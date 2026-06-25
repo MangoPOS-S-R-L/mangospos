@@ -2,8 +2,8 @@ import '../../../data/models/dining_table.dart';
 import '../../../data/models/reservation.dart';
 import '../../../data/models/zone.dart';
 
-/// Vista activa del módulo: agenda en lista o plano del salón.
-enum ReservationViewMode { list, floorPlan }
+/// Vista activa del módulo: lista, cuadrícula por hora, o plano del salón.
+enum ReservationViewMode { list, grid, floorPlan }
 
 class ReservationsState {
   /// Día seleccionado (local, solo fecha). La agenda muestra sus reservas.
@@ -13,6 +13,9 @@ class ReservationsState {
 
   /// Filtro de estado activo (null = todas).
   final ReservationStatus? statusFilter;
+
+  /// Texto de búsqueda (cliente/teléfono). Filtra lista y cuadrícula.
+  final String searchQuery;
 
   /// Vista activa (lista vs plano del salón).
   final ReservationViewMode viewMode;
@@ -39,6 +42,7 @@ class ReservationsState {
     required this.selectedDay,
     this.reservations = const [],
     this.statusFilter,
+    this.searchQuery = '',
     this.viewMode = ReservationViewMode.list,
     this.zones = const [],
     this.tablesByZone = const {},
@@ -50,14 +54,20 @@ class ReservationsState {
     this.businessId,
   });
 
-  /// Reservas ya filtradas por [statusFilter] y ordenadas por hora.
+  /// Reservas filtradas por [statusFilter] + [searchQuery] y ordenadas por hora.
   List<Reservation> get visible {
-    final list = statusFilter == null
-        ? reservations
-        : reservations.where((r) => r.status == statusFilter).toList();
-    final sorted = [...list]
-      ..sort((a, b) => a.reservedFor.compareTo(b.reservedFor));
-    return sorted;
+    final q = searchQuery.trim().toLowerCase();
+    final list = reservations.where((r) {
+      if (statusFilter != null && r.status != statusFilter) return false;
+      if (q.isNotEmpty) {
+        final name = r.customerName.toLowerCase();
+        final phone = (r.customerPhone ?? '').toLowerCase();
+        if (!name.contains(q) && !phone.contains(q)) return false;
+      }
+      return true;
+    }).toList();
+    list.sort((a, b) => a.reservedFor.compareTo(b.reservedFor));
+    return list;
   }
 
   /// [visible] agrupada por zona (nombre), preservando el orden por hora dentro
@@ -80,6 +90,27 @@ class ReservationsState {
     return [for (final k in keys) (zone: k, items: groups[k]!)];
   }
 
+  /// [visible] agrupada por HORA (franja) para la cuadrícula. Cada grupo trae
+  /// la etiqueta "hh:00 AM/PM" y sus reservas (ya ordenadas por hora). Solo
+  /// incluye las horas que tienen reservas, ascendente.
+  List<({String label, int hour, List<Reservation> items})> get groupedByHour {
+    final groups = <int, List<Reservation>>{};
+    for (final r in visible) {
+      final h = r.reservedForLocal.hour;
+      (groups[h] ??= <Reservation>[]).add(r);
+    }
+    final hours = groups.keys.toList()..sort();
+    String fmt(int h) {
+      final ampm = h >= 12 ? 'PM' : 'AM';
+      final h12 = h % 12 == 0 ? 12 : h % 12;
+      return '$h12:00 $ampm';
+    }
+
+    return [
+      for (final h in hours) (label: fmt(h), hour: h, items: groups[h]!),
+    ];
+  }
+
   /// Reservas ACTIVAS del día (pending/confirmed/seated) agrupadas por mesa,
   /// ordenadas por hora. Base del coloreado y los toques del plano del salón.
   Map<String, List<Reservation>> get activeByTableId {
@@ -99,6 +130,7 @@ class ReservationsState {
     List<Reservation>? reservations,
     ReservationStatus? statusFilter,
     bool clearStatusFilter = false,
+    String? searchQuery,
     ReservationViewMode? viewMode,
     List<Zone>? zones,
     Map<String, List<DiningTable>>? tablesByZone,
@@ -115,6 +147,7 @@ class ReservationsState {
       reservations: reservations ?? this.reservations,
       statusFilter:
           clearStatusFilter ? null : (statusFilter ?? this.statusFilter),
+      searchQuery: searchQuery ?? this.searchQuery,
       viewMode: viewMode ?? this.viewMode,
       zones: zones ?? this.zones,
       tablesByZone: tablesByZone ?? this.tablesByZone,

@@ -86,6 +86,11 @@ class ReservationsViewModel extends Notifier<ReservationsState> {
         : state.copyWith(statusFilter: status);
   }
 
+  void setSearch(String query) {
+    if (state.searchQuery == query) return;
+    state = state.copyWith(searchQuery: query);
+  }
+
   Future<void> refresh() => _fetchDay();
 
   // --- Plano del salón -------------------------------------------------------

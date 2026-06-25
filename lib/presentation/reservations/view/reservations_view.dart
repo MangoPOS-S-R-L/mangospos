@@ -17,7 +17,6 @@ import '../widgets/reservation_card.dart';
 import '../widgets/reservation_floor_map.dart';
 import 'reservation_form.dart';
 
-const _weekdaysShort = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const _weekdaysLong = [
   'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo',
 ];
@@ -25,6 +24,14 @@ const _monthsLong = [
   'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
 ];
+
+/// Hora local en formato 12h "h:mm AM/PM".
+String _time12(DateTime local) {
+  final m = local.minute.toString().padLeft(2, '0');
+  final ampm = local.hour >= 12 ? 'PM' : 'AM';
+  final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  return '$h12:$m $ampm';
+}
 
 class ReservationsView extends ConsumerStatefulWidget {
   const ReservationsView({super.key});
@@ -165,27 +172,40 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
     final state = ref.watch(reservationsVmProvider);
     final vm = ref.read(reservationsVmProvider.notifier);
 
+    final outerPad = MediaQuery.of(context).size.width < 600 ? 10.0 : 18.0;
+
     return Scaffold(
       backgroundColor: AppColors.background,
-      floatingActionButton: _canManage
-          ? _PrimaryFab(label: 'Nueva reserva', onTap: _new)
-          : null,
       body: SafeArea(
-        child: Column(
-          children: [
-            _Header(
-              state: state,
-              onPrev: () => vm.shiftDay(-1),
-              onNext: () => vm.shiftDay(1),
-              onToday: () => vm.setDay(DateTime.now()),
-              onPickDate: _pickDate,
-              onRefresh: vm.refresh,
-              onSelectDay: vm.setDay,
-              onFilter: vm.setStatusFilter,
-              onSetViewMode: vm.setViewMode,
+        child: Padding(
+          padding: EdgeInsets.all(outerPad),
+          child: Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.border),
+              boxShadow: AppShadows.soft,
             ),
-            Expanded(child: _body(state)),
-          ],
+            child: Column(
+              children: [
+                _Header(
+                  state: state,
+                  canManage: _canManage,
+                  onNew: _new,
+                  onSearch: vm.setSearch,
+                  onPrev: () => vm.shiftDay(-1),
+                  onNext: () => vm.shiftDay(1),
+                  onToday: () => vm.setDay(DateTime.now()),
+                  onPickDate: _pickDate,
+                  onRefresh: vm.refresh,
+                  onFilter: vm.setStatusFilter,
+                  onSetViewMode: vm.setViewMode,
+                ),
+                Expanded(child: _body(state)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -194,6 +214,9 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
   Widget _body(ReservationsState state) {
     if (state.viewMode == ReservationViewMode.floorPlan) {
       return _floorPlan(state);
+    }
+    if (state.viewMode == ReservationViewMode.grid) {
+      return _grid(state);
     }
 
     if (state.loading && state.reservations.isEmpty) {
@@ -208,7 +231,8 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
     final groups = state.groupedByZone;
     if (groups.isEmpty) {
       return _EmptyState(
-        filtered: state.statusFilter != null,
+        filtered:
+            state.statusFilter != null || state.searchQuery.trim().isNotEmpty,
         canManage: _canManage,
         onNew: _new,
       );
@@ -219,54 +243,27 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
       onRefresh: () => ref.read(reservationsVmProvider.notifier).refresh(),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final twoCol = constraints.maxWidth >= 980;
-          final contentWidth =
-              constraints.maxWidth > 1180 ? 1180.0 : constraints.maxWidth;
-          final pad = constraints.maxWidth < 600 ? 16.0 : 24.0;
-          final inner = contentWidth - pad * 2;
-          final itemWidth = twoCol ? (inner - 16) / 2 : inner;
-
-          return SingleChildScrollView(
+          final narrow = constraints.maxWidth < 720;
+          return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: contentWidth),
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(pad, 8, pad, 96),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final g in groups) ...[
-                        _ZoneSectionHeader(
-                          zone: g.zone,
-                          count: g.items.length,
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 16,
-                          runSpacing: 0,
-                          children: [
-                            for (final r in g.items)
-                              SizedBox(
-                                width: itemWidth,
-                                child: ReservationCard(
-                                  reservation: r,
-                                  onAction: (a) => _handleAction(r, a),
-                                  onTap: _canManage
-                                      ? () => _handleAction(
-                                          r, ReservationAction.edit)
-                                      : null,
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 22),
-                      ],
-                    ],
+            padding: const EdgeInsets.only(bottom: 28),
+            children: [
+              for (final g in groups) ...[
+                _FloorRowHeader(zone: g.zone, count: g.items.length),
+                for (var i = 0; i < g.items.length; i++)
+                  _ReservationRow(
+                    reservation: g.items[i],
+                    canManage: _canManage,
+                    narrow: narrow,
+                    last: i == g.items.length - 1,
+                    onTap: _canManage
+                        ? () => _handleAction(
+                            g.items[i], ReservationAction.edit)
+                        : null,
+                    onAction: (a) => _handleAction(g.items[i], a),
                   ),
-                ),
-              ),
-            ),
+              ],
+            ],
           );
         },
       ),
@@ -351,6 +348,55 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
       ),
     );
   }
+
+  // --- Cuadrícula por hora ---------------------------------------------------
+
+  Widget _grid(ReservationsState state) {
+    if (state.loading && state.reservations.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (state.error != null) {
+      return _ErrorState(
+        message: state.error!,
+        onRetry: () => ref.read(reservationsVmProvider.notifier).refresh(),
+      );
+    }
+    final groups = state.groupedByHour;
+    if (groups.isEmpty) {
+      return _EmptyState(
+        filtered: state.statusFilter != null,
+        canManage: _canManage,
+        onNew: _new,
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final colW = constraints.maxWidth < 640
+            ? (constraints.maxWidth - 40).clamp(240.0, 360.0)
+            : 320.0;
+        return ListView.separated(
+          scrollDirection: Axis.horizontal,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+          itemCount: groups.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 16),
+          itemBuilder: (context, i) {
+            final g = groups[i];
+            return SizedBox(
+              width: colW,
+              child: _HourColumn(
+                hourLabel: g.label,
+                items: g.items,
+                canManage: _canManage,
+                onAction: _handleAction,
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
 
 // ============================================================================
@@ -359,23 +405,27 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
 
 class _Header extends StatelessWidget {
   final ReservationsState state;
+  final bool canManage;
+  final VoidCallback onNew;
+  final void Function(String) onSearch;
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback onToday;
   final VoidCallback onPickDate;
   final VoidCallback onRefresh;
-  final void Function(DateTime) onSelectDay;
   final void Function(ReservationStatus?) onFilter;
   final void Function(ReservationViewMode) onSetViewMode;
 
   const _Header({
     required this.state,
+    required this.canManage,
+    required this.onNew,
+    required this.onSearch,
     required this.onPrev,
     required this.onNext,
     required this.onToday,
     required this.onPickDate,
     required this.onRefresh,
-    required this.onSelectDay,
     required this.onFilter,
     required this.onSetViewMode,
   });
@@ -383,125 +433,136 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final day = state.selectedDay;
-    final narrow = MediaQuery.of(context).size.width < 600;
-    final pad = narrow ? 16.0 : 24.0;
+    final width = MediaQuery.of(context).size.width;
+    final narrow = width < 900;
+    final pad = width < 600 ? 16.0 : 24.0;
     final longDate =
-        '${_weekdaysLong[day.weekday - 1]}, ${day.day} de ${_monthsLong[day.month - 1]}';
+        '${_weekdaysLong[day.weekday - 1]}, ${day.day} ${_monthsLong[day.month - 1]}';
 
     final all = state.reservations;
     final active = all.where((r) => r.status.isActive).toList();
     final covers = active.fold<int>(0, (s, r) => s + r.partySize);
     final seated =
         all.where((r) => r.status == ReservationStatus.seated).length;
-    final upcoming = all
-        .where((r) =>
-            r.status == ReservationStatus.confirmed ||
-            r.status == ReservationStatus.pending)
-        .length;
+
+    final title = const Text(
+      'Reservas',
+      style: TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.w800,
+        color: AppColors.foreground,
+        letterSpacing: -0.5,
+      ),
+    );
+    final search = _SearchField(onChanged: onSearch);
+    final refreshBtn = _RoundIconButton(
+      icon: Icons.refresh,
+      tooltip: 'Refrescar',
+      onTap: onRefresh,
+    );
+    final newBtn = canManage
+        ? _PrimaryFab(label: 'Nueva reserva', onTap: onNew)
+        : null;
+    final tabs = _ViewModeSwitch(
+      current: state.viewMode,
+      onSelect: onSetViewMode,
+    );
+    final stats = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _StatCard(
+          value: '${active.length}',
+          label: 'Reservas',
+          color: AppColors.primary,
+        ),
+        const SizedBox(width: 10),
+        _StatCard(
+          value: '$covers',
+          label: 'Comensales',
+          color: AppColors.info,
+        ),
+        const SizedBox(width: 10),
+        _StatCard(
+          value: '$seated',
+          label: 'Sentadas',
+          color: AppColors.success,
+        ),
+      ],
+    );
+    final dateNav = _DateNav(
+      longDate: longDate,
+      onPrev: onPrev,
+      onNext: onNext,
+      onToday: onToday,
+      onPick: onPickDate,
+    );
+    final filterBar = _FilterBar(
+      current: state.statusFilter,
+      reservations: all,
+      onFilter: onFilter,
+    );
 
     return Container(
+      padding: EdgeInsets.fromLTRB(pad, width < 600 ? 14 : 18, pad, 14),
       decoration: const BoxDecoration(
-        color: AppColors.background,
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-      padding: EdgeInsets.fromLTRB(pad, narrow ? 12 : 18, pad, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Título + controles
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Reservas',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.foreground,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      longDate,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: AppColors.mutedForeground,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _RoundIconButton(
-                icon: Icons.today_outlined,
-                tooltip: 'Elegir fecha',
-                onTap: onPickDate,
-              ),
-              const SizedBox(width: 8),
-              _RoundIconButton(
-                icon: Icons.refresh,
-                tooltip: 'Refrescar',
-                onTap: onRefresh,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _ViewModeSwitch(current: state.viewMode, onSelect: onSetViewMode),
-          const SizedBox(height: 16),
-          // KPIs
-          SizedBox(
-            height: 74,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
+          // Fila 1 — título + búsqueda + acciones
+          if (narrow) ...[
+            Row(children: [Expanded(child: title), refreshBtn]),
+            const SizedBox(height: 12),
+            Row(
               children: [
-                _StatCard(
-                  icon: Icons.event_available_outlined,
-                  value: '${active.length}',
-                  label: 'Reservas',
-                  color: AppColors.primary,
-                ),
-                _StatCard(
-                  icon: Icons.groups_outlined,
-                  value: '$covers',
-                  label: 'Comensales',
-                  color: AppColors.info,
-                ),
-                _StatCard(
-                  icon: Icons.event_seat_outlined,
-                  value: '$seated',
-                  label: 'Sentadas',
-                  color: AppColors.success,
-                ),
-                _StatCard(
-                  icon: Icons.schedule_outlined,
-                  value: '$upcoming',
-                  label: 'Por llegar',
-                  color: AppColors.warning,
-                ),
+                Expanded(child: search),
+                if (newBtn != null) ...[const SizedBox(width: 10), newBtn],
               ],
             ),
-          ),
-          const SizedBox(height: 14),
-          // Tira de días
-          _WeekStrip(
-            selectedDay: day,
-            onPrev: onPrev,
-            onNext: onNext,
-            onToday: onToday,
-            onSelect: onSelectDay,
-          ),
-          // Filtros con contador (solo en la vista de lista)
-          if (state.viewMode == ReservationViewMode.list) ...[
-            const SizedBox(height: 12),
-            _FilterBar(
-              current: state.statusFilter,
-              reservations: all,
-              onFilter: onFilter,
+          ] else
+            Row(
+              children: [
+                title,
+                const SizedBox(width: 24),
+                Expanded(child: search),
+                const SizedBox(width: 12),
+                refreshBtn,
+                if (newBtn != null) ...[const SizedBox(width: 10), newBtn],
+              ],
             ),
+          const SizedBox(height: 16),
+          // Fila 2 — pestañas de vista + tarjetas de stats
+          if (narrow) ...[
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: tabs,
+            ),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: stats,
+            ),
+          ] else
+            Row(children: [tabs, const Spacer(), stats]),
+          // Fila 3 — filtros de estado + navegación de fecha
+          if (state.viewMode != ReservationViewMode.floorPlan) ...[
+            const SizedBox(height: 14),
+            if (narrow) ...[
+              dateNav,
+              const SizedBox(height: 10),
+              filterBar,
+            ] else
+              Row(
+                children: [
+                  Expanded(child: filterBar),
+                  const SizedBox(width: 12),
+                  dateNav,
+                ],
+              ),
+          ] else ...[
+            const SizedBox(height: 14),
+            Align(alignment: Alignment.centerLeft, child: dateNav),
           ],
         ],
       ),
@@ -514,13 +575,11 @@ class _Header extends StatelessWidget {
 // ============================================================================
 
 class _StatCard extends StatelessWidget {
-  final IconData icon;
   final String value;
   final String label;
   final Color color;
 
   const _StatCard({
-    required this.icon,
     required this.value,
     required this.label,
     required this.color,
@@ -529,50 +588,34 @@ class _StatCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 156,
-      margin: const EdgeInsets.only(right: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      constraints: const BoxConstraints(minWidth: 104),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppRadius.iconBox),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.mutedForeground,
+              fontWeight: FontWeight.w600,
             ),
-            child: Icon(icon, color: color, size: 21),
           ),
-          const SizedBox(width: 12),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.foreground,
-                  height: 1,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.mutedForeground,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: color,
+              height: 1,
+            ),
           ),
         ],
       ),
@@ -581,139 +624,178 @@ class _StatCard extends StatelessWidget {
 }
 
 // ============================================================================
-// Week strip
+// Campo de búsqueda
 // ============================================================================
 
-class _WeekStrip extends StatelessWidget {
-  final DateTime selectedDay;
-  final VoidCallback onPrev;
-  final VoidCallback onNext;
-  final VoidCallback onToday;
-  final void Function(DateTime) onSelect;
+class _SearchField extends StatefulWidget {
+  final void Function(String) onChanged;
 
-  const _WeekStrip({
-    required this.selectedDay,
-    required this.onPrev,
-    required this.onNext,
-    required this.onToday,
-    required this.onSelect,
-  });
+  const _SearchField({required this.onChanged});
+
+  @override
+  State<_SearchField> createState() => _SearchFieldState();
+}
+
+class _SearchFieldState extends State<_SearchField> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    // Ancla en hoy; si el día elegido es anterior, arranca ahí para que sea
-    // visible. 14 días de ventana; fechas lejanas vía el date picker.
-    final start = selectedDay.isBefore(today) ? selectedDay : today;
-    final days = List.generate(14, (i) => start.add(Duration(days: i)));
-
-    return Row(
-      children: [
-        _RoundIconButton(
-          icon: Icons.chevron_left,
-          tooltip: 'Día anterior',
-          onTap: onPrev,
-          small: true,
+    return TextField(
+      controller: _ctrl,
+      onChanged: widget.onChanged,
+      textInputAction: TextInputAction.search,
+      style: const TextStyle(fontSize: 14, color: AppColors.foreground),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Buscar por cliente o teléfono…',
+        hintStyle: const TextStyle(
+          fontSize: 14,
+          color: AppColors.mutedForeground,
         ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: SizedBox(
-            height: 62,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: days.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final d = days[i];
-                final selected = d.year == selectedDay.year &&
-                    d.month == selectedDay.month &&
-                    d.day == selectedDay.day;
-                final isToday = d.year == today.year &&
-                    d.month == today.month &&
-                    d.day == today.day;
-                return _DayPill(
-                  day: d,
-                  selected: selected,
-                  isToday: isToday,
-                  onTap: () => onSelect(d),
-                );
-              },
-            ),
-          ),
+        prefixIcon: const Icon(
+          Icons.search,
+          size: 20,
+          color: AppColors.mutedForeground,
         ),
-        const SizedBox(width: 6),
-        _RoundIconButton(
-          icon: Icons.chevron_right,
-          tooltip: 'Día siguiente',
-          onTap: onNext,
-          small: true,
+        suffixIcon: _ctrl.text.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Limpiar',
+                icon: const Icon(Icons.close, size: 18),
+                color: AppColors.mutedForeground,
+                onPressed: () {
+                  _ctrl.clear();
+                  widget.onChanged('');
+                  setState(() {});
+                },
+              ),
+        filled: true,
+        fillColor: AppColors.muted,
+        contentPadding: const EdgeInsets.symmetric(vertical: 11),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.full),
+          borderSide: BorderSide.none,
         ),
-      ],
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.full),
+          borderSide: const BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppRadius.full),
+          borderSide: const BorderSide(color: AppColors.primary, width: 1.4),
+        ),
+      ),
     );
   }
 }
 
-class _DayPill extends StatelessWidget {
-  final DateTime day;
-  final bool selected;
-  final bool isToday;
+// ============================================================================
+// Navegación de fecha compacta (‹ fecha · Hoy ›)
+// ============================================================================
+
+class _DateNav extends StatelessWidget {
+  final String longDate;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback onToday;
+  final VoidCallback onPick;
+
+  const _DateNav({
+    required this.longDate,
+    required this.onPrev,
+    required this.onNext,
+    required this.onToday,
+    required this.onPick,
+  });
+
+  String get _capitalized =>
+      longDate.isEmpty ? longDate : longDate[0].toUpperCase() + longDate.substring(1);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.full),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _NavArrow(icon: Icons.chevron_left, tooltip: 'Día anterior', onTap: onPrev),
+          InkWell(
+            onTap: onPick,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.calendar_today_outlined,
+                    size: 15,
+                    color: AppColors.mutedForeground,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _capitalized,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.foreground,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Container(width: 1, height: 22, color: AppColors.border),
+          InkWell(
+            onTap: onToday,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Text(
+                'Hoy',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ),
+          _NavArrow(icon: Icons.chevron_right, tooltip: 'Día siguiente', onTap: onNext),
+        ],
+      ),
+    );
+  }
+}
+
+class _NavArrow extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
   final VoidCallback onTap;
 
-  const _DayPill({
-    required this.day,
-    required this.selected,
-    required this.isToday,
+  const _NavArrow({
+    required this.icon,
+    required this.tooltip,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final fg = selected
-        ? Colors.white
-        : (isToday ? AppColors.primary : AppColors.foreground);
-
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        width: 52,
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary : AppColors.card,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: selected
-                ? AppColors.primary
-                : (isToday ? AppColors.primary : AppColors.border),
-            width: isToday && !selected ? 1.4 : 1,
-          ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _weekdaysShort[day.weekday - 1],
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: selected
-                    ? Colors.white.withValues(alpha: 0.9)
-                    : AppColors.mutedForeground,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              '${day.day}',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: fg,
-                height: 1,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onTap,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+      icon: Icon(icon, size: 20, color: AppColors.foreground),
     );
   }
 }
@@ -843,18 +925,16 @@ class _RoundIconButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
-  final bool small;
 
   const _RoundIconButton({
     required this.icon,
     required this.tooltip,
     required this.onTap,
-    this.small = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final size = small ? 36.0 : 42.0;
+    const size = 42.0;
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -870,7 +950,7 @@ class _RoundIconButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppRadius.md),
               border: Border.all(color: AppColors.border),
             ),
-            child: Icon(icon, size: small ? 20 : 22, color: AppColors.foreground),
+            child: Icon(icon, size: 22, color: AppColors.foreground),
           ),
         ),
       ),
@@ -1047,8 +1127,14 @@ class _ViewModeSwitch extends StatelessWidget {
           _seg('Lista', Icons.view_agenda_outlined, ReservationViewMode.list),
           const SizedBox(width: 4),
           _seg(
+            'Cuadrícula',
+            Icons.calendar_view_week_outlined,
+            ReservationViewMode.grid,
+          ),
+          const SizedBox(width: 4),
+          _seg(
             'Plano del salón',
-            Icons.grid_view_outlined,
+            Icons.table_restaurant_outlined,
             ReservationViewMode.floorPlan,
           ),
         ],
@@ -1092,53 +1178,234 @@ class _ViewModeSwitch extends StatelessWidget {
 }
 
 // ============================================================================
-// Cabecera de sección por zona (vista de lista)
+// Lista tipo tabla: banda de piso + fila de reserva
 // ============================================================================
 
-class _ZoneSectionHeader extends StatelessWidget {
+class _FloorRowHeader extends StatelessWidget {
   final String zone;
   final int count;
 
-  const _ZoneSectionHeader({required this.zone, required this.count});
+  const _FloorRowHeader({required this.zone, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: AppColors.muted,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 9),
+      child: Row(
+        children: [
+          Text(
+            zone,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: AppColors.foreground,
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '· $count',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.mutedForeground,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReservationRow extends StatefulWidget {
+  final Reservation reservation;
+  final bool canManage;
+  final bool narrow;
+  final bool last;
+  final VoidCallback? onTap;
+  final void Function(ReservationAction) onAction;
+
+  const _ReservationRow({
+    required this.reservation,
+    required this.canManage,
+    required this.narrow,
+    required this.last,
+    required this.onTap,
+    required this.onAction,
+  });
+
+  @override
+  State<_ReservationRow> createState() => _ReservationRowState();
+}
+
+class _ReservationRowState extends State<_ReservationRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.reservation;
+    final color = reservationStatusColor(r.status);
+    final dimmed = r.status == ReservationStatus.cancelled ||
+        r.status == ReservationStatus.noShow ||
+        r.status == ReservationStatus.completed;
+    final table =
+        (r.tableCode?.trim().isNotEmpty ?? false) ? r.tableCode!.trim() : '—';
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Material(
+        color: _hover ? AppColors.muted : Colors.transparent,
+        child: InkWell(
+          onTap: widget.onTap,
+          child: Container(
+            decoration: BoxDecoration(
+              border: widget.last
+                  ? null
+                  : const Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
+            child: Opacity(
+              opacity: dimmed ? 0.62 : 1,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 78,
+                    child: Text(
+                      _time12(r.reservedForLocal),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 3,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          r.customerName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.foreground,
+                          ),
+                        ),
+                        if (widget.narrow)
+                          Text(
+                            'Mesa $table · ${r.partySize} pax',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.mutedForeground,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (!widget.narrow) ...[
+                    Expanded(
+                      flex: 2,
+                      child: _MetaCell(
+                        icon: Icons.table_restaurant_outlined,
+                        text: 'Mesa $table',
+                      ),
+                    ),
+                    SizedBox(
+                      width: 92,
+                      child: _MetaCell(
+                        icon: Icons.groups_outlined,
+                        text: '${r.partySize} pax',
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _StatusPill(status: r.status),
+                  ] else
+                    Container(
+                      width: 9,
+                      height: 9,
+                      margin: const EdgeInsets.only(left: 6),
+                      decoration:
+                          BoxDecoration(color: color, shape: BoxShape.circle),
+                    ),
+                  if (widget.canManage) ...[
+                    const SizedBox(width: 6),
+                    _RowActions(
+                      reservation: r,
+                      onAction: widget.onAction,
+                      compact: widget.narrow,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MetaCell extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _MetaCell({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 4,
-          height: 18,
-          decoration: BoxDecoration(
-            color: AppColors.primary,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          zone,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-            color: AppColors.foreground,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-          ),
+        Icon(icon, size: 14, color: AppColors.mutedForeground),
+        const SizedBox(width: 6),
+        Flexible(
           child: Text(
-            '$count',
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: AppColors.primary,
+              fontSize: 13,
+              color: AppColors.mutedForeground,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  final ReservationStatus status;
+
+  const _StatusPill({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = reservationStatusColor(status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.full),
+      ),
+      child: Text(
+        status.label,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
     );
   }
 }
@@ -1435,6 +1702,385 @@ class _TableSheet extends StatelessWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Cuadrícula por hora: columna de una franja
+// ============================================================================
+
+class _HourColumn extends StatelessWidget {
+  final String hourLabel;
+  final List<Reservation> items;
+  final bool canManage;
+  final void Function(Reservation, ReservationAction) onAction;
+
+  const _HourColumn({
+    required this.hourLabel,
+    required this.items,
+    required this.canManage,
+    required this.onAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.schedule_outlined,
+                  size: 16,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  hourLabel,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${items.length}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Flexible(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: items.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (context, i) => _GridTile(
+                reservation: items[i],
+                canManage: canManage,
+                onAction: onAction,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Celda compacta de la cuadrícula
+// ============================================================================
+
+class _GridTile extends StatelessWidget {
+  final Reservation reservation;
+  final bool canManage;
+  final void Function(Reservation, ReservationAction) onAction;
+
+  const _GridTile({
+    required this.reservation,
+    required this.canManage,
+    required this.onAction,
+  });
+
+  static String _time12(DateTime local) {
+    final m = local.minute.toString().padLeft(2, '0');
+    final ampm = local.hour >= 12 ? 'PM' : 'AM';
+    final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    return '$h12:$m $ampm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = reservation;
+    final color = reservationStatusColor(r.status);
+    final dimmed = r.status == ReservationStatus.cancelled ||
+        r.status == ReservationStatus.noShow ||
+        r.status == ReservationStatus.completed;
+    final table =
+        (r.tableCode?.trim().isNotEmpty ?? false) ? r.tableCode!.trim() : '—';
+
+    return Opacity(
+      opacity: dimmed ? 0.6 : 1,
+      child: Material(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: canManage ? () => onAction(r, ReservationAction.edit) : null,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 4,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: color,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _time12(r.reservedForLocal),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: color,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        r.customerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.table_restaurant_outlined,
+                            size: 13,
+                            color: AppColors.mutedForeground,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              'Mesa $table',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          const Icon(
+                            Icons.groups_outlined,
+                            size: 13,
+                            color: AppColors.mutedForeground,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${r.partySize}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.mutedForeground,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (canManage)
+                  _RowActions(
+                    reservation: r,
+                    onAction: (a) => onAction(r, a),
+                    compact: true,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Acciones de una reserva: botón Sentar + menú (Editar/Llamar/No llegó/Cancelar)
+// ============================================================================
+
+class _RowActions extends StatelessWidget {
+  final Reservation reservation;
+  final void Function(ReservationAction) onAction;
+  final bool compact;
+
+  const _RowActions({
+    required this.reservation,
+    required this.onAction,
+    required this.compact,
+  });
+
+  PopupMenuItem<ReservationAction> _menuItem(
+    ReservationAction action,
+    IconData icon,
+    String label, {
+    bool danger = false,
+  }) {
+    final color = danger ? AppColors.destructive : AppColors.foreground;
+    return PopupMenuItem<ReservationAction>(
+      value: action,
+      height: 44,
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            size: 18,
+            color: danger ? AppColors.destructive : AppColors.mutedForeground,
+          ),
+          const SizedBox(width: 10),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = reservation;
+    final canSeat = r.status == ReservationStatus.confirmed ||
+        r.status == ReservationStatus.pending;
+    final canEdit = r.status.isEditable;
+    final canCancel = r.status.isActive;
+    final hasPhone =
+        r.customerPhone != null && r.customerPhone!.trim().isNotEmpty;
+
+    final menuItems = <PopupMenuEntry<ReservationAction>>[
+      if (canEdit)
+        _menuItem(ReservationAction.edit, Icons.edit_outlined, 'Editar'),
+      if (hasPhone)
+        _menuItem(ReservationAction.call, Icons.call_outlined, 'Llamar'),
+      if (canCancel)
+        _menuItem(
+          ReservationAction.noShow,
+          Icons.person_off_outlined,
+          'No llegó',
+        ),
+      if (canCancel)
+        _menuItem(
+          ReservationAction.cancel,
+          Icons.cancel_outlined,
+          'Cancelar',
+          danger: true,
+        ),
+    ];
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (canSeat) ...[
+          _SeatPill(
+            compact: compact,
+            onTap: () => onAction(ReservationAction.seat),
+          ),
+          const SizedBox(width: 4),
+        ],
+        if (menuItems.isNotEmpty)
+          SizedBox(
+            width: 34,
+            height: 34,
+            child: PopupMenuButton<ReservationAction>(
+              tooltip: 'Más acciones',
+              padding: EdgeInsets.zero,
+              position: PopupMenuPosition.under,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+              ),
+              icon: const Icon(
+                Icons.more_vert,
+                size: 19,
+                color: AppColors.mutedForeground,
+              ),
+              onSelected: onAction,
+              itemBuilder: (_) => menuItems,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _SeatPill extends StatelessWidget {
+  final bool compact;
+  final VoidCallback onTap;
+
+  const _SeatPill({required this.compact, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.primary,
+      borderRadius: BorderRadius.circular(AppRadius.full),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.full),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 9 : 12,
+            vertical: 7,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.event_seat_outlined,
+                size: 16,
+                color: Colors.white,
+              ),
+              if (!compact) ...[
+                const SizedBox(width: 6),
+                const Text(
+                  'Sentar',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
