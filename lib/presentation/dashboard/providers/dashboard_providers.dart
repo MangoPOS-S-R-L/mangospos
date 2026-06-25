@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/offline/dashboard_kpis_offline_cache.dart';
+import '../../../core/offline/dashboard_lists_offline_cache.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/dashboard_models.dart';
 import '../../../data/repositories/inventory_repository.dart';
@@ -38,13 +39,25 @@ final dashboardTopProductsProvider =
     if (businessId == null || businessId.isEmpty) return const [];
     final range = _todayRange();
     final repo = ref.watch(salesRepositoryProvider);
-    final rows = await repo.getTopSellingProducts(
-      businessId: businessId,
-      from: range.from,
-      to: range.to,
-      limit: limit,
-    );
-    return rows.map(DashboardTopProduct.fromMap).toList(growable: false);
+    final cache = DashboardListsOfflineCache();
+    try {
+      final rows = await repo.getTopSellingProducts(
+        businessId: businessId,
+        from: range.from,
+        to: range.to,
+        limit: limit,
+      );
+      await cache.save(
+          businessId: businessId, section: 'top_products', rows: rows);
+      return rows.map(DashboardTopProduct.fromMap).toList(growable: false);
+    } catch (e) {
+      // Sin conexión: servir el último snapshot cacheado (si existe).
+      debugPrint('dashboardTopProductsProvider offline fallback: $e');
+      final cached =
+          await cache.load(businessId: businessId, section: 'top_products');
+      if (cached == null) return const [];
+      return cached.map(DashboardTopProduct.fromMap).toList(growable: false);
+    }
   },
 );
 
@@ -55,11 +68,22 @@ final dashboardRecentOrdersProvider =
     final businessId = ref.watch(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) return const [];
     final repo = ref.watch(salesRepositoryProvider);
-    final rows = await repo.getRecentOrders(
-      businessId: businessId,
-      limit: limit,
-    );
-    return rows.map(DashboardRecentOrder.fromMap).toList(growable: false);
+    final cache = DashboardListsOfflineCache();
+    try {
+      final rows = await repo.getRecentOrders(
+        businessId: businessId,
+        limit: limit,
+      );
+      await cache.save(
+          businessId: businessId, section: 'recent_orders', rows: rows);
+      return rows.map(DashboardRecentOrder.fromMap).toList(growable: false);
+    } catch (e) {
+      debugPrint('dashboardRecentOrdersProvider offline fallback: $e');
+      final cached =
+          await cache.load(businessId: businessId, section: 'recent_orders');
+      if (cached == null) return const [];
+      return cached.map(DashboardRecentOrder.fromMap).toList(growable: false);
+    }
   },
 );
 
@@ -72,11 +96,22 @@ final dashboardInventoryAlertsProvider =
     final businessId = ref.watch(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) return const [];
     final InventoryRepository repo = ref.watch(inventoryRepositoryProvider);
-    final rows = await repo.getLowStockAlerts(
-      businessId: businessId,
-      limit: limit,
-    );
-    return rows.map(DashboardInventoryAlert.fromMap).toList(growable: false);
+    final cache = DashboardListsOfflineCache();
+    try {
+      final rows = await repo.getLowStockAlerts(
+        businessId: businessId,
+        limit: limit,
+      );
+      await cache.save(
+          businessId: businessId, section: 'inventory_alerts', rows: rows);
+      return rows.map(DashboardInventoryAlert.fromMap).toList(growable: false);
+    } catch (e) {
+      debugPrint('dashboardInventoryAlertsProvider offline fallback: $e');
+      final cached = await cache.load(
+          businessId: businessId, section: 'inventory_alerts');
+      if (cached == null) return const [];
+      return cached.map(DashboardInventoryAlert.fromMap).toList(growable: false);
+    }
   },
 );
 
