@@ -897,6 +897,20 @@ mixin _PaymentActionsMixin {
         );
       }
 
+      // Anti-doble-conteo del service fee (LEY): cuando los ítems ya traen sus
+      // `order_item_tax_lines` (modelo unificado), el fee YA está contado dentro
+      // de ellos. Si además dejamos `order.serviceFee > 0`, summarizeOrderPricing
+      // lo suma OTRA VEZ como fee legacy y el TOTAL impreso sale inflado (ej:
+      // RD$6,574.57 vs RD$6,170 real). El modal de detalle no falla porque arma
+      // sus totales con `order = null`; aquí lo replicamos. Para órdenes legacy
+      // SIN tax_lines conservamos el serviceFee (ahí el fee solo vive a nivel de
+      // orden y debe seguir imprimiéndose). Aplica a ambas ramas (full-order y
+      // sub-cuenta, donde check.toOrder también copia serviceFee).
+      if (printOrder.serviceFee != 0 &&
+          printItems.any((item) => item.taxLines.isNotEmpty)) {
+        printOrder = printOrder.copyWith(serviceFee: 0);
+      }
+
       // Loading business profile (simplified, usually from a provider)
       if (businessId == null || businessId.isEmpty) {
         throw Exception('No se pudo resolver el negocio activo.');

@@ -7,11 +7,14 @@ import '../../../app/router/routes.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import '../../../data/models/dining_table.dart';
 import '../../../data/models/reservation.dart';
+import '../../../data/models/zone.dart';
 import '../../../services/session/session_controller.dart';
 import '../state/reservations_state.dart';
 import '../viewmodel/reservations_viewmodel.dart';
 import '../widgets/reservation_card.dart';
+import '../widgets/reservation_floor_map.dart';
 import 'reservation_form.dart';
 
 const _weekdaysShort = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -179,6 +182,7 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
               onRefresh: vm.refresh,
               onSelectDay: vm.setDay,
               onFilter: vm.setStatusFilter,
+              onSetViewMode: vm.setViewMode,
             ),
             Expanded(child: _body(state)),
           ],
@@ -188,6 +192,10 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
   }
 
   Widget _body(ReservationsState state) {
+    if (state.viewMode == ReservationViewMode.floorPlan) {
+      return _floorPlan(state);
+    }
+
     if (state.loading && state.reservations.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -197,8 +205,8 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
         onRetry: () => ref.read(reservationsVmProvider.notifier).refresh(),
       );
     }
-    final list = state.visible;
-    if (list.isEmpty) {
+    final groups = state.groupedByZone;
+    if (groups.isEmpty) {
       return _EmptyState(
         filtered: state.statusFilter != null,
         canManage: _canManage,
@@ -225,26 +233,119 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
                 constraints: BoxConstraints(maxWidth: contentWidth),
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(pad, 8, pad, 96),
-                  child: Wrap(
-                    spacing: 16,
-                    runSpacing: 0,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final r in list)
-                        SizedBox(
-                          width: itemWidth,
-                          child: ReservationCard(
-                            reservation: r,
-                            onAction: (a) => _handleAction(r, a),
-                            onTap: _canManage
-                                ? () => _handleAction(r, ReservationAction.edit)
-                                : null,
-                          ),
+                      for (final g in groups) ...[
+                        _ZoneSectionHeader(
+                          zone: g.zone,
+                          count: g.items.length,
                         ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 16,
+                          runSpacing: 0,
+                          children: [
+                            for (final r in g.items)
+                              SizedBox(
+                                width: itemWidth,
+                                child: ReservationCard(
+                                  reservation: r,
+                                  onAction: (a) => _handleAction(r, a),
+                                  onTap: _canManage
+                                      ? () => _handleAction(
+                                          r, ReservationAction.edit)
+                                      : null,
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 22),
+                      ],
                     ],
                   ),
                 ),
               ),
             ),
+          );
+        },
+      ),
+    );
+  }
+
+  // --- Plano del salón -------------------------------------------------------
+
+  Widget _floorPlan(ReservationsState state) {
+    if (state.floorLoading && state.zones.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (state.error != null && state.zones.isEmpty) {
+      return _ErrorState(
+        message: state.error!,
+        onRetry: () => ref
+            .read(reservationsVmProvider.notifier)
+            .setViewMode(ReservationViewMode.floorPlan),
+      );
+    }
+    if (state.zones.isEmpty) {
+      return const _FloorEmptyState();
+    }
+
+    final vm = ref.read(reservationsVmProvider.notifier);
+    final zoneId = state.selectedZoneId ?? state.zones.first.id;
+    final tables = state.tablesByZone[zoneId] ?? const <DiningTable>[];
+    final byTable = state.activeByTableId;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _ZoneChips(
+          zones: state.zones,
+          selectedId: zoneId,
+          onSelect: vm.selectZone,
+        ),
+        const _FloorLegend(),
+        Expanded(
+          child: ReservationFloorMap(
+            key: ValueKey('floor_$zoneId'),
+            tables: tables,
+            reservationsByTableId: byTable,
+            onTapTable: _openTableSheet,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openTableSheet(DiningTable table) async {
+    final state = ref.read(reservationsVmProvider);
+    final businessId = state.businessId;
+    if (businessId == null) return;
+    final reservations =
+        state.activeByTableId[table.id] ?? const <Reservation>[];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _TableSheet(
+        table: table,
+        reservations: reservations,
+        canManage: _canManage,
+        onAction: (r, a) {
+          Navigator.of(ctx).pop();
+          _handleAction(r, a);
+        },
+        onNew: () async {
+          Navigator.of(ctx).pop();
+          await showReservationForm(
+            context,
+            businessId: businessId,
+            initialDay: state.selectedDay,
+            initialTableId: table.id,
           );
         },
       ),
@@ -265,6 +366,7 @@ class _Header extends StatelessWidget {
   final VoidCallback onRefresh;
   final void Function(DateTime) onSelectDay;
   final void Function(ReservationStatus?) onFilter;
+  final void Function(ReservationViewMode) onSetViewMode;
 
   const _Header({
     required this.state,
@@ -275,6 +377,7 @@ class _Header extends StatelessWidget {
     required this.onRefresh,
     required this.onSelectDay,
     required this.onFilter,
+    required this.onSetViewMode,
   });
 
   @override
@@ -346,6 +449,8 @@ class _Header extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 14),
+          _ViewModeSwitch(current: state.viewMode, onSelect: onSetViewMode),
           const SizedBox(height: 16),
           // KPIs
           SizedBox(
@@ -389,13 +494,15 @@ class _Header extends StatelessWidget {
             onToday: onToday,
             onSelect: onSelectDay,
           ),
-          const SizedBox(height: 12),
-          // Filtros con contador
-          _FilterBar(
-            current: state.statusFilter,
-            reservations: all,
-            onFilter: onFilter,
-          ),
+          // Filtros con contador (solo en la vista de lista)
+          if (state.viewMode == ReservationViewMode.list) ...[
+            const SizedBox(height: 12),
+            _FilterBar(
+              current: state.statusFilter,
+              reservations: all,
+              onFilter: onFilter,
+            ),
+          ],
         ],
       ),
     );
@@ -908,6 +1015,425 @@ class _ErrorState extends StatelessWidget {
               icon: const Icon(Icons.refresh),
               label: const Text('Reintentar'),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Conmutador de vistas (Lista / Plano del salón)
+// ============================================================================
+
+class _ViewModeSwitch extends StatelessWidget {
+  final ReservationViewMode current;
+  final void Function(ReservationViewMode) onSelect;
+
+  const _ViewModeSwitch({required this.current, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _seg('Lista', Icons.view_agenda_outlined, ReservationViewMode.list),
+          const SizedBox(width: 4),
+          _seg(
+            'Plano del salón',
+            Icons.grid_view_outlined,
+            ReservationViewMode.floorPlan,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _seg(String label, IconData icon, ReservationViewMode mode) {
+    final selected = current == mode;
+    return GestureDetector(
+      onTap: () => onSelect(mode),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: selected ? Colors.white : AppColors.mutedForeground,
+            ),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : AppColors.mutedForeground,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Cabecera de sección por zona (vista de lista)
+// ============================================================================
+
+class _ZoneSectionHeader extends StatelessWidget {
+  final String zone;
+  final int count;
+
+  const _ZoneSectionHeader({required this.zone, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            color: AppColors.primary,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          zone,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: AppColors.foreground,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$count',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primary,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================================
+// Chips de zona (vista plano)
+// ============================================================================
+
+class _ZoneChips extends StatelessWidget {
+  final List<Zone> zones;
+  final String selectedId;
+  final void Function(String) onSelect;
+
+  const _ZoneChips({
+    required this.zones,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 46,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 7),
+        itemCount: zones.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final z = zones[i];
+          final selected = z.id == selectedId;
+          return GestureDetector(
+            onTap: () => onSelect(z.id),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? AppColors.primary : AppColors.card,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: selected ? AppColors.primary : AppColors.border,
+                ),
+              ),
+              child: Text(
+                z.name,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? Colors.white : AppColors.foreground,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Leyenda del plano
+// ============================================================================
+
+class _FloorLegend extends StatelessWidget {
+  const _FloorLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+      child: Wrap(
+        spacing: 16,
+        runSpacing: 4,
+        children: const [
+          _LegendDot(color: AppColors.success, label: 'Libre'),
+          _LegendDot(color: AppColors.primary, label: 'Reservada'),
+          _LegendDot(color: AppColors.warning, label: 'Ocupada'),
+          _LegendDot(color: AppColors.mutedForeground, label: 'Bloqueada'),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: AppColors.mutedForeground,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ============================================================================
+// Estado vacío del plano (sin zonas/mesas)
+// ============================================================================
+
+class _FloorEmptyState extends StatelessWidget {
+  const _FloorEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(
+              Icons.grid_view_outlined,
+              size: 48,
+              color: AppColors.mutedForeground,
+            ),
+            SizedBox(height: 12),
+            Text(
+              'No hay zonas ni mesas configuradas',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.foreground,
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'Configura el salón en Ajustes → Zonas y mesas para usar el plano.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: AppColors.mutedForeground),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// Hoja de mesa (al tocar una mesa en el plano)
+// ============================================================================
+
+class _TableSheet extends StatelessWidget {
+  final DiningTable table;
+  final List<Reservation> reservations;
+  final bool canManage;
+  final void Function(Reservation, ReservationAction) onAction;
+  final VoidCallback onNew;
+
+  const _TableSheet({
+    required this.table,
+    required this.reservations,
+    required this.canManage,
+    required this.onAction,
+    required this.onNew,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final maxH = MediaQuery.of(context).size.height * 0.72;
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.table_restaurant_outlined,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Mesa ${table.code}',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.foreground,
+                          ),
+                        ),
+                        Text(
+                          '${table.capacity} personas · '
+                          '${reservations.length} reserva(s)',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, color: AppColors.mutedForeground),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: reservations.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.event_available_outlined,
+                            size: 36,
+                            color: AppColors.mutedForeground,
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            'Sin reservas para este día',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: AppColors.mutedForeground,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                      itemCount: reservations.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, i) {
+                        final r = reservations[i];
+                        return ReservationCard(
+                          reservation: r,
+                          onAction: (a) => onAction(r, a),
+                          onTap: canManage
+                              ? () => onAction(r, ReservationAction.edit)
+                              : null,
+                        );
+                      },
+                    ),
+            ),
+            if (canManage)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: onNew,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Reservar esta mesa'),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

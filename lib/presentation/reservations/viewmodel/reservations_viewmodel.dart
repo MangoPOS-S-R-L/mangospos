@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../data/models/dining_table.dart';
 import '../../../data/models/reservation.dart';
+import '../../../data/models/zone.dart';
 import '../../../data/repositories/reservations_repository.dart';
+import '../../../data/repositories/zones_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../domain/repositories/i_reservations_repository.dart';
 import '../state/reservations_state.dart';
@@ -12,6 +15,14 @@ import '../state/reservations_state.dart';
 final reservationsRepoProvider = Provider<ReservationsRepository>(
   (ref) => ReservationsRepository(Supabase.instance.client),
 );
+
+final _reservationsZonesRepoProvider = Provider<ZonesRepository>(
+  (ref) => ZonesRepository(Supabase.instance.client),
+);
+
+/// Zonas virtuales de ventas que NO son parte del salón físico y por tanto no
+/// se muestran en el plano de reservas.
+const _virtualZoneNames = {'ventas manuales', 'ventas rápidas', 'delivery'};
 
 final reservationsVmProvider =
     NotifierProvider<ReservationsViewModel, ReservationsState>(
@@ -76,6 +87,54 @@ class ReservationsViewModel extends Notifier<ReservationsState> {
   }
 
   Future<void> refresh() => _fetchDay();
+
+  // --- Plano del salón -------------------------------------------------------
+
+  /// Cambia de vista. Al entrar al plano por primera vez, carga zonas+mesas.
+  void setViewMode(ReservationViewMode mode) {
+    if (state.viewMode == mode) return;
+    state = state.copyWith(viewMode: mode);
+    if (mode == ReservationViewMode.floorPlan && !state.floorLoaded) {
+      _loadFloorData();
+    }
+  }
+
+  void selectZone(String zoneId) {
+    if (state.selectedZoneId == zoneId) return;
+    state = state.copyWith(selectedZoneId: zoneId);
+  }
+
+  /// Carga (una vez) las zonas reales del salón y sus mesas para el plano.
+  Future<void> _loadFloorData() async {
+    final bizId = _resolvedBusinessId;
+    if (bizId == null) return;
+    state = state.copyWith(floorLoading: true, clearError: true);
+    try {
+      final repo = ref.read(_reservationsZonesRepoProvider);
+      final allZones = await repo.fetchZones(bizId);
+      final zones = allZones
+          .where((z) => !_virtualZoneNames.contains(z.name.trim().toLowerCase()))
+          .toList(growable: false);
+
+      final tablesByZone = <String, List<DiningTable>>{};
+      for (final Zone z in zones) {
+        tablesByZone[z.id] = await repo.fetchTablesByZone(z.id);
+      }
+
+      final selected = state.selectedZoneId ??
+          (zones.isNotEmpty ? zones.first.id : null);
+
+      state = state.copyWith(
+        zones: zones,
+        tablesByZone: tablesByZone,
+        selectedZoneId: selected,
+        floorLoading: false,
+        floorLoaded: true,
+      );
+    } catch (e) {
+      state = state.copyWith(floorLoading: false, error: e.toString());
+    }
+  }
 
   Future<void> _fetchDay() async {
     final bizId = _resolvedBusinessId;

@@ -17,6 +17,7 @@ Future<bool?> showReservationForm(
   required String businessId,
   DateTime? initialDay,
   Reservation? existing,
+  String? initialTableId,
 }) {
   return showDialog<bool>(
     context: context,
@@ -25,6 +26,7 @@ Future<bool?> showReservationForm(
       businessId: businessId,
       initialDay: initialDay,
       existing: existing,
+      initialTableId: initialTableId,
     ),
   );
 }
@@ -46,10 +48,14 @@ class _ReservationFormDialog extends ConsumerStatefulWidget {
   final DateTime? initialDay;
   final Reservation? existing;
 
+  /// Mesa preseleccionada (al crear desde el plano del salón).
+  final String? initialTableId;
+
   const _ReservationFormDialog({
     required this.businessId,
     this.initialDay,
     this.existing,
+    this.initialTableId,
   });
 
   @override
@@ -96,6 +102,7 @@ class _ReservationFormDialogState
       final base = widget.initialDay ?? DateTime.now();
       _date = DateTime(base.year, base.month, base.day);
       _time = const TimeOfDay(hour: 19, minute: 0);
+      _tableId = widget.initialTableId;
     }
     _loadTables();
   }
