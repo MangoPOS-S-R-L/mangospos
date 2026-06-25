@@ -129,7 +129,30 @@ class BillingState {
   }
 
   bool get isSuspended => billingStatus == BillingStatus.suspended;
-  bool get hasAccess => !isSuspended && billingStatus != BillingStatus.cancelled;
+  bool get hasAccess =>
+      !isSuspended && billingStatus != BillingStatus.cancelled;
+
+  /// Estado en el que un cobro manual ("Pagar ahora") tiene sentido — hay un
+  /// período por cobrar y no está suspendida ni cancelada.
+  bool get canAttemptCharge =>
+      billingStatus == BillingStatus.trial ||
+      billingStatus == BillingStatus.active ||
+      billingStatus == BillingStatus.pastDue;
+
+  /// Horas hasta el próximo cobro (negativo si ya está vencido). Null sin fecha.
+  int? get hoursUntilNextBilling {
+    final next = nextBillingDate;
+    if (next == null) return null;
+    return next.difference(DateTime.now()).inHours;
+  }
+
+  /// El botón "Pagar ahora" se habilita SOLO dentro de las 48 h previas a la
+  /// fecha de cobro (o si ya está vencida). El cobro automático (cron) no pasa
+  /// por este gate.
+  bool get isWithinPayWindow {
+    final h = hoursUntilNextBilling;
+    return h != null && h <= 48;
+  }
 
   /// Crea desde una row de memberships joineada con plans + opcionales charges.
   /// El SELECT del repo debe traer:
@@ -154,15 +177,20 @@ class BillingState {
       currentPeriodEnd: _parseDate(json['current_period_end']),
       nextBillingDate: _parseDate(json['next_billing_date']),
       consentGrantedAt: _parseTs(json['consent_granted_at']),
-      currentAttemptNumber: (json['current_attempt_number'] as num?)?.toInt() ?? 0,
+      currentAttemptNumber:
+          (json['current_attempt_number'] as num?)?.toInt() ?? 0,
       suspendedAt: _parseTs(json['suspended_at']),
       cancelledAt: _parseTs(json['cancelled_at']),
       cancellationReason: json['cancellation_reason'] as String?,
       lastSuccessfulCharge: json['last_successful_charge'] != null
-          ? BillingCharge.fromJson(json['last_successful_charge'] as Map<String, dynamic>)
+          ? BillingCharge.fromJson(
+              json['last_successful_charge'] as Map<String, dynamic>,
+            )
           : null,
       lastFailedCharge: json['last_failed_charge'] != null
-          ? BillingCharge.fromJson(json['last_failed_charge'] as Map<String, dynamic>)
+          ? BillingCharge.fromJson(
+              json['last_failed_charge'] as Map<String, dynamic>,
+            )
           : null,
       createdAt: DateTime.parse(json['created_at'] as String),
     );

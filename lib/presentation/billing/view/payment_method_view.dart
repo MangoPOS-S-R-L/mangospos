@@ -16,6 +16,7 @@ import '../../../data/models/billing_payment_method.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
 import '../widgets/azul_payment_page_launcher.dart';
+import '../widgets/pay_now_button.dart';
 
 class PaymentMethodView extends ConsumerWidget {
   const PaymentMethodView({super.key});
@@ -32,6 +33,9 @@ class PaymentMethodView extends ConsumerWidget {
     }
 
     final pmAsync = ref.watch(defaultPaymentMethodProvider(businessId));
+    final billingState = ref
+        .watch(billingStateProvider(businessId))
+        .valueOrNull;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
@@ -61,6 +65,12 @@ class PaymentMethodView extends ConsumerWidget {
           children: [
             if (pm != null) _CardDisplay(method: pm),
             if (pm == null) const _NoCardPlaceholder(),
+            if (pm != null &&
+                billingState != null &&
+                billingState.canAttemptCharge) ...[
+              const SizedBox(height: 16),
+              PayNowButton(businessId: businessId, state: billingState),
+            ],
             const SizedBox(height: 16),
             AzulPaymentPageLauncher(
               businessId: businessId,
@@ -96,7 +106,11 @@ class _CardDisplay extends StatelessWidget {
         ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 6)),
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 18,
+            offset: Offset(0, 6),
+          ),
         ],
       ),
       child: Column(
@@ -116,7 +130,10 @@ class _CardDisplay extends StatelessWidget {
               const Spacer(),
               if (method.isDefault)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: MangoColors.primaryOrange,
                     borderRadius: BorderRadius.circular(20),
@@ -153,7 +170,11 @@ class _CardDisplay extends StatelessWidget {
             children: [
               const Text(
                 'VENCE',
-                style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 10, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: Color(0xFF9CA3AF),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(width: 6),
               Text(
@@ -167,7 +188,10 @@ class _CardDisplay extends StatelessWidget {
               if (isExpired) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFEE2E2),
                     borderRadius: BorderRadius.circular(4),
@@ -220,8 +244,11 @@ class _NoCardPlaceholder extends StatelessWidget {
               color: const Color(0xFFFFE6D5),
               borderRadius: BorderRadius.circular(28),
             ),
-            child: const Icon(Icons.credit_card_off_rounded,
-                color: MangoColors.primaryOrange, size: 28),
+            child: const Icon(
+              Icons.credit_card_off_rounded,
+              color: MangoColors.primaryOrange,
+              size: 28,
+            ),
           ),
           const SizedBox(width: 14),
           const Expanded(
@@ -235,7 +262,11 @@ class _NoCardPlaceholder extends StatelessWidget {
                 SizedBox(height: 4),
                 Text(
                   'Agrega una para activar tu suscripción cuando termine el trial.',
-                  style: TextStyle(fontSize: 12, color: MangoColors.muted, height: 1.4),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: MangoColors.muted,
+                    height: 1.4,
+                  ),
                 ),
               ],
             ),
@@ -261,7 +292,11 @@ class _SecurityNote extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.verified_user_outlined, color: MangoColors.muted, size: 20),
+          const Icon(
+            Icons.verified_user_outlined,
+            color: MangoColors.muted,
+            size: 20,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(

@@ -14,6 +14,7 @@ import '../../../app/theme/mango_colors.dart';
 import '../../../data/models/billing_state.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
+import '../widgets/pay_now_button.dart';
 import '../widgets/suspended_overlay.dart';
 
 class MySubscriptionView extends ConsumerWidget {
@@ -29,7 +30,9 @@ class MySubscriptionView extends ConsumerWidget {
     }
 
     final stateAsync = ref.watch(billingStateProvider(businessId));
-    final paymentMethodAsync = ref.watch(defaultPaymentMethodProvider(businessId));
+    final paymentMethodAsync = ref.watch(
+      defaultPaymentMethodProvider(businessId),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),
@@ -74,7 +77,14 @@ class MySubscriptionView extends ConsumerWidget {
                 else
                   _NextBillingCard(state: state),
                 const SizedBox(height: 12),
-                _PaymentMethodSummary(paymentMethod: paymentMethodAsync.valueOrNull),
+                _PaymentMethodSummary(
+                  paymentMethod: paymentMethodAsync.valueOrNull,
+                ),
+                if (paymentMethodAsync.valueOrNull != null &&
+                    state.canAttemptCharge) ...[
+                  const SizedBox(height: 12),
+                  PayNowButton(businessId: businessId, state: state),
+                ],
                 const SizedBox(height: 12),
                 _LastChargeCard(state: state),
                 const SizedBox(height: 20),
@@ -138,7 +148,11 @@ class _PlanStatusCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               plan!.description!,
-              style: const TextStyle(fontSize: 13, color: Color(0xFF60646C), height: 1.4),
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF60646C),
+                height: 1.4,
+              ),
             ),
           ],
         ],
@@ -169,7 +183,9 @@ class _TrialCountdownCard extends StatelessWidget {
       headline = 'Tu prueba termina hoy';
       accent = const Color(0xFFEAB308);
     } else {
-      headline = days == 1 ? 'Falta 1 día de prueba' : 'Faltan $days días de prueba';
+      headline = days == 1
+          ? 'Falta 1 día de prueba'
+          : 'Faltan $days días de prueba';
       accent = MangoColors.infoBlue;
     }
 
@@ -244,7 +260,9 @@ class _NextBillingCard extends StatelessWidget {
       headline = 'Cobro programado hoy';
       accent = MangoColors.primaryOrange;
     } else if (days <= 3) {
-      headline = days == 1 ? 'Próximo cobro mañana' : 'Próximo cobro en $days días';
+      headline = days == 1
+          ? 'Próximo cobro mañana'
+          : 'Próximo cobro en $days días';
       accent = MangoColors.primaryOrange;
     } else {
       headline = 'Próximo cobro en $days días';
@@ -325,7 +343,10 @@ class _PaymentMethodSummary extends StatelessWidget {
               color: const Color(0xFFFFE6D5),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.credit_card_rounded, color: MangoColors.primaryOrange),
+            child: const Icon(
+              Icons.credit_card_rounded,
+              color: MangoColors.primaryOrange,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -386,7 +407,10 @@ class _LastChargeCard extends StatelessWidget {
               color: const Color(0xFFE8F8EF),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.history_rounded, color: MangoColors.successGreen),
+            child: const Icon(
+              Icons.history_rounded,
+              color: MangoColors.successGreen,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -484,7 +508,11 @@ class _ActionTile extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: const TextStyle(fontSize: 12, color: MangoColors.muted, height: 1.3),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
@@ -511,7 +539,10 @@ class _StatusBadge extends StatelessWidget {
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Text(
         status.label,
         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: fg),
@@ -539,7 +570,11 @@ class _Card extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: MangoColors.cardBorder),
         boxShadow: const [
-          BoxShadow(color: Color(0x0A000000), blurRadius: 14, offset: Offset(0, 2)),
+          BoxShadow(
+            color: Color(0x0A000000),
+            blurRadius: 14,
+            offset: Offset(0, 2),
+          ),
         ],
         // Hairline accent en el borde izquierdo cuando hay color de énfasis.
       ),
@@ -617,8 +652,11 @@ class _NotSetUpPanel extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.workspace_premium_outlined,
-                color: MangoColors.primaryOrange, size: 48),
+            const Icon(
+              Icons.workspace_premium_outlined,
+              color: MangoColors.primaryOrange,
+              size: 48,
+            ),
             const SizedBox(height: 12),
             const Text(
               'Aún no tienes una suscripción activa',

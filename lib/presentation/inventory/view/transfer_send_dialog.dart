@@ -128,6 +128,14 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
         .toList(growable: false);
   }
 
+  /// Devuelve [value] sólo si aparece exactamente una vez en [ids]; de lo
+  /// contrario null. Evita el assert de [DropdownButton] cuando el valor
+  /// seleccionado ya no está (o quedó duplicado) en la lista de ítems.
+  String? _safeDropdownValue(String? value, Iterable<String> ids) {
+    if (value == null) return null;
+    return ids.where((id) => id == value).length == 1 ? value : null;
+  }
+
   bool get _hasSelection {
     if (_quantities.values.every((q) => q <= 0)) return false;
     if (_fromWarehouseId == null || _toWarehouseId == null) return false;
@@ -286,7 +294,10 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
             if (_isCrossBusiness && candidateTargets.isNotEmpty) ...[
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
-                initialValue: _targetBusinessId,
+                initialValue: _safeDropdownValue(
+                  _targetBusinessId,
+                  candidateTargets.map((b) => b.id),
+                ),
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Negocio destino',
@@ -318,7 +329,10 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    initialValue: _fromWarehouseId,
+                    initialValue: _safeDropdownValue(
+                      _fromWarehouseId,
+                      warehouses.map((w) => w.id),
+                    ),
                     isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Bodega origen',
@@ -335,6 +349,12 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
                     onChanged: (v) async {
                       setState(() {
                         _fromWarehouseId = v;
+                        // En intra-sucursal, origen y destino no pueden ser la
+                        // misma bodega: si colisionan, limpiamos el destino para
+                        // no dejar un valor que el dropdown destino filtra.
+                        if (!_isCrossBusiness && _toWarehouseId == v) {
+                          _toWarehouseId = null;
+                        }
                         _quantities.clear();
                       });
                       await _loadSourceItems();
@@ -362,7 +382,10 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
                           ),
                         )
                       : DropdownButtonFormField<String>(
-                          initialValue: _toWarehouseId,
+                          initialValue: _safeDropdownValue(
+                            _toWarehouseId,
+                            destWarehouses.map((w) => w.id),
+                          ),
                           isExpanded: true,
                           decoration: InputDecoration(
                             labelText: _isCrossBusiness
