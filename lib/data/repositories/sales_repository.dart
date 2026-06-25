@@ -2606,19 +2606,78 @@ class SalesRepository {
     required DateTime to,
     int limit = 3,
   }) async {
+    // Query DIRECTA (sin el RPC fn_dashboard_top_selling_products, que no está
+    // desplegado en todos los entornos). Agrega las líneas de venta del rango
+    // por producto y devuelve el top-N por cantidad. La imagen sale de
+    // menu_items (solo para los ids del top, batch pequeño).
     final fromIso = AppTime.astToUtcIso(from);
     final toIso = AppTime.astToUtcIso(to);
-    final response = await _client.rpc(
-      'fn_dashboard_top_selling_products',
-      params: {
-        '_business_id': businessId,
-        '_from': fromIso,
-        '_to': toIso,
-        '_limit': limit,
-      },
+
+    final itemRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('order_items')
+          .select('product_id,product_name,qty,quantity,subtotal,discounts,status')
+          .eq('business_id', businessId)
+          .neq('status', 'void')
+          .gte('created_at', fromIso)
+          .lt('created_at', toIso)
+          .limit(100000),
     );
-    if (response == null) return const [];
-    return List<Map<String, dynamic>>.from(response as List);
+
+    double asDouble(Object? v) => (v as num?)?.toDouble() ?? 0;
+
+    final agg = <String, Map<String, dynamic>>{};
+    for (final row in itemRows) {
+      final productId = row['product_id']?.toString();
+      if (productId == null || productId.isEmpty) continue;
+      final qtyRaw = asDouble(row['qty']);
+      final qty = qtyRaw != 0 ? qtyRaw : asDouble(row['quantity']);
+      final amount = asDouble(row['subtotal']) - asDouble(row['discounts']);
+      final bucket = agg.putIfAbsent(
+        productId,
+        () => <String, dynamic>{
+          'product_id': productId,
+          'product_name': row['product_name']?.toString() ?? 'Producto',
+          'total_quantity': 0.0,
+          'total_amount': 0.0,
+        },
+      );
+      bucket['total_quantity'] = (bucket['total_quantity'] as double) + qty;
+      bucket['total_amount'] = (bucket['total_amount'] as double) + amount;
+    }
+
+    final ranked = agg.values.toList()
+      ..sort((a, b) => (b['total_quantity'] as double)
+          .compareTo(a['total_quantity'] as double));
+    final top = ranked.take(limit).toList(growable: false);
+    if (top.isEmpty) return const [];
+
+    // Imagen/nombre vigente desde menu_items para los productos del top.
+    final ids = top.map((e) => e['product_id'] as String).toList();
+    final menuRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('menu_items')
+          .select('id,name,image_url')
+          .inFilter('id', ids),
+    );
+    final meta = <String, Map<String, dynamic>>{
+      for (final row in menuRows)
+        if (row['id'] != null) row['id'].toString(): row,
+    };
+
+    return top.map((row) {
+      final m = meta[row['product_id']];
+      final menuName = m?['name']?.toString().trim();
+      return <String, dynamic>{
+        'product_id': row['product_id'],
+        'product_name': (menuName != null && menuName.isNotEmpty)
+            ? menuName
+            : row['product_name'],
+        'image_url': m?['image_url'],
+        'total_quantity': row['total_quantity'],
+        'total_amount': row['total_amount'],
+      };
+    }).toList(growable: false);
   }
 
   /// Últimas N órdenes del business para el panel "Recent Orders" del
@@ -2651,17 +2710,117 @@ class SalesRepository {
     required DateTime yesterdayFrom,
     required DateTime yesterdayTo,
   }) async {
-    final response = await _client.rpc(
-      'fn_dashboard_kpis',
-      params: {
-        '_business_id': businessId,
-        '_today_from': AppTime.astToUtcIso(todayFrom),
-        '_today_to': AppTime.astToUtcIso(todayTo),
-        '_yesterday_from': AppTime.astToUtcIso(yesterdayFrom),
-        '_yesterday_to': AppTime.astToUtcIso(yesterdayTo),
-      },
+    // Implementación con queries DIRECTAS (sin el RPC fn_dashboard_kpis).
+    // Motivos:
+    //   - El RPC scopeaba por COALESCE(zones.business_id, table_sessions.
+    //     business_id); cuando esos venían NULL el dashboard mostraba 0 aunque
+    //     SÍ hubiera órdenes. Aquí scopeamos por `orders.business_id` (poblado
+    //     y misma fuente que get_sales_summary_v2 → los números concilian).
+    //   - El RPC comparaba status_ext contra el vocabulario viejo del campo
+    //     `status` ('sent'/'served'/'canceled'); el enum real es
+    //     open/sent_to_kitchen/partially_paid/paid/void. Aquí usamos el correcto.
+    //   - Ingreso = dinero cobrado (payments.amount - change_amount), robusto
+    //     frente a orders.total = 0 en cuentas divididas.
+    final lowerIso = AppTime.astToUtcIso(yesterdayFrom);
+    final upperIso = AppTime.astToUtcIso(todayTo);
+
+    // Límites como instantes UTC para clasificar cada fila por período. Las dos
+    // ventanas (hoy / ayer, mismo tramo del día) no son contiguas: se sobre-pide
+    // el hueco intermedio y cada fila se ubica con su created_at exacto.
+    final tFrom = DateTime.parse(AppTime.astToUtcIso(todayFrom)).toUtc();
+    final tTo = DateTime.parse(AppTime.astToUtcIso(todayTo)).toUtc();
+    final yFrom = DateTime.parse(AppTime.astToUtcIso(yesterdayFrom)).toUtc();
+    final yTo = DateTime.parse(AppTime.astToUtcIso(yesterdayTo)).toUtc();
+
+    String? periodOf(Object? createdAtRaw) {
+      final ts = DateTime.tryParse(createdAtRaw?.toString() ?? '')?.toUtc();
+      if (ts == null) return null;
+      if (!ts.isBefore(tFrom) && ts.isBefore(tTo)) return 'today';
+      if (!ts.isBefore(yFrom) && ts.isBefore(yTo)) return 'yesterday';
+      return null;
+    }
+
+    double asDouble(Object? v) => (v as num?)?.toDouble() ?? 0;
+
+    final income = <String, double>{'today': 0, 'yesterday': 0};
+    final ordersTotal = <String, int>{'today': 0, 'yesterday': 0};
+    final ordersInProgress = <String, int>{'today': 0, 'yesterday': 0};
+    final ordersCompleted = <String, int>{'today': 0, 'yesterday': 0};
+    final itemsSold = <String, double>{'today': 0, 'yesterday': 0};
+
+    // 1. Ingresos = pagos cobrados (misma fórmula que ventas/caja).
+    final paymentRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('payments')
+          .select('created_at,amount,change_amount,status')
+          .eq('business_id', businessId)
+          .gte('created_at', lowerIso)
+          .lt('created_at', upperIso)
+          .limit(50000),
     );
-    if (response == null) return const [];
-    return List<Map<String, dynamic>>.from(response as List);
+    for (final row in paymentRows) {
+      final status = row['status']?.toString();
+      if (status != null && status != 'completed') continue;
+      final period = periodOf(row['created_at']);
+      if (period == null) continue;
+      income[period] =
+          income[period]! + (asDouble(row['amount']) - asDouble(row['change_amount']));
+    }
+
+    // 2. Órdenes: total (no void), en curso y completadas. Vocabulario del
+    //    enum order_status real.
+    const inProgress = {'open', 'sent_to_kitchen', 'partially_paid'};
+    final orderRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('orders')
+          .select('created_at,status_ext')
+          .eq('business_id', businessId)
+          .gte('created_at', lowerIso)
+          .lt('created_at', upperIso)
+          .limit(50000),
+    );
+    for (final row in orderRows) {
+      final period = periodOf(row['created_at']);
+      if (period == null) continue;
+      final status = row['status_ext']?.toString() ?? 'open';
+      if (status == 'void') continue;
+      ordersTotal[period] = ordersTotal[period]! + 1;
+      if (inProgress.contains(status)) {
+        ordersInProgress[period] = ordersInProgress[period]! + 1;
+      } else if (status == 'paid') {
+        ordersCompleted[period] = ordersCompleted[period]! + 1;
+      }
+    }
+
+    // 3. Items vendidos (líneas no anuladas).
+    final itemRows = List<Map<String, dynamic>>.from(
+      await _client
+          .from('order_items')
+          .select('created_at,qty,quantity,status')
+          .eq('business_id', businessId)
+          .neq('status', 'void')
+          .gte('created_at', lowerIso)
+          .lt('created_at', upperIso)
+          .limit(100000),
+    );
+    for (final row in itemRows) {
+      final period = periodOf(row['created_at']);
+      if (period == null) continue;
+      final qtyRaw = asDouble(row['qty']);
+      itemsSold[period] =
+          itemsSold[period]! + (qtyRaw != 0 ? qtyRaw : asDouble(row['quantity']));
+    }
+
+    return [
+      for (final period in const ['today', 'yesterday'])
+        {
+          'period': period,
+          'income': income[period],
+          'orders_total': ordersTotal[period],
+          'orders_in_progress': ordersInProgress[period],
+          'orders_completed': ordersCompleted[period],
+          'items_sold': itemsSold[period],
+        },
+    ];
   }
 }
