@@ -99,12 +99,12 @@ const ORDER_RE = /^[A-Z0-9]{1,15}$/;
 Deno.test("generateChargeOrderNumber: alfanumérico y exactamente 15 chars", () => {
   const on = generateChargeOrderNumber(
     "4d068df7-a5bf-4f55-bea1-70a84d08d662",
-    new Date(Date.UTC(2026, 5, 1)), // junio 2026
+    new Date(Date.UTC(2026, 5, 1)), // 1 junio 2026
     1,
   );
   assertEquals(on.length <= 15, true);
   assertEquals(ORDER_RE.test(on), true);
-  assertEquals(on, "MP4D068DF726061"); // MP + 4D068DF7 + 26 + 06 + 1
+  assertEquals(on, "MP4D068D2606011"); // MP + 4D068D + 26 + 06 + 01 + 1
 });
 
 Deno.test("generateChargeOrderNumber: determinístico por (membership, período, intento)", () => {
@@ -120,6 +120,13 @@ Deno.test("generateChargeOrderNumber: determinístico por (membership, período,
   const d2 = new Date(Date.UTC(2026, 6, 1));
   assertEquals(
     generateChargeOrderNumber(id, d, 1) === generateChargeOrderNumber(id, d2, 1),
+    false,
+  );
+  // distinto DÍA del mismo mes → distinto número (regresión del bug que daba
+  // "Could not create charge" al recobrar el mismo mes con otra fecha).
+  const d3 = new Date(Date.UTC(2026, 5, 24));
+  assertEquals(
+    generateChargeOrderNumber(id, d, 1) === generateChargeOrderNumber(id, d3, 1),
     false,
   );
 });

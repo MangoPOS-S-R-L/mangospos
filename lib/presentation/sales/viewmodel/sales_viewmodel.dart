@@ -111,6 +111,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // optimista en vuelo. Mientras el server no confirme esa qty, una recarga
   // stale (qty vieja) NO revierte la línea — se mantiene la optimista.
   final Map<String, double> _pendingItemQty = {};
+  // Guarda anti-parpadeo al AGREGAR: ids temporales (`tmp_`) de items agregados
+  // optimistamente cuyo INSERT aún no confirma el server. Mientras estén aquí,
+  // una recarga stale (que corre ANTES de que el INSERT haga commit — típico
+  // del eco Realtime de una acción previa) NO descarta el item optimista; se
+  // mantiene en la lista. Sin esto, el item recién tocado "sale y vuelve".
+  final Set<String> _inFlightAddTmpIds = {};
+  // Mapeo `tmp_` → id real (lo devuelve `addItemFromMenu`). Permite SOLTAR el
+  // optimista solo cuando el server YA trae su contraparte real, evitando un
+  // duplicado (tmp + real) en la recarga post-commit.
+  final Map<String, String> _tmpToRealItemId = {};
   // Overrides fiscales por sub-cuenta elegidos por el cajero en el header
   // (tipo de comprobante y cliente/RNC del check). Se REAPLICAN tras cada
   // recarga porque el bundle de la BD viva puede no devolver `requested_ncf_type`
@@ -1807,6 +1817,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             updatedSummary.discounts,
       );
 
+      // Guard del alta: protege este tmp de recargas stale en vuelo hasta que
+      // el server confirme su contraparte real (ver _loadOrderDetail).
+      _inFlightAddTmpIds.add(optimisticItem.id);
+
       state = state.copyWith(
         items: [...state.items, optimisticItem],
         order: updatedOrder,
@@ -1824,6 +1838,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             isTakeout: takeout,
             notes: notes,
           );
+
+      // Registrar tmp→real: a partir de aquí la recarga post-commit puede
+      // soltar el optimista (su contraparte real ya existe en el server) sin
+      // dejar duplicado.
+      if (optimisticItem != null && itemId.isNotEmpty) {
+        _tmpToRealItemId[optimisticItem.id] = itemId;
+      }
 
       // Audit trail del item: ver `_resolveItemEmployeeId` arriba.
       //
@@ -1909,6 +1930,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       } else {
         state = state.copyWith(error: 'Error al agregar producto: $e');
+      }
+    } finally {
+      // Soltar el guard del alta. En el camino feliz, _loadOrderDetail ya
+      // adoptó el item real (realId presente en el server) y descartó el tmp;
+      // aquí solo limpiamos el registro. En error online se revierte el
+      // optimismo; en offline el tmp persiste pero ya no hay recarga server
+      // que lo amenace.
+      if (optimisticItem != null) {
+        _inFlightAddTmpIds.remove(optimisticItem.id);
+        _tmpToRealItemId.remove(optimisticItem.id);
       }
     }
   }
@@ -3603,6 +3634,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (previousOrderId != orderId) {
       _pendingDeletedItemIds.clear();
       _pendingItemQty.clear();
+      _inFlightAddTmpIds.clear();
+      _tmpToRealItemId.clear();
     } else {
       // BORRADOS: los ids que el server YA NO trae están confirmados → salen
       // de la guarda; los que el server AÚN trae (recarga stale antes del
@@ -3633,6 +3666,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // Soltar guardas de items que el server ya no trae (borrados).
         final serverIds = items.map((i) => i.id).toSet();
         _pendingItemQty.removeWhere((id, _) => !serverIds.contains(id));
+      }
+      // ALTA: conservar los items agregados optimistamente (tmp_) cuyo INSERT
+      // el server AÚN no refleja en esta recarga (típico de un eco Realtime
+      // que corre antes del commit). Se sueltan en cuanto su contraparte real
+      // —mapeada en _tmpToRealItemId al volver addItemFromMenu— ya viene en la
+      // lista, evitando un duplicado (tmp + real). Sin esto, una recarga stale
+      // en vuelo descartaba el item recién tocado y se veía "salir y volver".
+      if (_inFlightAddTmpIds.isNotEmpty) {
+        final serverIds = items.map((i) => i.id).toSet();
+        final tmpInState = {
+          for (final i in state.items)
+            if (_inFlightAddTmpIds.contains(i.id)) i.id: i,
+        };
+        final keep = <OrderItem>[];
+        for (final tmpId in _inFlightAddTmpIds) {
+          final realId = _tmpToRealItemId[tmpId];
+          final confirmed = realId != null && serverIds.contains(realId);
+          if (!confirmed && tmpInState[tmpId] != null) {
+            keep.add(tmpInState[tmpId]!);
+          }
+        }
+        if (keep.isNotEmpty) {
+          items = [...items, ...keep];
+        }
       }
     }
 

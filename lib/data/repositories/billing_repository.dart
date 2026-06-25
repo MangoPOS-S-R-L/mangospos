@@ -88,7 +88,9 @@ class BillingRepository {
   }
 
   /// Método de pago default del business. Null si no hay tarjeta tokenizada.
-  Future<BillingPaymentMethod?> getDefaultPaymentMethod(String businessId) async {
+  Future<BillingPaymentMethod?> getDefaultPaymentMethod(
+    String businessId,
+  ) async {
     final row = await _client
         .from('azul_payment_methods_public')
         .select()
@@ -99,7 +101,9 @@ class BillingRepository {
     return BillingPaymentMethod.fromJson(row);
   }
 
-  Stream<BillingPaymentMethod?> watchDefaultPaymentMethod(String businessId) async* {
+  Stream<BillingPaymentMethod?> watchDefaultPaymentMethod(
+    String businessId,
+  ) async* {
     yield await getDefaultPaymentMethod(businessId);
     final stream = _client
         .from('azul_payment_methods')
@@ -206,7 +210,9 @@ class BillingRepository {
     }
 
     if (data is! Map<String, dynamic>) {
-      throw BillingRepositoryException('Respuesta inválida al tokenizar la tarjeta');
+      throw BillingRepositoryException(
+        'Respuesta inválida al tokenizar la tarjeta',
+      );
     }
     if (data['ok'] != true || data.containsKey('error')) {
       throw _tokenizeError(data);
@@ -254,10 +260,14 @@ class BillingRepository {
         }),
       );
     } catch (e) {
-      throw BillingRepositoryException('No se pudo contactar la función local: $e');
+      throw BillingRepositoryException(
+        'No se pudo contactar la función local: $e',
+      );
     }
     final dynamic data = resp.body.isNotEmpty ? jsonDecode(resp.body) : null;
-    if (resp.statusCode != 200 || data is! Map<String, dynamic> || data['ok'] != true) {
+    if (resp.statusCode != 200 ||
+        data is! Map<String, dynamic> ||
+        data['ok'] != true) {
       throw _tokenizeError(data);
     }
     return TokenizedCardResult(
@@ -285,6 +295,59 @@ class BillingRepository {
       if (m != null) return BillingRepositoryException(m.toString());
     }
     return BillingRepositoryException('No se pudo tokenizar la tarjeta');
+  }
+
+  /// Cobra la suscripción AHORA ("Pagar sistema") con la tarjeta default, vía la
+  /// Edge Function `azul-charge-now` (que autoriza al dueño y delega en
+  /// `azul-charge-subscription` con service_role). Devuelve el resultado.
+  ///
+  /// No lanza por tarjeta declinada (HTTP 200, `ok:false`) — eso viene en el
+  /// [ChargeNowResult]. Lanza [BillingRepositoryException] en errores reales
+  /// (sin tarjeta, suspendido, red, etc.).
+  Future<ChargeNowResult> chargeNow({required String businessId}) async {
+    final dynamic data;
+    try {
+      final response = await _client.functions.invoke(
+        'azul-charge-now',
+        body: {'business_id': businessId},
+      );
+      data = response.data;
+    } on FunctionException catch (e) {
+      throw _chargeError(e.details);
+    }
+
+    if (data is! Map<String, dynamic>) {
+      throw BillingRepositoryException('Respuesta inválida del cobro');
+    }
+    if (data.containsKey('error')) {
+      throw _chargeError(data);
+    }
+    final approved = data['ok'] == true;
+    return ChargeNowResult(
+      approved: approved,
+      status:
+          data['status']?.toString() ?? (approved ? 'approved' : 'declined'),
+      chargeId: data['charge_id']?.toString(),
+      isoCode: data['iso_code']?.toString(),
+      azulOrderId: data['azul_order_id']?.toString(),
+      responseMessage: data['response_message']?.toString(),
+      idempotent: data['idempotent'] == true,
+    );
+  }
+
+  BillingRepositoryException _chargeError(dynamic details) {
+    if (details is Map) {
+      final err = details['error'];
+      if (err is Map) {
+        return BillingRepositoryException(
+          err['message']?.toString() ?? 'No se pudo procesar el cobro',
+          code: err['code']?.toString(),
+        );
+      }
+      final m = details['response_message'] ?? details['message'];
+      if (m != null) return BillingRepositoryException(m.toString());
+    }
+    return BillingRepositoryException('No se pudo procesar el cobro');
   }
 
   // -------------------------------------------------------------------------
@@ -317,8 +380,10 @@ class BillingRepository {
     final lastDayOfMonth = DateTime(today.year, today.month + 1, 0).day;
     final daysRemaining = lastDayOfMonth - today.day + 1;
 
-    final creditA = (currentPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
-    final chargeB = (newPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
+    final creditA =
+        (currentPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
+    final chargeB =
+        (newPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
     final adjustment = chargeB - creditA;
 
     final ProrationKind kind;
@@ -376,6 +441,32 @@ class TokenizedCardResult {
     final digits = cardNumberMasked.replaceAll(RegExp(r'[^0-9]'), '');
     return digits.length >= 4 ? digits.substring(digits.length - 4) : digits;
   }
+}
+
+/// Resultado de un cobro manual de la suscripción ([BillingRepository.chargeNow]).
+class ChargeNowResult {
+  /// `true` si Azul aprobó (IsoCode 00).
+  final bool approved;
+
+  /// Estado de la charge: 'approved' | 'declined' | 'error'.
+  final String status;
+  final String? chargeId;
+  final String? isoCode;
+  final String? azulOrderId;
+  final String? responseMessage;
+
+  /// `true` si el período ya estaba cobrado y se devolvió sin recobrar.
+  final bool idempotent;
+
+  const ChargeNowResult({
+    required this.approved,
+    required this.status,
+    required this.chargeId,
+    required this.isoCode,
+    required this.azulOrderId,
+    required this.responseMessage,
+    required this.idempotent,
+  });
 }
 
 enum ProrationKind { upgrade, downgrade, same }

@@ -1,11 +1,13 @@
 // lib/data/repositories/printing_service.dart
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
 import '../models/sales_models.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
+import '../../core/printing/ble_printer_connection_manager.dart';
 import '../../services/printing/print_ticket_service.dart';
 import '../../presentation/sales/state/sales_state.dart';
 import 'pos_settings_repository.dart';
@@ -452,6 +454,31 @@ class PrintingService {
             throw Exception(
               'La impresora Bluetooth no tiene identificador para conectarse.',
             );
+          }
+          // En Android/iOS usamos la conexión PERSISTENTE (PRD BT — Fase 1/2 +
+          // transporte Classic): reutiliza el enlace vivo (Classic/RFCOMM o
+          // BLE, auto-elegido) en vez de conectar/desconectar por ticket, y
+          // encola el job si la impresora está reconectando. En macOS/Windows
+          // se mantiene el camino per-job de printRaw.
+          if (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS) {
+            // Misma clave de idempotencia que el cloud fallback → si el ticket
+            // se reintenta, la cola lo deduplica y no se duplica el papel.
+            final jobId = (orderId != null && orderId.isNotEmpty)
+                ? 'kitchen-$orderId-$areaCode-${printer.id}'
+                : 'kitchen-${DateTime.now().microsecondsSinceEpoch}'
+                    '-$areaCode-${printer.id}';
+            final result = await BlePrinterConnectionManager.instance
+                .printOrEnqueue(address: btId, data: bytes, jobId: jobId);
+            if (result == BlePrintResult.failed) {
+              throw Exception(
+                'No se pudo enviar el ticket a la impresora Bluetooth.',
+              );
+            }
+            // printed o queued: aceptado. El manager es dueño del reintento y
+            // del vaciado, así que NO caemos al fallback de cloud (que para
+            // impresoras BT en solo-tablets no se drena, y evita doble print).
+            return KitchenPrintOutcome.directSuccess;
           }
           await BluetoothPrintService.printRaw(remoteId: btId, data: bytes);
           return KitchenPrintOutcome.directSuccess;

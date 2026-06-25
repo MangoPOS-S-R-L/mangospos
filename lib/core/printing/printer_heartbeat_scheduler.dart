@@ -27,6 +27,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/models/printing.dart';
 import '../../services/print_agent_detector.dart';
 import '../network/android_net_lock.dart';
+import 'ble_printer_connection_manager.dart';
 import 'device_identity.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
@@ -61,6 +62,28 @@ class PrinterHeartbeatScheduler {
     _timer?.cancel();
     _timer = null;
     unawaited(AndroidNetLock.releaseWifiLock());
+    // Cierra conexiones BLE y detiene el Foreground Service al fin de sesión.
+    // NO borra la cola persistida (los pendientes sobreviven al logout).
+    unawaited(BlePrinterConnectionManager.instance.shutdown());
+  }
+
+  /// Mantiene el set de impresoras BT que el [BlePrinterConnectionManager] debe
+  /// conservar conectadas. Android sostiene la conexión con Foreground Service;
+  /// iOS la mantiene en foreground y reconecta al volver (Tier A). macOS/Windows
+  /// no aplican (siguen con el camino per-job).
+  Future<void> _syncBlePrinters(List<PrinterConfig> printers) async {
+    final p = defaultTargetPlatform;
+    if (p != TargetPlatform.android && p != TargetPlatform.iOS) return;
+    final btIds = printers
+        .where((p) => p.type.toLowerCase() == 'bluetooth')
+        .map((p) => (p.mac ?? p.devicePath ?? '').trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    try {
+      await BlePrinterConnectionManager.instance.setDesiredPrinters(btIds);
+    } catch (e) {
+      debugPrint('[Heartbeat] syncBlePrinters error: $e');
+    }
   }
 
   Future<void> _safeTick() async {
@@ -145,7 +168,17 @@ class PrinterHeartbeatScheduler {
       debugPrint('Heartbeat: error fetching printers: $e');
       return;
     }
-    if (printers.isEmpty) return;
+    if (printers.isEmpty) {
+      // Sin impresoras activas: derriba cualquier conexión BLE persistente y
+      // detiene el Foreground Service (PRD BT — F1.4: no corre en vacío).
+      unawaited(_syncBlePrinters(const []));
+      return;
+    }
+
+    // PRD BT — Fase 1: mantener vivas las conexiones BLE a las impresoras BT
+    // activas del negocio. Se refresca en cada tick, así que alta/baja de
+    // impresoras se refleja sin cablear el viewmodel.
+    unawaited(_syncBlePrinters(printers));
 
     for (final printer in printers) {
       final reachable = await _ping(

@@ -9,6 +9,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/bluetooth_diagnostics_screen.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -137,6 +138,17 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
           onPressed: () => context.go(AppRoutes.settings),
         ),
         title: const Text('Impresoras'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bluetooth_searching),
+            tooltip: 'Diagnóstico Bluetooth',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const BluetoothDiagnosticsScreen(),
+              ),
+            ),
+          ),
+        ],
       ),
       body: body,
     );

@@ -1,0 +1,18 @@
+-- ROLLBACK de 20260624_0002_close_orphan_checks_backfill.sql
+--
+-- NO reversible automáticamente: el backfill no registró qué checks estaban
+-- abiertos antes, así que no se puede distinguir un check cerrado por este
+-- backfill de uno cerrado legítimamente por un cobro. Reabrir por estado
+-- (is_closed=true) reabriría TODOS los checks cerrados, lo cual es incorrecto
+-- y peligroso (rompería cuentas pagadas).
+--
+-- Si fuera imprescindible revertir, hacerlo de forma acotada a una ventana de
+-- tiempo conocida del backfill, p. ej.:
+--
+--   UPDATE public.order_checks
+--   SET is_closed = false
+--   WHERE closed_at >= '<timestamp_exacto_del_backfill>'
+--     AND closed_at <  '<timestamp_fin>';
+--
+-- (No se ejecuta nada por defecto.)
+SELECT 1;

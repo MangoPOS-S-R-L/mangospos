@@ -1075,7 +1075,10 @@ class InventoryRepository {
         .select(
           'id, item_id, quantity_sent, quantity_received, '
           'cost_per_unit, variance_reason, '
-          'inventory_items(name, unit)',
+          // Desambiguar: stock_transfer_items tiene 2 FK a inventory_items
+          // (item_id origen y target_item_id destino). Aquí queremos el insumo
+          // de origen, así que fijamos la relación por item_id_fkey.
+          'inventory_items!stock_transfer_items_item_id_fkey(name, unit)',
         )
         .eq('stock_transfer_id', transferId)
         .order('id');

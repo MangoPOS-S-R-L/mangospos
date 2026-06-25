@@ -58,6 +58,20 @@ subprojects {
             force("org.jetbrains.kotlin:kotlin-stdlib:2.1.0")
         }
     }
+
+    // Silencia los avisos de javac que emiten plugins de terceros sobre los que
+    // no tenemos control:
+    //   - "source/target value 8 is obsolete"  → -Xlint:-options (lo sugiere el
+    //     propio compilador). Vienen de plugins que aún compilan contra Java 8.
+    //   - APIs deprecated / marked-for-removal  → -deprecation/-removal
+    //     (p. ej. media_kit_video onSurfaceCreated/Destroyed).
+    // No afecta a nuestro código (el lado nativo es Kotlin; KotlinCompile no se
+    // toca). Es supresión de ruido, no cambia comportamiento.
+    tasks.withType<JavaCompile>().configureEach {
+        options.compilerArgs.addAll(
+            listOf("-Xlint:-options", "-Xlint:-deprecation", "-Xlint:-removal"),
+        )
+    }
 }
 
 tasks.register<Delete>("clean") {

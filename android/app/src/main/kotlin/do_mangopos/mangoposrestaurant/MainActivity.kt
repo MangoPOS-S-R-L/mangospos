@@ -1,7 +1,9 @@
 package do_mangopos.mangoposrestaurant
 
 import android.content.Context
+import android.content.Intent
 import android.net.wifi.WifiManager
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -29,6 +31,7 @@ import io.flutter.plugin.common.MethodChannel
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "mangopos/net_lock"
+    private val printerFgsChannelName = "mangopos/printer_fgs"
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var multicastRefCount = 0
@@ -69,6 +72,54 @@ class MainActivity : FlutterActivity() {
                     result.error("net_lock_error", e.message, null)
                 }
             }
+
+        // Channel del Foreground Service de impresora (PRD BT — Fase 1). El
+        // lado Dart (AndroidPrinterForegroundService) llama start/stop según
+        // haya o no una impresora BT activa configurada.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, printerFgsChannelName)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "start" -> {
+                            startPrinterService()
+                            result.success(true)
+                        }
+                        "stop" -> {
+                            stopPrinterService()
+                            result.success(true)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    // Best-effort: si el servicio no arranca, la impresión sigue
+                    // funcionando en foreground; solo se pierde la persistencia.
+                    result.error("printer_fgs_error", e.message, null)
+                }
+            }
+
+        // Transporte Classic/RFCOMM (registra mangopos/classic_bt + events).
+        classicBt.register(flutterEngine.dartExecutor.binaryMessenger)
+    }
+
+    // Transporte Classic/RFCOMM (SPP) para impresoras térmicas. El lado Dart
+    // (ClassicBluetooth) lo usa para Fase 0 (bondedDevices+SPP) y como backend
+    // de impresión cuando el equipo expone Classic.
+    private val classicBt by lazy { ClassicBtPlugin(applicationContext) }
+
+    private fun printerServiceIntent() =
+        Intent(this, PrinterForegroundService::class.java)
+
+    private fun startPrinterService() {
+        // startForegroundService obliga al servicio a llamar startForeground()
+        // en ≤5s; PrinterForegroundService lo hace en onStartCommand.
+        ContextCompat.startForegroundService(this, printerServiceIntent())
+    }
+
+    private fun stopPrinterService() {
+        // stopService dispara onDestroy y retira la notificación foreground,
+        // sin violar el contrato de startForeground() (a diferencia de mandar
+        // un ACTION_STOP por startForegroundService).
+        stopService(printerServiceIntent())
     }
 
     @Synchronized

@@ -978,7 +978,8 @@ class MyApp extends ConsumerWidget {
       final statusChanged = prev?.status != next.status;
       final prevPerms = prev?.permissions;
       final nextPerms = next.permissions;
-      final permsChanged = prevPerms == null ||
+      final permsChanged =
+          prevPerms == null ||
           prevPerms.length != nextPerms.length ||
           !prevPerms.containsAll(nextPerms);
       if (statusChanged || permsChanged) {

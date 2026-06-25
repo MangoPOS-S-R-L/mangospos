@@ -203,8 +203,14 @@ export function generateChargeOrderNumber(
 ): string {
   const yy = billingPeriodStart.getUTCFullYear().toString().slice(-2);
   const mm = (billingPeriodStart.getUTCMonth() + 1).toString().padStart(2, "0");
-  const compactId = membershipId.replaceAll("-", "").slice(0, 8).toUpperCase();
-  return `MP${compactId}${yy}${mm}${attemptNumber}`;
+  const dd = billingPeriodStart.getUTCDate().toString().padStart(2, "0");
+  // Incluimos el DÍA (no solo año-mes): dos cobros de la misma membership en el
+  // mismo mes pero con billing_period_start distinto (p.ej. "pagar ahora"
+  // anticipado, o mover la fecha) DEBEN generar order_number distintos. Si no,
+  // chocan con el UNIQUE de order_number y el insert revienta con "Could not
+  // create charge". Presupuesto de 15 chars: MP(2) + 6 hex + YYMMDD(6) + intento.
+  const compactId = membershipId.replaceAll("-", "").slice(0, 6).toUpperCase();
+  return `MP${compactId}${yy}${mm}${dd}${attemptNumber}`;
 }
 
 // ---------------------------------------------------------------------------
