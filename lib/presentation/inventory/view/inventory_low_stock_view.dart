@@ -13,6 +13,7 @@ import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../state/low_stock_state.dart';
 import '../viewmodel/low_stock_viewmodel.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryLowStockView extends ConsumerStatefulWidget {
   const InventoryLowStockView({super.key});
@@ -42,7 +43,7 @@ class _InventoryLowStockViewState
     final low = state.countOf(LowStockAlertLevel.low);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -129,6 +130,11 @@ class _Header extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: InventoryBackButton(),
+          ),
+          const SizedBox(width: 4),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -360,7 +366,7 @@ class _AlertCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.card),
             border: Border.all(color: AppColors.border),
-            boxShadow: AppShadows.soft,
+            boxShadow: AppShadows.cardElevated,
           ),
           child: Row(
             children: [

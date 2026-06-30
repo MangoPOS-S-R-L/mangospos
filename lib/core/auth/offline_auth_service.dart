@@ -101,7 +101,8 @@ class OfflineAuthService {
     // macOS: en builds ad-hoc/dev (sin DEVELOPMENT_TEAM) el data-protection
     // keychain falla con errSecMissingEntitlement (-34018) porque el
     // access-group no tiene prefijo de Team. Usamos el keychain de archivo,
-    // válido bajo App Sandbox con la identidad propia de la app.
+    // válido bajo App Sandbox con la identidad propia de la app. Sus prompts de
+    // ACL (-128 si se cancelan) ya no tronan: las lecturas están blindadas.
     mOptions: MacOsOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
       useDataProtectionKeyChain: false,
@@ -154,9 +155,16 @@ class OfflineAuthService {
       );
     }
 
-    await _secureStorage.write(key: _kDeviceTokenKey, value: token);
-    await _secureStorage.write(key: _kDeviceIdKey, value: deviceId);
-    await _secureStorage.write(key: _kDeviceBusinessKey, value: businessId);
+    try {
+      await _secureStorage.write(key: _kDeviceTokenKey, value: token);
+      await _secureStorage.write(key: _kDeviceIdKey, value: deviceId);
+      await _secureStorage.write(key: _kDeviceBusinessKey, value: businessId);
+    } catch (e) {
+      // No pudimos persistir el binding en el keychain (ej. macOS -128/-34018).
+      // Lo reportamos con el tipo manejado por los callers en vez de propagar un
+      // PlatformException crudo que tronaría el flujo de vinculación.
+      throw OfflineRosterSyncException('No se pudo guardar el binding: $e');
+    }
   }
 
   /// Borra el device_token local. NO revoca en el server (para eso usa
@@ -169,13 +177,27 @@ class OfflineAuthService {
     await _secureStorage.delete(key: _kDeviceBusinessKey);
   }
 
+  /// Lee del secure storage tolerando fallos del keychain (macOS
+  /// errSecUserCanceled -128 si se canceló un prompt de ACL, -34018 sin Team,
+  /// o keychain bloqueado): devuelve null en vez de propagar el
+  /// PlatformException y tronar el arranque/sync. No es destructivo —el ítem
+  /// sigue en el keychain— así que una siguiente lectura exitosa se autorepara.
+  Future<String?> _safeRead(String key) async {
+    try {
+      return await _secureStorage.read(key: key);
+    } catch (e) {
+      debugPrint('[OfflineAuth] read de "$key" falló (keychain): $e');
+      return null;
+    }
+  }
+
   Future<bool> isDeviceBound() async {
-    final token = await _secureStorage.read(key: _kDeviceTokenKey);
+    final token = await _safeRead(_kDeviceTokenKey);
     return token != null && token.isNotEmpty;
   }
 
   Future<String?> currentBoundBusinessId() async {
-    return _secureStorage.read(key: _kDeviceBusinessKey);
+    return _safeRead(_kDeviceBusinessKey);
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -186,7 +208,7 @@ class OfflineAuthService {
   /// terminal haya sido bindado previamente. Idempotente: re-llamarla
   /// solo refresca el cache.
   Future<List<OfflineRosterUser>> syncRoster() async {
-    final token = await _secureStorage.read(key: _kDeviceTokenKey);
+    final token = await _safeRead(_kDeviceTokenKey);
     if (token == null || token.isEmpty) {
       throw OfflineRosterSyncException('Device no vinculado');
     }

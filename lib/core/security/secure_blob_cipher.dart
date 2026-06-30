@@ -48,6 +48,9 @@ class SecureBlobCipher {
     // errSecMissingEntitlement (-34018), rompiendo el sellado de la cola
     // offline (G9b). Usamos el keychain de archivo, accesible bajo App
     // Sandbox con la identidad propia de la app sin necesidad de Team.
+    // Nota: el keychain de archivo emite prompts de ACL cuando la firma ad-hoc
+    // cambia entre rebuilds; un "Deny" devuelve errSecUserCanceled (-128). El
+    // blindaje de _loadOrCreateKey degrada con gracia en vez de tronar.
     mOptions: MacOsOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
       useDataProtectionKeyChain: false,
@@ -62,7 +65,18 @@ class SecureBlobCipher {
   Future<SecretKey> _key() => _keyFuture ??= _loadOrCreateKey();
 
   Future<SecretKey> _loadOrCreateKey() async {
-    final existing = await _secureStorage.read(key: _keyStorageKey);
+    String? existing;
+    try {
+      existing = await _secureStorage.read(key: _keyStorageKey);
+    } catch (e) {
+      // Keychain inaccesible: macOS errSecUserCanceled (-128) si se canceló un
+      // prompt de ACL, errSecMissingEntitlement (-34018) sin Team, o keychain
+      // bloqueado. Degradamos a una clave efímera de sesión en vez de tronar el
+      // arranque. Los blobs sellados con otra clave quedan ilegibles (open →
+      // null, ya tolerado).
+      debugPrint('[SecureBlobCipher] read de clave falló, uso efímera: $e');
+      existing = null;
+    }
     if (existing != null && existing.isNotEmpty) {
       try {
         return SecretKey(base64Decode(existing));
@@ -73,7 +87,16 @@ class SecureBlobCipher {
     }
     final fresh = await _algorithm.newSecretKey();
     final bytes = await fresh.extractBytes();
-    await _secureStorage.write(key: _keyStorageKey, value: base64Encode(bytes));
+    try {
+      await _secureStorage.write(
+        key: _keyStorageKey,
+        value: base64Encode(bytes),
+      );
+    } catch (e) {
+      // Si el write falla, seguimos con la clave en memoria para no tronar; no
+      // sobrevivirá a un reinicio (se regenerará), aceptable frente a un crash.
+      debugPrint('[SecureBlobCipher] write de clave falló, solo en memoria: $e');
+    }
     return SecretKey(bytes);
   }
 

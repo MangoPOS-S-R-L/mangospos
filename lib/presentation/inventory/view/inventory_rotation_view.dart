@@ -15,6 +15,7 @@ import '../../../core/theme/app_shadows.dart';
 import '../../../core/utils/export/report_exporter.dart';
 import '../state/rotation_state.dart';
 import '../viewmodel/rotation_viewmodel.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryRotationView extends ConsumerStatefulWidget {
   const InventoryRotationView({super.key});
@@ -46,7 +47,7 @@ class _InventoryRotationViewState
               .toList(growable: false);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -336,6 +337,11 @@ class _Header extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: InventoryBackButton(),
+              ),
+              const SizedBox(width: 4),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -461,7 +467,7 @@ class _StatCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -662,7 +668,7 @@ class _RotationCard extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(color: AppColors.border),
-          boxShadow: AppShadows.soft,
+          boxShadow: AppShadows.cardElevated,
         ),
         child: Row(
           children: [

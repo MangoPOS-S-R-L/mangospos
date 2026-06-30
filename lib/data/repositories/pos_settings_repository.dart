@@ -145,6 +145,14 @@ class BusinessFeatures {
   final bool defaultTakeoutManual;
   final bool defaultTakeoutDelivery;
 
+  /// Fee de delivery propio (cargo EXENTO). Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+  /// Si [deliveryFeeRequired] es true, no se puede cobrar un delivery propio
+  /// sin fijar el monto (≥ [deliveryFeeMin]). [deliveryFeePresets] son los
+  /// montos sugeridos como botones en el gate de cobro.
+  final bool deliveryFeeRequired;
+  final double deliveryFeeMin;
+  final List<double> deliveryFeePresets;
+
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
     this.salesModeManualEnabled = true,
@@ -161,6 +169,9 @@ class BusinessFeatures {
     this.defaultTakeoutQuick = false,
     this.defaultTakeoutManual = false,
     this.defaultTakeoutDelivery = false,
+    this.deliveryFeeRequired = true,
+    this.deliveryFeeMin = 0,
+    this.deliveryFeePresets = const [],
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -189,7 +200,30 @@ class BusinessFeatures {
       defaultTakeoutQuick: map['default_takeout_quick'] == true,
       defaultTakeoutManual: map['default_takeout_manual'] == true,
       defaultTakeoutDelivery: map['default_takeout_delivery'] == true,
+      // Default true cuando la columna no viene o es NULL (= column default).
+      deliveryFeeRequired: map['delivery_fee_required'] != false,
+      deliveryFeeMin: _toDoubleOrZero(map['delivery_fee_min']),
+      deliveryFeePresets: _parseFeePresets(map['delivery_fee_presets']),
     );
+  }
+
+  /// numeric de Postgres puede llegar como num o String (según el driver).
+  static double _toDoubleOrZero(dynamic v) {
+    if (v == null) return 0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0;
+  }
+
+  /// `delivery_fee_presets` es jsonb (arreglo de montos). Llega como List.
+  static List<double> _parseFeePresets(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .map((e) => e is num ? e.toDouble() : double.tryParse(e.toString()))
+          .whereType<double>()
+          .where((n) => n > 0)
+          .toList();
+    }
+    return const [];
   }
 
   BusinessFeatures copyWith({
@@ -208,6 +242,9 @@ class BusinessFeatures {
     bool? defaultTakeoutQuick,
     bool? defaultTakeoutManual,
     bool? defaultTakeoutDelivery,
+    bool? deliveryFeeRequired,
+    double? deliveryFeeMin,
+    List<double>? deliveryFeePresets,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -232,6 +269,9 @@ class BusinessFeatures {
       defaultTakeoutManual: defaultTakeoutManual ?? this.defaultTakeoutManual,
       defaultTakeoutDelivery:
           defaultTakeoutDelivery ?? this.defaultTakeoutDelivery,
+      deliveryFeeRequired: deliveryFeeRequired ?? this.deliveryFeeRequired,
+      deliveryFeeMin: deliveryFeeMin ?? this.deliveryFeeMin,
+      deliveryFeePresets: deliveryFeePresets ?? this.deliveryFeePresets,
     );
   }
 
@@ -933,6 +973,9 @@ class PosSettingsRepository {
       'default_takeout_quick': features.defaultTakeoutQuick,
       'default_takeout_manual': features.defaultTakeoutManual,
       'default_takeout_delivery': features.defaultTakeoutDelivery,
+      'delivery_fee_required': features.deliveryFeeRequired,
+      'delivery_fee_min': features.deliveryFeeMin,
+      'delivery_fee_presets': features.deliveryFeePresets,
     }, onConflict: 'business_id');
   }
 }

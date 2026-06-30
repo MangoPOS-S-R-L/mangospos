@@ -15,6 +15,7 @@ import '../../../core/theme/app_shadows.dart';
 import '../state/direct_receipts_state.dart';
 import '../viewmodel/direct_receipts_viewmodel.dart';
 import 'direct_receipt_dialog.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryDirectReceiptsView extends ConsumerStatefulWidget {
   const InventoryDirectReceiptsView({super.key});
@@ -40,7 +41,7 @@ class _InventoryDirectReceiptsViewState
     final state = vm.state;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: state.saving ? null : () => _openCreateDialog(context),
         icon: const Icon(Icons.add_rounded),
@@ -217,6 +218,11 @@ class _Header extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: InventoryBackButton(),
+          ),
+          const SizedBox(width: 4),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -446,7 +452,7 @@ class _ReceiptCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.card),
             border: Border.all(color: AppColors.border),
-            boxShadow: AppShadows.soft,
+            boxShadow: AppShadows.cardElevated,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

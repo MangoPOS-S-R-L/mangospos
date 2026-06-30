@@ -41,6 +41,67 @@ class PrintTicketService {
     return itemDisplayBaseUnitPrice(order, item);
   }
 
+  /// Base imprimible por línea, consistente con el SUBTOTAL recomputado del
+  /// ticket. Cuando el ticket recomputa el SUBTOTAL desde el TOTAL (tasa
+  /// uniforme conocida) y el ítem es inclusive, derivamos la base de la línea
+  /// con la MISMA fórmula para que la suma de líneas cuadre con el SUBTOTAL:
+  ///   - post_discount: base = (gross - descuento) / (1 + tasa)
+  ///   - pre_discount:  base = gross / (1 + tasa)  (descuento sale aparte)
+  /// Necesario porque `item.subtotal` del backend resta el descuento
+  /// tax-inclusive a la base pre-impuestos (ej. 230.47 - 59 = 171.47), valor
+  /// que no cuadra con el SUBTOTAL recomputado (236/1.28 = 184.38). Fuera de
+  /// ese caso (exclusive, tasas mixtas o sin tasa) usamos la base nativa.
+  static double _printableItemBaseTotal(
+    Order? order,
+    OrderItem item, {
+    required bool canRecompute,
+    required bool isPostDiscountMode,
+    required double declaredRate,
+  }) {
+    if (canRecompute && item.taxMode == 'inclusive' && declaredRate > 0) {
+      // itemDisplayTotal (inclusive) = gross catálogo - descuento.
+      final grossAfterDiscount = itemDisplayTotal(order, item);
+      final gross = isPostDiscountMode
+          ? grossAfterDiscount
+          : grossAfterDiscount + item.discounts;
+      return gross / (1 + declaredRate);
+    }
+    return itemDisplayBaseTotal(order, item);
+  }
+
+  /// Detección de tasa uniforme + modo de descuento, compartida entre la
+  /// línea por ítem y el bloque de totales para que ambos usen exactamente
+  /// el mismo criterio de recomputación.
+  static _RecomputeContext _resolveRecomputeContext({
+    required double subtotal,
+    required double tax,
+    required double serviceFee,
+    required List<({String label, double amount})> taxBreakdown,
+    required String discountDisplayMode,
+  }) {
+    final isPostDiscountMode = discountDisplayMode == 'post_discount';
+    final lineRates = <double?>[];
+    for (final entry in taxBreakdown) {
+      lineRates.add(_parseInvoiceRatePercent(entry.label));
+    }
+    final allRatesKnown =
+        taxBreakdown.isNotEmpty && !lineRates.contains(null);
+    final declaredRate = allRatesKnown
+        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
+        : 0.0;
+    final actualRate =
+        subtotal > 0.005 ? (tax + serviceFee) / subtotal : 0.0;
+    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
+    final canRecompute =
+        allRatesKnown && declaredRate > 0 && ratesAreUniform;
+    return _RecomputeContext(
+      isPostDiscountMode: isPostDiscountMode,
+      lineRates: lineRates,
+      declaredRate: declaredRate,
+      canRecompute: canRecompute,
+    );
+  }
+
   static _PrintableReceiptTotals _resolvePrintableTotals({
     required Order order,
     required Iterable<OrderItem> items,
@@ -71,6 +132,7 @@ class PrintTicketService {
         serviceFee: summary.serviceFee,
         tax: summary.tax,
         total: summary.total,
+        deliveryFee: summary.deliveryFee,
       );
     }
 
@@ -80,6 +142,7 @@ class PrintTicketService {
       serviceFee: order.serviceFee,
       tax: order.tax,
       total: order.total,
+      deliveryFee: order.deliveryFee,
     );
   }
 
@@ -518,19 +581,37 @@ class PrintTicketService {
     }
     gap(); // línea en blanco debajo del encabezado
 
+    // Criterio de recomputación (tasa uniforme + modo de descuento). Se
+    // calcula ANTES del loop para que la base por línea y el SUBTOTAL de los
+    // totales usen exactamente la misma fórmula y cuadren al centavo.
+    final printableSummary = summarizeOrderPricing(order, items);
+    final recompute = _resolveRecomputeContext(
+      subtotal: printableSummary.subtotal,
+      tax: printableSummary.tax,
+      serviceFee: printableSummary.serviceFee,
+      taxBreakdown: taxBreakdown,
+      discountDisplayMode: discountDisplayMode,
+    );
+
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
       // Layout B: la línea principal muestra el PRECIO BASE del producto
       // (sin sumar modificadores). El modifier sale en su propia línea con
-      // su delta, y el total de la derecha (`itemDisplayBaseTotal`) ya
-      // incluye base + modifiers para que cuadre con SUBTOTAL.
+      // su delta, y el total de la derecha (`baseTotal`) ya incluye base +
+      // modifiers para que cuadre con SUBTOTAL.
       final baseUnitPrice = item.unitPrice;
 
       // Impuestos por item: NO se muestran aquí (solo consolidados en TOTALES);
       // el snapshot en `order_item_tax_lines` se mantiene para la factura.
       final displayQty = _formatQty(item.quantity);
       final cleanNote = cleanOrderItemNote(item.notes);
-      final baseTotal = itemDisplayBaseTotal(order, item);
+      final baseTotal = _printableItemBaseTotal(
+        order,
+        item,
+        canRecompute: recompute.canRecompute,
+        isPostDiscountMode: recompute.isPostDiscountMode,
+        declaredRate: recompute.declaredRate,
+      );
 
       if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
@@ -635,43 +716,29 @@ class PrintTicketService {
     // Totales salen de los items ORIGINALES (no consolidados) para que el
     // subtotal absorba el centavo de redondeo por-item y coincida exactamente
     // con lo que ve el cajero en pantalla. Los items consolidados se usan solo
-    // para el render de las lineas del ticket.
-    final printableSummary = summarizeOrderPricing(order, items);
+    // para el render de las lineas del ticket. `printableSummary` y el criterio
+    // de recompute (`recompute`) ya se calcularon antes del loop de ítems para
+    // que la base por línea y este SUBTOTAL usen la misma fórmula.
     final printableDiscounts = printableSummary.discounts;
     final double printableGrandTotal = printableSummary.total;
 
     // Recomputamos subtotal/impuestos según el modo elegido por el negocio
     // para que la math del precheck siempre cierre visualmente (misma
-    // lógica que generateInvoice). Default `pre_discount`.
-    //
-    // Detección de tasas uniformes: el recompute asume que la tasa
-    // aplica al subtotal completo. Si los items mezclan tasas (ej.
-    // takeout sin LEY + dine-in con LEY), la tasa efectiva real
-    // (`printableSummary.tax / .subtotal`) difiere de la declarada
-    // y el recompute genera números incorrectos. En ese caso caemos
-    // al path legacy (que usa valores nativos del summary).
-    final isPostDiscountMode = discountDisplayMode == 'post_discount';
-    final lineRates = <double?>[];
-    for (final entry in taxBreakdown) {
-      lineRates.add(_parseInvoiceRatePercent(entry.label));
-    }
-    final allRatesKnown =
-        taxBreakdown.isNotEmpty && !lineRates.contains(null);
-    final declaredRate = allRatesKnown
-        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
-        : 0.0;
-    final actualRate = printableSummary.subtotal > 0.005
-        ? (printableSummary.tax + printableSummary.serviceFee) /
-            printableSummary.subtotal
-        : 0.0;
-    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
-    final canRecompute =
-        allRatesKnown && declaredRate > 0 && ratesAreUniform;
+    // lógica que generateInvoice). Default `pre_discount`. Si las tasas son
+    // mixtas o no parseables, `canRecompute` es false y caemos al path legacy.
+    final isPostDiscountMode = recompute.isPostDiscountMode;
+    final lineRates = recompute.lineRates;
+    final declaredRate = recompute.declaredRate;
+    final canRecompute = recompute.canRecompute;
 
     if (canRecompute) {
       final discountForBase = isPostDiscountMode ? 0.0 : printableDiscounts;
+      // El fee de delivery es EXENTO: fuera de la base gravable.
       final subtotalBase =
-          (printableGrandTotal + discountForBase) / (1 + declaredRate);
+          (printableGrandTotal -
+                  printableSummary.deliveryFee +
+                  discountForBase) /
+              (1 + declaredRate);
       gen.textRow('SUBTOTAL:', _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
@@ -725,6 +792,17 @@ class PrintTicketService {
       }
     }
 
+    // Post-discount mode: el descuento se muestra como línea informativa
+    // justo debajo de los impuestos (no sustractiva: el total ya lo incluye).
+    if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
+      gen.textRow('Descuento :', _formatMoney(printableDiscounts));
+    }
+
+    // Fee de delivery propio: cargo exento, parte del total.
+    if (printableSummary.deliveryFee > 0) {
+      gen.textRow('DELIVERY:', _formatMoney(printableSummary.deliveryFee));
+    }
+
     gap();
     _thickSeparator(gen);
     gap();
@@ -739,15 +817,6 @@ class PrintTicketService {
     gen.setTextSize();
     gen.setBold(false);
     if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
-
-    // Post-discount mode: descuento como nota informativa debajo del
-    // total grande, no como línea sustractiva.
-    if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
-      gen.lineFeed();
-      gen.textCentered(
-        'Incluye descuento aplicado de ${_formatMoney(printableDiscounts)}',
-      );
-    }
 
     // PRD 6: equivalente USD debajo del TOTAL si está activo.
     // Decisión del cliente: la tasa NO sale en ningún ticket (ni
@@ -1033,20 +1102,49 @@ class PrintTicketService {
       receiptItemDisplayMode: receiptItemDisplayMode,
     );
 
+    // Totales + criterio de recompute calculados ANTES del loop para que la
+    // base por línea y el SUBTOTAL del bloque de totales usen la misma fórmula
+    // y cuadren al centavo (ver `_printableItemBaseTotal`).
+    final effectiveTotals = _resolvePrintableTotals(
+      order: order,
+      items: items,
+      preferStoredOrderTotals: preferStoredOrderTotals,
+    );
+    final recompute = _resolveRecomputeContext(
+      subtotal: effectiveTotals.subtotal,
+      tax: effectiveTotals.tax,
+      serviceFee: effectiveTotals.serviceFee,
+      taxBreakdown: taxBreakdown,
+      discountDisplayMode: discountDisplayMode,
+    );
+
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
-      final unitPrice = _resolvePrintableItemUnitPrice(
-        order,
-        item,
-        preferStoredItemTotals: preferStoredItemTotals,
-      );
-
       final displayQty = _formatQty(item.quantity);
-      final lineTotal = _resolvePrintableItemTotal(
-        order,
-        item,
-        preferStoredItemTotals: preferStoredItemTotals,
-      );
+      // Base de la línea consistente con el SUBTOTAL recomputado (en
+      // post_discount ya trae el descuento descontado del gross). El precio
+      // unitario se deriva de esa base para que `qty x unit ≈ total`.
+      final lineTotal = recompute.canRecompute
+          ? _printableItemBaseTotal(
+              order,
+              item,
+              canRecompute: recompute.canRecompute,
+              isPostDiscountMode: recompute.isPostDiscountMode,
+              declaredRate: recompute.declaredRate,
+            )
+          : _resolvePrintableItemTotal(
+              order,
+              item,
+              preferStoredItemTotals: preferStoredItemTotals,
+            );
+      final qtyForUnit = item.quantity <= 0 ? 1.0 : item.quantity;
+      final unitPrice = recompute.canRecompute
+          ? lineTotal / qtyForUnit
+          : _resolvePrintableItemUnitPrice(
+              order,
+              item,
+              preferStoredItemTotals: preferStoredItemTotals,
+            );
       final cleanNote = cleanOrderItemNote(item.notes);
 
       if (compact && simple) {
@@ -1143,20 +1241,13 @@ class PrintTicketService {
     // Totals
     // Ver comentario en generatePrecheck: usamos los items ORIGINALES para
     // que la absorcion del centavo quede en el subtotal y el papel coincida
-    // con la pantalla al centavo.
-    final effectiveTotals = _resolvePrintableTotals(
-      order: order,
-      items: items,
-      preferStoredOrderTotals: preferStoredOrderTotals,
-    );
+    // con la pantalla al centavo. `effectiveTotals` y `recompute` ya se
+    // calcularon antes del loop de ítems (misma fórmula que la base por línea).
     final effectiveDiscounts = effectiveTotals.discounts;
     final double effectiveTotal = effectiveTotals.total;
 
     // Recomputamos subtotal/impuestos según el modo elegido por el negocio
-    // para que la math del ticket siempre cierre visualmente. Tasa efectiva
-    // = suma de tasas únicas de los `tax_lines` parseadas desde las labels
-    // del breakdown. Si no hay tasa parseable o las tasas son mixtas,
-    // caemos al path legacy (valores nativos del summary).
+    // para que la math del ticket siempre cierre visualmente.
     //
     //   pre_discount (default):
     //     subtotalBase = (total + descuento) / (1 + tasa)
@@ -1166,27 +1257,12 @@ class PrintTicketService {
     //     subtotalBase = total / (1 + tasa)
     //     SUBTOTAL + impuestos = TOTAL; descuento como nota informativa.
     //
-    // Detección de tasas uniformes: si los items mezclan tasas (ej.
-    // takeout sin LEY + dine-in con LEY), `effectiveTotals.tax /
-    // .subtotal` es menor que la suma declarada → recompute genera
-    // subtotal/ITBIS incorrectos. En ese caso usamos el fallback.
-    final isPostDiscountMode = discountDisplayMode == 'post_discount';
-    final lineRates = <double?>[];
-    for (final entry in taxBreakdown) {
-      lineRates.add(_parseInvoiceRatePercent(entry.label));
-    }
-    final allRatesKnown =
-        taxBreakdown.isNotEmpty && !lineRates.contains(null);
-    final declaredRate = allRatesKnown
-        ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
-        : 0.0;
-    final actualRate = effectiveTotals.subtotal > 0.005
-        ? (effectiveTotals.tax + effectiveTotals.serviceFee) /
-            effectiveTotals.subtotal
-        : 0.0;
-    final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
-    final canRecompute =
-        allRatesKnown && declaredRate > 0 && ratesAreUniform;
+    // Si las tasas son mixtas o no parseables, `canRecompute` es false y
+    // caemos al path legacy (valores nativos del summary).
+    final isPostDiscountMode = recompute.isPostDiscountMode;
+    final lineRates = recompute.lineRates;
+    final declaredRate = recompute.declaredRate;
+    final canRecompute = recompute.canRecompute;
 
     // Etiquetas DGII para e-CF (Norma General 01-2020):
     // - "Subtotal Gravado" en lugar de "SUBTOTAL"
@@ -1195,8 +1271,10 @@ class PrintTicketService {
 
     if (canRecompute) {
       final discountForBase = isPostDiscountMode ? 0.0 : effectiveDiscounts;
+      // El fee de delivery es EXENTO: fuera de la base gravable.
       final subtotalBase =
-          (effectiveTotal + discountForBase) / (1 + declaredRate);
+          (effectiveTotal - effectiveTotals.deliveryFee + discountForBase) /
+          (1 + declaredRate);
       gen.textRow(subtotalLabel, _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
@@ -1263,6 +1341,17 @@ class PrintTicketService {
       }
     }
 
+    // Post-discount mode: el descuento se muestra como línea informativa
+    // justo debajo de los impuestos (no sustractiva: el total ya lo incluye).
+    if (canRecompute && isPostDiscountMode && effectiveDiscounts > 0) {
+      gen.textRow('Descuento :', _formatMoney(effectiveDiscounts));
+    }
+
+    // Fee de delivery propio: cargo exento, parte del total.
+    if (effectiveTotals.deliveryFee > 0) {
+      gen.textRow('DELIVERY:', _formatMoney(effectiveTotals.deliveryFee));
+    }
+
     gap();
     _thickSeparator(gen);
     gap();
@@ -1274,15 +1363,6 @@ class PrintTicketService {
     gen.setTextSize();
     gen.setBold(false);
     if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
-
-    // Post-discount mode: el descuento sale como nota informativa
-    // debajo del total grande, no como línea sustractiva en el sum.
-    if (canRecompute && isPostDiscountMode && effectiveDiscounts > 0) {
-      gen.lineFeed();
-      gen.textCentered(
-        'Incluye descuento aplicado de ${_formatMoney(effectiveDiscounts)}',
-      );
-    }
 
     // PRD 6: equivalente USD debajo del TOTAL si toggle está activo.
     // En la factura NO mostramos la tasa (showRate=false): el cliente
@@ -1697,6 +1777,11 @@ class PrintTicketService {
         'Descuentos:',
         '-${_formatMoney(effectiveTotals.discounts)}',
       );
+    }
+
+    // Fee de delivery propio: cargo exento, parte del total.
+    if (effectiveTotals.deliveryFee > 0) {
+      gen.textRow('Delivery:', _formatMoney(effectiveTotals.deliveryFee));
     }
 
     final double displayTotal = effectiveTotals.total;
@@ -2163,11 +2248,41 @@ class _PrintableReceiptTotals {
   final double tax;
   final double total;
 
+  /// Fee de delivery propio: cargo EXENTO ya incluido en [total].
+  final double deliveryFee;
+
   const _PrintableReceiptTotals({
     required this.subtotal,
     required this.discounts,
     required this.serviceFee,
     required this.tax,
     required this.total,
+    this.deliveryFee = 0,
+  });
+}
+
+/// Resultado de [PrintTicketService._resolveRecomputeContext]: criterio
+/// compartido por la línea por ítem y el bloque de totales para recomputar
+/// el SUBTOTAL/impuestos del ticket de forma consistente.
+class _RecomputeContext {
+  /// Descuento como nota informativa (no sustractiva) bajo los impuestos.
+  final bool isPostDiscountMode;
+
+  /// Tasa por línea del breakdown (paralelo a `taxBreakdown`); `null` si la
+  /// label no era parseable.
+  final List<double?> lineRates;
+
+  /// Suma de tasas declaradas (ej. 0.28 = 10% Ley + 18% ITBIS).
+  final double declaredRate;
+
+  /// `true` solo si todas las tasas son conocidas, uniformes y > 0; habilita
+  /// la recomputación inversa desde el TOTAL.
+  final bool canRecompute;
+
+  const _RecomputeContext({
+    required this.isPostDiscountMode,
+    required this.lineRates,
+    required this.declaredRate,
+    required this.canRecompute,
   });
 }

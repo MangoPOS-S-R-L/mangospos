@@ -21,6 +21,7 @@ import '../../../core/theme/app_shadows.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
+import 'widgets/inventory_back_button.dart';
 
 class WarehousesView extends ConsumerStatefulWidget {
   const WarehousesView({super.key});
@@ -92,7 +93,7 @@ class _WarehousesViewState extends ConsumerState<WarehousesView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: _loading
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : _error != null
@@ -149,6 +150,11 @@ class _Header extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 2),
+          child: InventoryBackButton(),
+        ),
+        const SizedBox(width: 4),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,7 +227,7 @@ class _WarehousesTable extends StatelessWidget {
         color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.lg),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         children: [

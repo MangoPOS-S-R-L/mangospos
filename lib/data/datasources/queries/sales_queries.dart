@@ -192,6 +192,10 @@ class SalesQueries {
 
   /// Delivery
   static const String rpcOpenDeliveryOrder = 'fn_open_delivery_order';
+
+  /// Fee de delivery propio (cargo exento). Fija orders.delivery_fee y
+  /// recomputa el total. Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+  static const String rpcSetDeliveryFee = 'fn_set_delivery_fee';
   static const String rpcListDeliveryOrders = 'fn_list_delivery_orders';
   static const String rpcCloseDeliveryOrder = 'fn_close_delivery_order';
 }

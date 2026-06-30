@@ -130,6 +130,46 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
     }
   }
 
+  /// Diálogo simple para capturar un monto (≥ 0). Devuelve null si se cancela
+  /// o el valor no es válido. Se usa para el mínimo y los presets del fee.
+  Future<double?> _promptAmount(String title, {double? initial}) async {
+    final controller = TextEditingController(
+      text: (initial != null && initial > 0) ? initial.toStringAsFixed(2) : '',
+    );
+    final result = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            prefixText: 'RD\$ ',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final v = double.tryParse(
+                controller.text.trim().replaceAll(',', '.'),
+              );
+              Navigator.of(ctx).pop(v == null || v < 0 ? null : v);
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -229,6 +269,73 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                           _features.copyWith(deliveryAddressEnabled: v),
                         ),
                       ),
+                    if (_features.salesModeDeliveryEnabled) ...[
+                      _FlagTile(
+                        icon: Icons.delivery_dining_outlined,
+                        label: 'Cobrar fee de delivery (obligatorio)',
+                        subtitle:
+                            'Exige fijar el monto del envío al cobrar un '
+                            'delivery propio. Apágalo para hacerlo opcional. '
+                            'El fee es un cargo exento (sin impuestos).',
+                        value: _features.deliveryFeeRequired,
+                        onChanged: (v) => _update(
+                          _features.copyWith(deliveryFeeRequired: v),
+                        ),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.south_east_outlined),
+                        title: const Text('Monto mínimo del delivery'),
+                        subtitle: Text(
+                          _features.deliveryFeeMin > 0
+                              ? 'Mínimo: RD\$ ${_features.deliveryFeeMin.toStringAsFixed(2)}'
+                              : 'Sin mínimo',
+                        ),
+                        trailing: const Icon(Icons.edit_outlined),
+                        onTap: _saving
+                            ? null
+                            : () async {
+                                final v = await _promptAmount(
+                                  'Monto mínimo del delivery',
+                                  initial: _features.deliveryFeeMin,
+                                );
+                                if (v != null) {
+                                  _update(
+                                    _features.copyWith(deliveryFeeMin: v),
+                                  );
+                                }
+                              },
+                      ),
+                      _DeliveryPresetsTile(
+                        presets: _features.deliveryFeePresets,
+                        onAdd: _saving
+                            ? null
+                            : () async {
+                                final v = await _promptAmount(
+                                  'Agregar monto sugerido',
+                                );
+                                if (v != null && v > 0) {
+                                  final next = [
+                                    ..._features.deliveryFeePresets,
+                                    v,
+                                  ]..sort();
+                                  _update(
+                                    _features.copyWith(
+                                      deliveryFeePresets: next,
+                                    ),
+                                  );
+                                }
+                              },
+                        onRemove: _saving
+                            ? null
+                            : (preset) {
+                                final next = [..._features.deliveryFeePresets]
+                                  ..remove(preset);
+                                _update(
+                                  _features.copyWith(deliveryFeePresets: next),
+                                );
+                              },
+                      ),
+                    ],
 
                     if (_features.salesModeQuickEnabled ||
                         _features.salesModeManualEnabled ||
@@ -419,6 +526,73 @@ class _Section extends StatelessWidget {
           fontWeight: FontWeight.w800,
           color: MangoColors.darkGray,
         ),
+      ),
+    );
+  }
+}
+
+/// Editor de los montos sugeridos (presets) del fee de delivery propio:
+/// chips con borrar + botón Agregar. Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+class _DeliveryPresetsTile extends StatelessWidget {
+  final List<double> presets;
+  final VoidCallback? onAdd;
+  final void Function(double preset)? onRemove;
+
+  const _DeliveryPresetsTile({
+    required this.presets,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.sell_outlined,
+                size: 20,
+                color: Color(0xFF6B7280),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Montos sugeridos',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: onAdd,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Agregar'),
+              ),
+            ],
+          ),
+          const Text(
+            'Botones rápidos para el cajero al cobrar un delivery propio.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+          ),
+          if (presets.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final p in presets)
+                  Chip(
+                    label: Text(
+                      'RD\$ ${p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(2)}',
+                    ),
+                    onDeleted: onRemove == null ? null : () => onRemove!(p),
+                  ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }

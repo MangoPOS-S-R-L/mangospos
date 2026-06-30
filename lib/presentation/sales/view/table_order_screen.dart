@@ -1772,6 +1772,16 @@ class _DeliveryAddressBar extends StatelessWidget {
   }
 }
 
+// Cache anti-parpadeo del panel de totales: el modo de descuento
+// (pre/post) sale de un FutureProvider keyed por businessId. Si en un
+// rebuild transitorio `activeBusinessId` queda vacío (re-key) o el provider
+// aún no resolvió, el panel revertía al default (modo A) y el total/impuestos
+// PARPADEABAN entre "descuento restado" (A) y "descuento como nota" (B).
+// Cacheamos el último businessId no-vacío y el último modo resuelto por
+// negocio para que el display nunca revierta una vez conocido.
+String? _lastDiscountBiz;
+final Map<String, String> _stickyDiscountModeByBiz = {};
+
 class _CartView extends ConsumerWidget {
   final OrderOrigin origin;
   final String tableCode;
@@ -1997,6 +2007,10 @@ class _CartView extends ConsumerWidget {
     // comanda — el negocio no tiene cocina.
     final features =
         ref.read(businessFeaturesProvider).value ?? BusinessFeatures.defaults;
+    // VENTA RÁPIDA: la cocina se dispara AUTOMÁTICAMENTE al cobrar (no hay
+    // botón manual). Se imprime desde un snapshot capturado antes del pago.
+    final fireKitchenForQuick =
+        origin == OrderOrigin.quick && features.kitchenEnabled;
     if (!features.kitchenEnabled) {
       final hasOpenItems = ref
           .read(currentOrderProvider)
@@ -2045,6 +2059,63 @@ class _CartView extends ConsumerWidget {
     if (!context.mounted) return;
 
     var currentOrderState = ref.read(currentOrderProvider);
+
+    // ── Gate de FEE DE DELIVERY PROPIO ───────────────────────────────────
+    // En un delivery propio (origin 'delivery' + deliveryType 'own') el cajero
+    // define el monto del envío como cargo EXENTO antes de cobrar. Obligatorio
+    // por defecto (configurable). No aplica a Uber/PedidosYa ni a otros modos.
+    // Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+    if (currentOrderState.origin == 'delivery' &&
+        currentOrderState.deliveryType == 'own') {
+      final oldFee = currentOrderState.order?.deliveryFee ?? 0;
+      final feeCurrency = currentBusinessCurrencyOrFallback(ref);
+      final chosenFee = await _promptDeliveryFee(
+        context,
+        presets: features.deliveryFeePresets,
+        min: features.deliveryFeeMin,
+        required: features.deliveryFeeRequired,
+        currentFee: oldFee,
+        formatAmount: feeCurrency.formatter.format,
+      );
+      if (!context.mounted) return;
+      if (chosenFee == null) {
+        // Canceló. Si es obligatorio, no se puede cobrar sin fee.
+        if (features.deliveryFeeRequired) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Debes indicar el monto del delivery para cobrar.',
+              ),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+      } else {
+        try {
+          await ref
+              .read(currentOrderProvider.notifier)
+              .setDeliveryFee(chosenFee);
+        } catch (e) {
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo fijar el fee de delivery: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+        if (!context.mounted) return;
+        // El fee es aditivo y exento: total nuevo = total − feeAnterior + feeNuevo.
+        total = total - oldFee + chosenFee;
+        currentOrderState = ref.read(currentOrderProvider);
+        // Propagar el fee al `order` que fluye al cobro/impresión: el capturado
+        // al tocar Pagar es ANTERIOR al gate (deliveryFee=0). Sin esto, la
+        // factura saldría sin la línea Delivery y con el total viejo.
+        order = currentOrderState.order ?? order;
+      }
+    }
 
     // Tipo de comprobante efectivo para este cobro. En cuentas divididas el
     // override de la sub-cuenta manda: tras el reload preferimos el valor del
@@ -2270,6 +2341,21 @@ class _CartView extends ConsumerWidget {
 
           final items = List<OrderItem>.from(prePaymentItems);
           final printOrder = prePaymentOrder;
+
+          // VENTA RÁPIDA: enviar la comanda a cocina al confirmarse el pago,
+          // desde el snapshot pre-pago (los ítems ya quedaron `paid`). Best-
+          // effort y fire-and-forget: no bloquea ni tumba la impresión de la
+          // factura. Solo si la cocina está activa y es venta rápida.
+          if (fireKitchenForQuick) {
+            unawaited(
+              ref
+                  .read(currentOrderProvider.notifier)
+                  .fireQuickSaleKitchenSnapshot(
+                    order: printOrder,
+                    items: items,
+                  ),
+            );
+          }
 
           // Si los pagos vienen con status='pending' significa que
           // PaymentSplitViewModel cayó al fallback offline: no hay NCF
@@ -2561,6 +2647,44 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// True si la línea ya salió a cocina (no es draft/open ni terminal).
+  bool _itemAlreadySentToKitchen(OrderItem item) {
+    final s = item.status;
+    return s != 'draft' && s != 'open' && s != 'void' && s != 'paid';
+  }
+
+  /// Agrega [qty] unidades de [source] como una línea DRAFT nueva, en el mismo
+  /// check. Se usa al SUBIR la cantidad de un ítem ya enviado a cocina: la
+  /// línea enviada conserva su qty y el incremento queda "por confirmar" →
+  /// irá a cocina con "Enviar a cocina" (igual que tocar el producto del menú).
+  Future<void> _addUnitsAsNewDraftLine(
+    WidgetRef ref,
+    OrderItem source,
+    double qty,
+    bool isTakeout,
+  ) async {
+    if (qty <= 0 || source.productId == null) return;
+    final st = ref.read(currentOrderProvider);
+    final orderId = st.order?.id;
+    if (orderId == null) return;
+    var checkPosition = 1;
+    if (source.checkId != null) {
+      for (final c in st.checks) {
+        if (c.id == source.checkId) {
+          checkPosition = c.position;
+          break;
+        }
+      }
+    }
+    await ref.read(salesRepositoryProvider).addItemFromMenu(
+          orderId: orderId,
+          menuItemId: source.productId!,
+          quantity: qty,
+          checkPosition: checkPosition,
+          isTakeout: isTakeout,
+        );
+  }
+
   void _openProductDetailModal(
     BuildContext context,
     WidgetRef ref,
@@ -2572,6 +2696,27 @@ class _CartView extends ConsumerWidget {
       builder: (context) => ProductDetailModal(
         item: item,
         groupedItems: groupedItems,
+        // Aplicar un descuento manual o cortesía NUEVO requiere el permiso
+        // `ventas.orden.descuento_aplicar`; si no, PIN de Supervisor. El mesero
+        // (sin el permiso) no puede descontar sin autorización. El descuento
+        // automático de ofertas no pasa por aquí.
+        onAuthorizeDiscount: () async {
+          if (ref.read(sessionProvider).isOwner) return true;
+          if (ref
+              .read(sessionProvider.notifier)
+              .hasPermission('ventas.orden.descuento_aplicar')) {
+            return true;
+          }
+          return showPinVerificationModal(
+            context,
+            ref,
+            level: PinAccessLevel.supervisor,
+            title: 'Autorización para descuento',
+            subtitle:
+                'Se requiere PIN de Supervisor o Administrador para aplicar '
+                'descuentos.',
+          );
+        },
         loadModifierGroups: (menuItemId) => ref
             .read(currentOrderProvider.notifier)
             .getMenuItemModifierGroups(menuItemId),
@@ -2582,9 +2727,28 @@ class _CartView extends ConsumerWidget {
               selectedModifiers: selectedModifiers,
             ),
         onSave: (updatedItem) async {
-          await ref
-              .read(currentOrderProvider.notifier)
-              .updateItem(item.id, updatedItem);
+          final notifier = ref.read(currentOrderProvider.notifier);
+          final increased = updatedItem.quantity > item.quantity + 0.0001;
+          if (increased &&
+              _itemAlreadySentToKitchen(item) &&
+              item.productId != null) {
+            // Subir cantidad de un ítem YA enviado a cocina: la línea enviada
+            // conserva su qty (con los demás cambios del modal) y el delta va
+            // como línea draft NUEVA → irá a cocina con "Enviar a cocina".
+            await notifier.updateItem(
+              item.id,
+              updatedItem.copyWith(quantity: item.quantity),
+            );
+            await _addUnitsAsNewDraftLine(
+              ref,
+              item,
+              updatedItem.quantity - item.quantity,
+              updatedItem.isTakeout,
+            );
+            await notifier.refreshOrder();
+          } else {
+            await notifier.updateItem(item.id, updatedItem);
+          }
         },
         onSaveBatch: (items, updatedItem, reductionReason) async {
           final salesRepo = ref.read(salesRepositoryProvider);
@@ -2654,6 +2818,34 @@ class _CartView extends ConsumerWidget {
             }
             if (reductionReason != null && reductionReason.trim().isNotEmpty) {
               mergedNotes.add('[REDUCCION:${reductionReason.trim()}]');
+            }
+
+            // Subir cantidad sobre una línea YA enviada a cocina: no inflarla;
+            // conserva su qty y el delta va como línea draft NUEVA (irá a
+            // cocina con "Enviar a cocina"). Solo la última fila absorbe el
+            // aumento.
+            if (isLast &&
+                !isReducing &&
+                nextQtyInt > currentQtyInt &&
+                _itemAlreadySentToKitchen(current) &&
+                current.productId != null) {
+              await salesRepo.updateItemDetails(
+                itemId: current.id,
+                productName: updatedItem.productName,
+                quantity: currentQtyInt.toDouble(),
+                isTakeout: updatedItem.isTakeout,
+                discounts: discountShare,
+                notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
+              );
+              await _addUnitsAsNewDraftLine(
+                ref,
+                current,
+                (nextQtyInt - currentQtyInt).toDouble(),
+                updatedItem.isTakeout,
+              );
+              remaining -= nextQtyInt;
+              if (remaining < 0) remaining = 0;
+              continue;
             }
 
             if (nextQty <= 0.0001) {
@@ -2867,11 +3059,25 @@ class _CartView extends ConsumerWidget {
     // la primera lectura usamos el default 'pre_discount' (= modo A,
     // comportamiento histórico).
     final activeBusinessId = ref.watch(sessionProvider).activeBusinessId ?? '';
+    // Estabilización anti-parpadeo (ver _lastDiscountBiz arriba):
+    //   1) Si el businessId queda vacío en un rebuild transitorio, reusamos
+    //      el último no-vacío → el provider no cambia de instancia (key).
+    //   2) Cacheamos el último modo resuelto por negocio; mientras el provider
+    //      aún no resuelve, reusamos ese último conocido en vez del default.
+    // Así el panel renderiza SIEMPRE un solo criterio del descuento.
+    if (activeBusinessId.isNotEmpty) _lastDiscountBiz = activeBusinessId;
+    final discountBiz = activeBusinessId.isNotEmpty
+        ? activeBusinessId
+        : (_lastDiscountBiz ?? '');
     final discountModeAsync = ref.watch(
-      discountDisplayModeProvider(activeBusinessId),
+      discountDisplayModeProvider(discountBiz),
     );
-    final discountMode =
-        discountModeAsync.valueOrNull ??
+    final resolvedMode = discountModeAsync.valueOrNull;
+    if (resolvedMode != null && discountBiz.isNotEmpty) {
+      _stickyDiscountModeByBiz[discountBiz] = resolvedMode;
+    }
+    final discountMode = resolvedMode ??
+        _stickyDiscountModeByBiz[discountBiz] ??
         PosSettingsRepository.discountPreDiscount;
     final isPostDiscountMode =
         discountMode == PosSettingsRepository.discountPostDiscount;
@@ -2910,8 +3116,12 @@ class _CartView extends ConsumerWidget {
       final discountForBase = isPostDiscountMode
           ? 0.0
           : pricingSummary.discounts;
+      // El fee de delivery es EXENTO: no entra a la base gravable. Lo
+      // descontamos del total antes de reconstruir subtotal/impuestos,
+      // o inflaríamos la base tratando un cargo exento como tributante.
       final subtotalBase =
-          (displayTotal + discountForBase) / (1 + declaredRate);
+          (displayTotal - pricingSummary.deliveryFee + discountForBase) /
+          (1 + declaredRate);
       displaySubtotal = subtotalBase;
       reconciledBreakdown = [
         for (var i = 0; i < rawBreakdown.length; i++)
@@ -3868,6 +4078,15 @@ class _CartView extends ConsumerWidget {
                   valueWeight: FontWeight.w700,
                 ),
               ],
+              // Fee de delivery propio: cargo exento (sin impuestos), ya
+              // incluido en displayTotal. Se muestra como línea aparte.
+              if (pricingSummary.deliveryFee > 0) ...[
+                const SizedBox(height: 8),
+                _SummaryRow(
+                  label: 'Delivery',
+                  value: currency.format(pricingSummary.deliveryFee),
+                ),
+              ],
               const SizedBox(height: 12),
               _SummaryRow(
                 label: 'Total',
@@ -3930,7 +4149,11 @@ class _CartView extends ConsumerWidget {
                 // negocios sin cocina y dejaba al usuario sin forma de
                 // cobrar drafts.
                 if (draftItems.isNotEmpty) ...[
-                  if (ref.watchBusinessFeatures().kitchenEnabled) ...[
+                  // En VENTA RÁPIDA no se envía a cocina manualmente: el envío
+                  // es automático al cobrar (ver onConfirmed en _openPaymentModal).
+                  // En los demás modos se conserva el botón manual.
+                  if (ref.watchBusinessFeatures().kitchenEnabled &&
+                      origin != OrderOrigin.quick) ...[
                     _ActionButton(
                       label: 'Enviar Pedido',
                       background: _salesKitchenButton,
@@ -4063,6 +4286,72 @@ class _CartView extends ConsumerWidget {
                     ),
                     const SizedBox(height: 12),
                   ], // cierra `if (kitchenEnabled)`
+                  // VENTA RÁPIDA: "Descartar venta" — la venta rápida no cobrada
+                  // queda abierta y se retoma al volver; este botón permite
+                  // anularla a propósito (con permiso). En mesas se usa el
+                  // "Anular orden" del riel/header.
+                  if (origin == OrderOrigin.quick &&
+                      ref
+                          .read(sessionProvider.notifier)
+                          .hasPermission('ventas.orden.anular')) ...[
+                    _ActionButton(
+                      label: 'Descartar venta',
+                      background: const Color(0xFFEF4444),
+                      icon: Icons.delete_outline_rounded,
+                      onPressed: orderState.order == null
+                          ? null
+                          : () async {
+                              final confirmed = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  title: const Text('Descartar venta'),
+                                  content: const Text(
+                                    'Se anulará esta venta rápida y sus '
+                                    'productos. ¿Deseas continuar?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(false),
+                                      child: const Text('Cancelar'),
+                                    ),
+                                    FilledButton(
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: const Color(
+                                          0xFFEF4444,
+                                        ),
+                                      ),
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(true),
+                                      child: const Text('Descartar'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirmed != true) return;
+                              final notifier = ref.read(
+                                currentOrderProvider.notifier,
+                              );
+                              await notifier.cancelCurrentOrder(
+                                reason: 'Venta rápida descartada',
+                              );
+                              // Reabrir una venta rápida limpia para que el
+                              // cajero pueda seguir vendiendo de inmediato.
+                              await notifier.openQuick(forceRestart: true);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Venta descartada'),
+                                  ),
+                                );
+                              }
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   // Pagar — siempre visible cuando hay drafts, independiente
                   // de kitchen_enabled. Si el negocio no tiene cocina, los
                   // items se marcan ready en el flujo de _openPaymentModal.
@@ -5994,6 +6283,161 @@ class _RailButton extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Gate de fee de delivery propio: presets + monto libre (≥ mínimo).
+/// Devuelve el monto elegido o `null` si el cajero cancela.
+Future<double?> _promptDeliveryFee(
+  BuildContext context, {
+  required List<double> presets,
+  required double min,
+  required bool required,
+  required double currentFee,
+  required String Function(num) formatAmount,
+}) {
+  return showDialog<double>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _DeliveryFeeDialog(
+      presets: presets,
+      min: min,
+      isRequired: required,
+      currentFee: currentFee,
+      formatAmount: formatAmount,
+    ),
+  );
+}
+
+class _DeliveryFeeDialog extends StatefulWidget {
+  final List<double> presets;
+  final double min;
+  final bool isRequired;
+  final double currentFee;
+  final String Function(num) formatAmount;
+
+  const _DeliveryFeeDialog({
+    required this.presets,
+    required this.min,
+    required this.isRequired,
+    required this.currentFee,
+    required this.formatAmount,
+  });
+
+  @override
+  State<_DeliveryFeeDialog> createState() => _DeliveryFeeDialogState();
+}
+
+class _DeliveryFeeDialogState extends State<_DeliveryFeeDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.currentFee > 0 ? widget.currentFee.toStringAsFixed(2) : '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  double? get _amount {
+    final raw = _controller.text.trim().replaceAll(',', '.');
+    if (raw.isEmpty) return null;
+    return double.tryParse(raw);
+  }
+
+  bool get _isValid {
+    final a = _amount;
+    if (a == null) return false;
+    if (a < widget.min) return false;
+    if (widget.isRequired && a <= 0) return false;
+    return a >= 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = _amount;
+    final belowMin = amount != null && amount < widget.min;
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(
+        children: [
+          Icon(Icons.delivery_dining, color: Color(0xFFF97316)),
+          SizedBox(width: 10),
+          Expanded(child: Text('Monto del delivery')),
+        ],
+      ),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Cargo de envío (exento de impuestos). Elige un monto o escríbelo.',
+              style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+            ),
+            const SizedBox(height: 16),
+            if (widget.presets.isNotEmpty) ...[
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final preset in widget.presets)
+                    OutlinedButton(
+                      onPressed: () => setState(() {
+                        _controller.text = preset == preset.roundToDouble()
+                            ? preset.toStringAsFixed(0)
+                            : preset.toStringAsFixed(2);
+                      }),
+                      child: Text(widget.formatAmount(preset)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                labelText: 'Monto del delivery',
+                prefixIcon: const Icon(Icons.attach_money),
+                border: const OutlineInputBorder(),
+                errorText: belowMin
+                    ? 'Mínimo ${widget.formatAmount(widget.min)}'
+                    : null,
+              ),
+            ),
+            if (widget.min > 0 && !belowMin) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Mínimo: ${widget.formatAmount(widget.min)}',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _isValid ? () => Navigator.of(context).pop(_amount) : null,
+          child: const Text('Confirmar'),
+        ),
+      ],
     );
   }
 }

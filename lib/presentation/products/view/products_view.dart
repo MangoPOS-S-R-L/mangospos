@@ -371,6 +371,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               isInventoryTracked = false,
               initialStock = 0,
               allowNegativeSale = false,
+              baseUnit,
+              purchaseUnit,
+              packSize,
             }) {
               viewModel.addProduct(
                 name: name,
@@ -394,6 +397,9 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 isInventoryTracked: isInventoryTracked,
                 initialStock: initialStock,
                 allowNegativeSale: allowNegativeSale,
+                baseUnit: baseUnit,
+                purchaseUnit: purchaseUnit,
+                packSize: packSize,
               );
             },
         onUpdate:

@@ -8,6 +8,7 @@ import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import 'widgets/inventory_back_button.dart';
 import 'transfer_send_dialog.dart';
 import 'transfer_receive_dialog.dart';
 
@@ -56,8 +57,9 @@ class _TransfersViewState extends ConsumerState<TransfersView>
     final cancelled = _filter(state.transfers, StockTransferStatus.cancelled);
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
+        leading: const InventoryBackButton(),
         title: const Text('Transferencias entre bodegas'),
         bottom: TabBar(
           controller: _tabController,
@@ -482,7 +484,7 @@ class _TransferCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.card),
             border: Border.all(color: AppColors.border),
-            boxShadow: AppShadows.soft,
+            boxShadow: AppShadows.cardElevated,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

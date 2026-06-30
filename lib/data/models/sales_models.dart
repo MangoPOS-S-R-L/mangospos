@@ -90,6 +90,12 @@ class Order extends Equatable {
   final double serviceFee;
   final double tax;
   final double total;
+
+  /// Fee de delivery propio: cargo extra EXENTO (sin impuestos) sumado al
+  /// total después de impuestos. 0 en órdenes que no son delivery propio.
+  /// Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+  final double deliveryFee;
+
   final DateTime createdAt;
   final DateTime? closedAt;
   final String origin;
@@ -103,6 +109,7 @@ class Order extends Equatable {
     required this.serviceFee,
     required this.tax,
     required this.total,
+    this.deliveryFee = 0,
     required this.createdAt,
     this.closedAt,
     this.origin = 'table',
@@ -118,6 +125,7 @@ class Order extends Equatable {
       serviceFee: (map['service_fee'] ?? 0).toDouble(),
       tax: (map['tax'] ?? 0).toDouble(),
       total: (map['total'] ?? 0).toDouble(),
+      deliveryFee: (map['delivery_fee'] ?? 0).toDouble(),
       createdAt: DateTime.tryParse(map['created_at'] ?? '') ?? DateTime.now(),
       closedAt: map['closed_at'] != null
           ? DateTime.tryParse(map['closed_at'])
@@ -135,6 +143,7 @@ class Order extends Equatable {
     'service_fee': serviceFee,
     'tax': tax,
     'total': total,
+    'delivery_fee': deliveryFee,
     'created_at': createdAt.toIso8601String(),
     'closed_at': closedAt?.toIso8601String(),
     'origin': origin,
@@ -149,6 +158,7 @@ class Order extends Equatable {
     double? serviceFee,
     double? tax,
     double? total,
+    double? deliveryFee,
     DateTime? createdAt,
     DateTime? closedAt,
     String? origin,
@@ -162,6 +172,7 @@ class Order extends Equatable {
       serviceFee: serviceFee ?? this.serviceFee,
       tax: tax ?? this.tax,
       total: total ?? this.total,
+      deliveryFee: deliveryFee ?? this.deliveryFee,
       createdAt: createdAt ?? this.createdAt,
       closedAt: closedAt ?? this.closedAt,
       origin: origin ?? this.origin,
@@ -183,6 +194,7 @@ class Order extends Equatable {
     serviceFee,
     tax,
     total,
+    deliveryFee,
     createdAt,
     closedAt,
   ];

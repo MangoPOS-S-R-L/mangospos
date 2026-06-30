@@ -121,6 +121,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // optimista solo cuando el server YA trae su contraparte real, evitando un
   // duplicado (tmp + real) en la recarga post-commit.
   final Map<String, String> _tmpToRealItemId = {};
+  // Generación monótona de cargas de orden. Cada `_loadOrderDetail` toma un
+  // número al entrar y, justo antes de escribir el state, verifica que siga
+  // siendo la carga vigente; si ya arrancó una más nueva, descarta su resultado
+  // en vez de pisar el state. Raíz del bug "el item agregado desaparece pero al
+  // salir y reentrar a la mesa está": dos `_loadOrderDetail` solapados hacían
+  // last-write-wins, y un reload stale en vuelo (eco Realtime que empezó a leer
+  // la BD ANTES del commit del INSERT) aterrizaba de último y borraba el item
+  // recién agregado de la lista —aunque en la BD sí quedó—. El más nuevo lee la
+  // data más fresca y gana; cualquier carga vieja en vuelo sale sin escribir.
+  int _loadGeneration = 0;
   // Overrides fiscales por sub-cuenta elegidos por el cajero en el header
   // (tipo de comprobante y cliente/RNC del check). Se REAPLICAN tras cada
   // recarga porque el bundle de la BD viva puede no devolver `requested_ncf_type`
@@ -1019,6 +1029,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     // Restaurante: reusar solo si la orden está abierta. Si fue paid/voided/sent
     // y el usuario vuelve al tab, se abre una nueva sesión Quick limpia.
+    //
+    // NOTA: el "resume" de venta rápida persistente (Feature C) se revirtió
+    // porque su consulta async + _loadOrderDetail tardío pisaba la orden en
+    // curso y borraba los productos recién agregados (parpadeo). Volvemos al
+    // comportamiento conocido-bueno: arrancar una venta rápida limpia.
     final current = state.order;
     if (state.origin == 'quick' &&
         current != null &&
@@ -3162,6 +3177,92 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Fee de delivery propio (cargo EXENTO sumado al total después de
+  /// impuestos). Fija `orders.delivery_fee` y recomputa el total.
+  /// Online: RPC `fn_set_delivery_fee` + reload autoritativo. Offline:
+  /// encola `set_delivery_fee` y refleja el fee/total localmente (el replay
+  /// llama al RPC al reconectar). Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+  Future<void> setDeliveryFee(double amount) async {
+    final order = state.order;
+    if (order == null) return;
+    final orderId = order.id;
+    final clamped = amount < 0 ? 0.0 : amount;
+
+    // Optimista: reflejar el fee y el nuevo total localmente (clave offline,
+    // para que el cobro use el total correcto sin esperar al server).
+    final withFee = order.copyWith(deliveryFee: clamped);
+    final newTotal = summarizeOrderPricing(
+      withFee,
+      state.items,
+      forcedOrigin: state.origin,
+    ).total;
+    state = state.copyWith(order: withFee.copyWith(total: newTotal));
+
+    final businessId = _activeBusinessId;
+
+    if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+      if (businessId != null && businessId.isNotEmpty) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'set_delivery_fee',
+            'order_id': orderId,
+            'amount': clamped,
+          },
+        );
+      }
+      await _persistCurrentState(localOnly: true);
+      return;
+    }
+
+    // Online: el backend fija el fee y recomputa el total; recargamos para
+    // tener los totales autoritativos (y que la factura/NCF cuadren).
+    await ref
+        .read(salesRepositoryProvider)
+        .setDeliveryFee(orderId: orderId, amount: clamped);
+    await reloadOrderNow();
+  }
+
+  /// VENTA RÁPIDA: imprime la comanda de cocina a partir de un SNAPSHOT de
+  /// ítems capturado ANTES de cobrar. Necesario porque al pagar los ítems
+  /// quedan `paid` y el envío normal (que re-lee de BD y filtra draft/open)
+  /// los descartaría. Best-effort: nunca lanza (no debe tumbar el cobro).
+  /// Solo imprime la comanda; no toca estados en BD (la orden ya está pagada).
+  Future<void> fireQuickSaleKitchenSnapshot({
+    required Order order,
+    required List<OrderItem> items,
+    String tableName = 'Venta Rápida',
+  }) async {
+    try {
+      final session = ref.read(sessionProvider);
+      final businessId = session.activeBusinessId;
+      if (businessId == null || businessId.isEmpty) return;
+      // Forzamos `draft` para que sendLocalOrderToKitchen (filtra draft/open)
+      // imprima TODOS los ítems del snapshot.
+      final snapItems = items
+          .where((i) => i.status != 'void')
+          .map((i) => i.copyWith(status: 'draft'))
+          .toList(growable: false);
+      if (snapItems.isEmpty) return;
+      final snapState = CurrentOrderState(
+        order: order,
+        items: snapItems,
+        origin: 'quick',
+      );
+      await ref
+          .read(printingServiceProvider)
+          .sendLocalOrderToKitchen(
+            businessId: businessId,
+            localState: snapState,
+            tableName: tableName,
+            waiterName: session.userName,
+            businessName: session.activeBusinessName,
+          );
+    } catch (e) {
+      debugPrint('Venta rápida: no se pudo enviar la comanda a cocina: $e');
+    }
+  }
+
   Future<void> reprintKitchenTicket({
     required String orderId,
     List<OrderItem>? items,
@@ -3442,6 +3543,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       String? note,
     })? preloadedBundle,
   }) async {
+    // Reclama esta carga como la vigente. Cualquier `_loadOrderDetail` que
+    // arranque después tendrá una generación mayor; al escribir el state esta
+    // carga comprueba que `myGeneration == _loadGeneration` y, si no, se
+    // descarta para no pisar el resultado de una carga más fresca (evita que un
+    // reload stale en vuelo borre el item recién agregado — ver `_loadGeneration`).
+    final myGeneration = ++_loadGeneration;
     final previousOrderId = state.order?.id;
     final previousOrigin = state.origin;
     final tableCacheHit = tableId != null && _tableCache.containsKey(tableId);
@@ -3544,6 +3651,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     if (order == null && items.isEmpty) {
+      // Una carga más nueva ya tomó el relevo: no limpiar el state ni loguear
+      // un ERROR espurio con data vieja. La carga vigente decide el recovery.
+      if (myGeneration != _loadGeneration) return;
       // Tails de IDs para que la captura del usuario sea autodiagnosticable
       // sin tener que pedirle logs. order=…<8> · business=…<8>.
       String tail(String? value) {
@@ -3724,6 +3834,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }).toList(growable: false);
       }
     }
+
+    // Punto de no retorno: si entre el fetch y aquí arrancó una carga más
+    // nueva, descartamos este resultado (potencialmente stale) para no pisar el
+    // state fresco. No hay `await` entre esta comprobación y la escritura, así
+    // que la condición no puede cambiar bajo nuestros pies.
+    if (myGeneration != _loadGeneration) return;
 
     state = _normalizeHydratedState(
       state.copyWith(

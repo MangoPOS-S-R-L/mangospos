@@ -1807,6 +1807,21 @@ class OfflinePosService {
           businessId: businessId,
         );
         return resolvedOrderId;
+      case 'set_delivery_fee':
+        // Fee de delivery propio fijado offline. FIFO garantiza que esto se
+        // replaya ANTES del process_payment de la misma orden (se encola en
+        // el gate, antes del cobro), así el total del server ya incluye el fee
+        // cuando llega el pago. Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+        final resolvedOrderId = await _resolveOrderIdForAction(
+          businessId: businessId,
+          action: action,
+          salesRepository: salesRepository,
+        );
+        await salesRepository.setDeliveryFee(
+          orderId: resolvedOrderId,
+          amount: ((action['amount'] ?? 0) as num).toDouble(),
+        );
+        return resolvedOrderId;
       case 'process_payment':
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,

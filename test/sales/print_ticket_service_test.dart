@@ -6,6 +6,8 @@ import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 
 Order _order({
+  String id = 'order-1',
+  String status = 'paid',
   double subtotal = 0,
   double discounts = 0,
   double serviceFee = 0,
@@ -13,9 +15,9 @@ Order _order({
   double total = 0,
 }) {
   return Order(
-    id: 'order-1',
+    id: id,
     sessionId: 'session-1',
-    status: 'paid',
+    status: status,
     subtotal: subtotal,
     discounts: discounts,
     serviceFee: serviceFee,
@@ -185,6 +187,59 @@ void main() {
         final text = _ticketText(ticket.escPosCommands);
         expect(text, contains('RD\$ 495.00'));
         expect(text, isNot(contains('RD\$ 500.00')));
+      },
+    );
+
+    test(
+      'precheck (post_discount): item line uses the recomputed base, not the '
+      'backend-drifted item.subtotal',
+      () {
+        // Escenario real (recibo Jardines Universitarios II): producto inclusive
+        // de menú RD$295 (28% = 10% Ley + 18% ITBIS) con descuento de RD$59.
+        // El backend guardó item.subtotal = 295/1.28 - 59 = 171.47 (resta el
+        // descuento tax-inclusive a la base pre-impuestos). El SUBTOTAL del
+        // ticket se recomputa a 236/1.28 = 184.38; la línea del ítem debe usar
+        // esa MISMA base para cuadrar, no el 171.47.
+        final order = _order(
+          id: 'order-12',
+          status: 'open',
+          subtotal: 171.47,
+          discounts: 59,
+          tax: 48.01,
+          total: 236,
+        );
+        final item = _item(
+          id: 'plato',
+          quantity: 1,
+          unitPrice: 295,
+          subtotal: 171.47,
+          discounts: 59,
+          tax: 48.01,
+          total: 236,
+          taxMode: 'inclusive',
+          taxRate: 28,
+          originalTaxRate: 28,
+        );
+
+        final ticket = PrintTicketService.generatePrecheck(
+          order: order,
+          items: [item],
+          tableName: 'T04',
+          discountDisplayMode: 'post_discount',
+          taxBreakdown: const [
+            (label: '10% De Ley (10%)', amount: 18.44),
+            (label: 'ITBIS (18%)', amount: 33.19),
+          ],
+        );
+
+        final text = _ticketText(ticket.escPosCommands);
+        // La base recomputada (184.38) aparece en la línea del ítem y en el
+        // SUBTOTAL; el valor drifted (171.47) ya no se imprime.
+        expect(text, contains('184.38'));
+        expect(text, isNot(contains('171.47')));
+        // El descuento sale como nota informativa bajo los impuestos.
+        expect(text, contains('Descuento'));
+        expect(text, contains('59.00'));
       },
     );
   });

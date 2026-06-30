@@ -25,14 +25,6 @@ const _monthsLong = [
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
 ];
 
-/// Hora local en formato 12h "h:mm AM/PM".
-String _time12(DateTime local) {
-  final m = local.minute.toString().padLeft(2, '0');
-  final ampm = local.hour >= 12 ? 'PM' : 'AM';
-  final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
-  return '$h12:$m $ampm';
-}
-
 class ReservationsView extends ConsumerStatefulWidget {
   const ReservationsView({super.key});
 
@@ -212,13 +204,31 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
   }
 
   Widget _body(ReservationsState state) {
-    if (state.viewMode == ReservationViewMode.floorPlan) {
-      return _floorPlan(state);
-    }
-    if (state.viewMode == ReservationViewMode.grid) {
-      return _grid(state);
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 1000;
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: 384, child: _listView(state)),
+              const VerticalDivider(
+                width: 1,
+                thickness: 1,
+                color: AppColors.border,
+              ),
+              Expanded(child: _floorPlan(state)),
+            ],
+          );
+        }
+        return state.viewMode == ReservationViewMode.floorPlan
+            ? _floorPlan(state)
+            : _listView(state);
+      },
+    );
+  }
 
+  Widget _listView(ReservationsState state) {
     if (state.loading && state.reservations.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -228,8 +238,8 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
         onRetry: () => ref.read(reservationsVmProvider.notifier).refresh(),
       );
     }
-    final groups = state.groupedByZone;
-    if (groups.isEmpty) {
+    final items = state.visible;
+    if (items.isEmpty) {
       return _EmptyState(
         filtered:
             state.statusFilter != null || state.searchQuery.trim().isNotEmpty,
@@ -237,33 +247,22 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
         onNew: _new,
       );
     }
-
     return RefreshIndicator(
       color: AppColors.primary,
       onRefresh: () => ref.read(reservationsVmProvider.notifier).refresh(),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final narrow = constraints.maxWidth < 720;
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 28),
-            children: [
-              for (final g in groups) ...[
-                _FloorRowHeader(zone: g.zone, count: g.items.length),
-                for (var i = 0; i < g.items.length; i++)
-                  _ReservationRow(
-                    reservation: g.items[i],
-                    canManage: _canManage,
-                    narrow: narrow,
-                    last: i == g.items.length - 1,
-                    onTap: _canManage
-                        ? () => _handleAction(
-                            g.items[i], ReservationAction.edit)
-                        : null,
-                    onAction: (a) => _handleAction(g.items[i], a),
-                  ),
-              ],
-            ],
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
+        itemCount: items.length,
+        itemBuilder: (context, i) {
+          final r = items[i];
+          return _ReservationListCard(
+            reservation: r,
+            canManage: _canManage,
+            onTap: _canManage
+                ? () => _handleAction(r, ReservationAction.edit)
+                : null,
+            onAction: (a) => _handleAction(r, a),
           );
         },
       ),
@@ -348,55 +347,6 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
       ),
     );
   }
-
-  // --- Cuadrícula por hora ---------------------------------------------------
-
-  Widget _grid(ReservationsState state) {
-    if (state.loading && state.reservations.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (state.error != null) {
-      return _ErrorState(
-        message: state.error!,
-        onRetry: () => ref.read(reservationsVmProvider.notifier).refresh(),
-      );
-    }
-    final groups = state.groupedByHour;
-    if (groups.isEmpty) {
-      return _EmptyState(
-        filtered: state.statusFilter != null,
-        canManage: _canManage,
-        onNew: _new,
-      );
-    }
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final colW = constraints.maxWidth < 640
-            ? (constraints.maxWidth - 40).clamp(240.0, 360.0)
-            : 320.0;
-        return ListView.separated(
-          scrollDirection: Axis.horizontal,
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-          itemCount: groups.length,
-          separatorBuilder: (_, _) => const SizedBox(width: 16),
-          itemBuilder: (context, i) {
-            final g = groups[i];
-            return SizedBox(
-              width: colW,
-              child: _HourColumn(
-                hourLabel: g.label,
-                items: g.items,
-                canManage: _canManage,
-                onAction: _handleAction,
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 }
 
 // ============================================================================
@@ -435,6 +385,7 @@ class _Header extends StatelessWidget {
     final day = state.selectedDay;
     final width = MediaQuery.of(context).size.width;
     final narrow = width < 900;
+    final wide = width >= 1000;
     final pad = width < 600 ? 16.0 : 24.0;
     final longDate =
         '${_weekdaysLong[day.weekday - 1]}, ${day.day} ${_monthsLong[day.month - 1]}';
@@ -543,10 +494,12 @@ class _Header extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               child: stats,
             ),
-          ] else
+          ] else if (wide)
+            Align(alignment: Alignment.centerRight, child: stats)
+          else
             Row(children: [tabs, const Spacer(), stats]),
           // Fila 3 — filtros de estado + navegación de fecha
-          if (state.viewMode != ReservationViewMode.floorPlan) ...[
+          if (wide || state.viewMode != ReservationViewMode.floorPlan) ...[
             const SizedBox(height: 14),
             if (narrow) ...[
               dateNav,
@@ -1127,13 +1080,7 @@ class _ViewModeSwitch extends StatelessWidget {
           _seg('Lista', Icons.view_agenda_outlined, ReservationViewMode.list),
           const SizedBox(width: 4),
           _seg(
-            'Cuadrícula',
-            Icons.calendar_view_week_outlined,
-            ReservationViewMode.grid,
-          ),
-          const SizedBox(width: 4),
-          _seg(
-            'Plano del salón',
+            'Plano',
             Icons.table_restaurant_outlined,
             ReservationViewMode.floorPlan,
           ),
@@ -1178,69 +1125,27 @@ class _ViewModeSwitch extends StatelessWidget {
 }
 
 // ============================================================================
-// Lista tipo tabla: banda de piso + fila de reserva
+// Tarjeta de reserva (panel de lista): bloque de hora + info + acciones
 // ============================================================================
 
-class _FloorRowHeader extends StatelessWidget {
-  final String zone;
-  final int count;
-
-  const _FloorRowHeader({required this.zone, required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: AppColors.muted,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 9),
-      child: Row(
-        children: [
-          Text(
-            zone,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
-              color: AppColors.foreground,
-              letterSpacing: 0.2,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '· $count',
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.mutedForeground,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReservationRow extends StatefulWidget {
+class _ReservationListCard extends StatefulWidget {
   final Reservation reservation;
   final bool canManage;
-  final bool narrow;
-  final bool last;
   final VoidCallback? onTap;
   final void Function(ReservationAction) onAction;
 
-  const _ReservationRow({
+  const _ReservationListCard({
     required this.reservation,
     required this.canManage,
-    required this.narrow,
-    required this.last,
     required this.onTap,
     required this.onAction,
   });
 
   @override
-  State<_ReservationRow> createState() => _ReservationRowState();
+  State<_ReservationListCard> createState() => _ReservationListCardState();
 }
 
-class _ReservationRowState extends State<_ReservationRow> {
+class _ReservationListCardState extends State<_ReservationListCard> {
   bool _hover = false;
 
   @override
@@ -1252,99 +1157,132 @@ class _ReservationRowState extends State<_ReservationRow> {
         r.status == ReservationStatus.completed;
     final table =
         (r.tableCode?.trim().isNotEmpty ?? false) ? r.tableCode!.trim() : '—';
+    final t = r.reservedForLocal;
+    final mm = t.minute.toString().padLeft(2, '0');
+    final ampm = t.hour >= 12 ? 'PM' : 'AM';
+    final h12 = t.hour % 12 == 0 ? 12 : t.hour % 12;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      child: Material(
-        color: _hover ? AppColors.muted : Colors.transparent,
-        child: InkWell(
-          onTap: widget.onTap,
-          child: Container(
-            decoration: BoxDecoration(
-              border: widget.last
-                  ? null
-                  : const Border(bottom: BorderSide(color: AppColors.border)),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
-            child: Opacity(
-              opacity: dimmed ? 0.62 : 1,
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 78,
-                    child: Text(
-                      _time12(r.reservedForLocal),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: color,
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    flex: 3,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          r.customerName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.foreground,
-                          ),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _hover ? color.withValues(alpha: 0.45) : AppColors.border,
+          ),
+          boxShadow: _hover ? AppShadows.cardElevated : AppShadows.soft,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onTap,
+              child: Opacity(
+                opacity: dimmed ? 0.64 : 1,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 60,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        if (widget.narrow)
-                          Text(
-                            'Mesa $table · ${r.partySize} pax',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '$h12:$mm',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                                height: 1,
+                              ),
                             ),
-                          ),
-                      ],
-                    ),
+                            const SizedBox(height: 2),
+                            Text(
+                              ampm,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: color,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    r.customerName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.foreground,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                _StatusPill(status: r.status),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 4,
+                              children: [
+                                _MiniMeta(
+                                  icon: Icons.table_restaurant_outlined,
+                                  text: 'Mesa $table',
+                                ),
+                                _MiniMeta(
+                                  icon: Icons.groups_outlined,
+                                  text: '${r.partySize} pax',
+                                ),
+                              ],
+                            ),
+                            if (r.customerPhone != null &&
+                                r.customerPhone!.trim().isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              _MiniMeta(
+                                icon: Icons.call_outlined,
+                                text: r.customerPhone!.trim(),
+                              ),
+                            ],
+                            if (widget.canManage) ...[
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: _RowActions(
+                                  reservation: r,
+                                  onAction: widget.onAction,
+                                  compact: false,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  if (!widget.narrow) ...[
-                    Expanded(
-                      flex: 2,
-                      child: _MetaCell(
-                        icon: Icons.table_restaurant_outlined,
-                        text: 'Mesa $table',
-                      ),
-                    ),
-                    SizedBox(
-                      width: 92,
-                      child: _MetaCell(
-                        icon: Icons.groups_outlined,
-                        text: '${r.partySize} pax',
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _StatusPill(status: r.status),
-                  ] else
-                    Container(
-                      width: 9,
-                      height: 9,
-                      margin: const EdgeInsets.only(left: 6),
-                      decoration:
-                          BoxDecoration(color: color, shape: BoxShape.circle),
-                    ),
-                  if (widget.canManage) ...[
-                    const SizedBox(width: 6),
-                    _RowActions(
-                      reservation: r,
-                      onAction: widget.onAction,
-                      compact: widget.narrow,
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
@@ -1354,11 +1292,11 @@ class _ReservationRowState extends State<_ReservationRow> {
   }
 }
 
-class _MetaCell extends StatelessWidget {
+class _MiniMeta extends StatelessWidget {
   final IconData icon;
   final String text;
 
-  const _MetaCell({required this.icon, required this.text});
+  const _MiniMeta({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {
@@ -1366,17 +1304,13 @@ class _MetaCell extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, size: 14, color: AppColors.mutedForeground),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 13,
-              color: AppColors.mutedForeground,
-              fontWeight: FontWeight.w500,
-            ),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 12.5,
+            color: AppColors.mutedForeground,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ],
@@ -1702,228 +1636,6 @@ class _TableSheet extends StatelessWidget {
                 ),
               ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// Cuadrícula por hora: columna de una franja
-// ============================================================================
-
-class _HourColumn extends StatelessWidget {
-  final String hourLabel;
-  final List<Reservation> items;
-  final bool canManage;
-  final void Function(Reservation, ReservationAction) onAction;
-
-  const _HourColumn({
-    required this.hourLabel,
-    required this.items,
-    required this.canManage,
-    required this.onAction,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: AppColors.border)),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.schedule_outlined,
-                  size: 16,
-                  color: AppColors.primary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  hourLabel,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.foreground,
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${items.length}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Flexible(
-            child: ListView.separated(
-              padding: const EdgeInsets.all(12),
-              itemCount: items.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, i) => _GridTile(
-                reservation: items[i],
-                canManage: canManage,
-                onAction: onAction,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// Celda compacta de la cuadrícula
-// ============================================================================
-
-class _GridTile extends StatelessWidget {
-  final Reservation reservation;
-  final bool canManage;
-  final void Function(Reservation, ReservationAction) onAction;
-
-  const _GridTile({
-    required this.reservation,
-    required this.canManage,
-    required this.onAction,
-  });
-
-  static String _time12(DateTime local) {
-    final m = local.minute.toString().padLeft(2, '0');
-    final ampm = local.hour >= 12 ? 'PM' : 'AM';
-    final h12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
-    return '$h12:$m $ampm';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final r = reservation;
-    final color = reservationStatusColor(r.status);
-    final dimmed = r.status == ReservationStatus.cancelled ||
-        r.status == ReservationStatus.noShow ||
-        r.status == ReservationStatus.completed;
-    final table =
-        (r.tableCode?.trim().isNotEmpty ?? false) ? r.tableCode!.trim() : '—';
-
-    return Opacity(
-      opacity: dimmed ? 0.6 : 1,
-      child: Material(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: canManage ? () => onAction(r, ReservationAction.edit) : null,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 10, 4, 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 4,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _time12(r.reservedForLocal),
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: color,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        r.customerName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.foreground,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.table_restaurant_outlined,
-                            size: 13,
-                            color: AppColors.mutedForeground,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              'Mesa $table',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.mutedForeground,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          const Icon(
-                            Icons.groups_outlined,
-                            size: 13,
-                            color: AppColors.mutedForeground,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${r.partySize}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                if (canManage)
-                  _RowActions(
-                    reservation: r,
-                    onAction: (a) => onAction(r, a),
-                    compact: true,
-                  ),
-              ],
-            ),
-          ),
         ),
       ),
     );

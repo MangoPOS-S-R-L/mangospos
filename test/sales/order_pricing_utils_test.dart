@@ -8,6 +8,7 @@ Order _order({
   double serviceFee = 0,
   double tax = 0,
   double total = 0,
+  double deliveryFee = 0,
 }) {
   return Order(
     id: 'order-1',
@@ -18,6 +19,7 @@ Order _order({
     serviceFee: serviceFee,
     tax: tax,
     total: total,
+    deliveryFee: deliveryFee,
     createdAt: DateTime(2026, 1, 1),
   );
 }
@@ -84,15 +86,16 @@ void main() {
     test('modifier totals reconcile through the canonical summary path', () {
       // PRD 2.5: bajo el modelo unificado, oi.tax incluye TODOS los impuestos
       // (regulares + service fees) que apliquen al origin. order.serviceFee = 0.
-      // El item simulado: 2 × 100 + 2 × 14 modifier = 228 base. Tax 28% = 63.84.
-      final order = _order(subtotal: 228, tax: 63.84);
+      // Modifiers POR UNIDAD (fix 20260509_0004): 2 × (100 + 2 × 14) = 256 base.
+      // Tax 28% = 71.68.
+      final order = _order(subtotal: 256, tax: 71.68);
       final item = _item(
         id: 'mods',
         quantity: 2,
         unitPrice: 100,
-        subtotal: 228, // base + modifiers (consolidado por backend)
-        tax: 63.84, // 28% de 228
-        total: 291.84,
+        subtotal: 256, // base + modifiers por unidad (consolidado por backend)
+        tax: 71.68, // 28% de 256
+        total: 327.68,
         taxMode: 'exclusive',
         taxRate: 28,
         modifiers: const [
@@ -108,11 +111,45 @@ void main() {
 
       final summary = summarizeOrderPricing(order, [item]);
 
-      expect(itemDisplayTotal(order, item), 228.0); // gross sin tax
-      expect(summary.subtotal, 228.0);
-      expect(summary.tax, 63.84);
+      expect(itemDisplayTotal(order, item), 256.0); // gross sin tax
+      expect(summary.subtotal, 256.0);
+      expect(summary.tax, 71.68);
       expect(summary.serviceFee, 0.0); // PRD 2.5: siempre 0
-      expect(summary.total, 291.84);
+      expect(summary.total, 327.68);
+    });
+
+    test('exclusive discount is subtracted exactly once (no double count)', () {
+      // Regresión del bug del descuento doble (mig 20260630_0001): el trigger
+      // backend DEBE guardar oi.subtotal como base PRE-descuento. Bajo ese
+      // contrato, un 20% sobre un item exclusive de RD$295 @ 28% (10% Ley +
+      // 18% ITBIS) descuenta 75.52 (= 20% de 377.60) y el total queda en
+      // 302.08 — NO 205.42 (que sería restar el descuento dos veces).
+      final order = _order(
+        subtotal: 295,
+        tax: 82.60,
+        discounts: 75.52,
+        total: 302.08,
+      );
+      final item = _item(
+        id: 'disc',
+        quantity: 1,
+        unitPrice: 295,
+        subtotal: 295, // base pre-descuento (contrato del backend)
+        tax: 82.60, // 28% de 295
+        discounts: 75.52, // 20% de (295 + 82.60)
+        total: 302.08,
+        taxMode: 'exclusive',
+        taxRate: 28,
+      );
+
+      final summary = summarizeOrderPricing(order, [item]);
+
+      expect(summary.subtotal, 295.0);
+      expect(summary.tax, 82.60);
+      expect(summary.discounts, 75.52);
+      expect(summary.total, 302.08); // descuento restado UNA vez
+      // El precio mostrado en la línea es gross − descuento.
+      expect(itemDisplayTotal(order, item), closeTo(219.48, 0.001));
     });
 
     test(
@@ -251,6 +288,68 @@ void main() {
       final summary = summarizeOrderPricing(order, [item]);
       expect(summary.discounts, 275);
       expect(summary.total, 550);
+    });
+  });
+
+  group('fee de delivery propio (cargo exento)', () {
+    test('suma el fee al total DESPUÉS de impuestos, sin tocar subtotal/tax', () {
+      // Item exclusivo RD$100 + ITBIS 18% = 118. Fee de delivery RD$50 exento.
+      final order = _order(deliveryFee: 50);
+      final item = _item(
+        id: 'excl',
+        quantity: 1,
+        unitPrice: 100,
+        subtotal: 100,
+        tax: 18,
+        total: 118,
+        taxRate: 18,
+      );
+
+      final summary = summarizeOrderPricing(order, [item]);
+
+      expect(summary.subtotal, 100); // base sin tocar
+      expect(summary.tax, 18); // ITBIS sin tocar
+      expect(summary.deliveryFee, 50); // expuesto aparte
+      expect(summary.total, 168); // 118 + 50 exento
+    });
+
+    test('fee 0 no altera el total (no regresión para no-delivery)', () {
+      final order = _order();
+      final item = _item(
+        id: 'excl',
+        quantity: 1,
+        unitPrice: 100,
+        subtotal: 100,
+        tax: 18,
+        total: 118,
+        taxRate: 18,
+      );
+
+      final summary = summarizeOrderPricing(order, [item]);
+
+      expect(summary.deliveryFee, 0);
+      expect(summary.total, 118);
+    });
+
+    test('fee se suma sobre el gross de una orden 100% inclusive', () {
+      // Item inclusive catálogo RD$500 (anclado al gross). Fee RD$100.
+      final order = _order(deliveryFee: 100);
+      final item = _item(
+        id: 'inclusive',
+        quantity: 1,
+        unitPrice: 500,
+        subtotal: 390.63,
+        tax: 70.31,
+        total: 500,
+        taxMode: 'inclusive',
+        taxRate: 18,
+        originalTaxRate: 28,
+      );
+
+      final summary = summarizeOrderPricing(order, [item]);
+
+      expect(summary.total, 600); // 500 gross + 100 exento
+      expect(summary.deliveryFee, 100);
     });
   });
 }

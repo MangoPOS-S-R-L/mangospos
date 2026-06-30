@@ -21,6 +21,7 @@ import '../state/inventory_state.dart';
 import '../state/valuation_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/valuation_viewmodel.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryValuationView extends ConsumerStatefulWidget {
   const InventoryValuationView({super.key});
@@ -49,7 +50,7 @@ class _InventoryValuationViewState
     final istate = ivm.state;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -344,6 +345,11 @@ class _Header extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: InventoryBackButton(),
+              ),
+              const SizedBox(width: 4),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -447,7 +453,7 @@ class _StatCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -678,7 +684,7 @@ class _SummaryTable extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.card),
               border: Border.all(color: AppColors.border),
-              boxShadow: AppShadows.soft,
+              boxShadow: AppShadows.cardElevated,
             ),
             child: Row(
               children: [
@@ -817,7 +823,7 @@ class _DetailsTable extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.card),
               border: Border.all(color: AppColors.border),
-              boxShadow: AppShadows.soft,
+              boxShadow: AppShadows.cardElevated,
             ),
             child: Row(
               children: [

@@ -68,6 +68,14 @@ class OrderSummaryPanel extends StatelessWidget {
                 valueWeight: FontWeight.w700,
               ),
             ],
+            // Fee de delivery propio: cargo exento (no lleva impuestos).
+            if (summary.deliveryFee > 0) ...[
+              const SizedBox(height: 8),
+              _row(
+                'Delivery',
+                'RD\$ ${currency.format(summary.deliveryFee)}',
+              ),
+            ],
             const SizedBox(height: 12),
             _row(
               'Total',

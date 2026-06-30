@@ -166,6 +166,11 @@ class ProductsRepository {
     bool isInventoryTracked = false,
     double initialStock = 0,
     bool allowNegativeSale = false,
+    // Conversión del insumo ligado (solo al crear inventariable): unidad base
+    // + unidad de compra + contenido por empaque.
+    String? baseUnit,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     final created = await _client
         .from(ProductsQueries.tableMenuItems)
@@ -218,9 +223,53 @@ class ProductsRepository {
         tracked: true,
         initialStock: initialStock,
       );
+      // El RPC crea el insumo ligado en unidad por defecto; aquí le aplicamos
+      // la unidad base + empaque elegidos en el form (1 botella = 700 ml).
+      await _applyLinkedInventoryUnit(
+        menuItemId: itemId,
+        baseUnit: baseUnit,
+        purchaseUnit: purchaseUnit,
+        packSize: packSize,
+      );
     }
 
     return Map<String, dynamic>.from(created);
+  }
+
+  /// Ajusta la unidad base + empaque del insumo LIGADO a un producto
+  /// (creado por `fn_menu_item_set_inventory_tracked`). No-op si no hay
+  /// insumo ligado o no se pasó nada. Ver core/inventory/unit_conversion.
+  Future<void> _applyLinkedInventoryUnit({
+    required String menuItemId,
+    String? baseUnit,
+    String? purchaseUnit,
+    double? packSize,
+  }) async {
+    final hasBase = baseUnit != null && baseUnit.trim().isNotEmpty;
+    final hasPurchase = purchaseUnit != null && purchaseUnit.trim().isNotEmpty;
+    if (!hasBase && !hasPurchase && packSize == null) return;
+
+    final row = await _client
+        .from(ProductsQueries.tableMenuItems)
+        .select('inventory_item_id')
+        .eq('id', menuItemId)
+        .maybeSingle();
+    final invId = row?['inventory_item_id']?.toString();
+    if (invId == null || invId.isEmpty) return;
+
+    final payload = <String, dynamic>{};
+    if (hasBase) payload['unit'] = baseUnit.trim();
+    if (purchaseUnit != null) {
+      payload['purchase_unit'] =
+          purchaseUnit.trim().isEmpty ? null : purchaseUnit.trim();
+    }
+    if (packSize != null) payload['pack_size'] = packSize <= 0 ? 1 : packSize;
+    if (payload.isEmpty) return;
+
+    await _client
+        .from('inventory_items')
+        .update(payload)
+        .eq('id', invId);
   }
 
   /// Activa/desactiva el tracking de inventario de un producto. Llama la

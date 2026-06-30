@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../../../../../core/inventory/unit_conversion.dart';
 import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_tokens.dart';
 import '../state/recipes_state.dart';
@@ -571,14 +572,18 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
                     )
                     .toList(growable: false),
                 onChanged: (value) {
-                  row.inventoryItemId = value;
-                  final inventoryItem = widget.inventoryItems
-                      .where((item) => item.id == value)
-                      .cast<RecipeInventoryItem?>()
-                      .firstWhere((item) => item != null, orElse: () => null);
-                  if (inventoryItem != null && row.unit.text.trim().isEmpty) {
-                    row.unit.text = inventoryItem.unit;
-                  }
+                  setState(() {
+                    row.inventoryItemId = value;
+                    final inventoryItem = widget.inventoryItems
+                        .where((item) => item.id == value)
+                        .cast<RecipeInventoryItem?>()
+                        .firstWhere((item) => item != null, orElse: () => null);
+                    // Al cambiar de insumo, fijamos la unidad a su unidad base
+                    // (las opciones del selector dependen del insumo).
+                    if (inventoryItem != null) {
+                      row.unit.text = inventoryItem.unit;
+                    }
+                  });
                 },
               ),
             ),
@@ -589,18 +594,36 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
                   labelText: 'Cantidad',
-                  // La cantidad SIEMPRE va en la unidad base del insumo (ej.
-                  // ml), no en la unidad de compra (botella).
-                  helperText: 'en unidad base del insumo',
+                  // Se puede escribir en oz/ml/botella; se convierte a la
+                  // unidad base del insumo al guardar.
+                  helperText: 'se convierte a la unidad base',
                   helperMaxLines: 2,
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: TextField(
-                controller: row.unit,
-                decoration: const InputDecoration(labelText: 'Unidad base'),
+              child: Builder(
+                builder: (_) {
+                  final options = _unitOptionsFor(row.inventoryItemId);
+                  final current = row.unit.text.trim();
+                  final value = options.contains(current)
+                      ? current
+                      : (options.isNotEmpty ? options.first : null);
+                  return DropdownButtonFormField<String>(
+                    initialValue: value,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Unidad'),
+                    items: options
+                        .map(
+                          (u) => DropdownMenuItem(value: u, child: Text(u)),
+                        )
+                        .toList(growable: false),
+                    onChanged: (u) {
+                      if (u != null) setState(() => row.unit.text = u);
+                    },
+                  );
+                },
               ),
             ),
             const SizedBox(width: 8),
@@ -627,6 +650,52 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
     });
   }
 
+  RecipeInventoryItem? _itemById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    return widget.inventoryItems
+        .where((item) => item.id == id)
+        .cast<RecipeInventoryItem?>()
+        .firstWhere((item) => item != null, orElse: () => null);
+  }
+
+  /// Unidades ofrecidas para un ingrediente: su unidad base + las de su misma
+  /// familia (oz/ml/L… ó g/kg) + la unidad de compra del insumo (ej. botella).
+  List<String> _unitOptionsFor(String? itemId) {
+    final item = _itemById(itemId);
+    final base = (item?.unit.trim().isNotEmpty ?? false)
+        ? item!.unit.trim()
+        : 'unidad';
+    final opts = <String>{base};
+    switch (unitFamily(base)) {
+      case UnitFamily.volume:
+        opts.addAll(const ['ml', 'cl', 'L', 'oz']);
+        break;
+      case UnitFamily.weight:
+        opts.addAll(const ['g', 'kg']);
+        break;
+      case UnitFamily.count:
+      case UnitFamily.unknown:
+        break;
+    }
+    final pu = item?.purchaseUnit?.trim();
+    if (pu != null && pu.isNotEmpty) opts.add(pu);
+    return opts.toList(growable: false);
+  }
+
+  /// Convierte `qty` (en `fromUnit`) a la unidad base del insumo:
+  /// 1) si es la unidad de compra → ×pack_size; 2) si es de la misma familia
+  /// → factor; 3) si no → se asume ya en unidad base.
+  double _toBaseQty(double qty, String fromUnit, RecipeInventoryItem item) {
+    final from = fromUnit.trim();
+    if (from.isEmpty) return qty;
+    final pu = item.purchaseUnit?.trim();
+    if (pu != null && pu.isNotEmpty && from.toLowerCase() == pu.toLowerCase()) {
+      return qty * (item.packSize <= 0 ? 1 : item.packSize);
+    }
+    final converted = convertUnit(qty, from, item.unit);
+    return converted ?? qty;
+  }
+
   void _submit() {
     final menuItemId = _menuItemId;
     if (menuItemId == null || menuItemId.isEmpty) return;
@@ -634,11 +703,29 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
     final yieldQuantity = double.tryParse(_yieldController.text.trim()) ?? 0;
     if (yieldQuantity <= 0) return;
 
-    final ingredients = _rows
-        .map((row) => row.toDraftIngredient())
-        .where((row) => row != null)
-        .cast<RecipeDraftIngredient>()
-        .toList(growable: false);
+    // Convertimos cada ingrediente a la UNIDAD BASE del insumo al guardar, para
+    // que el descuento de stock (que opera en unidad base) sea correcto.
+    final ingredients = <RecipeDraftIngredient>[];
+    for (final row in _rows) {
+      final id = row.inventoryItemId;
+      if (id == null || id.isEmpty) continue;
+      final qty = double.tryParse(row.quantity.text.trim()) ?? 0;
+      if (qty <= 0) continue;
+      final item = _itemById(id);
+      final baseUnit = (item?.unit.trim().isNotEmpty ?? false)
+          ? item!.unit.trim()
+          : 'unidad';
+      final fromUnit =
+          row.unit.text.trim().isEmpty ? baseUnit : row.unit.text.trim();
+      final baseQty = item == null ? qty : _toBaseQty(qty, fromUnit, item);
+      ingredients.add(
+        RecipeDraftIngredient(
+          inventoryItemId: id,
+          unit: baseUnit,
+          quantity: baseQty,
+        ),
+      );
+    }
 
     if (ingredients.isEmpty) return;
 
@@ -666,18 +753,6 @@ class _IngredientDraftRow {
     String unit = '',
   }) : quantity = TextEditingController(text: quantity),
        unit = TextEditingController(text: unit);
-
-  RecipeDraftIngredient? toDraftIngredient() {
-    if (inventoryItemId == null || inventoryItemId!.isEmpty) return null;
-    final parsedQuantity = double.tryParse(quantity.text.trim()) ?? 0;
-    if (parsedQuantity <= 0) return null;
-    final normalizedUnit = unit.text.trim();
-    return RecipeDraftIngredient(
-      inventoryItemId: inventoryItemId!,
-      unit: normalizedUnit.isEmpty ? 'unidad' : normalizedUnit,
-      quantity: parsedQuantity,
-    );
-  }
 
   void dispose() {
     quantity.dispose();

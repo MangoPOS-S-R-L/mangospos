@@ -17,12 +17,14 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/inventory/pack_conversion.dart';
+import '../../../core/inventory/unit_conversion.dart';
 import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryItemsView extends ConsumerStatefulWidget {
   const InventoryItemsView({super.key});
@@ -152,7 +154,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       decimalDigits: 2,
     );
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: _loading && _items.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : _error != null
@@ -287,7 +289,17 @@ class _Header extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (isCompact) ...[
-          titleBlock,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: InventoryBackButton(),
+              ),
+              const SizedBox(width: 4),
+              Expanded(child: titleBlock),
+            ],
+          ),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: createButton),
           const SizedBox(height: 16),
@@ -299,6 +311,11 @@ class _Header extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: InventoryBackButton(),
+              ),
+              const SizedBox(width: 4),
               Expanded(child: titleBlock),
               createButton,
             ],
@@ -1000,6 +1017,25 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     return (v == null || v <= 0) ? 1 : v;
   }
 
+  /// Opciones del dropdown de unidad base: las canónicas (unidad/ml/L/oz/g/kg)
+  /// + la unidad actual del insumo si no está en la lista (para no perder
+  /// valores legacy como 'lb' o 'gal' al editar).
+  List<String> _baseUnitOptionsList() {
+    final cur = _unitCtrl.text.trim();
+    final opts = <String>[...baseUnitOptions];
+    if (cur.isNotEmpty && !opts.contains(cur)) {
+      opts.insert(0, cur);
+    }
+    return opts;
+  }
+
+  /// Valor seleccionado del dropdown (cae a la primera opción si está vacío).
+  String _baseUnitValue() {
+    final cur = _unitCtrl.text.trim();
+    final opts = _baseUnitOptionsList();
+    return opts.contains(cur) ? cur : opts.first;
+  }
+
   /// Texto de ayuda bajo el campo de empaque: "1 botella = 750 ml".
   String? _packHelperText() {
     final pu = _purchaseUnitCtrl.text.trim();
@@ -1077,7 +1113,8 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
     return AlertDialog(
       title: Text(_isEdit ? 'Editar insumo' : 'Nuevo insumo'),
       content: SizedBox(
-        width: 580,
+        // Responsivo: en pantallas chicas usa el ancho disponible; en grandes, 580.
+        width: MediaQuery.of(context).size.width < 640 ? double.maxFinite : 580,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1120,12 +1157,20 @@ class _ItemFormDialogState extends State<_ItemFormDialog> {
                 children: [
                   SizedBox(
                     width: 160,
-                    child: TextField(
-                      controller: _unitCtrl,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _baseUnitValue(),
+                      isExpanded: true,
                       decoration: const InputDecoration(
                         labelText: 'Unidad base (stock)',
-                        hintText: 'ml, g, unidad',
                       ),
+                      items: _baseUnitOptionsList()
+                          .map(
+                            (u) => DropdownMenuItem(value: u, child: Text(u)),
+                          )
+                          .toList(growable: false),
+                      onChanged: (v) {
+                        if (v != null) setState(() => _unitCtrl.text = v);
+                      },
                     ),
                   ),
                   const SizedBox(width: 12),

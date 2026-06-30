@@ -122,6 +122,8 @@ class InventoryViewModel extends ChangeNotifier {
     required double minStock,
     double? maxStock,
     double initialStock = 0,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     final businessId = _state.businessId;
     final warehouseId = _state.selectedWarehouseId;
@@ -142,6 +144,8 @@ class InventoryViewModel extends ChangeNotifier {
         cost: cost,
         minStock: minStock,
         maxStock: maxStock,
+        purchaseUnit: purchaseUnit,
+        packSize: packSize,
       );
 
       final itemId = created['id']?.toString();
@@ -180,6 +184,8 @@ class InventoryViewModel extends ChangeNotifier {
     required double minStock,
     double? maxStock,
     required bool isActive,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
@@ -195,6 +201,8 @@ class InventoryViewModel extends ChangeNotifier {
         minStock: minStock,
         maxStock: maxStock,
         isActive: isActive,
+        purchaseUnit: purchaseUnit,
+        packSize: packSize,
       );
       _state = _state.copyWith(saving: false);
       await refresh();
@@ -202,6 +210,25 @@ class InventoryViewModel extends ChangeNotifier {
       _state = _state.copyWith(
         saving: false,
         error: 'Error actualizando insumo: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Soft-delete: desactiva el insumo (is_active=false). Preserva su
+  /// historial/kardex/movimientos y recetas. Sale de las listas de activos.
+  Future<void> deactivateItem(String itemId) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+    try {
+      await _repository.setItemActive(itemId: itemId, isActive: false);
+      _state = _state.copyWith(saving: false);
+      await refresh();
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error eliminando insumo: $e',
       );
       notifyListeners();
       rethrow;

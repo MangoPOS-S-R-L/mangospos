@@ -26,6 +26,13 @@ class ProductDetailModal extends StatefulWidget {
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
 
+  /// Autoriza aplicar un descuento manual o cortesía NUEVO. Debe devolver true
+  /// si el usuario tiene el permiso `ventas.orden.descuento_aplicar` o autoriza
+  /// con PIN de supervisor; false si cancela. Si es null, no se exige
+  /// autorización (compatibilidad). El descuento automático de ofertas NO pasa
+  /// por aquí.
+  final Future<bool> Function()? onAuthorizeDiscount;
+
   const ProductDetailModal({
     super.key,
     required this.item,
@@ -38,6 +45,7 @@ class ProductDetailModal extends StatefulWidget {
     this.onBeforeDelete,
     this.onMarkSoldOut,
     this.onReprint,
+    this.onAuthorizeDiscount,
   });
 
   @override
@@ -62,6 +70,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   late double _quantity;
   late bool _isTakeout;
   late bool _isCourtesy;
+  // Estado inicial del descuento/cortesía: exigimos autorización SOLO cuando
+  // se aplica un descuento manual/cortesía NUEVO (no al re-guardar uno ya
+  // existente ni al editar notas).
+  late bool _initialCourtesy;
+  late double _initialManualDiscountValue;
   bool _isMarkingSoldOut = false;
   bool _isSaving = false;
   bool _isEditingModifiers = false;
@@ -88,6 +101,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
         parsedNotes.courtesyReason != null ||
         widget.item.total.abs() < 0.01 ||
         widget.item.discounts >= (fullAmount - 0.01);
+    _initialCourtesy = _isCourtesy;
+    _initialManualDiscountValue = _initialManualDiscount();
   }
 
   @override
@@ -281,6 +296,29 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
 
     final discount = _effectiveDiscount();
+
+    // Gate de permiso: aplicar un descuento manual o cortesía NUEVO requiere
+    // autorización (permiso ventas.orden.descuento_aplicar o PIN de supervisor).
+    // El descuento automático de ofertas no pasa por aquí.
+    final appliedManualDiscount =
+        _enteredDiscount() > _initialManualDiscountValue + 0.001;
+    final appliedCourtesy = _isCourtesy && !_initialCourtesy;
+    if ((appliedManualDiscount || appliedCourtesy) &&
+        widget.onAuthorizeDiscount != null) {
+      final authorized = await widget.onAuthorizeDiscount!();
+      if (!authorized) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Descuento no autorizado: requiere permiso o PIN de supervisor.',
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
     final baseNotes = _notesController.text.trim();
     final courtesyReason = _isCourtesy
         ? _courtesyReasonController.text.trim()

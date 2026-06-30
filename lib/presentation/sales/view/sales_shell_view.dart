@@ -120,145 +120,147 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
           if (!businessModel.isRetail)
             Container(
               width: sidebarWidth,
-            decoration: const BoxDecoration(
-              color: SalesTheme.cardBackground,
-              border: Border(
-                right: BorderSide(color: SalesTheme.border, width: 1),
-              ),
-            ),
-            child: Column(
-              children: [
-                const SizedBox(height: 24),
-                if (!isCashOpen)
-                  _CashClosedBanner(compact: compact),
-                // 2026-05-13: removido el widget "Saldo en caja" de la
-                // app POS. El cajero no debe ver el monto esperado
-                // mientras opera (rompe el principio del cierre a
-                // ciegas). La visibilidad operativa cross-tenant la
-                // tiene mango_administrador (NOC). Ver PRD-12.
-                Expanded(
-                  child: ListView(
-                    padding: navPadding,
-                    children: [
-                      // Modos de venta visibles según feature flags.
-                      // Si `allModesOff` (admin apagó todo por error),
-                      // mostramos venta rápida como fallback para que
-                      // el cajero no quede sin punto de entrada.
-                      if (features.salesModeTableEnabled) ...[
-                        _SalesNavItem(
-                          icon: Icons.grid_view_rounded,
-                          label: 'Por zona',
-                          compact: compact,
-                          selected: selected == SalesTab.byZone,
-                          locked: !sessionCtrl.hasPermission(
-                            'ventas.mesas.acceso',
-                          ),
-                          onTap: () => _handleNavTap(
-                            context,
-                            ref,
-                            route,
-                            AppRoutes.salesReact,
-                            guardNavigation,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                      if (features.salesModeManualEnabled) ...[
-                        _SalesNavItem(
-                          icon: Icons.description_outlined, // FileText
-                          label: 'Venta manual',
-                          compact: compact,
-                          selected: selected == SalesTab.manual,
-                          locked: !sessionCtrl.hasPermission(
-                            'ventas.mesas.abrir',
-                          ),
-                          // PRD 4 F4.4: Venta Manual temporalmente
-                          // bloqueada hasta completar TableSelectorModal
-                          // + flujo de asignación post-cobro. Reactivar
-                          // removiendo el `|| true` cuando esté listo.
-                          disabled: !isCashOpen || true,
-                          onTap: () => _handleNavTap(
-                            context,
-                            ref,
-                            route,
-                            Uri(
-                              path: AppRoutes.salesReact,
-                              queryParameters: const {'mode': 'manual'},
-                            ).toString(),
-                            guardNavigation,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                      if (features.salesModeQuickEnabled || allModesOff) ...[
-                        _SalesNavItem(
-                          icon: Icons.bolt_rounded, // Zap
-                          label: 'Venta rápida',
-                          compact: compact,
-                          selected: selected == SalesTab.quick,
-                          locked: !sessionCtrl.hasPermission(
-                            'ventas_rapida.acceso',
-                          ),
-                          disabled: !isCashOpen,
-                          onTap: () => _handleNavTap(
-                            context,
-                            ref,
-                            route,
-                            Uri(
-                              path: AppRoutes.salesReact,
-                              queryParameters: const {'mode': 'rapida'},
-                            ).toString(),
-                            guardNavigation,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                      if (features.salesModeDeliveryEnabled) ...[
-                        _SalesNavItem(
-                          icon: Icons.local_shipping_outlined, // Truck
-                          label: 'Delivery',
-                          compact: compact,
-                          selected: selected == SalesTab.delivery,
-                          locked: !sessionCtrl.hasPermission(
-                            'delivery.crear_orden',
-                          ),
-                          disabled: !isCashOpen,
-                          onTap: () => _handleNavTap(
-                            context,
-                            ref,
-                            route,
-                            Uri(
-                              path: AppRoutes.salesReact,
-                              queryParameters: const {'mode': 'delivery'},
-                            ).toString(),
-                            guardNavigation,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 4),
-                      _SalesNavItem(
-                        icon: Icons.smartphone_rounded, // Smartphone
-                        label: 'Self service',
-                        compact: compact,
-                        selected: selected == SalesTab.selfService,
-                        onTap: () => _handleNavTap(
-                          context,
-                          ref,
-                          route,
-                          Uri(
-                            path: AppRoutes.salesReact,
-                            queryParameters: const {'mode': 'selfservice'},
-                          ).toString(),
-                          guardNavigation,
-                        ),
-                        disabled: true,
-                      ),
-                    ],
-                  ),
+              decoration: const BoxDecoration(
+                color: SalesTheme.cardBackground,
+                border: Border(
+                  right: BorderSide(color: SalesTheme.border, width: 1),
                 ),
-              ],
-            ),
-          ),
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 24),
+                  if (!isCashOpen)
+                    _CashClosedBanner(compact: compact),
+                  // 2026-05-13: removido el widget "Saldo en caja" de la
+                  // app POS. El cajero no debe ver el monto esperado
+                  // mientras opera (rompe el principio del cierre a
+                  // ciegas). La visibilidad operativa cross-tenant la
+                  // tiene mango_administrador (NOC). Ver PRD-12.
+                  Expanded(
+                    child: ListView(
+                      padding: navPadding,
+                      children: [
+                        // Modos de venta visibles según feature flags.
+                        // Si `allModesOff` (admin apagó todo por error),
+                        // mostramos venta rápida como fallback para que
+                        // el cajero no quede sin punto de entrada.
+                        if (features.salesModeTableEnabled) ...[
+                          _SalesNavItem(
+                            icon: Icons.grid_view_rounded,
+                            label: 'Por zona',
+                            compact: compact,
+                            selected: selected == SalesTab.byZone,
+                            locked: !sessionCtrl.hasPermission(
+                              'ventas.mesas.acceso',
+                            ),
+                            onTap: () => _handleNavTap(
+                              context,
+                              ref,
+                              route,
+                              AppRoutes.salesReact,
+                              guardNavigation,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        if (features.salesModeManualEnabled) ...[
+                          _SalesNavItem(
+                            icon: Icons.description_outlined, // FileText
+                            label: 'Venta manual',
+                            compact: compact,
+                            selected: selected == SalesTab.manual,
+                            locked: !sessionCtrl.hasPermission(
+                              'ventas.mesas.abrir',
+                            ),
+                            // PRD 4 F4.4: Venta Manual temporalmente
+                            // bloqueada hasta completar TableSelectorModal
+                            // + flujo de asignación post-cobro. Reactivar
+                            // removiendo el `|| true` cuando esté listo.
+                            disabled: !isCashOpen || true,
+                            onTap: () => _handleNavTap(
+                              context,
+                              ref,
+                              route,
+                              Uri(
+                                path: AppRoutes.salesReact,
+                                queryParameters: const {'mode': 'manual'},
+                              ).toString(),
+                              guardNavigation,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        if (features.salesModeQuickEnabled || allModesOff) ...[
+                          _SalesNavItem(
+                            icon: Icons.bolt_rounded, // Zap
+                            label: 'Venta rápida',
+                            compact: compact,
+                            selected: selected == SalesTab.quick,
+                            locked: !sessionCtrl.hasPermission(
+                              'ventas_rapida.acceso',
+                            ),
+                            disabled: !isCashOpen,
+                            onTap: () => _handleNavTap(
+                              context,
+                              ref,
+                              route,
+                              Uri(
+                                path: AppRoutes.salesReact,
+                                queryParameters: const {'mode': 'rapida'},
+                              ).toString(),
+                              guardNavigation,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        if (features.salesModeDeliveryEnabled) ...[
+                          _SalesNavItem(
+                            icon: Icons.local_shipping_outlined, // Truck
+                            label: 'Delivery',
+                            compact: compact,
+                            selected: selected == SalesTab.delivery,
+                            locked: !sessionCtrl.hasPermission(
+                              'delivery.crear_orden',
+                            ),
+                            disabled: !isCashOpen,
+                            onTap: () => _handleNavTap(
+                              context,
+                              ref,
+                              route,
+                              Uri(
+                                path: AppRoutes.salesReact,
+                                queryParameters: const {'mode': 'delivery'},
+                              ).toString(),
+                              guardNavigation,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        _SalesNavItem(
+                          icon: Icons.smartphone_rounded, // Smartphone
+                          label: 'Self service',
+                          compact: compact,
+                          selected: selected == SalesTab.selfService,
+                          onTap: () => _handleNavTap(
+                            context,
+                            ref,
+                            route,
+                            Uri(
+                              path: AppRoutes.salesReact,
+                              queryParameters: const {'mode': 'selfservice'},
+                            ).toString(),
+                            guardNavigation,
+                          ),
+                          disabled: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            const SizedBox.shrink(),
 
           // ======= CONTENIDO PRINCIPAL =======
           Expanded(
@@ -272,12 +274,16 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                     child: _CashClosedBanner(compact: false),
-                  ),
+                  )
+                else
+                  const SizedBox.shrink(),
                 if (orderState.isOfflineMode ||
                     orderState.syncInFlight ||
                     orderState.pendingOfflineActions > 0 ||
                     (orderState.syncStatus?.isNotEmpty ?? false))
-                  _SalesSyncBanner(state: orderState),
+                  _SalesSyncBanner(state: orderState)
+                else
+                  const SizedBox.shrink(),
                 Expanded(
                   child: Container(
                     color: SalesTheme.background,

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/inventory_state.dart';
@@ -87,59 +89,160 @@ class _StockReconciliationViewState
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(title: const Text('Ajustes de inventario')),
-      body: state.loading && state.items.isEmpty
-          ? Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : ListView.separated(
-              padding: const EdgeInsets.all(24),
-              itemCount: state.items.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final item = state.items[index];
-                return Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: AppColors.card,
-                    borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: Border.all(color: AppColors.border),
-                    boxShadow: AppShadows.soft,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.name,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.foreground,
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(context, state),
+            Expanded(
+              child: state.loading && state.items.isEmpty
+                  ? Center(
+                      child: CircularProgressIndicator(color: AppColors.primary),
+                    )
+                  : state.items.isEmpty
+                  ? _buildEmptyState()
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                      itemCount: state.items.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 12),
+                      itemBuilder: (context, index) {
+                        final item = state.items[index];
+                        return Container(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            color: AppColors.card,
+                            borderRadius: BorderRadius.circular(AppRadius.card),
+                            border: Border.all(color: AppColors.border),
+                            boxShadow: AppShadows.cardElevated,
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.name,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.foreground,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Actual: ${item.stock.toStringAsFixed(2)} ${item.unit} · Mínimo: ${item.minStock.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        color: AppColors.mutedForeground,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Actual: ${item.stock.toStringAsFixed(2)} ${item.unit} · Mínimo: ${item.minStock.toStringAsFixed(2)}',
-                              style: TextStyle(
-                                color: AppColors.mutedForeground,
+                              const SizedBox(width: 12),
+                              FilledButton(
+                                onPressed: state.saving
+                                    ? null
+                                    : () => _showAdjustDialog(context, item),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                ),
+                                child: const Text('Ajustar'),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: state.saving
-                            ? null
-                            : () => _showAdjustDialog(context, item),
-                        child: const Text('Ajustar'),
-                      ),
-                    ],
-                  ),
-                );
-              },
+                            ],
+                          ),
+                        );
+                      },
+                    ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(BuildContext context, InventoryState state) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 24, 8),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => context.go(AppRoutes.settings),
+            icon: const Icon(Icons.arrow_back),
+            tooltip: 'Volver',
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Cuadre de stock',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Ajusta el stock físico de tus insumos contra el conteo real.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton.filledTonal(
+            onPressed: state.loading
+                ? null
+                : () => ref.read(inventoryViewModelProvider).refresh(),
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refrescar',
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+              foregroundColor: AppColors.primary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.inventory_2_outlined,
+              size: 44,
+              color: AppColors.mutedForeground,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'No hay insumos para cuadrar',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.foreground,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Registra insumos en Inventario para poder ajustar su stock.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.mutedForeground),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

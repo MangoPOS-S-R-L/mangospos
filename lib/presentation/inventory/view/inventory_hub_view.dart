@@ -25,6 +25,7 @@ import '../../../core/theme/app_radius.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryHubView extends ConsumerStatefulWidget {
   const InventoryHubView({super.key});
@@ -119,7 +120,7 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
       orElse: () => InventoryMode.none,
     );
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: SingleChildScrollView(
         padding: pagePadding,
         child: Column(
@@ -292,6 +293,10 @@ class _Header extends StatelessWidget {
       children: [
         Row(
           children: [
+            const Padding(
+              padding: EdgeInsets.only(right: 4),
+              child: InventoryBackButton(),
+            ),
             Flexible(
               child: Text(
                 'Inventario',

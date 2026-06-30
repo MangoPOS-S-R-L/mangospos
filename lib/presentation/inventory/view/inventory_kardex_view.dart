@@ -21,6 +21,7 @@ import '../state/inventory_state.dart';
 import '../state/kardex_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/kardex_viewmodel.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryKardexView extends ConsumerStatefulWidget {
   const InventoryKardexView({super.key});
@@ -49,7 +50,7 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
     final istate = ivm.state;
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -121,10 +122,15 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+      padding: const EdgeInsets.fromLTRB(12, 16, 24, 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: InventoryBackButton(),
+          ),
+          const SizedBox(width: 4),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -460,7 +466,7 @@ class _MovementCard extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(color: AppColors.border),
-          boxShadow: AppShadows.soft,
+          boxShadow: AppShadows.cardElevated,
         ),
         child: Row(
           children: [

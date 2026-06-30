@@ -544,6 +544,35 @@ class SalesRepository {
     }
   }
 
+  /// Venta rápida persistente: devuelve el id de la orden `quick` ABIERTA del
+  /// negocio (la mesa virtual de venta rápida es única por negocio), o null si
+  /// no hay ninguna. Permite RETOMAR una venta no cobrada en vez de abrir una
+  /// nueva (que anularía la previa). Best-effort: null ante cualquier fallo.
+  /// Ver docs/PRD_DELIVERY_FEE_PROPIO.md (Feature C venta rápida).
+  Future<String?> findOpenQuickOrderId(String businessId) async {
+    try {
+      final rows = await _client
+          .from('orders')
+          .select(
+            'id, created_at, table_sessions!inner(business_id, origin, closed_at)',
+          )
+          .eq('status_ext', 'open')
+          .eq('table_sessions.business_id', businessId)
+          .inFilter('table_sessions.origin', ['quick', 'quick_sale'])
+          .isFilter('table_sessions.closed_at', null)
+          .order('created_at', ascending: false)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        final id = (rows.first as Map)['id'];
+        return id is String && id.isNotEmpty ? id : null;
+      }
+      return null;
+    } catch (e) {
+      // No es fatal: si falla la consulta, el caller abre una venta nueva.
+      return null;
+    }
+  }
+
   /// Retail: abre una venta rápida en una mesa virtual DEDICADA por carrito
   /// (`slot`), permitiendo varias ventas rápidas simultáneas sin que abrir una
   /// nueva anule las demás. A diferencia de [openManualOrQuick] (que comparte
@@ -1723,6 +1752,23 @@ class SalesRepository {
       // flujo de pago — no lo tocamos acá para no romper checks/payments.
     } catch (e) {
       throw Exception('Error al marcar items como listos: $e');
+    }
+  }
+
+  /// Fee de delivery propio (cargo EXENTO): fija `orders.delivery_fee` y
+  /// recomputa el total en backend. El monto se redondea/clampa a ≥0 dentro
+  /// del RPC. Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
+  Future<void> setDeliveryFee({
+    required String orderId,
+    required double amount,
+  }) async {
+    try {
+      await _client.rpc(
+        SalesQueries.rpcSetDeliveryFee,
+        params: {'p_order_id': orderId, 'p_amount': amount},
+      );
+    } catch (e) {
+      throw Exception('Error al fijar el fee de delivery: $e');
     }
   }
 

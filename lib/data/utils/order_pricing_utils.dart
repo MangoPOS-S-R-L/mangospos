@@ -333,6 +333,11 @@ class OrderPricingSummary {
   final double discounts;
   final double serviceFee;
   final double extraServiceFee;
+
+  /// Fee de delivery propio: cargo EXENTO ya incluido en [total]. Se expone
+  /// aparte para mostrarlo como línea "Delivery" en panel/recibo.
+  final double deliveryFee;
+
   final double total;
   final Map<double, double> taxDetails;
 
@@ -342,6 +347,7 @@ class OrderPricingSummary {
     required this.discounts,
     required this.serviceFee,
     required this.extraServiceFee,
+    this.deliveryFee = 0,
     required this.total,
     this.taxDetails = const {},
   });
@@ -543,9 +549,14 @@ OrderPricingSummary summarizeOrderPricing(
   final hasOnlyInclusive = items.every(
     (i) => i.status == 'void' || i.taxMode == 'inclusive',
   );
-  final double finalTotal = hasOnlyInclusive && items.isNotEmpty
-      ? _r(inclusiveGrossNet)
-      : _r(subtotal + tax + serviceFee + extraServiceFee - discounts);
+  final double baseTotal = hasOnlyInclusive && items.isNotEmpty
+      ? inclusiveGrossNet
+      : subtotal + tax + serviceFee + extraServiceFee - discounts;
+
+  // Fee de delivery propio: cargo EXENTO sumado DESPUÉS de impuestos (no entra
+  // a base/ITBIS/LEY). Mismo orden que `calculate_order_totals` en backend.
+  final double deliveryFee = order?.deliveryFee ?? 0;
+  final double finalTotal = _r(baseTotal + deliveryFee);
 
   return OrderPricingSummary(
     subtotal: _r(subtotal),
@@ -553,6 +564,7 @@ OrderPricingSummary summarizeOrderPricing(
     discounts: _r(discounts),
     serviceFee: _r(serviceFee),
     extraServiceFee: _r(extraServiceFee),
+    deliveryFee: _r(deliveryFee),
     total: finalTotal,
     taxDetails: taxGroups.map((key, value) => MapEntry(key, _r(value))),
   );

@@ -169,9 +169,51 @@ class InventoryRepository {
       );
 
       _lastReadFromCache = false;
+
+      // Filtro POR ALMACÉN: la lista muestra solo los insumos PRESENTES en el
+      // almacén seleccionado (con fila en inventory_stock, aunque la cantidad
+      // sea 0). En el almacén PRINCIPAL además incluimos los "huérfanos" (sin
+      // stock en NINGÚN almacén del negocio) para que insumos recién creados o
+      // sin asignar no desaparezcan de la vista.
+      final warehousesRaw = await _client
+          .from(InventoryQueries.tableWarehouses)
+          .select('id, is_main')
+          .eq('business_id', businessId);
+      final allWarehouseIds = <String>[];
+      var selectedIsMain = false;
+      for (final w in List<Map<String, dynamic>>.from(warehousesRaw)) {
+        final wid = w['id']?.toString();
+        if (wid == null || wid.isEmpty) continue;
+        allWarehouseIds.add(wid);
+        if (wid == warehouseId && w['is_main'] == true) selectedIsMain = true;
+      }
+
+      var orphanItemIds = const <String>{};
+      if (selectedIsMain && allWarehouseIds.isNotEmpty) {
+        final anyRowResponse = await _client
+            .from(InventoryQueries.tableInventoryStock)
+            .select('item_id')
+            .inFilter('warehouse_id', allWarehouseIds);
+        final withRow = <String>{};
+        for (final r in List<Map<String, dynamic>>.from(anyRowResponse)) {
+          final iid = r['item_id']?.toString();
+          if (iid != null && iid.isNotEmpty) withRow.add(iid);
+        }
+        orphanItemIds = itemsRaw
+            .map((i) => i['id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty && !withRow.contains(id))
+            .toSet();
+      }
+
+      bool presentInWarehouse(String id) =>
+          stockByItem.containsKey(id) || orphanItemIds.contains(id);
+
+      final present = itemsRaw
+          .where((i) => presentInWarehouse(i['id']?.toString() ?? ''))
+          .toList(growable: false);
       final filtered = (normalized == null || normalized.isEmpty)
-          ? itemsRaw
-          : _filterRawItems(itemsRaw, normalized);
+          ? present
+          : _filterRawItems(present, normalized);
       return filtered
           .map(
             (item) => InventoryItemSummary.fromMap(
@@ -189,9 +231,17 @@ class InventoryRepository {
       if (snapshot == null) rethrow;
       debugPrint('[inventory] getItems cayó al cache local: $e');
       _lastReadFromCache = true;
+      // Offline: el snapshot guarda el stock del almacén consultado, así que
+      // mostramos los insumos PRESENTES en él (los huérfanos del principal
+      // requieren red para resolverse y reaparecen al reconectar).
+      final present = snapshot.items
+          .where(
+            (i) => snapshot.stock.containsKey(i['id']?.toString() ?? ''),
+          )
+          .toList(growable: false);
       final filtered = (normalized == null || normalized.isEmpty)
-          ? snapshot.items
-          : _filterRawItems(snapshot.items, normalized);
+          ? present
+          : _filterRawItems(present, normalized);
       return filtered
           .map(
             (item) => InventoryItemSummary.fromMap(
@@ -742,6 +792,37 @@ class InventoryRepository {
         .select()
         .single();
 
+    final newItemId = response['id']?.toString();
+    // Presencia (qty 0) en el almacén PRINCIPAL para que el insumo nuevo
+    // aparezca de inmediato en la lista del principal aunque no tenga stock
+    // inicial. Idempotente: si ya existe la fila, no la pisa. Best-effort.
+    if (newItemId != null && newItemId.isNotEmpty) {
+      try {
+        final mainW = await _client
+            .from(InventoryQueries.tableWarehouses)
+            .select('id')
+            .eq('business_id', businessId)
+            .eq('is_main', true)
+            .order('created_at')
+            .limit(1)
+            .maybeSingle();
+        final mainId = mainW?['id']?.toString();
+        if (mainId != null && mainId.isNotEmpty) {
+          await _client
+              .from(InventoryQueries.tableInventoryStock)
+              .upsert(
+                {'warehouse_id': mainId, 'item_id': newItemId, 'quantity': 0},
+                onConflict: 'warehouse_id,item_id',
+                ignoreDuplicates: true,
+              );
+        }
+      } catch (e) {
+        debugPrint(
+          'createItem: no se pudo asegurar presencia en almacén principal: $e',
+        );
+      }
+    }
+
     return Map<String, dynamic>.from(response);
   }
 
@@ -791,6 +872,18 @@ class InventoryRepository {
     await _client
         .from(InventoryQueries.tableInventoryItems)
         .update(payload)
+        .eq('id', itemId);
+  }
+
+  /// Activa/desactiva un insumo (soft-delete). Update mínimo de `is_active`
+  /// para no exigir el resto de campos requeridos por [updateItem].
+  Future<void> setItemActive({
+    required String itemId,
+    required bool isActive,
+  }) async {
+    await _client
+        .from(InventoryQueries.tableInventoryItems)
+        .update({'is_active': isActive})
         .eq('id', itemId);
   }
 

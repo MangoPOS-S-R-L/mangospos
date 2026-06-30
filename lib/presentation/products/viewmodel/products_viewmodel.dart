@@ -355,6 +355,10 @@ class ProductsViewModel extends ChangeNotifier {
     bool isInventoryTracked = false,
     double initialStock = 0,
     bool allowNegativeSale = false,
+    // Conversión del insumo ligado (solo al crear inventariable).
+    String? baseUnit,
+    String? purchaseUnit,
+    double? packSize,
   }) async {
     if (_businessId == null) return;
 
@@ -411,6 +415,9 @@ class ProductsViewModel extends ChangeNotifier {
         isInventoryTracked: isInventoryTracked,
         initialStock: initialStock,
         allowNegativeSale: allowNegativeSale,
+        baseUnit: baseUnit,
+        purchaseUnit: purchaseUnit,
+        packSize: packSize,
       );
 
       // Printing v2 (Slice 4.B): persistir N:M con el id recién creado.

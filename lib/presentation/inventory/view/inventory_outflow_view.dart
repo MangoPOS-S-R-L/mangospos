@@ -7,6 +7,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import 'widgets/inventory_back_button.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
   const InventoryOutflowView({super.key});
@@ -44,7 +45,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     );
 
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.background,
       body: state.loading && state.items.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : SingleChildScrollView(
@@ -54,28 +55,41 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Inventario',
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: AppColors.foreground,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Insumos, stock actual y salidas manuales',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: AppColors.mutedForeground,
-                            ),
-                          ),
-                        ],
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: InventoryBackButton(),
                       ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Inventario',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.foreground,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Insumos, stock actual y salidas manuales',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
                       Wrap(
                         spacing: 12,
                         runSpacing: 12,
@@ -128,6 +142,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                   Row(
                     children: [
                       Expanded(
+                        flex: 2,
                         child: TextField(
                           controller: _searchController,
                           onChanged: (value) => ref
@@ -145,10 +160,11 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      SizedBox(
-                        width: 260,
+                      Expanded(
+                        flex: 1,
                         child: DropdownButtonFormField<String>(
                           key: ValueKey(state.selectedWarehouseId),
+                          isExpanded: true,
                           initialValue: state.selectedWarehouseId,
                           decoration: InputDecoration(
                             labelText: 'Almacen',
@@ -258,7 +274,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                               ),
                               Expanded(
                                 child: Text(
-                                  'PRESENTACIÓN',
+                                  'UNIDAD BASE',
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w800,
@@ -366,7 +382,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                       child: Text(currency.format(item.cost)),
                                     ),
                                     SizedBox(
-                                      width: 120,
+                                      width: 168,
                                       child: Wrap(
                                         alignment: WrapAlignment.end,
                                         spacing: 8,
@@ -382,6 +398,19 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                                   ),
                                             icon: const Icon(
                                               Icons.edit_outlined,
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Eliminar insumo',
+                                            onPressed: state.saving
+                                                ? null
+                                                : () => _showDeleteItemDialog(
+                                                    context,
+                                                    item,
+                                                  ),
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              color: Color(0xFFEF4444),
                                             ),
                                           ),
                                           FilledButton.tonal(
@@ -505,6 +534,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                 minStock: payload.minStock,
                 maxStock: payload.maxStock,
                 initialStock: payload.initialStock,
+                purchaseUnit: payload.purchaseUnit,
+                packSize: payload.packSize,
               );
         },
       ),
@@ -533,10 +564,54 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                 minStock: payload.minStock,
                 maxStock: payload.maxStock,
                 isActive: payload.isActive,
+                purchaseUnit: payload.purchaseUnit,
+                packSize: payload.packSize,
               );
         },
       ),
     );
+  }
+
+  Future<void> _showDeleteItemDialog(
+    BuildContext context,
+    InventoryItemSummary item,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+        ),
+        title: const Text('Eliminar insumo'),
+        content: Text(
+          'Se eliminará "${item.name}" de la lista. Su historial de '
+          'movimientos y recetas se conservan; puedes reactivarlo luego. '
+          '¿Deseas continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(inventoryViewModelProvider).deactivateItem(item.id);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"${item.name}" eliminado')),
+      );
+    }
   }
 
   Future<void> _showOutflowDialog(
@@ -582,7 +657,7 @@ class _SummaryCard extends StatelessWidget {
         color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppShadows.soft,
+        boxShadow: AppShadows.cardElevated,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -620,6 +695,8 @@ class _ItemDialogPayload {
   final double? maxStock;
   final double initialStock;
   final bool isActive;
+  final String? purchaseUnit;
+  final double packSize;
 
   const _ItemDialogPayload({
     required this.name,
@@ -631,6 +708,8 @@ class _ItemDialogPayload {
     required this.maxStock,
     required this.initialStock,
     required this.isActive,
+    required this.purchaseUnit,
+    required this.packSize,
   });
 }
 
@@ -658,6 +737,10 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   late final TextEditingController _minStockController;
   late final TextEditingController _maxStockController;
   late final TextEditingController _initialStockController;
+  // Conversión de empaque: se compra en `purchase_unit` (ej. botella) que
+  // contiene `pack_size` unidades base (ej. 700 ml). Vacío = sin conversión.
+  late final TextEditingController _purchaseUnitController;
+  late final TextEditingController _packSizeController;
   String _selectedPresentation = 'unidad';
   bool _isActive = true;
   bool _saving = false;
@@ -707,6 +790,14 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       text: item?.maxStock?.toStringAsFixed(2) ?? '',
     );
     _initialStockController = TextEditingController();
+    _purchaseUnitController = TextEditingController(
+      text: item?.purchaseUnit ?? '',
+    );
+    _packSizeController = TextEditingController(
+      text: (item != null && item.packSize > 1)
+          ? _trimNum(item.packSize)
+          : '',
+    );
     _isActive = item?.isActive ?? true;
   }
 
@@ -720,7 +811,35 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     _minStockController.dispose();
     _maxStockController.dispose();
     _initialStockController.dispose();
+    _purchaseUnitController.dispose();
+    _packSizeController.dispose();
     super.dispose();
+  }
+
+  String _trimNum(double v) {
+    final s = v.toStringAsFixed(2);
+    if (s.endsWith('.00')) return s.substring(0, s.length - 3);
+    if (s.endsWith('0')) return s.substring(0, s.length - 1);
+    return s;
+  }
+
+  double get _packSizeValue {
+    final v = double.tryParse(_packSizeController.text.trim().replaceAll(',', '.'));
+    return (v == null || v <= 0) ? 1 : v;
+  }
+
+  /// Texto bajo el bloque de empaque: "1 botella = 700 ml" + costo por base.
+  String? _packPreview() {
+    final pu = _purchaseUnitController.text.trim();
+    final base = _selectedPresentation.trim();
+    final size = _packSizeValue;
+    if (pu.isEmpty || size <= 1) return null;
+    final baseLabel = base.isEmpty ? 'unidad' : base;
+    final cost = double.tryParse(_costController.text.trim().replaceAll(',', '.'));
+    final perBase = (cost != null && cost > 0)
+        ? '  ·  costo ${_trimNum(cost / size)} / $baseLabel'
+        : '';
+    return '1 $pu = ${_trimNum(size)} $baseLabel$perBase';
   }
 
   @override
@@ -739,7 +858,9 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       ),
       contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
       content: SizedBox(
-        width: 460,
+        // Responsivo: en pantallas chicas el diálogo ocupa el ancho
+        // disponible (evita que se corten campos/botones); en grandes, 460.
+        width: MediaQuery.of(context).size.width < 520 ? double.maxFinite : 460,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -757,7 +878,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                       initialValue: _selectedPresentation,
                       dropdownColor: AppColors.card,
                       decoration: InputDecoration(
-                        labelText: 'Presentacion',
+                        labelText: 'Unidad base',
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppRadius.card),
                         ),
@@ -793,10 +914,52 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                      onChanged: (_) => setState(() {}),
                     ),
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              // Conversión de empaque: comprar en botella/caja, consumir en la
+              // unidad base. Ej: 1 botella = 700 ml. Vacío = sin conversión.
+              Row(
+                children: [
+                  Expanded(
+                    child: _field(
+                      _purchaseUnitController,
+                      'Unidad de compra (opcional)',
+                      hint: 'botella, caja',
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _field(
+                      _packSizeController,
+                      'Contenido por empaque',
+                      hint: '700',
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              if (_packPreview() != null) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _packPreview()!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -872,12 +1035,16 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     TextEditingController controller,
     String label, {
     TextInputType? keyboardType,
+    void Function(String)? onChanged,
+    String? hint,
   }) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
+      onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
+        hintText: hint,
         labelStyle: TextStyle(color: AppColors.mutedForeground),
         filled: true,
         fillColor: AppColors.muted,
@@ -921,6 +1088,10 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
           maxStock: maxStockRaw.isEmpty ? null : parse(maxStockRaw),
           initialStock: parse(_initialStockController.text),
           isActive: _isActive,
+          purchaseUnit: _purchaseUnitController.text.trim().isEmpty
+              ? null
+              : _purchaseUnitController.text.trim(),
+          packSize: _packSizeValue,
         ),
       );
       if (!mounted) return;

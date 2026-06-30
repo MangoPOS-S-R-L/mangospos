@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mangopos/core/inventory/unit_conversion.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
@@ -49,6 +50,11 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     bool isInventoryTracked,
     double initialStock,
     bool allowNegativeSale,
+    // Conversión del insumo ligado (solo al crear inventariable): unidad base
+    // + unidad de compra + contenido por empaque (1 botella = 700 ml).
+    String? baseUnit,
+    String? purchaseUnit,
+    double? packSize,
   })
   onAdd;
 
@@ -138,6 +144,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _wasInventoryTrackedInitially = false;
   late TextEditingController _initialStockController;
 
+  /// Conversión del insumo ligado (solo al CREAR producto inventariable).
+  /// `_invBaseUnit` = unidad base (consumo); compra/contenido definen el
+  /// empaque (1 botella = 700 ml). Ver core/inventory/unit_conversion.
+  String _invBaseUnit = 'unidad';
+  late TextEditingController _invPurchaseUnitController;
+  late TextEditingController _invPackSizeController;
+
   /// Si true, el producto sigue vendible aunque su stock llegue a 0 o
   /// negativo. El auto-86 (que normalmente esconde productos agotados)
   /// NO lo desactiva. El faltante se salda con la próxima compra.
@@ -197,6 +210,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _isInventoryTracked = p?['is_inventory_tracked'] == true;
     _wasInventoryTrackedInitially = _isInventoryTracked;
     _initialStockController = TextEditingController(text: '0');
+    _invPurchaseUnitController = TextEditingController();
+    _invPackSizeController = TextEditingController();
     _allowNegativeSale = p?['allow_negative_sale'] == true;
     _wasAllowNegativeSaleInitially = _allowNegativeSale;
 
@@ -325,6 +340,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _barcodeController.dispose();
     _presentationController.dispose();
     _initialStockController.dispose();
+    _invPurchaseUnitController.dispose();
+    _invPackSizeController.dispose();
     super.dispose();
   }
 
@@ -785,6 +802,104 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
             ),
           ),
         ],
+        // Conversión del insumo ligado — solo al CREAR un producto
+        // inventariable. Define la unidad base (consumo) y el empaque del
+        // insumo que se crea (1 botella = 700 ml). En edición se ajusta
+        // desde el módulo Inventario.
+        if (widget.product == null && _isInventoryTracked) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.accent,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Unidad e inventario',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Cómo se mide el stock. Si lo compras en botella/caja, indica '
+                  'cuánto contiene para descontar por ml/g (ej. recetas/tragos).',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                _fieldLabel('Unidad base (consumo)'),
+                _buildDropdown<String>(
+                  value: _invBaseUnit,
+                  hint: 'Unidad base',
+                  items: baseUnitOptions
+                      .map(
+                        (u) => DropdownMenuItem(value: u, child: Text(u)),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _invBaseUnit = v);
+                  },
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _fieldLabel('Unidad de compra'),
+                          _buildTextField(
+                            controller: _invPurchaseUnitController,
+                            hintText: 'botella, caja',
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _fieldLabel('Contenido por empaque'),
+                          _buildTextField(
+                            controller: _invPackSizeController,
+                            hintText: '700',
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (_invPackPreview() != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _invPackPreview()!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: AppSpacing.sm),
         _switchRow(
           title: 'Impuestos',
@@ -970,6 +1085,20 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     );
   }
 
+  /// Preview "1 botella = 700 ml" para el bloque de conversión del producto
+  /// inventariable. Null si no hay empaque definido.
+  String? _invPackPreview() {
+    final pu = _invPurchaseUnitController.text.trim();
+    final size = double.tryParse(
+      _invPackSizeController.text.trim().replaceAll(',', '.'),
+    );
+    if (pu.isEmpty || size == null || size <= 1) return null;
+    final s = size == size.roundToDouble()
+        ? size.toStringAsFixed(0)
+        : size.toStringAsFixed(2);
+    return '1 $pu = $s $_invBaseUnit';
+  }
+
   Widget _fieldLabel(String text, {bool required = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
@@ -992,6 +1121,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     TextInputType? keyboardType,
     bool enabled = true,
     String? Function(String?)? validator,
+    void Function(String)? onChanged,
   }) {
     return TextFormField(
       controller: controller,
@@ -1000,6 +1130,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
       maxLines: maxLines,
       keyboardType: keyboardType,
       validator: validator,
+      onChanged: onChanged,
       style: TextStyle(fontSize: 15, color: AppColors.foreground),
       decoration: InputDecoration(
         hintText: hintText,
@@ -1538,6 +1669,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         isInventoryTracked: _isInventoryTracked,
         initialStock: initialStock,
         allowNegativeSale: _allowNegativeSale,
+        // Conversión del insumo ligado (solo si es inventariable).
+        baseUnit: _isInventoryTracked ? _invBaseUnit : null,
+        purchaseUnit: _isInventoryTracked
+            ? (_invPurchaseUnitController.text.trim().isEmpty
+                  ? null
+                  : _invPurchaseUnitController.text.trim())
+            : null,
+        packSize: _isInventoryTracked
+            ? (double.tryParse(
+                _invPackSizeController.text.trim().replaceAll(',', '.'),
+              ))
+            : null,
       );
     }
     Navigator.pop(context);

@@ -6,6 +6,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import 'widgets/inventory_back_button.dart';
 
 class RequirementsView extends ConsumerStatefulWidget {
   const RequirementsView({super.key});
@@ -28,8 +29,11 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
     final state = ref.watch(inventoryViewModelProvider).state;
 
     return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(title: const Text('Kardex de inventario')),
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        leading: const InventoryBackButton(),
+        title: const Text('Kardex de inventario'),
+      ),
       body: state.loading && state.movements.isEmpty
           ? Center(child: CircularProgressIndicator(color: AppColors.primary))
           : ListView.separated(
@@ -45,7 +49,7 @@ class _RequirementsViewState extends ConsumerState<RequirementsView> {
                     color: AppColors.card,
                     borderRadius: BorderRadius.circular(AppRadius.card),
                     border: Border.all(color: AppColors.border),
-                    boxShadow: AppShadows.soft,
+                    boxShadow: AppShadows.cardElevated,
                   ),
                   child: Row(
                     children: [

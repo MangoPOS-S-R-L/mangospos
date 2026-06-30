@@ -27,7 +27,7 @@ class RecipesRepository {
   Future<List<RecipeInventoryItem>> getInventoryItems(String businessId) async {
     final response = await _client
         .from('inventory_items')
-        .select('id, name, sku, unit, cost, is_active')
+        .select('id, name, sku, unit, cost, is_active, purchase_unit, pack_size')
         .eq('business_id', businessId)
         .eq('is_active', true)
         .order('name');
@@ -70,7 +70,9 @@ class RecipesRepository {
     if (inventoryIds.isNotEmpty) {
       final inventoryResponse = await _client
           .from('inventory_items')
-          .select('id, name, sku, unit, cost, is_active')
+          .select(
+            'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
+          )
           .inFilter('id', inventoryIds);
 
       for (final row in List<Map<String, dynamic>>.from(inventoryResponse)) {
