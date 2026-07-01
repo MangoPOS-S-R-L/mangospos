@@ -123,7 +123,10 @@
       "Bash(awk '/CREATE TABLE IF NOT EXISTS \"public\".\"menu_items\"/,/^\\\\\\);/' supabase/schema.sql)",
       "PowerShell(Set-Location 'd:\\\\MangoPos\\\\Dev\\\\mangopos'; powershell -ExecutionPolicy Bypass -File '.\\\\installer\\\\windows\\\\build_inno.ps1')",
       "PowerShell($f = Get-Item 'd:\\\\MangoPos\\\\Dev\\\\mangopos\\\\build\\\\installer\\\\MangoPOS-Setup-1.3.2-x64.exe' -ErrorAction SilentlyContinue; if \\($f\\) { \"{0}  |  {1:N1} MB  |  {2}\" -f $f.Name, \\($f.Length/1MB\\), $f.LastWriteTime } else { Get-Content 'C:\\\\Users\\\\crist\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--MangoPos-Dev-mangopos\\\\14c803a0-855f-4233-b7c8-703f83dda744\\\\tasks\\\\b480x780s.output' -Tail 6 })",
-      "Bash(supabase --version)"
+      "Bash(supabase --version)",
+      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.5\")",
+      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.6\")",
+      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.7\")"
     ],
     "additionalDirectories": [
       "/tmp"

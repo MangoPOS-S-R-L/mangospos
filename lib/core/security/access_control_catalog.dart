@@ -137,8 +137,8 @@ const accessPermissions = <AccessPermission>[
   AccessPermission(
     code: 'ventas.orden.descuento_aplicar',
     label: 'Aplicar descuento en orden',
-    categoryId: 'finance',
-    categoryLabel: 'Finanzas',
+    categoryId: 'operations',
+    categoryLabel: 'Gestion Operativa',
     description: 'Permite descuentos por linea o por orden.',
   ),
   AccessPermission(
