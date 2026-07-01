@@ -126,7 +126,8 @@
       "Bash(supabase --version)",
       "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.5\")",
       "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.6\")",
-      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.7\")"
+      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.7\")",
+      "PowerShell(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"installer\\\\windows\\\\build_inno.ps1\" -AppVersion \"1.3.8\")"
     ],
     "additionalDirectories": [
       "/tmp"

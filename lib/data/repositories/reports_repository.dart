@@ -1660,6 +1660,21 @@ class ReportsRepository {
     int voidCount = 0;
     final byType = <String, Map<String, dynamic>>{};
 
+    // Cuántos comprobantes tiene cada orden. Si una orden tiene MÁS DE UNO es
+    // una cuenta dividida (split bill): cada NCF es una sub-cuenta. El ITBIS/LEY
+    // derivado de los ítems (derivedItbisByOrder/derivedServiceFeeByOrder) está
+    // agregado por ORDEN completa, así que atribuirlo a cada sub-cuenta DUPLICA
+    // el impuesto de la orden en cada NCF (bug: las 2 sub-cuentas mostraban el
+    // ITBIS/LEY de toda la orden). Para esos docs usamos el ITBIS/LEY YA
+    // guardado por sub-cuenta en fiscal_documents, correcto desde el recálculo
+    // por check de fn_recompute_fd_for_scope v5 (mig 20260610_0001).
+    final docCountByOrder = <String, int>{};
+    for (final doc in rows) {
+      final oid = doc['order_id']?.toString() ?? '';
+      if (oid.isEmpty) continue;
+      docCountByOrder[oid] = (docCountByOrder[oid] ?? 0) + 1;
+    }
+
     final enrichedDocs = <Map<String, dynamic>>[];
     for (final doc in rows) {
       final status = doc['status']?.toString() ?? 'active';
@@ -1685,7 +1700,31 @@ class ReportsRepository {
 
       double pureItbis;
       double serviceFee;
-      if (itemTaxTotal > 0.005) {
+      final isSplitOrder = (docCountByOrder[oid] ?? 0) > 1;
+      if (isSplitOrder) {
+        // Cuenta dividida: cada comprobante trae SU ITBIS/LEY correctos por
+        // sub-cuenta en fiscal_documents (fn_recompute_fd_for_scope scopea los
+        // totales por check). Usar el derivado por orden completa duplicaría el
+        // impuesto de la orden en cada NCF. La LEY vive en service_fee.
+        pureItbis = itbis;
+        serviceFee = docServiceFee;
+        // Docs de split legacy (pre-v5) pueden traer el combinado (28% = 18+10)
+        // metido junto en itbis_amount y sin LEY separada → partirlo por las
+        // tasas configuradas para no inflar el ITBIS con la porción de LEY.
+        if (configuredServiceFeeRate > 0 &&
+            configuredTaxOnlyRate > 0 &&
+            subtotal > 0 &&
+            serviceFee.abs() < 0.005 &&
+            (((itbis / subtotal) * 100) -
+                        (configuredTaxOnlyRate + configuredServiceFeeRate))
+                    .abs() <
+                0.5) {
+          final combined = configuredTaxOnlyRate + configuredServiceFeeRate;
+          final svcPortion = itbis * (configuredServiceFeeRate / combined);
+          pureItbis = itbis - svcPortion;
+          serviceFee = svcPortion;
+        }
+      } else if (itemTaxTotal > 0.005) {
         // Los items cargan el impuesto: usar el split derivado de la config.
         // Refleja exactamente lo cobrado; nada se imputa.
         pureItbis = derivedItbis;
