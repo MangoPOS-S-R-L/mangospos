@@ -37,9 +37,15 @@ $target = Get-CimInstance Win32_Printer |
   Select-Object -First 1
 
 if (-not $target) {
+  # Fallback difuso alineado con el discovery: no exigir "PortName -match
+  # '^USB'" (descartaba termicas 2Connect/ZJiang/POS80 con puerto custom
+  # POS001/CP001/GP001). Mismos filtros de exclusion que Win32_Printer usa
+  # para listar impresoras locales imprimibles.
   $target = Get-CimInstance Win32_Printer |
     Where-Object {
-      $_.Local -eq $true -and $_.PortName -match '^USB' -and (
+      $_.Local -eq $true -and
+      $_.PortName -notmatch '^(PORTPROMPT|FILE|XPSPort|SHRFAX|FaxPort|nul|IP_|WSD-|http|lpr)' -and
+      $_.DriverName -notmatch '(XPS|PDF|OneNote|Fax|Send To OneNote|Microsoft Print)' -and (
         ($printerName -and $_.Name -like "*$printerName*") -or
         ($devicePath -and ($_.Name -like "*$devicePath*" -or $_.DeviceID -like "*$devicePath*")) -or
         ($portHint -and $_.PortName -like "*$portHint*")

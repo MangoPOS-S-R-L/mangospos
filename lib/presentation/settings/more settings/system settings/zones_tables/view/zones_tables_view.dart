@@ -228,9 +228,19 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  children: [
-                                    ReorderableDragStartListener(
+                                LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    // En pantallas angostas (teléfono) los
+                                    // botones de acción competían con el
+                                    // nombre de la zona en el mismo Row y lo
+                                    // aplastaban a ancho ~0 → el nombre salía
+                                    // vertical, letra por letra. Debajo de
+                                    // 500px movemos las acciones a una fila
+                                    // aparte, debajo del título.
+                                    final narrow = constraints.maxWidth < 500;
+
+                                    final dragHandle =
+                                        ReorderableDragStartListener(
                                       index: i,
                                       child: const Padding(
                                         padding: EdgeInsets.only(right: 12),
@@ -240,117 +250,161 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
                                           color: Colors.black38,
                                         ),
                                       ),
-                                    ),
-                                    Expanded(
-                                      child: Column(
+                                    );
+
+                                    final titleBlock = Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                zone.name,
+                                                style: text.titleMedium
+                                                    ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 18,
+                                                      color: isInactiveZone
+                                                          ? Colors.grey[600]
+                                                          : Colors.black87,
+                                                      decoration:
+                                                          isInactiveZone
+                                                              ? TextDecoration
+                                                                  .lineThrough
+                                                              : null,
+                                                    ),
+                                              ),
+                                            ),
+                                            if (isInactiveZone) ...[
+                                              const SizedBox(width: 8),
+                                              _buildInactiveBadge(),
+                                            ],
+                                          ],
+                                        ),
+                                        Text(
+                                          '${tables.length} mesas registradas',
+                                          style: text.bodySmall?.copyWith(
+                                            color: Colors.grey[600],
+                                          ),
+                                        ),
+                                      ],
+                                    );
+
+                                    final List<Widget> actions =
+                                        isInactiveZone
+                                            ? [
+                                                TextButton.icon(
+                                                  onPressed: () =>
+                                                      _onReactivateZone(zone),
+                                                  icon: const Icon(
+                                                    Icons.unarchive_outlined,
+                                                    size: 20,
+                                                  ),
+                                                  label: const Text(
+                                                      'Reactivar zona'),
+                                                  style: TextButton.styleFrom(
+                                                    foregroundColor:
+                                                        const Color(0xFF2563EB),
+                                                    textStyle: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ]
+                                            : [
+                                                IconButton(
+                                                  tooltip: 'Editar zona',
+                                                  onPressed: () =>
+                                                      _onEditZone(zone),
+                                                  icon: const Icon(
+                                                    Icons.edit_outlined,
+                                                    size: 20,
+                                                    color: Colors.black54,
+                                                  ),
+                                                ),
+                                                IconButton(
+                                                  tooltip: 'Eliminar zona',
+                                                  onPressed: () => _onDeleteZone(
+                                                    zone,
+                                                    tables.length,
+                                                  ),
+                                                  icon: const Icon(
+                                                    Icons.delete_outline,
+                                                    size: 20,
+                                                    color: Colors.redAccent,
+                                                  ),
+                                                ),
+                                                IconButton(
+                                                  tooltip: 'Editar plano',
+                                                  onPressed: () =>
+                                                      _onEditFloorPlan(zone),
+                                                  icon: const Icon(
+                                                    Icons
+                                                        .space_dashboard_outlined,
+                                                    size: 20,
+                                                    color: Color(0xFF2563EB),
+                                                  ),
+                                                ),
+                                                TextButton.icon(
+                                                  onPressed: () =>
+                                                      _onAddTable(zone, tables),
+                                                  icon: const Icon(
+                                                    Icons.add_circle_outline,
+                                                    size: 20,
+                                                  ),
+                                                  label: const Text(
+                                                      'Agregar mesa'),
+                                                  style: TextButton.styleFrom(
+                                                    foregroundColor:
+                                                        const Color(0xFF22C55E),
+                                                    textStyle: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ];
+
+                                    if (narrow) {
+                                      return Column(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
                                           Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
-                                              Flexible(
-                                                child: Text(
-                                                  zone.name,
-                                                  style: text.titleMedium
-                                                      ?.copyWith(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 18,
-                                                        color: isInactiveZone
-                                                            ? Colors.grey[600]
-                                                            : Colors.black87,
-                                                        decoration:
-                                                            isInactiveZone
-                                                                ? TextDecoration
-                                                                    .lineThrough
-                                                                : null,
-                                                      ),
-                                                ),
-                                              ),
-                                              if (isInactiveZone) ...[
-                                                const SizedBox(width: 8),
-                                                _buildInactiveBadge(),
-                                              ],
+                                              dragHandle,
+                                              Expanded(child: titleBlock),
                                             ],
                                           ),
-                                          Text(
-                                            '${tables.length} mesas registradas',
-                                            style: text.bodySmall?.copyWith(
-                                              color: Colors.grey[600],
+                                          const SizedBox(height: 10),
+                                          Align(
+                                            alignment: Alignment.centerRight,
+                                            child: Wrap(
+                                              spacing: 4,
+                                              runSpacing: 4,
+                                              alignment: WrapAlignment.end,
+                                              crossAxisAlignment:
+                                                  WrapCrossAlignment.center,
+                                              children: actions,
                                             ),
                                           ),
                                         ],
-                                      ),
-                                    ),
-                                    if (isInactiveZone)
-                                      TextButton.icon(
-                                        onPressed: () =>
-                                            _onReactivateZone(zone),
-                                        icon: const Icon(
-                                          Icons.unarchive_outlined,
-                                          size: 20,
-                                        ),
-                                        label: const Text('Reactivar zona'),
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: const Color(
-                                            0xFF2563EB,
-                                          ),
-                                          textStyle: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      )
-                                    else ...[
-                                      IconButton(
-                                        tooltip: 'Editar zona',
-                                        onPressed: () => _onEditZone(zone),
-                                        icon: const Icon(
-                                          Icons.edit_outlined,
-                                          size: 20,
-                                          color: Colors.black54,
-                                        ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Eliminar zona',
-                                        onPressed: () => _onDeleteZone(
-                                          zone,
-                                          tables.length,
-                                        ),
-                                        icon: const Icon(
-                                          Icons.delete_outline,
-                                          size: 20,
-                                          color: Colors.redAccent,
-                                        ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Editar plano',
-                                        onPressed: () => _onEditFloorPlan(zone),
-                                        icon: const Icon(
-                                          Icons.space_dashboard_outlined,
-                                          size: 20,
-                                          color: Color(0xFF2563EB),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      TextButton.icon(
-                                        onPressed: () =>
-                                            _onAddTable(zone, tables),
-                                        icon: const Icon(
-                                          Icons.add_circle_outline,
-                                          size: 20,
-                                        ),
-                                        label: const Text('Agregar mesa'),
-                                        style: TextButton.styleFrom(
-                                          foregroundColor: const Color(
-                                            0xFF22C55E,
-                                          ),
-                                          textStyle: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
+                                      );
+                                    }
+
+                                    return Row(
+                                      children: [
+                                        dragHandle,
+                                        Expanded(child: titleBlock),
+                                        ...actions,
+                                      ],
+                                    );
+                                  },
                                 ),
                                 const SizedBox(height: 16),
                                 const Divider(height: 1, thickness: 0.5),

@@ -17,7 +17,9 @@ import 'package:mangopos/core/currency/business_currency_provider.dart';
 
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/sales_by_waiter_repository.dart';
+import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 class SalesByWaiterView extends ConsumerStatefulWidget {
@@ -201,6 +203,60 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
                       0,
                       (s, r) => s + r.itemsCount,
                     );
+
+                    // En teléfono la tabla de 6 columnas no cabe (avatar +
+                    // montos se aplastan). Renderizamos cada mesero como una
+                    // tarjeta apilada, más una tarjeta de totales al final.
+                    if (ResponsiveHelper.isMobile(ctx)) {
+                      return ListView(
+                        padding: EdgeInsets.zero,
+                        children: [
+                          ...rows.map(
+                            (r) => ReportRecordCard(
+                              title: r.employeeName.isNotEmpty
+                                  ? r.employeeName
+                                  : 'Sin mesero',
+                              fields: [
+                                ReportRecordField('Órdenes',
+                                    numberFormat.format(r.ordersCount)),
+                                ReportRecordField('Items',
+                                    numberFormat.format(r.itemsCount)),
+                                ReportRecordField(
+                                    'Bruto', currency.format(r.grossAmount)),
+                                ReportRecordField(
+                                  'Descuentos',
+                                  currency.format(r.discountsAmount),
+                                  valueColor: r.discountsAmount > 0
+                                      ? const Color(0xFFDC2626)
+                                      : MangoColors.muted,
+                                ),
+                                ReportRecordField(
+                                  'Neto',
+                                  currency.format(r.netAmount),
+                                  emphasize: true,
+                                ),
+                              ],
+                            ),
+                          ),
+                          ReportRecordCard(
+                            title: 'Total',
+                            highlight: true,
+                            fields: [
+                              ReportRecordField(
+                                  'Items', numberFormat.format(totalItems)),
+                              ReportRecordField(
+                                  'Bruto', currency.format(totalGross)),
+                              ReportRecordField(
+                                'Neto',
+                                currency.format(totalNet),
+                                valueColor: MangoColors.primaryOrange,
+                                emphasize: true,
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    }
 
                     return Container(
                       decoration: BoxDecoration(

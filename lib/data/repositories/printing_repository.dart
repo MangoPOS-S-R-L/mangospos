@@ -2025,7 +2025,7 @@ class PrintingRepository {
     //   - nul:                         OneNote / send-to-OneNote
     //   - IP_, WSD-, http:, lpr:       impresoras de red
     //   - drivers Microsoft genéricos: XPS, PDF, OneNote, Fax
-    final result = await _runPowerShell(r'''
+    final script = r'''
 $ErrorActionPreference = 'Stop'
 $items = @(
   Get-CimInstance Win32_Printer |
@@ -2053,7 +2053,25 @@ if ($items.Count -eq 0) {
 } else {
   $items | ConvertTo-Json -Compress
 }
-''', timeout: const Duration(seconds: 6));
+''';
+
+    // WMI/CIM en frio (primer query del proceso) puede tardar varios
+    // segundos en hardware viejo; 6s quedaba muy justo y un timeout dejaba
+    // la lista USB vacia ("no sale la impresora"). Subimos a 12s + 1
+    // reintento para que un hipo puntual de WMI no borre la impresora.
+    ProcessResult? result;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = await _runPowerShell(
+          script,
+          timeout: const Duration(seconds: 12),
+        );
+        break;
+      } catch (_) {
+        if (attempt == 1) rethrow;
+      }
+    }
+    if (result == null) return const [];
 
     final stdout = result.stdout.toString().trim();
     if (stdout.isEmpty || stdout == 'null') return const [];
@@ -2301,9 +2319,17 @@ if ($items.Count -eq 0) {
   Select-Object -First 1
 
 if (-not \$target) {
+  # Fallback difuso: usa los MISMOS filtros de exclusion que el
+  # discovery (_discoverLocalUsbPrintersWindows) en vez de exigir
+  # "PortName -match '^USB'". Ese filtro previo descartaba las termicas
+  # chinas (2Connect, ZJiang, Goojprt, POS80) cuyo driver crea puertos
+  # custom tipo POS001/CP001/GP001 — quedaban listadas pero irrecuperables
+  # aqui si el match exacto por nombre fallaba (cola renombrada, etc).
   \$target = Get-CimInstance Win32_Printer |
     Where-Object {
-      \$_.Local -eq \$true -and \$_.PortName -match '^USB' -and (
+      \$_.Local -eq \$true -and
+      \$_.PortName -notmatch '^(PORTPROMPT|FILE|XPSPort|SHRFAX|FaxPort|nul|IP_|WSD-|http|lpr)' -and
+      \$_.DriverName -notmatch '(XPS|PDF|OneNote|Fax|Send To OneNote|Microsoft Print)' -and (
         (\$printerName -and \$_.Name -like "*\$printerName*") -or
         (\$devicePath -and (\$_.Name -like "*\$devicePath*" -or \$_.DeviceID -like "*\$devicePath*")) -or
         (\$portHint -and \$_.PortName -like "*\$portHint*")
@@ -2407,11 +2433,35 @@ finally {
     }
   }
 
+  // En un .exe empaquetado el PATH del proceso hijo no siempre incluye
+  // System32, y `Process.run('powershell')` lanza ProcessException — que
+  // el descubrimiento traga como "no hay impresoras USB" (lista vacia) y
+  // la impresion reporta como fallo. Resolvemos la ruta ABSOLUTA de
+  // powershell.exe via %SystemRoot%/%windir% y caemos al nombre suelto
+  // solo si el archivo no existe. Se cachea porque no cambia en runtime.
+  static String? _cachedPowerShellExe;
+  String _powerShellExecutable() {
+    final cached = _cachedPowerShellExe;
+    if (cached != null) return cached;
+    var exe = 'powershell';
+    try {
+      final root = Platform.environment['SystemRoot'] ??
+          Platform.environment['windir'];
+      if (root != null && root.isNotEmpty) {
+        final full =
+            '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+        if (File(full).existsSync()) exe = full;
+      }
+    } catch (_) {/* usa el nombre suelto */}
+    _cachedPowerShellExe = exe;
+    return exe;
+  }
+
   Future<ProcessResult> _runPowerShell(
     String script, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final result = await Process.run('powershell', [
+    final result = await Process.run(_powerShellExecutable(), [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -31,6 +32,10 @@ class _TaxReportBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final currency = state.currency.formatter;
     final cachedAt = viewModel.taxDataCachedAt;
+    // En teléfono las "tablas" de columnas con flex se aplastan; renderizamos
+    // cada fila como tarjeta apilada (ReportRecordCard) en su lugar.
+    final isMobile = ResponsiveHelper.isMobile(context);
+    const taxBlue = Color(0xFF2563EB);
 
     // All data comes from fiscal_documents
     final fs = state.fiscalSummary ?? const <String, dynamic>{};
@@ -202,7 +207,44 @@ class _TaxReportBody extends StatelessWidget {
                   icon: Icons.description_outlined,
                   message: 'No hay comprobantes fiscales en el rango.',
                 )
-              else ...[
+              else if (isMobile) ...[
+                ...typeRows.map(
+                  (row) => ReportRecordCard(
+                    title: row.label,
+                    fields: [
+                      ReportRecordField('Comprobantes', '${row.count}'),
+                      ReportRecordField(
+                        primaryTaxLabel,
+                        currency.format(row.quantity),
+                        valueColor: taxBlue,
+                      ),
+                      ReportRecordField(
+                        'Total',
+                        currency.format(row.amount),
+                        emphasize: true,
+                      ),
+                    ],
+                  ),
+                ),
+                ReportRecordCard(
+                  title: 'TOTAL',
+                  highlight: true,
+                  fields: [
+                    ReportRecordField('Comprobantes', '$activeCount'),
+                    ReportRecordField(
+                      primaryTaxLabel,
+                      currency.format(totalItbis),
+                      valueColor: taxBlue,
+                      emphasize: true,
+                    ),
+                    ReportRecordField(
+                      'Total',
+                      currency.format(totalAmount),
+                      emphasize: true,
+                    ),
+                  ],
+                ),
+              ] else ...[
                 // Header
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
@@ -337,7 +379,49 @@ class _TaxReportBody extends StatelessWidget {
                   icon: Icons.receipt_outlined,
                   message: 'No hay impuestos registrados en el rango.',
                 )
-              else ...[
+              else if (isMobile) ...[
+                if (totalItbis > 0)
+                  ReportRecordCard(
+                    title: primaryTaxRowLabel,
+                    leadingDot: taxBlue,
+                    fields: [
+                      ReportRecordField(
+                          'Base gravable', currency.format(totalSubtotal)),
+                      ReportRecordField(
+                        'Monto',
+                        currency.format(totalItbis),
+                        valueColor: taxBlue,
+                        emphasize: true,
+                      ),
+                    ],
+                  ),
+                if (totalServiceFee > 0)
+                  ReportRecordCard(
+                    title: '$serviceFeeLabel$serviceFeeRateStr',
+                    leadingDot: const Color(0xFFF97316),
+                    fields: [
+                      ReportRecordField(
+                          'Base gravable', currency.format(totalSubtotal)),
+                      ReportRecordField(
+                        'Monto',
+                        currency.format(totalServiceFee),
+                        valueColor: const Color(0xFFF97316),
+                        emphasize: true,
+                      ),
+                    ],
+                  ),
+                ReportRecordCard(
+                  title: 'TOTAL IMPUESTOS',
+                  highlight: true,
+                  fields: [
+                    ReportRecordField(
+                      'Monto',
+                      currency.format(totalItbis + totalServiceFee),
+                      emphasize: true,
+                    ),
+                  ],
+                ),
+              ] else ...[
                 // Header
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),

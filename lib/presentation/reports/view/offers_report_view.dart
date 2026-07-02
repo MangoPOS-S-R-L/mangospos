@@ -147,6 +147,12 @@ class _OffersFilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final offerOptions = viewModel.offerNameOptions();
     final productOptions = viewModel.offerProductOptions();
+    // En teléfono cada filtro ocupa el ancho completo (se apilan); en
+    // pantallas anchas conservan su ancho fijo y fluyen en el Wrap. Antes
+    // los anchos fijos (240/240/280) desbordaban / reflujaban feo en móvil.
+    final isMobile = ResponsiveHelper.isMobile(context);
+    final offerWidth = isMobile ? double.infinity : 240.0;
+    final searchWidth = isMobile ? double.infinity : 280.0;
 
     return ReportSurfaceCard(
       child: Column(
@@ -158,7 +164,7 @@ class _OffersFilterBar extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               SizedBox(
-                width: 240,
+                width: offerWidth,
                 child: _dropdown(
                   label: 'Oferta',
                   value: state.offerOfferFilter,
@@ -168,7 +174,7 @@ class _OffersFilterBar extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 240,
+                width: offerWidth,
                 child: _dropdown(
                   label: 'Producto',
                   value: state.offerProductFilter,
@@ -178,7 +184,7 @@ class _OffersFilterBar extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 280,
+                width: searchWidth,
                 child: _SearchField(
                   query: state.offerSearchQuery,
                   onChanged: viewModel.setOfferSearchQuery,
@@ -466,6 +472,48 @@ class _OffersDetailTable extends StatelessWidget {
     final totalQty = rows.fold<double>(0, (s, r) => s + r.quantity);
     final totalValorMenu = rows.fold<double>(0, (s, r) => s + r.valorMenu);
     final totalDescuento = rows.fold<double>(0, (s, r) => s + r.descuento);
+
+    // En teléfono la fila de 6 columnas se aplasta; cada aplicación de oferta
+    // se muestra como tarjeta apilada, con una tarjeta de totales al final.
+    if (isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ...rows.map(
+            (row) => ReportRecordCard(
+              title: row.offerName,
+              fields: [
+                ReportRecordField('Producto', row.productName),
+                ReportRecordField(
+                  'Fecha',
+                  row.dateTime != null ? dateFormat.format(row.dateTime!) : '—',
+                ),
+                ReportRecordField('Cantidad', qtyFormat.format(row.quantity)),
+                ReportRecordField('Valor', currency.format(row.valorMenu)),
+                ReportRecordField(
+                  'Descuento',
+                  currency.format(row.descuento),
+                  emphasize: true,
+                ),
+              ],
+            ),
+          ),
+          ReportRecordCard(
+            title: 'Total',
+            highlight: true,
+            fields: [
+              ReportRecordField('Cantidad', qtyFormat.format(totalQty)),
+              ReportRecordField('Valor', currency.format(totalValorMenu)),
+              ReportRecordField(
+                'Descuento',
+                currency.format(totalDescuento),
+                emphasize: true,
+              ),
+            ],
+          ),
+        ],
+      );
+    }
 
     return ReportSurfaceCard(
       child: Column(

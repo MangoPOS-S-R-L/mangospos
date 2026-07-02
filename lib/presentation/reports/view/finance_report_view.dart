@@ -234,57 +234,75 @@ class _CashClosureCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.lg),
-          Row(
-            children: [
-              Expanded(
-                child: ReportHeroStat(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // En teléfono las 3 cajas de dinero no caben en una fila
+              // (el monto se corta con ellipsis). Debajo de 640 las apilamos
+              // a ancho completo — mismo umbral que el ledger de más abajo.
+              final stacked = constraints.maxWidth < 640;
+              final diffBox = Container(
+                padding: const EdgeInsets.all(AppSpacing.cardPadding),
+                decoration: BoxDecoration(
+                  color: diffColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(reportRadius),
+                  border: Border.all(
+                    color: diffColor.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Diferencia',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.mutedForeground,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      currency.format(difference),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: diffColor,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              final boxes = <Widget>[
+                ReportHeroStat(
                   label: 'Esperado',
                   value: currency.format(expectedTotal),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.itemGap),
-              Expanded(
-                child: ReportHeroStat(
+                ReportHeroStat(
                   label: 'Reportado',
                   value: currency.format(reportedTotal),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.itemGap),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(AppSpacing.cardPadding),
-                  decoration: BoxDecoration(
-                    color: diffColor.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(reportRadius),
-                    border: Border.all(
-                      color: diffColor.withValues(alpha: 0.25),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Diferencia',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.mutedForeground,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(
-                        currency.format(difference),
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: diffColor,
-                        ),
-                      ),
+                diffBox,
+              ];
+              if (stacked) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (int i = 0; i < boxes.length; i++) ...[
+                      if (i > 0) const SizedBox(height: AppSpacing.itemGap),
+                      boxes[i],
                     ],
-                  ),
-                ),
-              ),
-            ],
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  for (int i = 0; i < boxes.length; i++) ...[
+                    if (i > 0) const SizedBox(width: AppSpacing.itemGap),
+                    Expanded(child: boxes[i]),
+                  ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: AppSpacing.lg),
           LayoutBuilder(

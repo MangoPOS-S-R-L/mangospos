@@ -886,6 +886,135 @@ class ReportLedgerRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
+// RecordCard (tabla → tarjeta en móvil)
+// ---------------------------------------------------------------------------
+
+/// Un campo (columna) dentro de [ReportRecordCard].
+class ReportRecordField {
+  const ReportRecordField(
+    this.label,
+    this.value, {
+    this.valueColor,
+    this.emphasize = false,
+  });
+
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final bool emphasize;
+}
+
+/// Representa UNA fila de una tabla como tarjeta apilada, pensada para
+/// pantallas angostas (teléfono) donde las filas de `Expanded(flex:)`
+/// aplastan el texto y cortan los montos.
+///
+/// Arriba el [title] (lo que en desktop sería la primera columna) y debajo
+/// los [fields] como pares etiqueta → valor. Reutilizado por los reportes
+/// de Impuestos, Ventas por mesero y Ofertas para su modo móvil.
+class ReportRecordCard extends StatelessWidget {
+  const ReportRecordCard({
+    super.key,
+    required this.title,
+    required this.fields,
+    this.titleColor,
+    this.leadingDot,
+    this.highlight = false,
+  });
+
+  final String title;
+  final List<ReportRecordField> fields;
+  final Color? titleColor;
+
+  /// Punto de color a la izquierda del título (ej. leyenda del impuesto).
+  final Color? leadingDot;
+
+  /// Resalta la tarjeta como fila de totales (fondo tenue + borde marcado).
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.tightGap),
+      padding: const EdgeInsets.all(AppSpacing.cardPadding),
+      decoration: BoxDecoration(
+        color: highlight
+            ? MangoColors.sidebarBg.withValues(alpha: 0.4)
+            : AppColors.background,
+        borderRadius: BorderRadius.circular(reportRadius),
+        border: Border.all(
+          color: highlight
+              ? MangoColors.primaryOrange.withValues(alpha: 0.3)
+              : AppColors.border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (leadingDot != null)
+                Container(
+                  width: 10,
+                  height: 10,
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    color: leadingDot,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: titleColor ?? AppColors.foreground,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final f in fields)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      f.label,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.mutedForeground,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      f.value,
+                      textAlign: TextAlign.end,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight:
+                            f.emphasize ? FontWeight.w800 : FontWeight.w700,
+                        color: f.valueColor ?? AppColors.foreground,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // StatusTag
 // ---------------------------------------------------------------------------
 

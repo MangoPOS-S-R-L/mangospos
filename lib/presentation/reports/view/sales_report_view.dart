@@ -247,7 +247,12 @@ class _SalesReportBody extends StatelessWidget {
                     ),
                   ];
                   if (narrow) {
+                    // stretch: en teléfono/tablet-angosto cada tile ocupa el
+                    // ancho completo. Sin esto, cada CommercialStatTile toma
+                    // su ancho intrínseco (el del texto más largo) y quedan
+                    // angostos y de ancho desigual — el bug visible en móvil.
                     return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         for (var i = 0; i < stats.length; i++) ...[
                           if (i > 0)
@@ -1074,33 +1079,43 @@ class _ProductSalesReportSection extends StatelessWidget {
             },
           ),
           const SizedBox(height: AppSpacing.lg),
-          Wrap(
-            spacing: AppSpacing.tightGap,
-            runSpacing: AppSpacing.tightGap,
-            children: [
-              CommercialStatTile(
-                label: 'Productos visibles',
-                value: '${rows.length}',
-                hint: 'Filtrados sobre el rango activo',
-              ),
-              CommercialStatTile(
-                label: 'Unidades vendidas',
-                value: (totals['quantity'] ?? 0).toStringAsFixed(2),
-                hint: 'Cantidad consolidada',
-              ),
-              CommercialStatTile(
-                label: 'Ventas netas',
-                value: currency.format(totals['netSales'] ?? 0),
-                hint: 'Después de descuentos y cortesías',
-              ),
-              CommercialStatTile(
-                label: 'Ganancia bruta',
-                value: currency.format(totals['grossProfit'] ?? 0),
-                hint: 'Netas menos costo actual del producto',
-              ),
-            ]
-                .map((tile) => SizedBox(width: 220, child: tile))
-                .toList(growable: false),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // En teléfono: 2 columnas que llenan el ancho disponible; en
+              // pantallas anchas mantiene el ancho fijo de 220 (antes 220
+              // fijo dejaba 1 columna angosta y desperdiciaba medio viewport).
+              final tileWidth = ResponsiveHelper.isMobile(context)
+                  ? (constraints.maxWidth - AppSpacing.tightGap) / 2
+                  : 220.0;
+              return Wrap(
+                spacing: AppSpacing.tightGap,
+                runSpacing: AppSpacing.tightGap,
+                children: [
+                  CommercialStatTile(
+                    label: 'Productos visibles',
+                    value: '${rows.length}',
+                    hint: 'Filtrados sobre el rango activo',
+                  ),
+                  CommercialStatTile(
+                    label: 'Unidades vendidas',
+                    value: (totals['quantity'] ?? 0).toStringAsFixed(2),
+                    hint: 'Cantidad consolidada',
+                  ),
+                  CommercialStatTile(
+                    label: 'Ventas netas',
+                    value: currency.format(totals['netSales'] ?? 0),
+                    hint: 'Después de descuentos y cortesías',
+                  ),
+                  CommercialStatTile(
+                    label: 'Ganancia bruta',
+                    value: currency.format(totals['grossProfit'] ?? 0),
+                    hint: 'Netas menos costo actual del producto',
+                  ),
+                ]
+                    .map((tile) => SizedBox(width: tileWidth, child: tile))
+                    .toList(growable: false),
+              );
+            },
           ),
           const SizedBox(height: AppSpacing.lg),
           if (rows.isEmpty)

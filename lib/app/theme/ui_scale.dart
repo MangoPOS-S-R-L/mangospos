@@ -86,7 +86,21 @@ class UiScaleWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (factor == 1.0) return child;
+    // La forma del árbol debe ser CONSTANTE sin importar el `factor`.
+    //
+    // Antes había un `if (factor == 1.0) return child;` como atajo. El problema:
+    // al arrancar el factor es 1.0 (rama "child directo") y, cuando `_load()`
+    // aplica async una escala guardada ≠ normal, el factor cruza el límite 1.0
+    // y la rama cambia → se inserta/quita este MediaQuery+FittedBox por encima
+    // del `child`. Debajo del `child` vive el Navigator de go_router (con
+    // GlobalKey), así que Flutter reparenta ese subárbol en vez de destruirlo,
+    // y este MediaQuery se desactiva con dependientes vivos →
+    // `assert(_dependents.isEmpty)` en InheritedElement.debugDeactivated.
+    //
+    // Envolviendo SIEMPRE, la estructura no cambia entre rebuilds: a 1.0 el
+    // FittedBox/SizedBox quedan en identidad (inv = 1 ⇒ scaled == mq.size, sin
+    // reescalado ni blur), y los cambios de escala son updates in-place sin
+    // reparentar el Navigator.
     final mq = MediaQuery.of(context);
     final inv = 1 / factor;
     final scaled = Size(mq.size.width * inv, mq.size.height * inv);
