@@ -674,7 +674,24 @@ class _AddPrinterDialogState extends ConsumerState<_AddPrinterDialog> {
       devicePath: _selectedPrinter?['devicePath'] as String?,
       type: type,
     );
-    if (created && mounted) Navigator.pop(context);
+    if (!mounted) return;
+    if (created) {
+      Navigator.pop(context);
+    } else {
+      // Antes esto fallaba EN SILENCIO: si createPrinter devolvia false
+      // (nombre vacio, RPC fn_register_device_agent caido, INSERT
+      // rechazado por RLS/FK, sin internet, etc.) el dialogo solo se
+      // quedaba abierto y el usuario veia "no se agrega" sin ninguna
+      // pista. Surfaceamos el errorMessage real para que el fallo sea
+      // visible y accionable.
+      final msg = ref.read(printingPrintersViewModelProvider).errorMessage;
+      AppToast.error(
+        context,
+        (msg == null || msg.trim().isEmpty)
+            ? 'No se pudo agregar la impresora.'
+            : msg,
+      );
+    }
   }
 
   @override
