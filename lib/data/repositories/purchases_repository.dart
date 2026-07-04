@@ -62,7 +62,7 @@ class PurchasesRepository {
         ? await _client
               .from(PurchasesQueries.tablePurchaseOrders)
               .select(
-                'id, supplier_id, warehouse_id, order_number, status, total, expected_date, received_date, created_at, notes',
+                'id, supplier_id, warehouse_id, order_number, invoice_number, status, total, expected_date, received_date, created_at, notes',
               )
               .eq('business_id', businessId)
               .eq('status', status)
@@ -71,7 +71,7 @@ class PurchasesRepository {
         : await _client
               .from(PurchasesQueries.tablePurchaseOrders)
               .select(
-                'id, supplier_id, warehouse_id, order_number, status, total, expected_date, received_date, created_at, notes',
+                'id, supplier_id, warehouse_id, order_number, invoice_number, status, total, expected_date, received_date, created_at, notes',
               )
               .eq('business_id', businessId)
               .order('created_at', ascending: false)
@@ -129,21 +129,54 @@ class PurchasesRepository {
         .toList(growable: false);
   }
 
-  Future<void> createSupplier({
+  Future<PurchaseSupplier> createSupplier({
     required String businessId,
     required String name,
     String? contactName,
     String? phone,
     String? email,
   }) async {
-    await _client.from(PurchasesQueries.tableSuppliers).insert({
-      'business_id': businessId,
-      'name': name,
-      'contact_name': contactName,
-      'phone': phone,
-      'email': email,
-      'is_active': true,
-    }..removeWhere((key, value) => value == null || value == ''));
+    final row = await _client
+        .from(PurchasesQueries.tableSuppliers)
+        .insert({
+          'business_id': businessId,
+          'name': name,
+          'contact_name': contactName,
+          'phone': phone,
+          'email': email,
+          'is_active': true,
+        }..removeWhere((key, value) => value == null || value == ''))
+        .select('id, name, contact_name, phone, email, is_active')
+        .single();
+    return PurchaseSupplier.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  /// Crea un almacén para el registro de compra sin salir del flujo. Si se
+  /// marca principal, baja la marca del almacén principal previo (sólo uno
+  /// por negocio), igual que la gestión de inventario.
+  Future<PurchaseWarehouse> createWarehouse({
+    required String businessId,
+    required String name,
+    bool isMain = false,
+  }) async {
+    if (isMain) {
+      await _client
+          .from(PurchasesQueries.tableWarehouses)
+          .update({'is_main': false})
+          .eq('business_id', businessId)
+          .eq('is_main', true);
+    }
+    final row = await _client
+        .from(PurchasesQueries.tableWarehouses)
+        .insert({
+          'business_id': businessId,
+          'name': name,
+          'is_main': isMain,
+          'is_active': true,
+        })
+        .select('id, name, is_main')
+        .single();
+    return PurchaseWarehouse.fromMap(Map<String, dynamic>.from(row));
   }
 
   Future<void> createPurchaseOrder({
@@ -154,17 +187,20 @@ class PurchasesRepository {
     required String status,
     required DateTime expectedDate,
     String? notes,
+    String? invoiceNumber,
     required List<PurchaseDraftItem> items,
+    // Cuando es true, el costo de cada línea vinculada actualiza el costo
+    // maestro del insumo (inventory_items.cost). El costo ya viene en unidad
+    // base (la vista convirtió desde la unidad de compra).
+    bool updateItemCost = false,
   }) async {
     if (items.isEmpty) {
       throw Exception('Debes agregar al menos una linea a la orden.');
     }
 
     final subtotal = items.fold<double>(0, (sum, item) => sum + item.total);
-    final tax = items.fold<double>(
-      0,
-      (sum, item) => sum + ((item.total * item.taxRate) / 100),
-    );
+    // ITBIS absoluto por línea (o derivado del % en el modo heredado).
+    final tax = items.fold<double>(0, (sum, item) => sum + item.taxValue);
     final total = subtotal + tax;
 
     final createdOrder = await _client
@@ -174,6 +210,7 @@ class PurchasesRepository {
           'supplier_id': supplierId,
           'warehouse_id': warehouseId,
           'order_number': orderNumber,
+          'invoice_number': invoiceNumber,
           'status': status,
           'subtotal': subtotal,
           'tax': tax,
@@ -210,6 +247,32 @@ class PurchasesRepository {
           )
           .toList(growable: false),
     );
+
+    if (updateItemCost) {
+      // Actualiza el costo maestro del insumo con el costo de compra recién
+      // digitado (ya en unidad base). Si una línea con costo 0 comparte insumo
+      // con otra de costo válido, gana la de costo > 0; si hay varias válidas,
+      // gana la última de la lista.
+      final latestCostByItem = <String, double>{};
+      for (final item in items) {
+        final id = item.inventoryItemId;
+        if (id == null || id.isEmpty) continue;
+        if (item.unitCost <= 0) continue;
+        latestCostByItem[id] = item.unitCost;
+      }
+      for (final entry in latestCostByItem.entries) {
+        try {
+          await _client
+              .from(PurchasesQueries.tableInventoryItems)
+              .update({'cost': entry.value})
+              .eq('id', entry.key)
+              .eq('business_id', businessId);
+        } catch (_) {
+          // Best-effort: un fallo al actualizar el costo maestro no debe
+          // tumbar el registro de la compra (la orden ya quedó guardada).
+        }
+      }
+    }
   }
 
   Future<void> receivePurchaseOrder(String orderId, {String? notes}) async {

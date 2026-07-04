@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/repositories/purchases_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../inventory/viewmodel/inventory_viewmodel.dart'
+    show inventoryRepositoryProvider;
 import '../state/purchases_state.dart';
 
 final purchasesRepositoryProvider = Provider<PurchasesRepository>((ref) {
@@ -13,15 +16,19 @@ final purchasesRepositoryProvider = Provider<PurchasesRepository>((ref) {
 final purchasesViewModelProvider = ChangeNotifierProvider<PurchasesViewModel>((
   ref,
 ) {
-  return PurchasesViewModel(ref.read(purchasesRepositoryProvider));
+  return PurchasesViewModel(
+    ref.read(purchasesRepositoryProvider),
+    ref.read(inventoryRepositoryProvider),
+  );
 });
 
 class PurchasesViewModel extends ChangeNotifier {
   final PurchasesRepository _repository;
+  final InventoryRepository _inventoryRepository;
 
   PurchasesState _state = const PurchasesState();
 
-  PurchasesViewModel(this._repository);
+  PurchasesViewModel(this._repository, this._inventoryRepository);
 
   PurchasesState get state => _state;
 
@@ -94,7 +101,7 @@ class PurchasesViewModel extends ChangeNotifier {
     return _repository.generateNextOrderNumber(businessId);
   }
 
-  Future<void> createSupplier({
+  Future<PurchaseSupplier> createSupplier({
     required String name,
     String? contactName,
     String? phone,
@@ -109,7 +116,7 @@ class PurchasesViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _repository.createSupplier(
+      final created = await _repository.createSupplier(
         businessId: businessId,
         name: name,
         contactName: contactName,
@@ -118,10 +125,80 @@ class PurchasesViewModel extends ChangeNotifier {
       );
       _state = _state.copyWith(saving: false);
       await refresh();
+      return created;
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
         error: 'Error creando proveedor: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<PurchaseWarehouse> createWarehouse({
+    required String name,
+    bool isMain = false,
+  }) async {
+    final businessId = _state.businessId;
+    if (businessId == null) {
+      throw Exception('No hay negocio activo.');
+    }
+
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      final created = await _repository.createWarehouse(
+        businessId: businessId,
+        name: name,
+        isMain: isMain,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return created;
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error creando almacén: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Crea un insumo inventariable sin salir del registro de compra. Reusa el
+  /// repositorio de inventario (asegura presencia en el almacén principal) y
+  /// refresca la lista para que el nuevo insumo quede disponible en el buscador.
+  Future<PurchaseInventoryItem> createInventoryItem({
+    required String name,
+    String? sku,
+    String unit = 'unidad',
+    double cost = 0,
+  }) async {
+    final businessId = _state.businessId;
+    if (businessId == null) {
+      throw Exception('No hay negocio activo.');
+    }
+
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      final row = await _inventoryRepository.createItem(
+        businessId: businessId,
+        name: name,
+        sku: sku,
+        unit: unit,
+        cost: cost,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return PurchaseInventoryItem.fromMap(Map<String, dynamic>.from(row));
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: 'Error creando insumo: $e',
       );
       notifyListeners();
       rethrow;
@@ -135,7 +212,9 @@ class PurchasesViewModel extends ChangeNotifier {
     required String status,
     required DateTime expectedDate,
     String? notes,
+    String? invoiceNumber,
     required List<PurchaseDraftItem> items,
+    bool updateItemCost = false,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -154,7 +233,9 @@ class PurchasesViewModel extends ChangeNotifier {
         status: status,
         expectedDate: expectedDate,
         notes: notes,
+        invoiceNumber: invoiceNumber,
         items: items,
+        updateItemCost: updateItemCost,
       );
       _state = _state.copyWith(saving: false);
       await refresh();

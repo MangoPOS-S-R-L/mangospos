@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
@@ -1974,6 +1976,19 @@ class PrintingRepository {
       return;
     }
 
+    // Android: USB Host nativo (OTG) vía flutter_usb_printer. NO existe una
+    // ruta de archivo tipo /dev/usb/lpX accesible desde una app Android sin
+    // root, así que el `File(devicePath)` de abajo (Linux/desktop) nunca
+    // funcionaría aquí. En su lugar abrimos el endpoint USB por
+    // vendorId/productId — lo mismo que hacen NokoPrint/PrinterShare por
+    // dentro. `connect()` dispara el diálogo de permiso USB del sistema la
+    // primera vez (o silencioso si el usuario ya lo concedió / hay
+    // intent-filter de USB_DEVICE_ATTACHED).
+    if (!kIsWeb && Platform.isAndroid) {
+      await _printRawDirectUsbAndroid(printer: printer, data: data);
+      return;
+    }
+
     final devicePath = printer.devicePath?.trim();
     if (devicePath == null || devicePath.isEmpty) {
       throw Exception(
@@ -1983,6 +1998,110 @@ class PrintingRepository {
 
     final file = File(devicePath);
     await file.writeAsBytes(data, mode: FileMode.writeOnly, flush: true);
+  }
+
+  /// Impresión USB nativa en Android (USB Host / OTG) vía flutter_usb_printer.
+  ///
+  /// El identificador se guarda como `vendorId:productId` (decimal) tanto en
+  /// `mac` como en `device_path` cuando se descubre la impresora — ver
+  /// `PrintersViewModel.scanUSB()`. Aceptamos ambos campos y varios formatos
+  /// (`"1234:5678"`, `"usb://1a2b:3c4d/serie"`) por robustez.
+  Future<void> _printRawDirectUsbAndroid({
+    required PrinterConfig printer,
+    required List<int> data,
+  }) async {
+    final ids = _parseUsbVidPid(printer.devicePath) ??
+        _parseUsbVidPid(printer.mac);
+    if (ids == null) {
+      throw Exception(
+        'La impresora USB "${printer.name}" no tiene un identificador '
+        'vendorId:productId válido. Vuelve a agregarla desde Ajustes → '
+        'Impresoras → buscar por USB.',
+      );
+    }
+    final (vendorId, productId) = ids;
+
+    final usb = FlutterUsbPrinter();
+    bool connected = false;
+
+    // 1) Intento directo por vendorId/productId guardados.
+    try {
+      connected = await usb.connect(vendorId, productId) ?? false;
+    } catch (e) {
+      debugPrint('[USB-Android] connect($vendorId,$productId) lanzó: $e');
+    }
+
+    // 2) Fallback: si el vid/pid guardado ya no coincide (reconexión con
+    //    otro deviceId), tomamos la primera impresora USB presente. Esto
+    //    cubre el caso de una sola impresora conectada por OTG.
+    if (!connected) {
+      try {
+        final devices = await FlutterUsbPrinter.getUSBDeviceList();
+        if (devices.isNotEmpty) {
+          final d = devices.first;
+          final vid = int.tryParse(d['vendorId']?.toString() ?? '');
+          final pid = int.tryParse(d['productId']?.toString() ?? '');
+          if (vid != null && pid != null) {
+            connected = await usb.connect(vid, pid) ?? false;
+          }
+        }
+      } catch (e) {
+        debugPrint('[USB-Android] fallback getUSBDeviceList/connect: $e');
+      }
+    }
+
+    if (!connected) {
+      throw Exception(
+        'No se pudo conectar a la impresora USB "${printer.name}". '
+        'Verifica el cable OTG y acepta el permiso USB cuando Android lo pida.',
+      );
+    }
+
+    try {
+      // El bulkTransfer de USB puede quedarse corto con tickets grandes
+      // (logos), así que troceamos en bloques de 16 KB.
+      final bytes = Uint8List.fromList(data);
+      const chunk = 16 * 1024;
+      for (var i = 0; i < bytes.length; i += chunk) {
+        final end = (i + chunk < bytes.length) ? i + chunk : bytes.length;
+        await usb.write(Uint8List.sublistView(bytes, i, end));
+      }
+    } finally {
+      try {
+        await usb.close();
+      } catch (_) {/* best-effort */}
+    }
+  }
+
+  /// Parsea `vendorId:productId` desde una cadena guardada. Soporta:
+  ///   - `"4611:8215"`         (decimal — formato del scan Android)
+  ///   - `"usb://1a2b:3c4d"`   (hex con prefijo — formato desktop)
+  ///   - `"usb://1a2b:3c4d/serie"` (con serie al final)
+  /// Devuelve `(vendorId, productId)` en enteros o `null` si no es parseable.
+  (int, int)? _parseUsbVidPid(String? raw) {
+    final s = raw?.trim();
+    if (s == null || s.isEmpty) return null;
+
+    // Quitar prefijo usb:// y cualquier segmento tras el primer '/'.
+    var body = s;
+    if (body.contains('://')) body = body.split('://').last;
+    if (body.contains('/')) body = body.split('/').first;
+
+    final parts = body.split(':');
+    if (parts.length < 2) return null;
+
+    // Android guarda decimal; desktop guarda hex. Intentamos decimal y si el
+    // token trae dígitos hex (a-f) caemos a base 16.
+    int? parseId(String t) {
+      final tk = t.trim();
+      if (tk.isEmpty) return null;
+      return int.tryParse(tk) ?? int.tryParse(tk, radix: 16);
+    }
+
+    final vid = parseId(parts[0]);
+    final pid = parseId(parts[1]);
+    if (vid == null || pid == null) return null;
+    return (vid, pid);
   }
 
   Future<List<Map<String, dynamic>>> discoverLocalUsbPrinters() async {

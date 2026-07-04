@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +8,27 @@ import '../../../app/router/routes.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
+
+/// Cómo trae el ITBIS cada línea de la factura del proveedor.
+/// - [included]: el costo digitado YA trae el ITBIS → se desglosa (neto = costo/1.18).
+/// - [separate]: el costo es neto y el usuario escribe el TOTAL pagado → ITBIS = pagado − base.
+/// - [exempt]: la línea no lleva ITBIS.
+enum _TaxMode { included, separate, exempt }
+
+const _kIvaRate = 0.18;
+
+extension _TaxModeLabel on _TaxMode {
+  String get short {
+    switch (this) {
+      case _TaxMode.included:
+        return 'Incluido';
+      case _TaxMode.separate:
+        return 'Aparte';
+      case _TaxMode.exempt:
+        return 'Exento';
+    }
+  }
+}
 
 class PurchasesRegisterView extends ConsumerStatefulWidget {
   const PurchasesRegisterView({super.key});
@@ -19,13 +41,37 @@ class PurchasesRegisterView extends ConsumerStatefulWidget {
 class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   final _notesCtrl = TextEditingController();
   final _orderNumberCtrl = TextEditingController();
+  final _invoiceNumberCtrl = TextEditingController();
   String? _supplierId;
   String? _warehouseId;
   String _status = 'draft';
   DateTime _expectedDate = DateTime.now().add(const Duration(days: 3));
-  final List<_DraftItemControllers> _itemControllers = [
-    _DraftItemControllers(),
-  ];
+
+  /// Productos ya agregados a la factura (la lista de abajo). Empieza vacía;
+  /// se llena con el flujo rápido de teclado o con el buscador multi-selección.
+  final List<_DraftItemControllers> _lines = [];
+
+  // ── Estado del renglón de captura rápida (producto → cant → costo → Enter).
+  final _entryQtyCtrl = TextEditingController(text: '1');
+  final _entryCostCtrl = TextEditingController(text: '0');
+  final _entryPaidCtrl = TextEditingController();
+  final _qtyFocus = FocusNode();
+  final _costFocus = FocusNode();
+  final _paidFocus = FocusNode();
+  PurchaseInventoryItem? _entrySelected;
+  _TaxMode _entryTaxMode = _TaxMode.included;
+  // Snapshot de empaque del insumo seleccionado en el renglón de captura.
+  String _entryPurchaseUnit = '';
+  double _entryPackSize = 1;
+  String _entryBaseUnit = '';
+
+  // Controlador/foco del campo de búsqueda del Autocomplete (capturados en
+  // fieldViewBuilder para poder limpiar y devolver el foco tras cada alta).
+  TextEditingController? _productFieldCtrl;
+  FocusNode? _productFocus;
+
+  bool get _entryHasPack =>
+      _entryPackSize > 1 && _entryPurchaseUnit.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -53,8 +99,15 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   void dispose() {
     _notesCtrl.dispose();
     _orderNumberCtrl.dispose();
-    for (final item in _itemControllers) {
-      item.dispose();
+    _invoiceNumberCtrl.dispose();
+    _entryQtyCtrl.dispose();
+    _entryCostCtrl.dispose();
+    _entryPaidCtrl.dispose();
+    _qtyFocus.dispose();
+    _costFocus.dispose();
+    _paidFocus.dispose();
+    for (final line in _lines) {
+      line.dispose();
     }
     super.dispose();
   }
@@ -68,11 +121,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       symbol: 'RD\$',
       decimalDigits: 2,
     );
-    final total = _draftItems.fold<double>(0, (sum, item) => sum + item.total);
-    final estimatedTax = _draftItems.fold<double>(
-      0,
-      (sum, item) => sum + ((item.total * item.taxRate) / 100),
-    );
+    final subtotal = _lines.fold<double>(0, (sum, l) => sum + l.baseSubtotal);
+    final estimatedTax = _lines.fold<double>(0, (sum, l) => sum + l.taxAmount);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -104,7 +154,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                             ),
                             SizedBox(height: 6),
                             Text(
-                              'Crea una orden de compra básica para proveedores',
+                              'Registra la factura del proveedor y agrega sus productos',
                               style: TextStyle(
                                 fontSize: 14,
                                 color: Color(0xFF64748B),
@@ -142,214 +192,19 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     children: [
                       Expanded(
                         flex: 2,
-                        child: Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Datos generales',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _orderNumberCtrl,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Número de orden',
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _status,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Estado',
-                                      ),
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: 'draft',
-                                          child: Text('Borrador'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'sent',
-                                          child: Text('Enviada'),
-                                        ),
-                                      ],
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        setState(() {
-                                          _status = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _supplierId,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Proveedor',
-                                      ),
-                                      items: state.suppliers
-                                          .map(
-                                            (supplier) => DropdownMenuItem(
-                                              value: supplier.id,
-                                              child: Text(supplier.name),
-                                            ),
-                                          )
-                                          .toList(growable: false),
-                                      onChanged: (value) {
-                                        setState(() {
-                                          _supplierId = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _warehouseId,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Almacen',
-                                      ),
-                                      items: state.warehouses
-                                          .map(
-                                            (warehouse) => DropdownMenuItem(
-                                              value: warehouse.id,
-                                              child: Text(
-                                                warehouse.isMain
-                                                    ? '${warehouse.name} · Principal'
-                                                    : warehouse.name,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(growable: false),
-                                      onChanged: (value) {
-                                        setState(() {
-                                          _warehouseId = value;
-                                        });
-                                      },
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: () async {
-                                        final picked = await showDatePicker(
-                                          context: context,
-                                          initialDate: _expectedDate,
-                                          firstDate: DateTime.now().subtract(
-                                            const Duration(days: 30),
-                                          ),
-                                          lastDate: DateTime.now().add(
-                                            const Duration(days: 365),
-                                          ),
-                                        );
-                                        if (picked == null) return;
-                                        setState(() {
-                                          _expectedDate = picked;
-                                        });
-                                      },
-                                      icon: const Icon(Icons.event_outlined),
-                                      label: Text(
-                                        'Entrega ${DateFormat('dd/MM/yyyy').format(_expectedDate)}',
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _notesCtrl,
-                                maxLines: 3,
-                                decoration: const InputDecoration(
-                                  labelText: 'Notas',
-                                  alignLabelWithHint: true,
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-                              if (state.inventoryItems.isEmpty) ...[
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFFFBEB),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: const Color(0xFFFDE68A),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'No hay insumos activos en inventario. Puedes guardar la orden, pero no podrá subir stock automáticamente al recibirla.',
-                                    style: TextStyle(color: Color(0xFF92400E)),
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                              ],
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    'Líneas de compra',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: _addLine,
-                                    icon: const Icon(Icons.add),
-                                    label: const Text('Agregar línea'),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              for (var i = 0; i < _itemControllers.length; i++) ...[
-                                _DraftItemCard(
-                                  index: i,
-                                  controllers: _itemControllers[i],
-                                  inventoryItems: state.inventoryItems,
-                                  onRemove: _itemControllers.length == 1
-                                      ? null
-                                      : () => _removeLine(i),
-                                  onChanged: () => setState(() {}),
-                                ),
-                                const SizedBox(height: 12),
-                              ],
-                            ],
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _card(child: _buildHeaderCard(state)),
+                            const SizedBox(height: 20),
+                            _card(child: _buildProductsCard(state)),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 20),
                       SizedBox(
                         width: 280,
-                        child: Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFFE2E8F0)),
-                          ),
+                        child: _card(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -363,22 +218,22 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                               const SizedBox(height: 16),
                               _SummaryRow(
                                 label: 'Líneas',
-                                value: '${_draftItems.length}',
+                                value: '${_lines.length}',
                               ),
                               const SizedBox(height: 10),
                               _SummaryRow(
-                                label: 'Subtotal',
-                                value: currency.format(total),
+                                label: 'Subtotal (neto)',
+                                value: currency.format(subtotal),
                               ),
                               const SizedBox(height: 10),
                               _SummaryRow(
-                                label: 'ITBIS estimado',
+                                label: 'ITBIS',
                                 value: currency.format(estimatedTax),
                               ),
                               const Divider(height: 24),
                               _SummaryRow(
-                                label: 'Total estimado',
-                                value: currency.format(total + estimatedTax),
+                                label: 'Total',
+                                value: currency.format(subtotal + estimatedTax),
                                 bold: true,
                               ),
                             ],
@@ -393,32 +248,856 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     );
   }
 
-  List<PurchaseDraftItem> get _draftItems => _itemControllers
-      .map((controllers) => controllers.toDraftItem())
+  Widget _card({required Widget child}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: child,
+    );
+  }
+
+  // ─────────────────────────────────────────── Datos generales / factura ──
+  Widget _buildHeaderCard(PurchasesState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Datos generales',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _orderNumberCtrl,
+                decoration: const InputDecoration(labelText: 'Número de orden'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: _invoiceNumberCtrl,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Número de factura',
+                  hintText: 'Ej. B0100000284',
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _status,
+                decoration: const InputDecoration(labelText: 'Estado'),
+                items: const [
+                  DropdownMenuItem(value: 'draft', child: Text('Borrador')),
+                  DropdownMenuItem(value: 'sent', child: Text('Enviada')),
+                  DropdownMenuItem(
+                    value: 'received',
+                    child: Text('Recibida'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _status = value);
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _supplierId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Proveedor'),
+                items: state.suppliers
+                    .map(
+                      (supplier) => DropdownMenuItem(
+                        value: supplier.id,
+                        child: Text(
+                          supplier.name,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) => setState(() => _supplierId = value),
+              ),
+            ),
+            const SizedBox(width: 6),
+            _AddIconButton(
+              tooltip: 'Nuevo proveedor',
+              onPressed: state.saving ? null : _showCreateSupplierDialog,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: _warehouseId,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Almacén'),
+                items: state.warehouses
+                    .map(
+                      (warehouse) => DropdownMenuItem(
+                        value: warehouse.id,
+                        child: Text(
+                          warehouse.isMain
+                              ? '${warehouse.name} · Principal'
+                              : warehouse.name,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) => setState(() => _warehouseId = value),
+              ),
+            ),
+            const SizedBox(width: 6),
+            _AddIconButton(
+              tooltip: 'Nuevo almacén',
+              onPressed: state.saving ? null : _showCreateWarehouseDialog,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: _expectedDate,
+                  firstDate: DateTime.now().subtract(const Duration(days: 90)),
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                );
+                if (picked == null) return;
+                setState(() => _expectedDate = picked);
+              },
+              icon: const Icon(Icons.event_outlined),
+              label: Text(
+                'Entrega ${DateFormat('dd/MM/yyyy').format(_expectedDate)}',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _notesCtrl,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            labelText: 'Notas',
+            alignLabelWithHint: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────────────── Productos / captura ──
+  Widget _buildProductsCard(PurchasesState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Productos de la factura',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _openMultiSearchDialog(state),
+              icon: const Icon(Icons.playlist_add_check, size: 18),
+              label: const Text('Buscar y seleccionar varios'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Escribe el producto y presiona Enter, luego cantidad · Enter, luego costo · Enter.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+        ),
+        const SizedBox(height: 14),
+        _buildEntryRow(state),
+        const SizedBox(height: 18),
+        if (_lines.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: const Text(
+              'Aún no has agregado productos a esta factura.',
+              style: TextStyle(color: Color(0xFF64748B)),
+            ),
+          )
+        else
+          _buildLinesTable(),
+      ],
+    );
+  }
+
+  Widget _buildEntryRow(PurchasesState state) {
+    final selected = _entrySelected;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFCBD5E1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 4,
+                child: _buildProductAutocomplete(state),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: TextField(
+                  controller: _entryQtyCtrl,
+                  focusNode: _qtyFocus,
+                  enabled: selected != null,
+                  textInputAction: TextInputAction.next,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: _entryHasPack
+                        ? 'Cant. ($_entryPurchaseUnit)'
+                        : 'Cantidad',
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onSubmitted: (_) => _costFocus.requestFocus(),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
+                child: TextField(
+                  controller: _entryCostCtrl,
+                  focusNode: _costFocus,
+                  enabled: selected != null,
+                  textInputAction: _entryTaxMode == _TaxMode.separate
+                      ? TextInputAction.next
+                      : TextInputAction.done,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: _entryHasPack
+                        ? 'Costo x $_entryPurchaseUnit'
+                        : 'Costo unitario',
+                    helperText: _entryTaxMode == _TaxMode.included
+                        ? 'trae ITBIS'
+                        : null,
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onSubmitted: (_) {
+                    if (_entryTaxMode == _TaxMode.separate) {
+                      _paidFocus.requestFocus();
+                    } else {
+                      _commitEntry();
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: selected == null ? null : _commitEntry,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 18,
+                  ),
+                ),
+                child: const Text('Agregar'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Text(
+                'ITBIS:',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF475569),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _TaxModeDropdown(
+                value: _entryTaxMode,
+                onChanged: (m) => setState(() {
+                  _entryTaxMode = m;
+                  if (m != _TaxMode.separate) _entryPaidCtrl.clear();
+                }),
+              ),
+              if (_entryTaxMode == _TaxMode.separate) ...[
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 180,
+                  child: TextField(
+                    controller: _entryPaidCtrl,
+                    focusNode: _paidFocus,
+                    enabled: selected != null,
+                    textInputAction: TextInputAction.done,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Total pagado (con ITBIS)',
+                      isDense: true,
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    onSubmitted: (_) => _commitEntry(),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              if (_entryHasPack && selected != null)
+                Builder(
+                  builder: (_) {
+                    final qty =
+                        double.tryParse(_entryQtyCtrl.text.trim()) ?? 0;
+                    final base = packToBase(qty, _entryPackSize);
+                    return Text(
+                      '= ${_trimNum(base)} $_entryBaseUnit '
+                      '(1 $_entryPurchaseUnit = '
+                      '${_trimNum(_entryPackSize)} $_entryBaseUnit)',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF64748B),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProductAutocomplete(PurchasesState state) {
+    return Autocomplete<_ProductOption>(
+      displayStringForOption: (opt) => opt.label,
+      optionsBuilder: (TextEditingValue value) {
+        final raw = value.text.trim();
+        if (raw.isEmpty) return const Iterable<_ProductOption>.empty();
+        final q = raw.toLowerCase();
+        final matches = state.inventoryItems
+            .where(
+              (it) =>
+                  it.name.toLowerCase().contains(q) ||
+                  it.sku.toLowerCase().contains(q),
+            )
+            .take(20)
+            .map(_ProductOption.item)
+            .toList();
+        matches.add(_ProductOption.create(raw));
+        return matches;
+      },
+      onSelected: (opt) => _onProductOptionSelected(opt),
+      fieldViewBuilder:
+          (context, textController, focusNode, onFieldSubmitted) {
+            _productFieldCtrl = textController;
+            _productFocus = focusNode;
+            return TextField(
+              controller: textController,
+              focusNode: focusNode,
+              decoration: const InputDecoration(
+                labelText: 'Producto',
+                hintText: 'Busca por nombre o SKU…',
+                prefixIcon: Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
+              ),
+              onSubmitted: (_) => onFieldSubmitted(),
+            );
+          },
+      optionsViewBuilder: (context, onSelected, options) {
+        final currency = NumberFormat.currency(
+          locale: 'en_US',
+          symbol: 'RD\$',
+          decimalDigits: 2,
+        );
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 320, maxWidth: 520),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (context, index) {
+                  final opt = options.elementAt(index);
+                  if (opt.isCreate) {
+                    return ListTile(
+                      leading: const Icon(
+                        Icons.add_circle_outline,
+                        color: Color(0xFF2563EB),
+                      ),
+                      title: Text('Crear "${opt.rawText}"'),
+                      subtitle: const Text('Nuevo insumo en inventario'),
+                      onTap: () => onSelected(opt),
+                    );
+                  }
+                  final item = opt.item!;
+                  return ListTile(
+                    title: Text(item.name),
+                    subtitle: Text(
+                      [
+                        if (item.sku.trim().isNotEmpty) item.sku,
+                        if (item.cost > 0)
+                          'Costo actual ${currency.format(item.cost)}',
+                      ].join(' · '),
+                    ),
+                    onTap: () => onSelected(opt),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _onProductOptionSelected(_ProductOption opt) async {
+    PurchaseInventoryItem? item = opt.item;
+    if (opt.isCreate) {
+      try {
+        item = await ref.read(purchasesViewModelProvider).createInventoryItem(
+          name: opt.rawText,
+        );
+      } catch (_) {
+        return; // el error ya quedó en el state.error de la vista
+      }
+      if (!mounted) return;
+    }
+    if (item == null) return;
+    final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
+    // Costo NETO por unidad de compra (el costo maestro se guarda sin ITBIS).
+    final netPurchaseUnit = hasPack ? item.cost * item.packSize : item.cost;
+    setState(() {
+      _entrySelected = item;
+      _entryPurchaseUnit = hasPack ? item!.purchaseUnit : '';
+      _entryPackSize = hasPack ? item!.packSize : 1;
+      _entryBaseUnit = item!.unit;
+      _entryQtyCtrl.text = '1';
+      _entryPaidCtrl.clear();
+      // Si el modo es "incluido", el campo costo espera el precio CON ITBIS.
+      final prefill = netPurchaseUnit <= 0
+          ? ''
+          : (_entryTaxMode == _TaxMode.included
+                  ? netPurchaseUnit * (1 + _kIvaRate)
+                  : netPurchaseUnit)
+              .toStringAsFixed(2);
+      _entryCostCtrl.text = prefill;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _qtyFocus.requestFocus();
+    });
+  }
+
+  void _commitEntry() {
+    final item = _entrySelected;
+    if (item == null) return;
+    final qty = double.tryParse(_entryQtyCtrl.text.trim()) ?? 0;
+    if (qty <= 0) {
+      _qtyFocus.requestFocus();
+      return;
+    }
+    final cost = double.tryParse(_entryCostCtrl.text.trim()) ?? 0;
+    final paid = double.tryParse(_entryPaidCtrl.text.trim()) ?? 0;
+    setState(() {
+      _lines.add(
+        _DraftItemControllers.fromItem(
+          item,
+          qty: qty,
+          cost: cost,
+          taxMode: _entryTaxMode,
+          paid: paid,
+        ),
+      );
+    });
+    _resetEntry();
+  }
+
+  void _resetEntry() {
+    setState(() {
+      _entrySelected = null;
+      _entryPurchaseUnit = '';
+      _entryPackSize = 1;
+      _entryBaseUnit = '';
+      _entryQtyCtrl.text = '1';
+      _entryCostCtrl.text = '0';
+      _entryPaidCtrl.clear();
+    });
+    _productFieldCtrl?.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _productFocus?.requestFocus();
+    });
+  }
+
+  Widget _buildLinesTable() {
+    final currency = NumberFormat.currency(
+      locale: 'en_US',
+      symbol: 'RD\$',
+      decimalDigits: 2,
+    );
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
+          ),
+          child: Row(
+            children: const [
+              Expanded(flex: 4, child: _HeaderCell('Descripción')),
+              Expanded(flex: 2, child: _HeaderCell('Cantidad')),
+              Expanded(flex: 2, child: _HeaderCell('Costo')),
+              SizedBox(width: 118, child: _HeaderCell('ITBIS')),
+              Expanded(flex: 2, child: _HeaderCell('Pagado')),
+              Expanded(flex: 2, child: _HeaderCell('ITBIS \$', alignRight: true)),
+              Expanded(flex: 2, child: _HeaderCell('Valor', alignRight: true)),
+              SizedBox(width: 36),
+            ],
+          ),
+        ),
+        for (var i = 0; i < _lines.length; i++)
+          _LineRow(
+            key: ValueKey(_lines[i].key),
+            line: _lines[i],
+            currency: currency,
+            onChanged: () => setState(() {}),
+            onRemove: () => setState(() {
+              final removed = _lines.removeAt(i);
+              removed.dispose();
+            }),
+          ),
+      ],
+    );
+  }
+
+  // ─────────────────────────────────────── Buscador multi-selección ──
+  Future<void> _openMultiSearchDialog(PurchasesState state) async {
+    final selectedIds = <String>{};
+    final searchCtrl = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            final q = searchCtrl.text.trim().toLowerCase();
+            final items = state.inventoryItems
+                .where(
+                  (it) =>
+                      q.isEmpty ||
+                      it.name.toLowerCase().contains(q) ||
+                      it.sku.toLowerCase().contains(q),
+                )
+                .toList(growable: false);
+            final currency = NumberFormat.currency(
+              locale: 'en_US',
+              symbol: 'RD\$',
+              decimalDigits: 2,
+            );
+            return AlertDialog(
+              title: const Text('Seleccionar productos'),
+              content: SizedBox(
+                width: 520,
+                height: 480,
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: searchCtrl,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Buscar por nombre o SKU',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (_) => setLocal(() {}),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: items.isEmpty
+                          ? const Center(
+                              child: Text('Sin resultados'),
+                            )
+                          : ListView.builder(
+                              itemCount: items.length,
+                              itemBuilder: (context, index) {
+                                final it = items[index];
+                                final checked = selectedIds.contains(it.id);
+                                return CheckboxListTile(
+                                  value: checked,
+                                  dense: true,
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                  title: Text(it.name),
+                                  subtitle: Text(
+                                    [
+                                      if (it.sku.trim().isNotEmpty) it.sku,
+                                      if (it.cost > 0)
+                                        currency.format(it.cost),
+                                    ].join(' · '),
+                                  ),
+                                  onChanged: (v) => setLocal(() {
+                                    if (v == true) {
+                                      selectedIds.add(it.id);
+                                    } else {
+                                      selectedIds.remove(it.id);
+                                    }
+                                  }),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: selectedIds.isEmpty
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(true),
+                  child: Text('Agregar (${selectedIds.length})'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    searchCtrl.dispose();
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      for (final it in state.inventoryItems) {
+        if (!selectedIds.contains(it.id)) continue;
+        // No duplicar: si el insumo ya está en la lista, se omite.
+        final already = _lines.any((l) => l.inventoryItemId == it.id);
+        if (already) continue;
+        final hasPack =
+            it.packSize > 1 && it.purchaseUnit.trim().isNotEmpty;
+        final netPU = hasPack ? it.cost * it.packSize : it.cost;
+        // Se agregan con el modo de ITBIS actual del renglón de captura.
+        final cost = _entryTaxMode == _TaxMode.included
+            ? netPU * (1 + _kIvaRate)
+            : netPU;
+        _lines.add(
+          _DraftItemControllers.fromItem(
+            it,
+            qty: 1,
+            cost: cost,
+            taxMode: _entryTaxMode,
+            paid: 0,
+          ),
+        );
+      }
+    });
+  }
+
+  // ─────────────────────────────────────────────── Diálogos de alta ──
+  Future<void> _showCreateSupplierDialog() async {
+    final nameCtrl = TextEditingController();
+    final contactCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Nuevo proveedor'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Nombre'),
+                ),
+                TextField(
+                  controller: contactCtrl,
+                  decoration: const InputDecoration(labelText: 'Contacto'),
+                ),
+                TextField(
+                  controller: phoneCtrl,
+                  decoration: const InputDecoration(labelText: 'Teléfono'),
+                ),
+                TextField(
+                  controller: emailCtrl,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                try {
+                  final created = await ref
+                      .read(purchasesViewModelProvider)
+                      .createSupplier(
+                        name: name,
+                        contactName: contactCtrl.text.trim(),
+                        phone: phoneCtrl.text.trim(),
+                        email: emailCtrl.text.trim(),
+                      );
+                  if (!mounted) return;
+                  setState(() => _supplierId = created.id);
+                } catch (_) {
+                  // el error se muestra vía state.error
+                }
+                if (!dialogContext.mounted) return;
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showCreateWarehouseDialog() async {
+    final nameCtrl = TextEditingController();
+    var isMain = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return AlertDialog(
+              title: const Text('Nuevo almacén'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameCtrl,
+                      autofocus: true,
+                      decoration: const InputDecoration(labelText: 'Nombre'),
+                    ),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      value: isMain,
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Marcar como almacén principal'),
+                      onChanged: (v) => setLocal(() => isMain = v ?? false),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final name = nameCtrl.text.trim();
+                    if (name.isEmpty) return;
+                    try {
+                      final created = await ref
+                          .read(purchasesViewModelProvider)
+                          .createWarehouse(name: name, isMain: isMain);
+                      if (!mounted) return;
+                      setState(() => _warehouseId = created.id);
+                    } catch (_) {
+                      // el error se muestra vía state.error
+                    }
+                    if (!dialogContext.mounted) return;
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text('Guardar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ───────────────────────────────────────────────────────── Guardar ──
+  List<PurchaseDraftItem> get _draftItems => _lines
+      .map((l) => l.toDraftItem())
       .where(
         (item) =>
-            item.description.trim().isNotEmpty || item.inventoryItemId != null,
+            (item.description.trim().isNotEmpty ||
+                item.inventoryItemId != null) &&
+            item.quantity > 0,
       )
       .toList(growable: false);
 
-  void _addLine() {
-    setState(() {
-      _itemControllers.add(_DraftItemControllers());
-    });
-  }
-
-  void _removeLine(int index) {
-    setState(() {
-      final removed = _itemControllers.removeAt(index);
-      removed.dispose();
-    });
-  }
-
   Future<void> _submit() async {
     if (_supplierId == null || _warehouseId == null) {
+      _snack('Selecciona proveedor y almacén.');
       return;
     }
-    if (_draftItems.isEmpty) {
+    final items = _draftItems;
+    if (items.isEmpty) {
+      _snack('Agrega al menos un producto a la factura.');
       return;
     }
 
@@ -429,170 +1108,267 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       status: _status,
       expectedDate: _expectedDate,
       notes: _notesCtrl.text.trim(),
-      items: _draftItems,
+      invoiceNumber: _invoiceNumberCtrl.text.trim(),
+      items: items,
+      updateItemCost: true,
     );
 
     if (!mounted) return;
+    if (ref.read(purchasesViewModelProvider).state.error != null) return;
     context.go(AppRoutes.purchasesList);
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
-class _DraftItemCard extends StatelessWidget {
-  final int index;
-  final _DraftItemControllers controllers;
-  final List<PurchaseInventoryItem> inventoryItems;
-  final VoidCallback? onRemove;
-  final VoidCallback onChanged;
+// ─────────────────────────────────────────────────────── Widgets aux ──
 
-  const _DraftItemCard({
-    required this.index,
-    required this.controllers,
-    required this.inventoryItems,
+class _AddIconButton extends StatelessWidget {
+  final String tooltip;
+  final VoidCallback? onPressed;
+
+  const _AddIconButton({required this.tooltip, this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: IconButton.filledTonal(
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+/// Selector compacto del modo de ITBIS de una línea.
+class _TaxModeDropdown extends StatelessWidget {
+  final _TaxMode value;
+  final ValueChanged<_TaxMode> onChanged;
+  final bool dense;
+
+  const _TaxModeDropdown({
+    required this.value,
     required this.onChanged,
-    this.onRemove,
+    this.dense = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFCBD5E1)),
       ),
-      child: Column(
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<_TaxMode>(
+          value: value,
+          isDense: true,
+          style: TextStyle(
+            fontSize: dense ? 12 : 13,
+            fontWeight: FontWeight.w600,
+            color: const Color(0xFF0F172A),
+          ),
+          items: _TaxMode.values
+              .map(
+                (m) => DropdownMenuItem(
+                  value: m,
+                  child: Text(m.short),
+                ),
+              )
+              .toList(growable: false),
+          onChanged: (m) {
+            if (m != null) onChanged(m);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderCell extends StatelessWidget {
+  final String label;
+  final bool alignRight;
+
+  const _HeaderCell(this.label, {this.alignRight = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      textAlign: alignRight ? TextAlign.right : TextAlign.left,
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF475569),
+      ),
+    );
+  }
+}
+
+class _LineRow extends StatelessWidget {
+  final _DraftItemControllers line;
+  final NumberFormat currency;
+  final VoidCallback onChanged;
+  final VoidCallback onRemove;
+
+  const _LineRow({
+    super.key,
+    required this.line,
+    required this.currency,
+    required this.onChanged,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isSeparate = line.taxMode == _TaxMode.separate;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0))),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Línea ${index + 1}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+          Expanded(
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  line.description.text,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ),
-              if (onRemove != null)
-                IconButton(
-                  onPressed: onRemove,
-                  icon: const Icon(Icons.delete_outline),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String?>(
-            initialValue: controllers.inventoryItemId,
-            decoration: const InputDecoration(
-              labelText: 'Insumo inventariable',
+                if (line.hasPack)
+                  Text(
+                    '1 ${line.purchaseUnit} = ${_trimNum(line.packSize)} ${line.baseUnit}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF94A3B8),
+                    ),
+                  ),
+              ],
             ),
-            items: [
-              const DropdownMenuItem<String?>(
-                value: null,
-                child: Text('No vinculado'),
-              ),
-              ...inventoryItems.map(
-                (item) => DropdownMenuItem<String?>(
-                  value: item.id,
-                  child: Text(
-                    item.sku.trim().isEmpty
-                        ? item.name
-                        : '${item.name} · ${item.sku}',
-                  ),
-                ),
-              ),
-            ],
-            onChanged: (value) {
-              controllers.inventoryItemId = value;
-              PurchaseInventoryItem? selected;
-              for (final item in inventoryItems) {
-                if (item.id == value) {
-                  selected = item;
-                  break;
-                }
-              }
-              if (selected != null) {
-                controllers.description.text = selected.name;
-                controllers.purchaseUnit = selected.purchaseUnit;
-                controllers.packSize = selected.packSize;
-                controllers.baseUnit = selected.unit;
-                if (controllers.unitCost.text.trim() == '0' &&
-                    selected.cost > 0) {
-                  // selected.cost es por unidad base; mostrar por empaque
-                  // si aplica (costo del empaque = cost × packSize).
-                  final shown = controllers.hasPack
-                      ? selected.cost * selected.packSize
-                      : selected.cost;
-                  controllers.unitCost.text = shown.toStringAsFixed(2);
-                }
-              } else {
-                controllers.purchaseUnit = '';
-                controllers.packSize = 1;
-                controllers.baseUnit = '';
-              }
-              onChanged();
-            },
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: controllers.description,
-            onChanged: (_) => onChanged(),
-            decoration: const InputDecoration(labelText: 'Descripción'),
+          Expanded(
+            flex: 2,
+            child: _MiniField(
+              controller: line.quantity,
+              suffix: line.hasPack ? line.purchaseUnit : null,
+              onChanged: onChanged,
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: controllers.quantity,
-                  onChanged: (_) => onChanged(),
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: controllers.hasPack
-                        ? 'Cantidad (${controllers.purchaseUnit})'
-                        : 'Cantidad',
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextField(
-                  controller: controllers.unitCost,
-                  onChanged: (_) => onChanged(),
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: controllers.hasPack
-                        ? 'Costo por ${controllers.purchaseUnit}'
-                        : 'Costo unitario',
-                  ),
-                ),
-              ),
-            ],
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: _MiniField(
+              controller: line.unitCost,
+              onChanged: onChanged,
+            ),
           ),
-          if (controllers.hasPack) ...[
-            const SizedBox(height: 6),
-            Builder(
-              builder: (_) {
-                final qty =
-                    double.tryParse(controllers.quantity.text.trim()) ?? 0;
-                final base = packToBase(qty, controllers.packSize);
-                final u = controllers.baseUnit;
-                return Text(
-                  '= ${_trimNum(base)} $u '
-                  '(1 ${controllers.purchaseUnit} = '
-                  '${_trimNum(controllers.packSize)} $u)',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF64748B),
-                  ),
-                );
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 118,
+            child: _TaxModeDropdown(
+              value: line.taxMode,
+              dense: true,
+              onChanged: (m) {
+                line.taxMode = m;
+                onChanged();
               },
             ),
-          ],
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: isSeparate
+                ? _MiniField(
+                    controller: line.paid,
+                    hint: 'Pagado',
+                    onChanged: onChanged,
+                  )
+                : const Center(
+                    child: Text('—', style: TextStyle(color: Color(0xFFCBD5E1))),
+                  ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: Text(
+              currency.format(line.taxAmount),
+              textAlign: TextAlign.right,
+              style: const TextStyle(color: Color(0xFF64748B)),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              currency.format(line.lineTotal),
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          SizedBox(
+            width: 36,
+            child: IconButton(
+              tooltip: 'Quitar',
+              onPressed: onRemove,
+              icon: const Icon(
+                Icons.close,
+                size: 18,
+                color: Color(0xFF94A3B8),
+              ),
+            ),
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _MiniField extends StatelessWidget {
+  final TextEditingController controller;
+  final String? suffix;
+  final String? hint;
+  final VoidCallback onChanged;
+
+  const _MiniField({
+    required this.controller,
+    required this.onChanged,
+    this.suffix,
+    this.hint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+      ],
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontSize: 14),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: hint,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 8,
+          vertical: 8,
+        ),
+        suffixText: suffix,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      onChanged: (_) => onChanged(),
     );
   }
 }
@@ -637,33 +1413,132 @@ class _SummaryRow extends StatelessWidget {
   }
 }
 
+/// Opción del buscador: un insumo existente o el sentinel "crear nuevo".
+class _ProductOption {
+  final PurchaseInventoryItem? item;
+  final String rawText;
+
+  const _ProductOption._(this.item, this.rawText);
+
+  factory _ProductOption.item(PurchaseInventoryItem it) =>
+      _ProductOption._(it, it.name);
+
+  factory _ProductOption.create(String rawText) =>
+      _ProductOption._(null, rawText);
+
+  bool get isCreate => item == null;
+
+  String get label => item?.name ?? rawText;
+}
+
 class _DraftItemControllers {
-  final description = TextEditingController();
-  final quantity = TextEditingController(text: '1');
-  final unitCost = TextEditingController(text: '0');
+  // Clave estable para keys de widgets al reordenar/eliminar filas.
+  static int _seq = 0;
+  final int key = _seq++;
+
+  final TextEditingController description;
+  final TextEditingController quantity;
+  final TextEditingController unitCost;
+  // Total pagado de la línea (con ITBIS) para el modo "aparte".
+  final TextEditingController paid;
   String? inventoryItemId;
+  _TaxMode taxMode;
   // Snapshot del empaque del insumo seleccionado. La cantidad/costo se
   // digitan en la unidad de compra y se convierten a base al guardar.
-  String purchaseUnit = '';
-  double packSize = 1;
-  String baseUnit = '';
+  String purchaseUnit;
+  double packSize;
+  String baseUnit;
+
+  _DraftItemControllers({
+    String description = '',
+    double quantity = 1,
+    double unitCost = 0,
+    double paid = 0,
+    this.inventoryItemId,
+    this.taxMode = _TaxMode.included,
+    this.purchaseUnit = '',
+    this.packSize = 1,
+    this.baseUnit = '',
+  })  : description = TextEditingController(text: description),
+        quantity = TextEditingController(text: _fmt(quantity)),
+        unitCost = TextEditingController(text: _fmt(unitCost)),
+        paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid));
+
+  factory _DraftItemControllers.fromItem(
+    PurchaseInventoryItem item, {
+    required double qty,
+    required double cost,
+    required _TaxMode taxMode,
+    required double paid,
+  }) {
+    final hasPack =
+        item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
+    return _DraftItemControllers(
+      description: item.name,
+      quantity: qty,
+      unitCost: cost,
+      paid: paid,
+      inventoryItemId: item.id,
+      taxMode: taxMode,
+      purchaseUnit: hasPack ? item.purchaseUnit : '',
+      packSize: hasPack ? item.packSize : 1,
+      baseUnit: item.unit,
+    );
+  }
+
+  static String _fmt(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(2);
+  }
 
   bool get hasPack => packSize > 1 && purchaseUnit.trim().isNotEmpty;
 
+  double get _enteredQty => double.tryParse(quantity.text.trim()) ?? 0;
+  double get _enteredCost => double.tryParse(unitCost.text.trim()) ?? 0;
+  double get _enteredPaid => double.tryParse(paid.text.trim()) ?? 0;
+
+  /// Costo NETO (sin ITBIS) por unidad de compra.
+  double get _netUnitEntered =>
+      taxMode == _TaxMode.included ? _enteredCost / (1 + _kIvaRate) : _enteredCost;
+
+  /// Base NETA de la línea (cantidad × costo neto). Consistente en unidad de
+  /// compra o base porque packToBase(q)·packCostToBase(c) = q·c.
+  double get baseSubtotal => _netUnitEntered * _enteredQty;
+
+  /// ITBIS absoluto de la línea (en dinero).
+  double get taxAmount {
+    switch (taxMode) {
+      case _TaxMode.exempt:
+        return 0;
+      case _TaxMode.included:
+        return (_enteredCost * _enteredQty) - baseSubtotal;
+      case _TaxMode.separate:
+        final t = _enteredPaid - baseSubtotal;
+        return t > 0 ? t : 0;
+    }
+  }
+
+  /// Total de la línea con ITBIS.
+  double get lineTotal => baseSubtotal + taxAmount;
+
   PurchaseDraftItem toDraftItem() {
-    double parse(String raw) => double.tryParse(raw.trim()) ?? 0;
-    final qtyEntered = parse(quantity.text);
-    final costEntered = parse(unitCost.text);
     // Convertir a unidad base si hay empaque (ej. 6 botellas → 4500 ml;
-    // RD$1000/botella → RD$1.333/ml). Sin empaque, 1:1.
-    final qtyBase = hasPack ? packToBase(qtyEntered, packSize) : qtyEntered;
-    final costBase =
-        hasPack ? packCostToBaseCost(costEntered, packSize) : costEntered;
+    // costo neto por botella → costo neto por ml). Sin empaque, 1:1.
+    final qtyBase = hasPack ? packToBase(_enteredQty, packSize) : _enteredQty;
+    final netUnitBase = hasPack
+        ? packCostToBaseCost(_netUnitEntered, packSize)
+        : _netUnitEntered;
+    final base = baseSubtotal;
+    final tax = taxAmount;
     return PurchaseDraftItem(
       inventoryItemId: inventoryItemId,
       description: description.text.trim(),
       quantity: qtyBase,
-      unitCost: costBase,
+      // Costo NETO por unidad base → costo maestro y movimiento de stock.
+      unitCost: netUnitBase,
+      // Tasa efectiva (por si el ITBIS no es 18% exacto en modo "aparte").
+      taxRate: base > 0 ? (tax / base * 100) : 0,
+      taxAmount: tax,
       purchaseUnit: hasPack ? purchaseUnit.trim() : '',
       packSize: hasPack ? packSize : 1,
     );
@@ -673,5 +1548,6 @@ class _DraftItemControllers {
     description.dispose();
     quantity.dispose();
     unitCost.dispose();
+    paid.dispose();
   }
 }

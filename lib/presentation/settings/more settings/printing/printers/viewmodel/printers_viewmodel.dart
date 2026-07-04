@@ -189,36 +189,23 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       // impriman a esta impresora vía el agent local de este device.
       String? hostDeviceId;
       if (t == PrinterType.usb || t == PrinterType.bluetooth) {
-        hostDeviceId = await DeviceIdentity.getOrCreateId(b);
+        final resolvedId = await DeviceIdentity.getOrCreateId(b);
 
-        // PRD 5 F5.2 fix (2026-05-01): garantizar que `device_agents`
-        // tenga la fila ANTES del INSERT en `printers`, sino la FK
-        // `printers_host_device_id_fkey` rompe en sucursales nuevas
-        // donde el heartbeat scheduler aún no corrió o el agent local
-        // no está alcanzable. La función es upsert idempotente: si el
-        // heartbeat scheduler corre después, sobreescribe agent_url
-        // con la URL real (vía COALESCE en el ON CONFLICT DO UPDATE).
-        try {
-          final deviceName = await DeviceIdentity.getDisplayName();
-          await Supabase.instance.client.rpc(
-            'fn_register_device_agent',
-            params: {
-              'p_id': hostDeviceId,
-              'p_business_id': b,
-              'p_device_name': deviceName,
-              'p_agent_url': null,
-              'p_platform': DeviceIdentity.currentPlatform(),
-            },
-          );
-        } catch (e, st) {
-          _log('createPrinter() pre-register device_agent failed: $e\n$st');
-          state = state.copyWith(
-            isLoading: false,
-            errorMessage:
-                'No se pudo registrar este equipo como host. ${e.toString()}',
-          );
-          return false;
-        }
+        // PRD 5 F5.2: pre-registrar `device_agents` ANTES del INSERT en
+        // `printers` satisface la FK `printers_host_device_id_fkey` (upsert
+        // idempotente; el heartbeat scheduler lo refresca luego con la URL
+        // real vía COALESCE en el ON CONFLICT DO UPDATE).
+        //
+        // Fix "a veces no guarda BT" (2026-07-04): antes un fallo transitorio
+        // de red en este RPC abortaba el alta completa y dejaba el modal
+        // abierto sin guardar.
+        // Ahora es BEST-EFFORT (timeout + reintento). Si aun así falla,
+        // creamos la impresora SIN host_device_id en vez de abortar — sigue
+        // usable localmente (el print directo BT/USB usa mac/vid:pid, no el
+        // host). El heartbeat scheduler registra este device en su próximo
+        // tick (~30s) para reactivar el uso compartido entre equipos.
+        final registered = await _tryRegisterDeviceAgentHost(resolvedId, b);
+        hostDeviceId = registered ? resolvedId : null;
       }
 
       await _repo.createPrinter(
@@ -240,6 +227,42 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       state = state.copyWith(isLoading: false, errorMessage: e.toString());
       return false;
     }
+  }
+
+  /// Registra este device como agent host (upsert idempotente vía
+  /// `fn_register_device_agent`) para satisfacer la FK de `printers`.
+  ///
+  /// BEST-EFFORT: 2 intentos con timeout de 6s cada uno. Devuelve `true` si
+  /// quedó registrado. NUNCA lanza — el alta de una impresora BT/USB no debe
+  /// abortar por un fallo transitorio de red aquí (ver `createPrinter`).
+  Future<bool> _tryRegisterDeviceAgentHost(
+    String deviceId,
+    String businessId,
+  ) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
+      try {
+        final deviceName = await DeviceIdentity.getDisplayName();
+        await Supabase.instance.client.rpc(
+          'fn_register_device_agent',
+          params: {
+            'p_id': deviceId,
+            'p_business_id': businessId,
+            'p_device_name': deviceName,
+            'p_agent_url': null,
+            'p_platform': DeviceIdentity.currentPlatform(),
+          },
+        ).timeout(const Duration(seconds: 6));
+        return true;
+      } catch (e, st) {
+        _log(
+          '_tryRegisterDeviceAgentHost() intento ${attempt + 1}/2 falló: $e\n$st',
+        );
+      }
+    }
+    return false;
   }
 
   Future<bool> deletePrinter(String printerId) async {

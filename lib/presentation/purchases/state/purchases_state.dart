@@ -99,6 +99,8 @@ class PurchaseOrderSummary {
   final String warehouseId;
   final String warehouseName;
   final String orderNumber;
+  /// Número de factura/NCF físico del proveedor (distinto del folio interno).
+  final String invoiceNumber;
   final String status;
   final double total;
   final String notes;
@@ -113,6 +115,7 @@ class PurchaseOrderSummary {
     required this.warehouseId,
     required this.warehouseName,
     required this.orderNumber,
+    required this.invoiceNumber,
     required this.status,
     required this.total,
     required this.notes,
@@ -143,6 +146,7 @@ class PurchaseOrderSummary {
       warehouseId: map['warehouse_id']?.toString() ?? '',
       warehouseName: warehouseName,
       orderNumber: map['order_number']?.toString() ?? 'PO-00000',
+      invoiceNumber: map['invoice_number']?.toString() ?? '',
       status: map['status']?.toString() ?? 'draft',
       total: toDouble(map['total']),
       notes: map['notes']?.toString() ?? '',
@@ -248,10 +252,15 @@ class PurchaseDraftItem {
   final String? inventoryItemId;
   final String description;
   /// Cantidad y costo YA en unidad BASE (la vista convirtió desde la unidad
-  /// de compra antes de crear el draft).
+  /// de compra antes de crear el draft). `unitCost` es el costo NETO (sin
+  /// ITBIS): así queda el costo maestro del insumo y el movimiento de stock.
   final double quantity;
   final double unitCost;
   final double taxRate;
+  /// ITBIS ABSOLUTO de la línea (en dinero). Cuando es null, el impuesto se
+  /// deriva del porcentaje (`total * taxRate / 100`), modo heredado usado por
+  /// las OC generadas desde sugerencias de reorden.
+  final double? taxAmount;
   // Snapshot de empaque para guardar en la línea (display/recepción).
   final String purchaseUnit;
   final double packSize;
@@ -262,11 +271,16 @@ class PurchaseDraftItem {
     required this.quantity,
     required this.unitCost,
     this.taxRate = 18,
+    this.taxAmount,
     this.purchaseUnit = '',
     this.packSize = 1,
   });
 
+  /// Base NETA de la línea (sin ITBIS).
   double get total => quantity * unitCost;
+
+  /// ITBIS de la línea: absoluto si viene dado, si no derivado del porcentaje.
+  double get taxValue => taxAmount ?? (total * taxRate / 100);
 }
 
 class PurchasesState {
