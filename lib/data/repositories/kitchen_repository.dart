@@ -56,7 +56,7 @@ class KitchenRepository {
   }) async {
     try {
       const selectColumns =
-          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
+          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout,kitchen_sent_at';
       var query = _client.from('kds_open_orders').select(selectColumns);
       if (businessId != null && businessId.isNotEmpty) {
         query = query.eq('business_id', businessId);
@@ -330,7 +330,7 @@ class KitchenRepository {
     // NULL hardcoded para area_code; ahora vienen del oi.print_area_code +
     // LEFT JOIN a print_areas.name.
     const selectColumns =
-        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
+        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout,kitchen_sent_at';
 
     final baseQuery = _client.from('kds_active_items').select(selectColumns);
     var query = baseQuery;

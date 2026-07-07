@@ -1729,6 +1729,22 @@ class SalesRepository {
         SalesQueries.rpcConfirmOrderToKitchen,
         params: {'p_order_id': orderId},
       );
+      // Marca la RONDA: estampa `kitchen_sent_at` a los ítems recién enviados
+      // (los que aún no lo tienen). Los de rondas previas conservan su marca,
+      // así el KDS separa cada comanda en su propia tarjeta. Best-effort: un
+      // fallo aquí no debe tumbar el envío a cocina.
+      try {
+        await _client
+            .from('order_items')
+            .update({
+              'kitchen_sent_at': DateTime.now().toUtc().toIso8601String(),
+            })
+            .eq('order_id', orderId)
+            .isFilter('kitchen_sent_at', null)
+            .inFilter('status', ['pending', 'preparing']);
+      } catch (_) {
+        // La marca de ronda es best-effort; el pedido ya entró a cocina.
+      }
     } catch (e) {
       throw Exception('Error al enviar a cocina: $e');
     }

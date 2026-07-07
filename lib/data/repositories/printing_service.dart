@@ -50,6 +50,32 @@ class KitchenSendResult {
   bool get allDirect => escalatedAreas.isEmpty && directAreas.isNotEmpty;
 }
 
+/// Resultado de imprimir el ticket LISTO ("Imprimir al marcar listo").
+/// Permite que el KDS avise cuando el ticket no salió porque el área no
+/// tiene una impresora con la bandera `prints_receipts` activa, en vez de
+/// fallar en silencio.
+class ReadyPrintReport {
+  /// Áreas que sí imprimieron (o escalaron) el ticket de listos.
+  final int areasPrinted;
+
+  /// Códigos de área que se saltaron por NO tener impresora de "listos"
+  /// configurada (`prints_receipts = true`).
+  final List<String> areasWithoutReadyPrinter;
+
+  const ReadyPrintReport({
+    required this.areasPrinted,
+    required this.areasWithoutReadyPrinter,
+  });
+
+  static const empty = ReadyPrintReport(
+    areasPrinted: 0,
+    areasWithoutReadyPrinter: [],
+  );
+
+  bool get nothingPrinted => areasPrinted == 0;
+  bool get missingReadyPrinter => areasWithoutReadyPrinter.isNotEmpty;
+}
+
 /// 🖨️ Servicio de Impresión con Agrupación por Departamento
 /// Maneja la lógica de envío de órdenes a diferentes áreas de impresión
 class NoAssignedKitchenPrinterException implements Exception {
@@ -1049,7 +1075,7 @@ class PrintingService {
     return 'LAN-$areaCode-${DateTime.now().microsecondsSinceEpoch}';
   }
 
-  Future<void> printReadyOrderTicket({
+  Future<ReadyPrintReport> printReadyOrderTicket({
     required String orderId,
     required String businessId,
     required List<String> itemIds,
@@ -1065,7 +1091,7 @@ class PrintingService {
       final readyItems = items
           .where((item) => itemIds.contains(item.id))
           .toList(growable: false);
-      if (readyItems.isEmpty) return;
+      if (readyItems.isEmpty) return ReadyPrintReport.empty;
 
       final orderData = await _getOrderDisplayData(orderId);
       final businessName = await _getBusinessName(businessId);
@@ -1077,6 +1103,9 @@ class PrintingService {
       ).getKitchenBanners(businessId);
       final itemsByArea = await _groupItemsByPrintArea(readyItems);
 
+      var areasPrinted = 0;
+      final areasWithoutReadyPrinter = <String>[];
+
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
@@ -1086,7 +1115,11 @@ class PrintingService {
           areaId: area.id,
           areaCode: areaCode,
         );
-        if (printers.isEmpty) continue;
+        if (printers.isEmpty) {
+          // El área no tiene impresora con "Imprimir al marcar listo" activo.
+          areasWithoutReadyPrinter.add(areaCode);
+          continue;
+        }
 
         final ticket = PrintTicketService.generateKitchenTicket(
           order: order,
@@ -1117,7 +1150,13 @@ class PrintingService {
           businessId: businessId,
           orderId: orderId,
         );
+        areasPrinted++;
       }
+
+      return ReadyPrintReport(
+        areasPrinted: areasPrinted,
+        areasWithoutReadyPrinter: areasWithoutReadyPrinter,
+      );
     } on ItemsWithoutPrintAreaException {
       rethrow;
     } on UnknownPrintAreaCodeException {

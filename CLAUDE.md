@@ -17,6 +17,13 @@ It includes POS/cashier flows, auth, dashboard, sales, products, inventory, kitc
 - Before major refactors, inspect the feature module end-to-end first.
 - If a task is feature-specific, work inside that module instead of spreading logic across unrelated folders.
 
+## Database Lookups
+
+- There is NO production database access from the dev environment (the DB is self-hosted at `supabase.mangopos.do`; no `.pgpass`, no linked Supabase project, and the app ships only the anon key with RLS).
+- Whenever the user asks to look up / check / find any data in the database (e.g. "which businesses have taxes configured", "check order X", "how many NCFs..."), DO NOT try to query prod directly. Instead, WRITE the SQL query and give it to the user to run in Supabase (Studio SQL Editor or psql).
+- Give the query ready to paste: fully qualified (`public.`), with the actual IDs filled in, ordered/labeled for readability. Verify table/column names against `supabase/schema.sql` (and migrations) first so it won't error.
+- If the user pastes results back, interpret them.
+
 ## Important Commands
 
 ```bash

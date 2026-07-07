@@ -76,6 +76,9 @@ class StockReconciliationView extends ConsumerStatefulWidget {
 
 class _StockReconciliationViewState
     extends ConsumerState<StockReconciliationView> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
   @override
   void initState() {
     super.initState();
@@ -85,8 +88,30 @@ class _StockReconciliationViewState
   }
 
   @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// Filtra los insumos por nombre, SKU o código de barras (case-insensitive).
+  /// Los items ya vienen cargados en `state.items`, así que el filtro es local.
+  List<InventoryItemSummary> _applyFilter(List<InventoryItemSummary> items) {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return items;
+    return items
+        .where(
+          (item) =>
+              item.name.toLowerCase().contains(q) ||
+              item.sku.toLowerCase().contains(q) ||
+              item.barcode.toLowerCase().contains(q),
+        )
+        .toList(growable: false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final state = ref.watch(inventoryViewModelProvider).state;
+    final items = _applyFilter(state.items);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -95,6 +120,7 @@ class _StockReconciliationViewState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(context, state),
+            if (state.items.isNotEmpty) _buildSearchField(),
             Expanded(
               child: state.loading && state.items.isEmpty
                   ? Center(
@@ -102,13 +128,15 @@ class _StockReconciliationViewState
                     )
                   : state.items.isEmpty
                   ? _buildEmptyState()
+                  : items.isEmpty
+                  ? _buildNoResultsState()
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-                      itemCount: state.items.length,
+                      itemCount: items.length,
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 12),
                       itemBuilder: (context, index) {
-                        final item = state.items[index];
+                        final item = items[index];
                         return Container(
                           padding: const EdgeInsets.all(18),
                           decoration: BoxDecoration(
@@ -237,6 +265,81 @@ class _StockReconciliationViewState
             const SizedBox(height: 4),
             Text(
               'Registra insumos en Inventario para poder ajustar su stock.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.mutedForeground),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (value) => setState(() => _query = value),
+        textInputAction: TextInputAction.search,
+        style: TextStyle(color: AppColors.foreground),
+        decoration: InputDecoration(
+          isDense: true,
+          filled: true,
+          fillColor: AppColors.card,
+          hintText: 'Buscar por nombre, SKU o código de barras',
+          hintStyle: TextStyle(color: AppColors.mutedForeground),
+          prefixIcon: Icon(Icons.search, color: AppColors.mutedForeground),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  icon: Icon(Icons.close, color: AppColors.mutedForeground),
+                  tooltip: 'Limpiar',
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _query = '');
+                  },
+                ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            borderSide: BorderSide(color: AppColors.border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            borderSide: BorderSide(color: AppColors.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoResultsState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.search_off_rounded,
+              size: 44,
+              color: AppColors.mutedForeground,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Sin coincidencias',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: AppColors.foreground,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Ningún insumo coincide con "$_query".',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppColors.mutedForeground),
             ),

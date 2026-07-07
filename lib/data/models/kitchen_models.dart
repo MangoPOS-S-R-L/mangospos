@@ -26,6 +26,11 @@ class KitchenItem extends Equatable {
   /// no existe en la BD o si el item no tiene área asignada.
   final String? areaName;
 
+  /// Momento en que el ítem se envió a cocina. Los ítems enviados juntos
+  /// comparten este valor y forman una RONDA (comanda) en el KDS. Null =
+  /// ítem legacy sin marca (cae en la ronda "legacy" de su orden).
+  final DateTime? kitchenSentAt;
+
   const KitchenItem({
     required this.id,
     required this.orderId,
@@ -43,6 +48,7 @@ class KitchenItem extends Equatable {
     this.isTakeout = false,
     this.areaCode,
     this.areaName,
+    this.kitchenSentAt,
   });
 
   factory KitchenItem.fromMap(Map<String, dynamic> map) {
@@ -72,6 +78,9 @@ class KitchenItem extends Equatable {
       isTakeout: map['is_takeout'] == true,
       areaCode: trimOrNull(map['area_code']),
       areaName: trimOrNull(map['area_name']),
+      kitchenSentAt: map['kitchen_sent_at'] != null
+          ? DateTime.tryParse(map['kitchen_sent_at'].toString())
+          : null,
     );
   }
 
@@ -92,6 +101,7 @@ class KitchenItem extends Equatable {
     bool? isTakeout,
     String? areaCode,
     String? areaName,
+    DateTime? kitchenSentAt,
   }) {
     return KitchenItem(
       id: id ?? this.id,
@@ -110,6 +120,7 @@ class KitchenItem extends Equatable {
       isTakeout: isTakeout ?? this.isTakeout,
       areaCode: areaCode ?? this.areaCode,
       areaName: areaName ?? this.areaName,
+      kitchenSentAt: kitchenSentAt ?? this.kitchenSentAt,
     );
   }
 
@@ -146,6 +157,7 @@ class KitchenItem extends Equatable {
     isTakeout,
     areaCode,
     areaName,
+    kitchenSentAt,
   ];
 }
 
@@ -200,6 +212,11 @@ class KitchenOrder extends Equatable {
   final DateTime createdAt;
   final List<KitchenItem> items;
 
+  /// Identifica la RONDA (comanda) dentro de una orden. Una orden con dos
+  /// envíos a cocina produce dos `KitchenOrder` con el mismo `orderId` pero
+  /// distinto `roundKey`, y por tanto dos tarjetas separadas en el KDS.
+  final String roundKey;
+
   const KitchenOrder({
     required this.orderId,
     required this.orderNumber,
@@ -207,6 +224,7 @@ class KitchenOrder extends Equatable {
     this.waiterName,
     required this.createdAt,
     required this.items,
+    this.roundKey = '',
   });
 
   /// Items pendientes
@@ -234,5 +252,6 @@ class KitchenOrder extends Equatable {
     waiterName,
     createdAt,
     items,
+    roundKey,
   ];
 }

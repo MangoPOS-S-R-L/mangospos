@@ -161,9 +161,13 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     List<KitchenItem> items,
     bool completeOnPayment,
   ) {
+    // Clave de RONDA = orden + kitchen_sent_at. Cada envío a cocina forma su
+    // propia comanda/tarjeta. Los ítems legacy sin marca caen en la ronda
+    // 'legacy' (una sola tarjeta por orden, como antes).
     final map = <String, List<KitchenItem>>{};
     for (final item in items) {
-      map.putIfAbsent(item.orderId, () => []).add(item);
+      final round = item.kitchenSentAt?.toIso8601String() ?? 'legacy';
+      map.putIfAbsent('${item.orderId}::$round', () => []).add(item);
     }
 
     final orders = <KitchenOrder>[];
@@ -189,7 +193,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       );
       orders.add(
         KitchenOrder(
-          orderId: entry.key,
+          orderId: first.orderId,
+          roundKey: entry.key,
           orderNumber: first.orderNumber,
           tableName: first.tableName,
           waiterName: first.waiterName,
@@ -282,13 +287,32 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                     children: [
                       for (final order in columns[c]) ...[
                         KitchenTicketCard(
+                          key: ValueKey(order.roundKey),
                           order: order,
                           onBumpItem: (itemId) => ref
                               .read(kitchenViewModelProvider)
                               .markReady(itemId),
-                          onCompleteOrder: (orderId) => ref
-                              .read(kitchenViewModelProvider)
-                              .markOrderReady(orderId),
+                          onCompleteOrder: (orderId) async {
+                            // Completa SOLO los ítems de esta ronda/tarjeta.
+                            final notice = await ref
+                                .read(kitchenViewModelProvider)
+                                .markOrderReady(
+                                  orderId,
+                                  itemIds: order.items
+                                      .map((i) => i.id)
+                                      .toList(growable: false),
+                                );
+                            if (notice != null && context.mounted) {
+                              ScaffoldMessenger.of(context)
+                                ..hideCurrentSnackBar()
+                                ..showSnackBar(
+                                  SnackBar(
+                                    content: Text(notice),
+                                    duration: const Duration(seconds: 6),
+                                  ),
+                                );
+                            }
+                          },
                         ),
                         SizedBox(height: gap),
                       ],

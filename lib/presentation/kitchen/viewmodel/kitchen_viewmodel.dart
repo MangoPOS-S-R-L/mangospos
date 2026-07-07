@@ -219,33 +219,42 @@ class KitchenViewModel extends ChangeNotifier {
     }
   }
 
-  /// Despacha la comanda completa ("Marcar todo listo"): marca lo que falte
-  /// como listo, sella la cocina como terminada (la saca del tablero en modo
-  /// "esperar al cocinero"), imprime el ticket LISTO con la orden completa y la
-  /// quita del tablero.
-  Future<void> markOrderReady(String orderId) async {
+  /// Despacha una comanda ("Marcar todo listo"): marca lo que falte como
+  /// listo, imprime el ticket LISTO de esa RONDA y la quita del tablero.
+  ///
+  /// [itemIds] limita la acción a los ítems de esa ronda/tarjeta (una orden
+  /// puede tener varias comandas). Si es null, opera sobre toda la orden
+  /// (compat). La cocina se sella solo cuando ya no quedan ítems activos de la
+  /// orden (última ronda), para no borrar del tablero rondas aún pendientes.
+  ///
+  /// Devuelve un aviso para el usuario cuando el ticket LISTO no pudo salir
+  /// porque el área no tiene impresora con "Imprimir al marcar listo" activa.
+  /// `null` = todo bien (imprimió o no había nada que imprimir).
+  Future<String?> markOrderReady(String orderId, {List<String>? itemIds}) async {
+    final scope = itemIds?.toSet();
+    bool inScope(KitchenItem i) =>
+        i.orderId == orderId && (scope == null || scope.contains(i.id));
+
     // Items que aún faltaban (los que esta acción transiciona a 'ready').
     final openItems = _items
         .where(
           (item) =>
-              item.orderId == orderId &&
+              inScope(item) &&
               (item.status == 'pending' || item.status == 'preparing'),
         )
         .toList(growable: false);
     final affectedIds = openItems.map((item) => item.id).toSet();
 
-    // TODA la comanda activa, incluidos los ítems que el chef ya marcó listos
-    // uno por uno. El ticket LISTO debe reflejar la orden completa, no solo el
-    // último ítem.
+    // TODA la ronda activa, incluidos los ítems que el chef ya marcó listos
+    // uno por uno. El ticket LISTO debe reflejar la comanda completa, no solo
+    // el último ítem.
     final allActiveIds = _items
-        .where((item) => item.orderId == orderId)
+        .where(inScope)
         .map((item) => item.id)
         .toList(growable: false);
 
-    // Optimista: sacar la orden del tablero de inmediato.
-    _items = _items
-        .where((item) => item.orderId != orderId)
-        .toList(growable: false);
+    // Optimista: sacar SOLO los ítems de esta ronda del tablero.
+    _items = _items.where((item) => !inScope(item)).toList(growable: false);
     notifyListeners();
 
     try {
@@ -255,27 +264,59 @@ class KitchenViewModel extends ChangeNotifier {
       for (final item in openItems) {
         await _repository.updateItemStatus(itemId: item.id, status: 'ready');
       }
-      // Sello de cocina terminada: saca la orden del KDS en modo "esperar al
-      // cocinero" y deja constancia en modo "sale al pagar".
-      await _repository.markOrderKitchenDone(orderId);
+      // Sello de cocina terminada: solo si a la orden ya no le queda trabajo
+      // pendiente en NINGUNA ronda (todo está listo/servido). Así, en modo
+      // "esperar al cocinero", una ronda aún por cocinar no saca del tablero
+      // toda la orden. Los ítems 'ready' de rondas previas no cuentan como
+      // trabajo pendiente.
+      final orderHasPendingWork = _items.any(
+        (item) =>
+            item.orderId == orderId &&
+            (item.status == 'pending' || item.status == 'preparing'),
+      );
+      if (!orderHasPendingWork) {
+        await _repository.markOrderKitchenDone(orderId);
+      }
+      String? notice;
       if (_businessId != null && allActiveIds.isNotEmpty) {
         try {
-          await _printingService.printReadyOrderTicket(
+          final report = await _printingService.printReadyOrderTicket(
             orderId: orderId,
             businessId: _businessId!,
             itemIds: allActiveIds,
           );
+          if (report.nothingPrinted && report.missingReadyPrinter) {
+            notice = _readyPrinterNotice(report.areasWithoutReadyPrinter);
+          }
         } catch (e) {
           debugPrint('Error printing ready ticket: $e');
         }
       }
       _clearOverrides(affectedIds);
       _scheduleRefresh(immediate: true);
+      return notice;
     } catch (e) {
       debugPrint('Error marking order ready: $e');
       _clearOverrides(affectedIds);
       _scheduleRefresh(immediate: true);
+      return null;
     }
+  }
+
+  /// Mensaje amigable cuando ninguna área imprimió el ticket LISTO por falta
+  /// de una impresora con "Imprimir al marcar listo" activa. Traduce los
+  /// códigos de área a nombres legibles usando las áreas cargadas.
+  String _readyPrinterNotice(List<String> areaCodes) {
+    final names = areaCodes.map((code) {
+      for (final a in _availableAreas) {
+        if (a.code == code) return a.name;
+      }
+      return code;
+    }).toList(growable: false);
+    final areas = names.isEmpty ? '' : ' (${names.join(', ')})';
+    return 'La comanda se marcó lista, pero no salió impresa: ninguna '
+        'impresora del área$areas tiene activado "Imprimir al marcar listo". '
+        'Actívalo en Ajustes → Impresoras → Asignaciones de área.';
   }
 
   void _subscribeRealtime(SupabaseClient client, String businessId) {
