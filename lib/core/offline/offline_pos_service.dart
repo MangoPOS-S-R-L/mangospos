@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/core/offline/hub/hub_op_log.dart';
+import 'package:mangopos/core/offline/hub/hub_order_projector.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/security/secure_blob_cipher.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
@@ -171,6 +173,14 @@ class OfflinePosService {
         msg.contains('handshake');
   }
 
+  /// Público: expone la clasificación de errores de TRANSPORTE (red) para que
+  /// los viewmodels decidan encolar offline aunque `ConnectivityService`
+  /// todavía reporte `isConnected == true` (va 1-2 sondeos atrás — la ventana
+  /// "conectado pero malo"). NO clasifica errores de negocio del RPC (RAISE,
+  /// constraint, validación) como transporte, así que esos siguen
+  /// mostrándose al usuario en vez de encolarse a ciegas.
+  static bool isTransportError(Object e) => _isConnectivityError(e);
+
   Future<StorageService> get _storage async => StorageService.getInstance();
 
   /// Cifrado en reposo para snapshots de órdenes (datos sensibles: montos,
@@ -198,6 +208,89 @@ class OfflinePosService {
         uploader,
   ) {
     _hubUploader = uploader;
+  }
+
+  /// Difusor por WS que registra el agente en-proceso (mobile_print_agent) al
+  /// arrancar. Cuando el HOST agrega una op a su op-log local, la difunde a los
+  /// clientes suscritos igual que las que llegan por POST /hub/ops → las cajas
+  /// cliente ven en vivo también las mesas que abre el propio Hub.
+  void Function(String businessId, Map<String, dynamic> opWithSeq)?
+      _hubBroadcaster;
+
+  void setHubBroadcaster(
+    void Function(String businessId, Map<String, dynamic> opWithSeq)? cb,
+  ) {
+    _hubBroadcaster = cb;
+  }
+
+  /// H4: cuando ESTE dispositivo es el Hub (hubHost), sus propias mutaciones se
+  /// escriben directo al op-log local compartido (el mismo que sirve el
+  /// servidor en-proceso vía /hub/salon y que drena `syncHubOpLog`) y se
+  /// difunden por WS (broadcaster). Es el uploader que HubModeController cablea
+  /// en modo hubHost. Devuelve el `seq` asignado, o null si falla (el caller
+  /// cae a la cola local).
+  Future<int?> appendToLocalHubOpLog(
+    String businessId,
+    Map<String, dynamic> op,
+  ) async {
+    try {
+      final seq = await _hubOpLog.append(businessId, op);
+      try {
+        _hubBroadcaster?.call(businessId, {...op, 'seq': seq});
+      } catch (_) {
+        // El broadcast es best-effort; el op ya quedó persistido.
+      }
+      return seq;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// H4: proyecta el salón desde el op-log LOCAL (cuando ESTE equipo es el
+  /// Hub). Devuelve la lista de mesas ocupadas con el mismo shape que el
+  /// endpoint `/hub/salon`, para que el grid del propio Hub no necesite un
+  /// round-trip HTTP a sí mismo. Best-effort: lista vacía ante error.
+  Future<List<Map<String, dynamic>>> localHubSalon(String businessId) async {
+    try {
+      final ops = await _hubOpLog.since(businessId, seq: 0);
+      return HubOrderProjector.projectSalon(ops)
+          .map((t) => t.toJson())
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// H6: devuelve el op-log LOCAL completo (cuando ESTE equipo es el Hub) para
+  /// que el KDS lo proyecte con HubKitchenProjector sin un round-trip HTTP a sí
+  /// mismo. Best-effort: lista vacía ante error.
+  Future<List<Map<String, dynamic>>> getLocalHubOps(String businessId) async {
+    try {
+      return await _hubOpLog.since(businessId, seq: 0);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// H4 m2: proyecta el DETALLE de una orden desde el op-log LOCAL (cuando ESTE
+  /// equipo es el Hub) por table_id u order_id. Mismo shape que `/hub/order`.
+  /// null si no hay una orden abierta que coincida. Best-effort.
+  Future<Map<String, dynamic>?> localHubOrder(
+    String businessId, {
+    String? tableId,
+    String? orderId,
+  }) async {
+    try {
+      final ops = await _hubOpLog.since(businessId, seq: 0);
+      final order = HubOrderProjector.projectOrder(
+        ops,
+        tableId: tableId,
+        orderId: orderId,
+      );
+      return order?.toJson();
+    } catch (_) {
+      return null;
+    }
   }
 
   /// DAO de drift/sqlite para cola + completed_ops + fingerprints.
@@ -394,6 +487,49 @@ class OfflinePosService {
         debugPrint('OfflinePosService.remapSnapshotOrderId error: $e');
       }
     }
+  }
+
+  /// Lista las mesas con un borrador LOCAL de ESTE dispositivo aún no
+  /// sincronizado con el servidor (su orden sigue siendo `local-order-…`, así
+  /// que `v_zone_table_status` no las conoce). El grid del salón las overlaya
+  /// como ocupadas/pendientes para que NO desaparezcan al recargar desde el
+  /// server (p.ej. tras "limpiar caché" o un refresh). La visibilidad ENTRE
+  /// terminales es tarea del Hub Local (F3), no de esto. Best-effort: una
+  /// entrada corrupta se ignora. Devuelve tableId + conteo de ítems + total
+  /// del borrador para pintar la tarjeta.
+  Future<List<({String tableId, int itemsCount, double total})>>
+      listPendingTableDrafts(String businessId) async {
+    final storage = await _storage;
+    final prefix = 'offline_snapshot_${businessId}_';
+    final keys = await storage.getKeysByPrefix(prefix);
+    final result = <({String tableId, int itemsCount, double total})>[];
+    for (final key in keys) {
+      try {
+        final payload = await _readSnapshot(storage, key);
+        if (payload == null) continue;
+        // Solo borradores de MESA (no venta rápida/retail).
+        if (payload['origin'] != 'table') continue;
+        final tableId = payload['table_id'] as String?;
+        if (tableId == null || tableId.isEmpty) continue;
+        final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
+        final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
+        final orderId = order['id'] as String?;
+        // Solo las que el server NO conoce (orden local sin sincronizar). Al
+        // sincronizar, remapSnapshotOrderId reescribe el id a un uuid real y
+        // el server ya la muestra ocupada → deja de ser "pendiente".
+        if (orderId == null || !orderId.startsWith('local-order-')) continue;
+        final items = (state['items'] as List?) ?? const [];
+        final total = (order['total'] as num?)?.toDouble() ?? 0;
+        result.add((
+          tableId: tableId,
+          itemsCount: items.length,
+          total: total,
+        ));
+      } catch (_) {
+        // best-effort: ignorar snapshots corruptos.
+      }
+    }
+    return result;
   }
 
   /// Persiste el índice de carritos de venta rápida (retail) cifrado: la lista
@@ -1529,6 +1665,47 @@ class OfflinePosService {
           referenceType: action['reference_type']?.toString(),
         );
         return null;
+      case 'open_table':
+        // H4 (modo hub): la caja abrió una mesa como borrador local y notificó
+        // al Hub. Al subir a Supabase abrimos la mesa REAL y guardamos el
+        // mapping local→remoto; los add_item siguientes (en orden seq)
+        // resuelven vía ese mapping. Idempotente: si ya existe el mapping,
+        // _resolveOrderIdForAction lo devuelve sin recrear la mesa.
+        return await _resolveOrderIdForAction(
+          businessId: businessId,
+          action: action,
+          salesRepository: salesRepository,
+        );
+      case 'kds_item_status':
+        // H6: cambio de estado del KDS hecho sin nube (preparing/ready/served).
+        // Al subir, resolvemos el ítem real (tmp→uuid vía mapping) y
+        // actualizamos su status + timestamp (igual que KitchenRepository).
+        // `served` se persiste como `ready` (el ítem ya se despachó). Es
+        // best-effort: si el ítem ya no existe (borrado en otra caja), se
+        // ignora — idempotente.
+        try {
+          final kdsItemId = await _resolveItemIdForAction(
+            businessId: businessId,
+            action: action,
+            salesRepository: salesRepository,
+          );
+          final rawStatus = action['status']?.toString() ?? 'preparing';
+          final status = rawStatus == 'served' ? 'ready' : rawStatus;
+          final updates = <String, dynamic>{'status': status};
+          if (status == 'preparing') {
+            updates['started_at'] = DateTime.now().toIso8601String();
+          } else if (status == 'ready') {
+            updates['ready_at'] = DateTime.now().toIso8601String();
+          }
+          await Supabase.instance.client
+              .from('order_items')
+              .update(updates)
+              .eq('id', kdsItemId);
+          return kdsItemId;
+        } catch (e) {
+          debugPrint('[sync] kds_item_status replay falló (ignorado): $e');
+          return null;
+        }
       case 'add_item':
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,

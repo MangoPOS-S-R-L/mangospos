@@ -8,6 +8,9 @@ import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/core/offline/hub/hub_mode.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/presentation/settings/hub/hub_network_settings_view.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/widgets/system_update_dialog.dart';
 
@@ -69,14 +72,73 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
   }
 
   Future<void> _confirmAndClearSystemCache(BuildContext context) async {
+    // Contar operaciones/mesas sin sincronizar para advertir. Limpiar caché NO
+    // las borra (viven en otro namespace / en SQLite), pero SÍ fuerza una
+    // recarga desde el servidor que puede OCULTAR temporalmente las mesas
+    // locales aún no subidas hasta que vuelva la conexión y sincronicen. Se
+    // avisa para que el cajero sincronice antes y no crea que perdió la mesa.
+    final businessId = widget.businessId.isNotEmpty
+        ? widget.businessId
+        : (ref.read(sessionProvider).activeBusinessId ?? '');
+    int pendingOffline = 0;
+    if (businessId.isNotEmpty) {
+      try {
+        final svc = OfflinePosService();
+        pendingOffline = await svc.pendingActionsCount(businessId) +
+            await svc.deadActionsCount(businessId);
+      } catch (_) {
+        pendingOffline = 0;
+      }
+    }
+    if (!context.mounted) return;
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Limpiar caché del sistema'),
-          content: const Text(
-            'Se borrarán datos temporales locales para forzar una recarga fresca del sistema. '
-            'No se cerrará tu sesión ni se eliminarán operaciones offline pendientes.',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Se borrarán datos temporales locales para forzar una recarga fresca del sistema. '
+                'No se cerrará tu sesión ni se eliminarán operaciones offline pendientes.',
+              ),
+              if (pendingOffline > 0) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFB45309),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Tienes $pendingOffline operación(es) sin sincronizar. No se '
+                          'borrarán, pero al recargar, las mesas locales que aún no '
+                          'subieron pueden dejar de verse en el salón hasta que vuelva '
+                          'la conexión y sincronicen. Sincroniza antes de limpiar.',
+                          style: const TextStyle(
+                            color: Color(0xFF92400E),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
           actions: [
             TextButton(
@@ -907,6 +969,22 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             color: const Color(0xFFFFEDED),
             onTap: () => _confirmAndClearSystemCache(context),
           ),
+          // Gateado tras kHubModeEnabled: no aparece en producción hasta que
+          // el ruteo LAN-first esté cableado y probado (H4+).
+          if (kHubModeEnabled)
+            _SettingsOption(
+              title: 'Red local (Hub)',
+              subtitle: 'Modo híbrido: caja principal como servidor local',
+              icon: Icons.hub_rounded,
+              color: const Color(0xFFEFF6FF),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const HubNetworkSettingsView(),
+                  ),
+                );
+              },
+            ),
           const _SettingsOption(
             title: 'Integración con Marketing',
             subtitle: 'Conexión con herramientas de marketing',

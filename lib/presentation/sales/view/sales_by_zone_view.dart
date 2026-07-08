@@ -767,8 +767,13 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                     // PRD-12 F3: long-press en mesa ocupada → unir con
                     // otra mesa ocupada. Solo activo cuando la mesa
                     // tiene sesión abierta (sessionId != null).
+                    // No permitir "unir mesas" sobre un borrador local sin
+                    // sincronizar: no existe sesión real en el server que
+                    // fusionar (rompería). Solo mesas con sesión real.
                     onLongPress:
-                        widget.canOpenTables && table.sessionId != null
+                        widget.canOpenTables &&
+                            table.sessionId != null &&
+                            !table.isPendingSync
                         ? () =>
                             _handleMergeTable(context, ref, table, widget.zoneId)
                         : null,

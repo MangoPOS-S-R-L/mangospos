@@ -583,11 +583,16 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         offlineQueued: false,
       );
     } catch (e) {
+      // Encolar también ante error de TRANSPORTE aunque `isConnected` siga en
+      // true (ventana "conectado pero malo"): el clasificador cubre
+      // Socket/Timeout + ClientException/handshake/connection reset/closed,
+      // que antes se escapaban y perdían el cobro. El replay de
+      // process_payment es idempotente (fn_process_payment_v3 devuelve el pago
+      // existente si ya se cerró), así que reencolar es seguro.
       final shouldQueueOffline =
           !_connectivity.isConnected ||
           orderId.startsWith('local-order-') ||
-          e is TimeoutException ||
-          e is SocketException;
+          OfflinePosService.isTransportError(e);
       if (!shouldQueueOffline) {
         state = state.copyWith(
           processingPayment: false,

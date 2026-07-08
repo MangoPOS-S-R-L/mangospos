@@ -8,6 +8,13 @@ import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/models/kitchen_models.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/hub/hub_client.dart';
+import 'package:mangopos/core/offline/hub/hub_config.dart' show TerminalMode;
+import 'package:mangopos/core/offline/hub/hub_event_stream.dart';
+import 'package:mangopos/core/offline/hub/hub_kitchen_projector.dart';
+import 'package:mangopos/core/offline/hub/hub_mode_controller.dart'
+    show hubModeProvider;
 
 final kitchenRepositoryProvider = Provider<KitchenRepository>((ref) {
   return KitchenRepository(Supabase.instance.client);
@@ -23,12 +30,20 @@ final kitchenViewModelProvider = ChangeNotifierProvider<KitchenViewModel>((
   return KitchenViewModel(
     ref.read(kitchenRepositoryProvider),
     ref.read(printingServiceProvider),
+    ref,
   );
 });
 
 class KitchenViewModel extends ChangeNotifier {
   final KitchenRepository _repository;
   final PrintingService _printingService;
+  // H6: acceso al modo hub (LAN-first) para leer el tablero del Hub y enrutar
+  // los cambios de estado del KDS por la red local en vez de Supabase.
+  final Ref _ref;
+  HubEventStream? _hubEvents;
+  StreamSubscription<Map<String, dynamic>>? _hubEventsSub;
+  String? _hubEventsUrl;
+  Timer? _hubPollTimer;
 
   bool _isLoading = false;
   List<KitchenItem> _items = [];
@@ -55,7 +70,53 @@ class KitchenViewModel extends ChangeNotifier {
   ///   (órdenes con `kitchen_done_at IS NULL`).
   bool _completeOnPayment = true;
 
-  KitchenViewModel(this._repository, this._printingService);
+  KitchenViewModel(this._repository, this._printingService, this._ref);
+
+  // Solo CAJA CLIENTE del Hub. El equipo Hub (host) tiene internet → su KDS
+  // lee de Supabase normal (no del op-log). Ver nota en SalesViewModel._isHubMode.
+  bool get _isHubMode {
+    return _ref.read(hubModeProvider) == TerminalMode.hubClient;
+  }
+
+  /// H6: obtiene los ítems del tablero de cocina desde el Hub. El equipo Hub
+  /// proyecta su op-log local; una caja cliente pide el delta del Hub
+  /// (`GET /hub/state`). null si no aplica o no se pudo leer.
+  Future<List<KitchenItem>?> _fetchHubKitchenItems() async {
+    if (_businessId == null) return null;
+    final mode = _ref.read(hubModeProvider);
+    List<Map<String, dynamic>> ops;
+    if (mode == TerminalMode.hubHost) {
+      ops = await OfflinePosService().getLocalHubOps(_businessId!);
+    } else if (mode == TerminalMode.hubClient) {
+      final url = _ref.read(hubModeProvider.notifier).reachableHubUrl;
+      if (url == null) return null;
+      final state =
+          await HubClient().getStateSince(url, businessId: _businessId!);
+      ops = state?.ops ?? const [];
+    } else {
+      return null;
+    }
+    final orders = HubKitchenProjector.project(ops);
+    return orders.expand((o) => o.items).toList(growable: false);
+  }
+
+  /// H6: enruta un cambio de estado del KDS. En modo hub encola una op
+  /// `kds_item_status` (que va al Hub y, al subir, actualiza el ítem real). En
+  /// modo nube, el update directo a Supabase de siempre.
+  Future<void> _setItemStatus(String itemId, String status) async {
+    if (_isHubMode && _businessId != null) {
+      await OfflinePosService().enqueueAction(
+        businessId: _businessId!,
+        action: {
+          'type': 'kds_item_status',
+          'item_id': itemId,
+          'status': status,
+        },
+      );
+    } else {
+      await _repository.updateItemStatus(itemId: itemId, status: status);
+    }
+  }
 
   bool get isLoading => _isLoading;
   List<KitchenItem> get items => _items;
@@ -123,7 +184,14 @@ class KitchenViewModel extends ChangeNotifier {
           _loadAreas(),
           refresh(),
         ]);
-        _subscribeRealtime(client, _businessId!);
+        // H6: en modo hub el Realtime de Supabase no sirve (las comandas viven
+        // en el Hub) → usamos el feed del Hub (WS para cliente) + un poll de
+        // respaldo. En modo nube, el Realtime de siempre.
+        if (_isHubMode) {
+          _startHubFeed();
+        } else {
+          _subscribeRealtime(client, _businessId!);
+        }
       }
     } catch (e) {
       debugPrint('Error initializing kitchen: $e');
@@ -152,6 +220,17 @@ class KitchenViewModel extends ChangeNotifier {
     }
     _refreshing = true;
     try {
+      // H6: en modo hub el tablero se reconstruye del op-log del Hub (las
+      // comandas que las cajas mandaron por LAN), no de Supabase. Si el Hub no
+      // responde, caemos al camino normal de abajo.
+      if (_isHubMode) {
+        final hubItems = await _fetchHubKitchenItems();
+        if (hubItems != null) {
+          _items = _applyStatusOverrides(hubItems);
+          notifyListeners();
+          return;
+        }
+      }
       // Modo "sale al pagar" → kds_active_items (solo pendientes/listos).
       // Modo "esperar al cocinero" → kds_open_orders (incluye pagadas hasta
       // que la cocina las marque). En paralelo traemos los completados de hoy
@@ -179,7 +258,7 @@ class KitchenViewModel extends ChangeNotifier {
   Future<void> startCooking(String itemId) async {
     _applyLocalItemStatus(itemId, 'preparing');
     try {
-      await _repository.updateItemStatus(itemId: itemId, status: 'preparing');
+      await _setItemStatus(itemId, 'preparing');
       _clearOverride(itemId);
       _scheduleRefresh(immediate: true);
     } catch (e) {
@@ -196,7 +275,13 @@ class KitchenViewModel extends ChangeNotifier {
         .map((item) => item.id)
         .toSet();
     try {
-      await _repository.startPreparingOrder(orderId);
+      if (_isHubMode) {
+        for (final id in affectedIds) {
+          await _setItemStatus(id, 'preparing');
+        }
+      } else {
+        await _repository.startPreparingOrder(orderId);
+      }
       _clearOverrides(affectedIds);
       _scheduleRefresh(immediate: true);
     } catch (e) {
@@ -209,7 +294,7 @@ class KitchenViewModel extends ChangeNotifier {
   Future<void> markReady(String itemId) async {
     _applyLocalItemStatus(itemId, 'ready');
     try {
-      await _repository.updateItemStatus(itemId: itemId, status: 'ready');
+      await _setItemStatus(itemId, 'ready');
       _clearOverride(itemId);
       _scheduleRefresh(immediate: true);
     } catch (e) {
@@ -262,7 +347,7 @@ class KitchenViewModel extends ChangeNotifier {
       // porque en este entorno no persistía y la card "se devolvía"; el update
       // directo por ítem es el mismo camino probado del bump individual.
       for (final item in openItems) {
-        await _repository.updateItemStatus(itemId: item.id, status: 'ready');
+        await _setItemStatus(item.id, 'ready');
       }
       // Sello de cocina terminada: solo si a la orden ya no le queda trabajo
       // pendiente en NINGUNA ronda (todo está listo/servido). Así, en modo
@@ -274,7 +359,10 @@ class KitchenViewModel extends ChangeNotifier {
             item.orderId == orderId &&
             (item.status == 'pending' || item.status == 'preparing'),
       );
-      if (!orderHasPendingWork) {
+      // En modo hub el "sello" de cocina terminada (kitchen_done_at) se
+      // reconcilia al subir; el tablero del Hub ya saca la comanda por el
+      // estado 'ready' de sus ítems. Evitamos el RPC a Supabase aquí.
+      if (!orderHasPendingWork && !_isHubMode) {
         await _repository.markOrderKitchenDone(orderId);
       }
       String? notice;
@@ -335,6 +423,44 @@ class KitchenViewModel extends ChangeNotifier {
         callback: (_) => _scheduleRefresh(),
       )
       ..subscribe();
+  }
+
+  /// H6: engancha el feed del Hub. Cliente → WebSocket del Hub (refresco
+  /// instantáneo). Host → no tiene WS propio, así que un poll de respaldo cada
+  /// 3s cubre tanto al host como a reconexiones del cliente.
+  void _startHubFeed() {
+    final businessId = _businessId;
+    if (businessId == null) return;
+    if (_ref.read(hubModeProvider) == TerminalMode.hubClient) {
+      final url = _ref.read(hubModeProvider.notifier).reachableHubUrl;
+      if (url != null && _hubEventsUrl != url) {
+        _disconnectHubEvents();
+        _hubEventsUrl = url;
+        final stream = HubEventStream(baseUrl: url, businessId: businessId);
+        _hubEvents = stream;
+        _hubEventsSub = stream.ops.listen((_) => _scheduleRefresh());
+        stream.connect();
+      }
+    }
+    _hubPollTimer ??= Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => unawaited(refresh()),
+    );
+  }
+
+  void _stopHubFeed() {
+    _hubPollTimer?.cancel();
+    _hubPollTimer = null;
+    _disconnectHubEvents();
+  }
+
+  void _disconnectHubEvents() {
+    _hubEventsSub?.cancel();
+    _hubEventsSub = null;
+    final s = _hubEvents;
+    _hubEvents = null;
+    _hubEventsUrl = null;
+    if (s != null) unawaited(s.dispose());
   }
 
   void _scheduleRefresh({bool immediate = false}) {
@@ -464,6 +590,7 @@ class KitchenViewModel extends ChangeNotifier {
     _statusOverrides.clear();
     _rtItems?.unsubscribe();
     _rtItems = null;
+    _stopHubFeed();
     super.dispose();
   }
 }

@@ -8,6 +8,25 @@ import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
+import '../../core/offline/hub/hub_client.dart';
+
+/// Resultado de abrir/reanudar una mesa: order_id + bundle completo
+/// (order/items con modifiers+tax_lines/checks/customer). Compartido por el
+/// camino directo ([SalesRepository.openTableAndLoad]) y el proxy del Hub
+/// ([SalesRepository.openTableAndLoadViaHub]) — ambos parsean el MISMO JSON
+/// que devuelve el RPC `fn_open_table_and_load`.
+typedef OpenTableResult = ({
+  String orderId,
+  ({
+    Order? order,
+    List<OrderItem> items,
+    List<OrderCheck> checks,
+    String? customerId,
+    String? customerName,
+    String? note,
+  })
+      bundle,
+});
 
 /// Excepción tipada para señalizar que la orden consultada no pertenece
 /// al `businessId` activo. Los métodos de lectura la atrapan y devuelven
@@ -388,19 +407,7 @@ class SalesRepository {
   /// Retorna `(orderId, bundle)` donde `bundle` tiene la misma forma
   /// que el de `getOrderBundle()` — order/items/checks/customer — pero
   /// con `modifiers` y `tax_lines` ya pegados en cada item.
-  Future<
-    ({
-      String orderId,
-      ({
-        Order? order,
-        List<OrderItem> items,
-        List<OrderCheck> checks,
-        String? customerId,
-        String? customerName,
-        String? note,
-      }) bundle,
-    })
-  > openTableAndLoad({
+  Future<OpenTableResult> openTableAndLoad({
     required String tableId,
     String? userId,
     int peopleCount = 1,
@@ -420,7 +427,38 @@ class SalesRepository {
       throw Exception('No se pudo abrir la mesa');
     }
 
-    final payload = Map<String, dynamic>.from(response as Map);
+    return _parseOpenTableAndLoad(Map<String, dynamic>.from(response as Map));
+  }
+
+  /// Igual que [openTableAndLoad] pero A TRAVÉS del Hub Local: el Hub (que sí
+  /// tiene internet) ejecuta el RPC contra Supabase y devuelve el MISMO JSON,
+  /// que parseamos idéntico. Para cajas cliente cuya conexión directa a
+  /// Supabase es mala → obtienen la orden REAL (con datos fiscales) sin
+  /// depender de su propio WAN. Lanza si el Hub no responde (el caller cae al
+  /// respaldo local).
+  Future<OpenTableResult> openTableAndLoadViaHub({
+    required String hubBaseUrl,
+    required String tableId,
+    String? userId,
+    int peopleCount = 1,
+    String? openedByEmployeeId,
+  }) async {
+    final raw = await HubClient().proxyOpenTable(
+      hubBaseUrl,
+      tableId: tableId,
+      userId: userId,
+      peopleCount: peopleCount,
+      openedByEmployeeId: openedByEmployeeId,
+    );
+    if (raw == null) {
+      throw Exception('El Hub no pudo abrir la mesa (sin respuesta)');
+    }
+    return _parseOpenTableAndLoad(raw);
+  }
+
+  /// Parsea la respuesta cruda de `fn_open_table_and_load` (order_id + bundle
+  /// con items/modifiers/tax_lines/checks embebidos) en [OpenTableResult].
+  OpenTableResult _parseOpenTableAndLoad(Map<String, dynamic> payload) {
     final orderId = payload['order_id']?.toString();
     if (orderId == null || orderId.isEmpty) {
       throw Exception('fn_open_table_and_load no retornó order_id');
@@ -904,6 +942,34 @@ class SalesRepository {
         await _client.from('order_items').update(payload).eq('id', id);
       }
     }
+  }
+
+  /// Igual que [addItemFromMenu] pero A TRAVÉS del Hub (que tiene internet):
+  /// agrega el ítem REAL (+ modifiers) contra Supabase y devuelve su id. Para
+  /// cajas cliente con conexión directa mala. Devuelve null si el Hub no
+  /// respondió (el caller cae al respaldo local).
+  Future<String?> addItemFromMenuViaHub({
+    required String hubBaseUrl,
+    required String orderId,
+    required String menuItemId,
+    double quantity = 1,
+    int checkPosition = 1,
+    bool isTakeout = false,
+    String? notes,
+    List<Map<String, dynamic>> modifiers = const [],
+    String? employeeId,
+  }) {
+    return HubClient().proxyAddItem(
+      hubBaseUrl,
+      orderId: orderId,
+      menuItemId: menuItemId,
+      quantity: quantity,
+      checkPosition: checkPosition,
+      isTakeout: isTakeout,
+      notes: notes,
+      modifiers: modifiers,
+      employeeId: employeeId,
+    );
   }
 
   Future<String> addItemFromMenu({

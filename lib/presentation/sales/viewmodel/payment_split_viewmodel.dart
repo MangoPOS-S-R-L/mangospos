@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -714,8 +713,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           // (pagos parciales aplicados, otros encolados) que el RPC no
           // sabe reconciliar — preferimos fallar limpio y que el cajero
           // reintente cuando vuelva la red.
-          final isConnectivityError =
-              e is SocketException || e is TimeoutException;
+          // Amplía Socket/Timeout a todo error de transporte (ClientException,
+          // handshake, connection reset/closed) — común en redes malas. Solo
+          // dispara el fallback offline en la PRIMERA tx (i==0), sin mezclar
+          // online/offline sobre la misma orden.
+          final isConnectivityError = OfflinePosService.isTransportError(e);
           if (i == 0 && isConnectivityError) {
             debugPrint(
               '[split-offline] tx#0 falló por red, fallback offline',

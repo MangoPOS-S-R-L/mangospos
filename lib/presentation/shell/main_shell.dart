@@ -8,7 +8,9 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/agent/hub_server_controller.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
+import 'package:mangopos/presentation/shell/hub_host_uplink.dart';
 import 'package:mangopos/core/offline/offline_refreshers.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
@@ -52,6 +54,17 @@ class _MainShellState extends ConsumerState<MainShell> {
     // op-log al reconectar. Usamos read (no watch) para no re-construir el shell
     // en cada cambio de modo; con la flag apagada el controller queda inerte.
     ref.read(hubModeProvider);
+
+    // Paridad Windows del Hub: mantiene vivo el HubServerController, que en
+    // Windows/Linux levanta el servidor Dart dedicado de /hub/* cuando este
+    // equipo es el Hub (modo hubHost). Inerte en web/Mac/tablet/móvil y cuando
+    // el equipo no es Hub.
+    ref.read(hubServerProvider);
+
+    // Drenaje rápido del op-log del Hub host (cada 4s) para que las ediciones
+    // de las cajas lleguen al servidor sin esperar el sync de 3 min → el cobro
+    // del cashier en la caja principal queda exacto. Inerte salvo en hubHost.
+    ref.read(hubHostUplinkProvider);
 
     // F6: mantiene vivo el coordinador de bajada desde el arranque del shell
     // (read, no watch). Refresca catálogo/zonas/inventario del negocio activo

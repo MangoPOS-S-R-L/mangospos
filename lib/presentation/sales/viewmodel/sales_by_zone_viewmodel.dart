@@ -8,6 +8,11 @@ import '../../../data/models/table_status.dart';
 import '../../../data/models/dining_table.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/offline/hub/hub_client.dart';
+import '../../../core/offline/hub/hub_config.dart';
+import '../../../core/offline/hub/hub_event_stream.dart';
+import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/utils/sorting_utils.dart';
 import '../state/by_zone_state.dart';
 
@@ -30,6 +35,15 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   final Set<String> _dirtyOrderIds = <String>{};
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
+  final OfflinePosService _offlinePos = OfflinePosService();
+
+  // H4 m2c: feed en vivo del Hub (modo cliente). Reemplaza el Realtime de
+  // Supabase dentro de la LAN: cada op del Hub dispara un reload debounced del
+  // grid para que la mesa del mesero aparezca al instante (no en 30s).
+  HubEventStream? _hubEvents;
+  StreamSubscription<Map<String, dynamic>>? _hubEventsSub;
+  String? _hubEventsUrl;
+  Timer? _hubEventDebounce;
 
   // Throttle del barrido de mesas fantasma: la vista llama load() cada ~30s,
   // pero no queremos disparar el RPC tan seguido.
@@ -47,6 +61,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       _rtBusinessId = null;
       _realtimeDebounceTimer?.cancel();
       _realtimeDebounceTimer = null;
+      _disconnectHubEvents();
       _dirtyZoneIds.clear();
       _dirtyOrderIds.clear();
       _tableToZoneIndex.clear();
@@ -106,6 +121,8 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       );
 
       _pruneIndexes(validZoneIds);
+      // H4 m2c: engancha (o suelta) el feed en vivo del Hub según el modo.
+      _ensureHubEventStream();
       // Realtime no funciona offline; solo lo enganchamos cuando hubo
       // respuesta fresca de Supabase. Cuando el internet vuelva, el
       // siguiente _loadData periodico re-suscribe.
@@ -150,13 +167,24 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       // Natural Sort (Mesa 1, Mesa 2, ..., Mesa 10)
       rows.sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
 
+      // Overlay de mesas con borrador LOCAL sin sincronizar: el server no las
+      // conoce (orden local-order-…), así que el grid las perdería al recargar
+      // (ese es el síntoma de "limpiar caché borra las mesas"). Las marcamos
+      // ocupadas+pendientes para que no desaparezcan del salón de ESTE
+      // dispositivo. La visibilidad entre cajas la aporta el Hub Local (F3).
+      final overlaidRows = await _overlayPendingDrafts(rows);
+      // H4c: en modo Hub, overlayamos también las mesas que el HUB conoce (las
+      // que abrió OTRA caja) para que sean visibles en este equipo. Es lo que
+      // hace aparecer la mesa del mesero en la caja principal.
+      final hubRows = await _overlayHubSalon(overlaidRows);
+
       state = state.copyWith(
-        statusByZone: {...state.statusByZone, zoneId: rows},
+        statusByZone: {...state.statusByZone, zoneId: hubRows},
         isOffline: result.fromCache,
         lastSyncAt: result.cachedAt ?? DateTime.now(),
         errorByZone: {...state.errorByZone, zoneId: null},
       );
-      _indexZone(zoneId, rows);
+      _indexZone(zoneId, hubRows);
     } catch (e) {
       developer.log(
         'Error loading zone status',
@@ -176,6 +204,149 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         );
       }
     }
+  }
+
+  /// Overlaya las mesas con borrador local sin sincronizar sobre las filas del
+  /// server. Solo toca mesas que el server muestra LIBRES (sin sesión) y que
+  /// tienen un borrador local en ESTE dispositivo: las convierte en ocupadas +
+  /// `isPendingSync` para que la tarjeta las muestre y no se pierdan al
+  /// recargar. Best-effort: si algo falla, devuelve las filas del server tal
+  /// cual. `ordersCount:1` e `itemsCount>=1` garantizan que cuenten como
+  /// ocupadas (no "fantasma") de forma consistente con el conteo del grid.
+  Future<List<TableStatus>> _overlayPendingDrafts(
+    List<TableStatus> rows,
+  ) async {
+    final businessId = state.businessId;
+    if (businessId == null || businessId.isEmpty) return rows;
+    try {
+      final drafts = await _offlinePos.listPendingTableDrafts(businessId);
+      if (drafts.isEmpty) return rows;
+      final byTable = {for (final d in drafts) d.tableId: d};
+      return rows.map((r) {
+        final d = byTable[r.tableId];
+        // Solo overlay si hay borrador Y el server no la muestra ya ocupada.
+        if (d == null || r.sessionId != null) return r;
+        return TableStatus(
+          tableId: r.tableId,
+          zoneId: r.zoneId,
+          code: r.code,
+          sessionId: 'local-draft',
+          ordersCount: 1,
+          minutesOpen: r.minutesOpen,
+          itemsCount: d.itemsCount > 0 ? d.itemsCount : 1,
+          total: d.total,
+          peopleCount: r.peopleCount,
+          status: r.status,
+          waiterName: r.waiterName,
+          customerName: r.customerName,
+          isOwn: true,
+          isPendingSync: true,
+        );
+      }).toList();
+    } catch (_) {
+      return rows;
+    }
+  }
+
+  /// H4c: overlay de las mesas que el HUB conoce (modo hub). El equipo Hub lee
+  /// su propio op-log (sin HTTP); las cajas cliente leen `GET /hub/salon` del
+  /// Hub alcanzable. Marca como ocupadas las mesas del Hub que el server aún
+  /// muestra libres (las que abrió OTRA caja y no llegaron a Supabase). No pisa
+  /// una fila ya marcada (sesión real o borrador local de este equipo).
+  /// Best-effort: ante cualquier fallo devuelve las filas sin tocar.
+  Future<List<TableStatus>> _overlayHubSalon(List<TableStatus> rows) async {
+    final mode = ref.read(hubModeProvider);
+    if (mode != TerminalMode.hubClient && mode != TerminalMode.hubHost) {
+      return rows;
+    }
+    final businessId = state.businessId;
+    if (businessId == null || businessId.isEmpty) return rows;
+    try {
+      List<Map<String, dynamic>> hubTables;
+      if (mode == TerminalMode.hubHost) {
+        hubTables = await _offlinePos.localHubSalon(businessId);
+      } else {
+        final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
+        if (url == null) return rows;
+        hubTables =
+            await HubClient().getSalon(url, businessId: businessId) ?? const [];
+      }
+      if (hubTables.isEmpty) return rows;
+      final byTable = <String, Map<String, dynamic>>{
+        for (final t in hubTables)
+          if (t['table_id'] != null) t['table_id'].toString(): t,
+      };
+      return rows.map((r) {
+        final t = byTable[r.tableId];
+        if (t == null || r.sessionId != null) return r;
+        final itemsCount = (t['items_count'] as num?)?.toInt() ?? 1;
+        final total = (t['total'] as num?)?.toDouble() ?? 0;
+        return TableStatus(
+          tableId: r.tableId,
+          zoneId: r.zoneId,
+          code: r.code,
+          sessionId: 'hub',
+          ordersCount: 1,
+          minutesOpen: r.minutesOpen,
+          itemsCount: itemsCount > 0 ? itemsCount : 1,
+          total: total,
+          peopleCount: r.peopleCount,
+          status: r.status,
+          waiterName: r.waiterName,
+          customerName: r.customerName,
+          isOwn: false,
+        );
+      }).toList();
+    } catch (_) {
+      return rows;
+    }
+  }
+
+  /// H4 m2c: conecta/reconecta el feed en vivo del Hub cuando este equipo es
+  /// una caja cliente en modo hub. Cada op del Hub dispara un reload debounced
+  /// del grid (para que la mesa del mesero aparezca al instante). Se desconecta
+  /// si el modo cambia o el Hub deja de ser alcanzable. Idempotente: no
+  /// reconecta si ya está enganchado a la misma URL.
+  void _ensureHubEventStream() {
+    final mode = ref.read(hubModeProvider);
+    if (mode != TerminalMode.hubClient) {
+      _disconnectHubEvents();
+      return;
+    }
+    final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
+    final businessId = state.businessId;
+    if (url == null || businessId == null || businessId.isEmpty) {
+      _disconnectHubEvents();
+      return;
+    }
+    if (_hubEventsUrl == url && _hubEvents != null) return;
+    _disconnectHubEvents();
+    _hubEventsUrl = url;
+    final stream = HubEventStream(baseUrl: url, businessId: businessId);
+    _hubEvents = stream;
+    _hubEventsSub = stream.ops.listen((_) => _onHubEvent());
+    stream.connect();
+  }
+
+  void _onHubEvent() {
+    _hubEventDebounce?.cancel();
+    _hubEventDebounce = Timer(const Duration(milliseconds: 400), () {
+      final zoneIds = state.statusByZone.keys.toList(growable: false);
+      for (final z in zoneIds) {
+        unawaited(loadZoneStatus(z, emitError: false));
+      }
+    });
+  }
+
+  void _disconnectHubEvents() {
+    _hubEventDebounce?.cancel();
+    _hubEventDebounce = null;
+    _hubEventsSub?.cancel();
+    _hubEventsSub = null;
+    final s = _hubEvents;
+    _hubEvents = null;
+    _hubEventsUrl = null;
+    if (s != null) unawaited(s.dispose());
   }
 
   /// Carga la geometría (posición/forma/tamaño/capacidad) de las mesas de

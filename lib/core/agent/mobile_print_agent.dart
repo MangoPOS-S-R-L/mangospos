@@ -24,6 +24,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../offline/hub/hub_op_log.dart';
+import '../offline/hub/hub_order_projector.dart';
+import '../offline/offline_pos_service.dart';
+import '../../data/repositories/sales_repository.dart';
 import '../offline/ncf_offline_allocator.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +98,12 @@ class MobilePrintAgent {
         shared: true,
       );
       debugPrint('[MobileAgent] Listening on port $_port');
+      // H4: registra el difusor del Hub para que las ops que el HOST agrega a
+      // su op-log local (sus propias mesas) se difundan por WS a las cajas
+      // cliente, igual que las que llegan por POST /hub/ops.
+      OfflinePosService().setHubBroadcaster(
+        (biz, op) => _broadcastOp(biz, op),
+      );
       return url;
     } catch (e) {
       debugPrint('[MobileAgent] Failed to start: $e');
@@ -127,6 +136,15 @@ class MobilePrintAgent {
     // op-log (GET). Con auth (igual que el resto de endpoints).
     router.post('/hub/ops', _handleHubOps);
     router.get('/hub/state', _handleHubState);
+
+    // H3: estado del salón + detalle de orden reconstruidos del op-log.
+    router.get('/hub/salon', _handleHubSalon);
+    router.get('/hub/order', _handleHubOrder);
+
+    // Paso 2 (proxy real-time): el Hub ejecuta operaciones contra Supabase con
+    // SU internet y devuelve el resultado real a las cajas cliente.
+    router.post('/hub/proxy/open-table', _handleHubProxyOpenTable);
+    router.post('/hub/proxy/add-item', _handleHubProxyAddItem);
     // Hub Local (F4): asigna el próximo NCF de una serie (asignador único en
     // LAN → numeración secuencial sin huecos).
     router.post('/hub/ncf/next', _handleHubNcfNext);
@@ -286,6 +304,116 @@ class MobilePrintAgent {
     final ops = await _hubOpLog.since(businessId, seq: since);
     final seq = await _hubOpLog.currentSeq(businessId);
     return _jsonOk({'seq': seq, 'ops': ops});
+  }
+
+  /// H3: sirve el estado del SALÓN (mesas ocupadas) reconstruido desde el
+  /// op-log con [HubOrderProjector]. Equivalente LAN de `v_zone_table_status`
+  /// para que el grid de las cajas lea del Hub. Devuelve `{tables: [...]}`.
+  Future<shelf.Response> _handleHubSalon(shelf.Request request) async {
+    final businessId = request.url.queryParameters['business_id'] ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final ops = await _hubOpLog.since(businessId, seq: 0);
+    final tables = HubOrderProjector.projectSalon(ops)
+        .map((t) => t.toJson())
+        .toList(growable: false);
+    return _jsonOk({'tables': tables});
+  }
+
+  /// H3: sirve el detalle de una orden por `table_id` u `order_id`,
+  /// reconstruido desde el op-log. Equivalente LAN de `fn_get_order_bundle`
+  /// para abrir una mesa ajena sin nube. 404 si no hay orden abierta.
+  Future<shelf.Response> _handleHubOrder(shelf.Request request) async {
+    final q = request.url.queryParameters;
+    final businessId = q['business_id'] ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+    final tableId = q['table_id'];
+    final orderId = q['order_id'];
+    if ((tableId == null || tableId.isEmpty) &&
+        (orderId == null || orderId.isEmpty)) {
+      return _jsonError('Missing table_id or order_id', 400);
+    }
+    final ops = await _hubOpLog.since(businessId, seq: 0);
+    final order = HubOrderProjector.projectOrder(
+      ops,
+      tableId: (tableId != null && tableId.isNotEmpty) ? tableId : null,
+      orderId: (orderId != null && orderId.isNotEmpty) ? orderId : null,
+    );
+    if (order == null) return _jsonError('Order not found', 404);
+    return _jsonOk(order.toJson());
+  }
+
+  /// Paso 2: el Hub abre/reanuda una mesa REAL contra Supabase (con su
+  /// internet) y devuelve el JSON crudo de `fn_open_table_and_load`. La caja
+  /// cliente lo parsea igual que el camino directo, así obtiene la orden real
+  /// (con items, modifiers, tax_lines) sin depender de su propio WAN.
+  Future<shelf.Response> _handleHubProxyOpenTable(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final tableId = body['table_id']?.toString() ?? '';
+    if (tableId.isEmpty) return _jsonError('Missing table_id', 400);
+    try {
+      final resp = await Supabase.instance.client.rpc(
+        'fn_open_table_and_load',
+        params: {
+          'p_table_id': tableId,
+          'p_user_id': body['user_id'],
+          'p_people_count': (body['people_count'] as num?)?.toInt() ?? 1,
+          'p_opened_by_employee_id': body['opened_by_employee_id'],
+        },
+      );
+      if (resp is! Map) return _jsonError('open-table failed', 502);
+      return _jsonOk(Map<String, dynamic>.from(resp));
+    } catch (e) {
+      return _jsonError('Hub open-table error: $e', 502);
+    }
+  }
+
+  /// Paso 2: el Hub agrega un ítem REAL a la orden contra Supabase (con su
+  /// internet) — ítem + modifiers + autor — y devuelve el id real. La caja
+  /// cliente lo adopta (tmp→real) sin refetch. Así el ítem queda en el servidor
+  /// al instante y el cobro sale correcto.
+  Future<shelf.Response> _handleHubProxyAddItem(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final orderId = body['order_id']?.toString() ?? '';
+    final menuItemId = body['menu_item_id']?.toString() ?? '';
+    if (orderId.isEmpty || menuItemId.isEmpty) {
+      return _jsonError('Missing order_id or menu_item_id', 400);
+    }
+    try {
+      final repo = SalesRepository(Supabase.instance.client);
+      final itemId = await repo.addItemFromMenu(
+        orderId: orderId,
+        menuItemId: menuItemId,
+        quantity: (body['quantity'] as num?)?.toDouble() ?? 1,
+        checkPosition: (body['check_position'] as num?)?.toInt() ?? 1,
+        isTakeout: body['is_takeout'] == true,
+        notes: body['notes']?.toString(),
+      );
+      if (itemId.isEmpty) return _jsonError('add-item failed', 502);
+      final mods = body['modifiers'];
+      if (mods is List && mods.isNotEmpty) {
+        await repo.addOrderItemModifiers(
+          itemId: itemId,
+          modifiers: mods
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList(growable: false),
+        );
+      }
+      final empId = body['employee_id']?.toString();
+      if (empId != null && empId.isNotEmpty) {
+        try {
+          await Supabase.instance.client
+              .from('order_items')
+              .update({'created_by_employee_id': empId})
+              .eq('id', itemId);
+        } catch (_) {}
+      }
+      return _jsonOk({'item_id': itemId});
+    } catch (e) {
+      return _jsonError('Hub add-item error: $e', 502);
+    }
   }
 
   /// F4: asigna el próximo NCF de una serie. El allocator serializa por serie,

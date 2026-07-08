@@ -69,5 +69,6 @@ ventas.VentasTable ventasTableFromStatus(TableStatus ts) {
     waiterId: ts.sessionId, // sessionId usado como waiterId temporalmente
     waiterName: ts.waiterName,
     customerName: ts.customerName,
+    isPendingSync: ts.isPendingSync,
   );
 }

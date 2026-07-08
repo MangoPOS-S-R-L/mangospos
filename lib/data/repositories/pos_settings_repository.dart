@@ -390,6 +390,40 @@ class PosSettingsRepository {
     }, onConflict: 'business_id');
   }
 
+  /// Política de red del local (modo híbrido Hub LAN-first). 'cloud' (default)
+  /// = cada caja habla directo con Supabase; 'hub' = la caja principal es el
+  /// servidor central de la LAN y única subida. El rol del dispositivo es
+  /// device-level (ver [HubConfigService]). Tolera columna ausente
+  /// (pre-migración 20260708_0002) → 'cloud'. Ver
+  /// docs/PRD_HUB_HIBRIDO_LAN_FIRST.md.
+  static const String networkModeCloud = 'cloud';
+  static const String networkModeHub = 'hub';
+
+  Future<String> getNetworkMode(String businessId) async {
+    String parse(Map<String, dynamic>? row) {
+      final raw = row?['network_mode']?.toString();
+      return raw == networkModeHub ? networkModeHub : networkModeCloud;
+    }
+
+    try {
+      return parse(await _fetchAndCacheRow(businessId));
+    } catch (_) {
+      return parse(await _cachedRow(businessId));
+    }
+  }
+
+  Future<void> setNetworkMode({
+    required String businessId,
+    required String mode,
+  }) async {
+    final normalized =
+        mode == networkModeHub ? networkModeHub : networkModeCloud;
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'network_mode': normalized,
+    }, onConflict: 'business_id');
+  }
+
   /// Modelo de factura impresa elegido por el negocio. Default `standard`
   /// cuando la columna no existe (pre-migración) o la query falla — preserva
   /// el layout histórico para quienes no toquen el ajuste.

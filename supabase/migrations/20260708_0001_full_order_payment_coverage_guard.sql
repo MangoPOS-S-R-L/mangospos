@@ -17,10 +17,10 @@
 --   1. Un RAISE falso BLOQUEA el cobro por completo (peor que la fuga rara). Por
 --      eso la tolerancia es AMPLIA (3% o RD$5): atrapa fugas grandes como los
 --      RD$100/16.7% del caso real, sin bloquear por redondeo/descuento.
---   2. `sum(subtotal + tax)` asume el modelo actual donde el descuento ya está
---      restado dentro de oi.subtotal (mig 20260509_0004, ver
---      [[project_exclusive_discount_double_count]]). Si hay órdenes legacy con
---      el descuento NO baked, esto sobre-cuenta → verificar antes de aplicar.
+--   2. [RESUELTO 2026-07-08] El descuento NO está baked en oi.subtotal (vive en
+--      oi.discounts) → la fórmula lo RESTA: sum(subtotal + tax - discounts).
+--      Sin esto bloqueaba cobros con descuento (falso UNDERCOVERED). Confirmado
+--      en prod: cobro 247.50 sobre ítems bruto 275 (descuento 27.50).
 --   3. Fee de delivery / service_fee a nivel de orden hacen `pagado > ítems` →
 --      dirección SEGURA (nunca bloquean). Solo bloquea sub-cobertura real.
 --   4. Esta función VIVE divergente del repo ([[project_db_diverges_from_repo_migrations]]).
@@ -240,11 +240,19 @@ begin
       -- ── GUARD DE COBERTURA (backstop) ─────────────────────────────────
       -- El UPDATE de abajo marca TODOS los ítems no-void como pagados. Antes
       -- de cerrar, verificamos que los pagos full-order (check_id NULL) cubran
-      -- el valor de los ítems aún no pagados. Suma TODOS los pagos full-order
-      -- completados (ya incluye el recién insertado) → soporta split-tender
-      -- (ej. 300 + 300 = 600). Tolerancia amplia para no bloquear por
-      -- redondeo/descuento; el guard exacto está en la app.
-      select coalesce(sum(oi.subtotal + oi.tax), 0)
+      -- el valor NETO de los ítems aún no pagados. Suma TODOS los pagos
+      -- full-order completados (ya incluye el recién insertado) → soporta
+      -- split-tender (ej. 300 + 300 = 600). Tolerancia amplia para no bloquear
+      -- por redondeo; el guard exacto está en la app.
+      --
+      -- IMPORTANTE (fix 2026-07-08): el descuento NO está baked en oi.subtotal
+      -- (vive en oi.discounts) → hay que RESTARLO. Sin esto el guard bloqueaba
+      -- cobros legítimos con descuento (cobró 247.50 sobre ítems bruto 275 =
+      -- descuento 27.50 → falso ORDER_PAYMENT_UNDERCOVERED). subtotal+tax da el
+      -- bruto (inclusive y exclusive); menos discounts = lo que realmente se
+      -- cobra. Si en órdenes legacy el descuento SÍ estuviera baked, restar de
+      -- más solo baja v_items_due → dirección SEGURA (nunca bloquea de más).
+      select coalesce(sum(oi.subtotal + oi.tax - coalesce(oi.discounts, 0)), 0)
         into v_items_due
       from public.order_items oi
       where oi.order_id = p_order_id

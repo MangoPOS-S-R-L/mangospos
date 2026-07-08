@@ -354,9 +354,13 @@ class _TableCardState extends State<TableCard> {
     return _getBorderColor();
   }
 
-  /// Obtiene el texto del estado
+  /// Obtiene el texto del estado. Para un borrador local sin sincronizar
+  /// añade "· Sin subir" (en el mismo naranja de "Ocupado") para que el cajero
+  /// sepa que la mesa aún no llegó al servidor. Se reusa la línea de estado
+  /// para no agregar alto y evitar overflow en la tarjeta de 140px fijos.
   String _getStatusText() {
-    return widget.table.status.label;
+    final base = widget.table.status.label;
+    return widget.table.isPendingSync ? '$base · Sin subir' : base;
   }
 
   /// Formatea el monto con el símbolo de la moneda del negocio. Mantiene el

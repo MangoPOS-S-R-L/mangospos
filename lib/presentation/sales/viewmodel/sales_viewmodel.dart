@@ -9,6 +9,10 @@ import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/offline/hub/hub_mode.dart' show kHubModeEnabled;
+import 'package:mangopos/core/offline/hub/hub_config.dart' show TerminalMode;
+import 'package:mangopos/core/offline/hub/hub_client.dart' show HubClient;
+import 'package:mangopos/core/offline/hub/hub_mode_controller.dart'
+    show hubModeProvider;
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
@@ -63,6 +67,14 @@ class SelectedModifierInput {
         'price': price,
         if (menuItemId != null) 'menu_item_id': menuItemId,
       };
+}
+
+/// Sentinel (m2b): en modo Hub cortocircuitamos la llamada a Supabase de las
+/// mutaciones de ítem y saltamos directo al encolado (que enruta la op al Hub),
+/// para no perder segundos intentando el WAN. Se lanza tras el update optimista
+/// y `_shouldTreatAsOffline` lo reconoce como "encolar".
+class _HubModeShortCircuit implements Exception {
+  const _HubModeShortCircuit();
 }
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
@@ -882,6 +894,198 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// True SOLO si este terminal es una CAJA CLIENTE del Hub (LAN-first): sus
+  /// mutaciones se enrutan al Hub por LAN en vez de directo a Supabase.
+  ///
+  /// El equipo Hub (host) NO entra aquí: tiene internet (es la puerta de
+  /// enlace), así que opera NORMAL contra Supabase → órdenes y comprobantes
+  /// reales al instante. Solo si el host pierde internet cae al respaldo
+  /// (op-log) por el `catch` de H0 (`_shouldTreatAsOffline`). Esto arregla el
+  /// "comprobante no carga al abrir la mesa" en la caja principal.
+  bool get _isHubMode {
+    return ref.read(hubModeProvider) == TerminalMode.hubClient;
+  }
+
+  /// Abre una mesa en modo Hub: resume el borrador local si ya existe en este
+  /// equipo, si no crea uno nuevo y notifica al Hub con la op `open_table`
+  /// (que mapea order↔table para el salón y el uplink). Reusa el camino offline
+  /// (`local-order-…`) → las mutaciones de ítem se enrutan al Hub por el
+  /// uploader de OfflinePosService.
+  Future<void> _openTableViaHub(String tableId, int peopleCount) async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      state = state.copyWith(loading: false, error: 'Sin negocio activo.');
+      return;
+    }
+    try {
+      // Paso 2 (proxy real-time): intentar abrir la mesa REAL a través del Hub
+      // (que tiene internet). Devuelve el bundle completo con datos fiscales,
+      // así el comprobante carga bien. Si el Hub no responde (offline), caemos
+      // al respaldo local (borrador + op-log) de abajo.
+      final hubUrl = ref.read(hubModeProvider.notifier).reachableHubUrl;
+      if (hubUrl != null) {
+        try {
+          final result =
+              await ref.read(salesRepositoryProvider).openTableAndLoadViaHub(
+                    hubBaseUrl: hubUrl,
+                    tableId: tableId,
+                    userId: Supabase.instance.client.auth.currentUser?.id,
+                    peopleCount: peopleCount,
+                    openedByEmployeeId:
+                        ref.read(activeWaiterProvider)?.employeeId,
+                  );
+          await _loadOrderDetail(
+            result.orderId,
+            origin: 'table',
+            tableId: tableId,
+            caller: 'openTableViaHub',
+            preloadedBundle: result.bundle,
+          );
+          return;
+        } catch (e) {
+          // Hub offline / sin respuesta → respaldo local (abajo).
+          debugPrint('[openTableViaHub] proxy falló, uso respaldo local: $e');
+        }
+      }
+
+      final existing = await _offlinePos.loadSnapshot(
+        businessId: businessId,
+        slotId: tableId,
+      );
+      if (existing != null) {
+        state = _normalizeHydratedState(
+          existing.copyWith(loading: false, origin: 'table', error: null),
+        );
+        _tableCache[tableId] = state;
+        return;
+      }
+      // 2. ¿El HUB ya tiene una orden abierta en esta mesa (la abrió OTRA
+      //    caja)? → reconstruirla y resumirla para verla/cobrarla. Persistimos
+      //    un snapshot local con el MISMO order_id del Hub para que las
+      //    mutaciones (agregar ítem / cobrar) referencien esa misma orden.
+      final hubOrder = await _fetchHubOrder(businessId, tableId);
+      if (hubOrder != null &&
+          ((hubOrder['items'] as List?)?.isNotEmpty ?? false)) {
+        final hydrated = _stateFromHubOrder(hubOrder);
+        await _offlinePos.saveSnapshot(
+          businessId: businessId,
+          slotId: tableId,
+          origin: 'table',
+          tableId: tableId,
+          state: hydrated,
+          localOnly: true,
+        );
+        state = _normalizeHydratedState(hydrated);
+        _tableCache[tableId] = state;
+        return;
+      }
+      // 3. Mesa nueva → borrador local + notificar al Hub.
+      final draft = await _offlinePos.createLocalDraft(
+        businessId: businessId,
+        origin: 'table',
+        tableId: tableId,
+      );
+      final orderId = draft.order?.id;
+      if (orderId != null) {
+        await _offlinePos.enqueueAction(
+          businessId: businessId,
+          action: {
+            'type': 'open_table',
+            'origin': 'table',
+            'order_id': orderId,
+            'table_id': tableId,
+          },
+        );
+      }
+      state = _normalizeHydratedState(
+        draft.copyWith(
+          loading: false,
+          origin: 'table',
+          error: 'Mesa abierta en la red local (Hub).',
+        ),
+      );
+      _tableCache[tableId] = state;
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'No se pudo abrir la mesa en el Hub: $e',
+      );
+    }
+  }
+
+  /// H4 m2: obtiene el detalle de la orden que el Hub tiene para [tableId]. El
+  /// equipo Hub proyecta desde su op-log local; una caja cliente lo pide al Hub
+  /// alcanzable (`GET /hub/order`). Null si no hay orden o no aplica.
+  Future<Map<String, dynamic>?> _fetchHubOrder(
+    String businessId,
+    String tableId,
+  ) async {
+    final mode = ref.read(hubModeProvider);
+    if (mode == TerminalMode.hubHost) {
+      return _offlinePos.localHubOrder(businessId, tableId: tableId);
+    }
+    if (mode == TerminalMode.hubClient) {
+      final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
+      if (url == null) return null;
+      return HubClient()
+          .getOrder(url, businessId: businessId, tableId: tableId);
+    }
+    return null;
+  }
+
+  /// H4 m2: reconstruye un [CurrentOrderState] "plano" desde el JSON de una
+  /// orden del Hub (order_id + ítems con nombre/cant/precio). Suficiente para
+  /// VER y COBRAR la mesa desde otra caja. Limitación conocida: no reconstruye
+  /// modificadores, líneas de impuesto ni subcuentas (el Hub no los proyecta
+  /// aún); el desglose fiscal se reconcilia al subir a Supabase.
+  CurrentOrderState _stateFromHubOrder(Map<String, dynamic> hub) {
+    final orderId = hub['order_id']?.toString() ?? 'local-order-hub';
+    final total = (hub['total'] as num?)?.toDouble() ?? 0;
+    final itemsJson = (hub['items'] as List?) ?? const [];
+    final items = itemsJson.map((e) {
+      final m = Map<String, dynamic>.from(e as Map);
+      final qty = (m['quantity'] as num?)?.toDouble() ??
+          (m['qty'] as num?)?.toDouble() ??
+          1;
+      final price = (m['unit_price'] as num?)?.toDouble() ?? 0;
+      return OrderItem(
+        id: m['id']?.toString() ?? '',
+        orderId: orderId,
+        productName: m['product_name']?.toString() ?? 'Producto',
+        quantity: qty,
+        unitPrice: price,
+        isTakeout: m['takeout'] == true,
+        status: 'pending',
+        notes: m['notes']?.toString(),
+        subtotal: qty * price,
+        discounts: 0,
+        tax: 0,
+        total: qty * price,
+        createdAt: DateTime.now(),
+      );
+    }).toList(growable: false);
+    final order = Order(
+      id: orderId,
+      sessionId: 'hub-session',
+      status: 'open',
+      subtotal: total,
+      discounts: 0,
+      serviceFee: 0,
+      tax: 0,
+      total: total,
+      createdAt: DateTime.now(),
+    );
+    return CurrentOrderState(
+      loading: false,
+      order: order,
+      items: items,
+      checks: const [],
+      takeout: false,
+      origin: 'table',
+      error: 'Mesa cargada desde la red local (Hub).',
+    );
+  }
+
   Future<void> openTable(String tableId, {int peopleCount = 1}) async {
     // ⚡ Fix anti-parpadeo: reset SÍNCRONO del state ANTES de cualquier
     // await. Antes los checks de caja + business tax se ejecutaban
@@ -920,6 +1124,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (!await ensureCashSessionOpen()) return;
     }
     await _ensureBusinessTaxSettingsLoaded();
+
+    // Modo Hub (LAN-first): NO abrimos la mesa en Supabase. La abrimos como
+    // borrador local y notificamos al Hub (op `open_table`, que mapea
+    // order↔table). Las mutaciones de ítem se enrutan al Hub por el uploader
+    // (reusa el camino offline). Inerte si kHubModeEnabled=false.
+    if (_isHubMode) {
+      await _openTableViaHub(tableId, peopleCount);
+      return;
+    }
+
     try {
       final client = Supabase.instance.client;
       final userId = client.auth.currentUser?.id;
@@ -973,14 +1187,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           return;
         }
 
-        // 2. Sin snapshot previo pero estamos offline: crear draft local
-        //    nuevo. `_resolveOrderIdForAction` con origin='table' usará el
-        //    tableId al sincronizar para abrir la mesa real en el server.
-        //    Solo cuando estamos offline — si Supabase respondió error real
-        //    (server down con LAN OK), `_connectivity.isConnected` baja por
-        //    el healthcheck y entramos aquí; si fue otro error transitorio
-        //    propagamos al usuario.
-        if (!_connectivity.isConnected) {
+        // 2. Sin snapshot previo pero la apertura falló por falta de red:
+        //    crear draft local nuevo. `_resolveOrderIdForAction` con
+        //    origin='table' usará el tableId al sincronizar para abrir la mesa
+        //    real en el server. Entramos aquí si estamos offline por el flag
+        //    O si el error es de transporte aunque `isConnected` siga en true
+        //    (ventana "conectado pero malo"). Un error de NEGOCIO del RPC
+        //    (mesa ya ocupada, permisos, validación) NO crea draft: se
+        //    propaga al usuario más abajo.
+        if (_shouldTreatAsOffline(e)) {
           final draft = await _offlinePos.createLocalDraft(
             businessId: businessId,
             origin: 'table',
@@ -999,6 +1214,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
       state = state.copyWith(loading: false, error: e.toString());
     }
+  }
+
+  /// Decide si una mutación que acaba de fallar debe tratarse como offline
+  /// (encolar la acción / crear un borrador local) en vez de propagar el error
+  /// y perder el trabajo del usuario. Cubre tres casos:
+  ///   1. El flag de conectividad ya está en offline.
+  ///   2. La orden ya es un borrador local (`local-order-…`), así que toda
+  ///      mutación posterior es inherentemente offline.
+  ///   3. El error es de TRANSPORTE (red) aunque `isConnected` siga en `true`
+  ///      — la ventana "conectado pero malo": el healthcheck va 1-2 sondeos
+  ///      atrás y el RPC realmente falló por red. Antes, este caso NO encolaba
+  ///      y el ítem/mesa se perdía (bug reportado en redes malas).
+  /// Un error de NEGOCIO del RPC (RAISE, constraint, validación) no entra aquí
+  /// y se muestra al usuario. Como efecto colateral del caso 3, se dispara una
+  /// revalidación de conectividad para que el resto de la app reaccione ya sin
+  /// esperar el próximo poll.
+  bool _shouldTreatAsOffline(Object error, {String? orderId}) {
+    // m2b: cortocircuito de modo Hub → siempre encolar (la op va al Hub).
+    if (error is _HubModeShortCircuit) return true;
+    if (!_connectivity.isConnected) return true;
+    if (orderId != null && orderId.startsWith('local-order-')) return true;
+    if (OfflinePosService.isTransportError(error)) {
+      unawaited(_connectivity.forceReachabilityCheck());
+      return true;
+    }
+    return false;
   }
 
   Future<void> openManual({bool forceRestart = false}) async =>
@@ -1843,6 +2084,49 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
+      if (_isHubMode) {
+        // Orden LOCAL (el Hub estaba offline al abrir) → op-log; el proxy no
+        // aplica porque la orden aún no existe en el server.
+        if (orderId.startsWith('local-order-')) {
+          throw const _HubModeShortCircuit();
+        }
+        // Orden REAL → agregar el ítem por el Hub (real-time contra Supabase).
+        final hubUrl = ref.read(hubModeProvider.notifier).reachableHubUrl;
+        final realId = hubUrl == null
+            ? null
+            : await ref.read(salesRepositoryProvider).addItemFromMenuViaHub(
+                  hubBaseUrl: hubUrl,
+                  orderId: orderId,
+                  menuItemId: menuItemId,
+                  quantity: qty,
+                  checkPosition: effectiveCheckPos,
+                  isTakeout: takeout,
+                  notes: notes,
+                  modifiers: selectedModifiers
+                      .map((m) => m.toMap())
+                      .toList(growable: false),
+                  employeeId: await _resolveItemEmployeeId(),
+                );
+        if (realId != null && realId.isNotEmpty) {
+          if (optimisticItem != null) {
+            final optId = optimisticItem.id;
+            _tmpToRealItemId[optId] = realId;
+            // Adoptar el id real en el estado SIN refetch (la caja no llega a
+            // Supabase): reemplaza el tmp por su versión con id real, para que
+            // borrar/editar/cobrar después usen el id que el server conoce.
+            state = state.copyWith(
+              items: state.items
+                  .map((it) =>
+                      it.id == optId ? it.copyWith(id: realId) : it)
+                  .toList(growable: false),
+            );
+          }
+          await _persistCurrentState(localOnly: true);
+          return;
+        }
+        // Hub no respondió → respaldo local (op-log) por el catch.
+        throw const _HubModeShortCircuit();
+      }
       final itemId = await ref
           .read(salesRepositoryProvider)
           .addItemFromMenu(
@@ -1899,8 +2183,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await _loadOrderDetail(orderId, caller: 'addItem');
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
 
       if (isOffline &&
           optimisticItem != null &&
@@ -2202,14 +2485,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = state.copyWith(takeout: value, error: null);
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref
           .read(salesRepositoryProvider)
           .markOrderTakeout(orderId: orderId, takeout: value);
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         await _offlinePos.enqueueAction(
           businessId: businessId,
@@ -2272,6 +2559,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
 
       // Fase 1 Toast redesign: si el item borrado era el último de un
@@ -2287,8 +2579,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         await _offlinePos.enqueueAction(
           businessId: businessId,
@@ -2390,14 +2681,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _pendingItemQty[itemId] = quantity;
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref
           .read(salesRepositoryProvider)
           .updateItemQuantity(itemId: itemId, quantity: quantity);
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         final updatedItems = state.items
             .map((item) {
@@ -2488,14 +2783,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref
           .read(salesRepositoryProvider)
           .updateItemNotes(itemId: itemId, notes: notes);
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         state = state.copyWith(
           items: state.items
@@ -2541,6 +2840,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref
           .read(salesRepositoryProvider)
           .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
@@ -2558,8 +2862,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         state = state.copyWith(
           items: state.items
@@ -2877,14 +3180,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
+      if (_isHubMode) {
+        // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
+        // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
+        throw const _HubModeShortCircuit();
+      }
       await ref
           .read(salesRepositoryProvider)
           .moveItemToCheck(itemId: itemId, checkPosition: pos);
       refreshOrder();
     } catch (e) {
       final businessId = _activeBusinessId;
-      final isOffline =
-          !_connectivity.isConnected || orderId.startsWith('local-order-');
+      final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         await _offlinePos.enqueueAction(
           businessId: businessId,
@@ -3330,11 +3637,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (!_connectivity.isConnected) return;
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
-    try {
-      final pending = await _offlinePos.pendingActionsCount(businessId);
-      if (pending <= 0) return;
-    } catch (_) {
-      return;
+    // Si ESTE equipo es el Hub host, sus ops (y las que recibe de las cajas)
+    // viven en el op-log del Hub, NO en la cola por-device — así que hay que
+    // drenar en cada tick aunque la cola propia esté vacía (uplink continuo).
+    final isHubHost = ref.read(hubModeProvider) == TerminalMode.hubHost;
+    if (!isHubHost) {
+      try {
+        final pending = await _offlinePos.pendingActionsCount(businessId);
+        if (pending <= 0) return;
+      } catch (_) {
+        return;
+      }
     }
     await syncPendingOfflineActions();
   }

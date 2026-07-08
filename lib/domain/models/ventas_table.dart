@@ -57,6 +57,11 @@ class VentasTable {
   final String? waiterName;
   final String? customerName;
 
+  /// True si la mesa es un borrador local sin sincronizar (overlay del grid).
+  /// El card muestra un indicador "sin subir" para que el cajero sepa que aún
+  /// no llegó al servidor.
+  final bool isPendingSync;
+
   const VentasTable({
     required this.id,
     required this.code,
@@ -68,6 +73,7 @@ class VentasTable {
     this.waiterId,
     this.waiterName,
     this.customerName,
+    this.isPendingSync = false,
   });
 
   /// Verifica si la mesa está ocupada
@@ -101,6 +107,7 @@ class VentasTable {
     String? waiterId,
     String? waiterName,
     String? customerName,
+    bool? isPendingSync,
   }) {
     return VentasTable(
       id: id ?? this.id,
@@ -113,6 +120,7 @@ class VentasTable {
       waiterId: waiterId ?? this.waiterId,
       waiterName: waiterName ?? this.waiterName,
       customerName: customerName ?? this.customerName,
+      isPendingSync: isPendingSync ?? this.isPendingSync,
     );
   }
 
@@ -167,7 +175,8 @@ class VentasTable {
         other.total == total &&
         other.waiterId == waiterId &&
         other.waiterName == waiterName &&
-        other.customerName == customerName;
+        other.customerName == customerName &&
+        other.isPendingSync == isPendingSync;
   }
 
   @override
@@ -183,6 +192,7 @@ class VentasTable {
       waiterId,
       waiterName,
       customerName,
+      isPendingSync,
     );
   }
 }

@@ -10,6 +10,12 @@ class TableStatus {
   final String? waiterName;
   final String? customerName;
   final bool isOwn;
+
+  /// True si la mesa proviene de un borrador LOCAL de ESTE dispositivo aún no
+  /// sincronizado con el servidor (orden `local-order-…`). Es un overlay del
+  /// grid para que la mesa no desaparezca al recargar desde el server. Las
+  /// filas de `v_zone_table_status` nunca lo traen → siempre false para ellas.
+  final bool isPendingSync;
   TableStatus({
     required this.tableId,
     required this.zoneId,
@@ -24,6 +30,7 @@ class TableStatus {
     this.waiterName,
     this.customerName,
     this.isOwn = false,
+    this.isPendingSync = false,
   });
   factory TableStatus.fromMap(Map<String, dynamic> r) => TableStatus(
     tableId: r['table_id'],
@@ -39,5 +46,6 @@ class TableStatus {
     waiterName: r['waiter_name'] ?? r['server_name'],
     customerName: r['customer_name'],
     isOwn: r['is_own'] ?? false,
+    // El server no expone este flag; solo lo setea el overlay offline.
   );
 }
