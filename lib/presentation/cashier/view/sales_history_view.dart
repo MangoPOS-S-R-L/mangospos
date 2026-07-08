@@ -897,6 +897,17 @@ mixin _PaymentActionsMixin {
         );
       }
 
+      // ¿El total guardado del comprobante difiere del recomputado desde los
+      // ítems? Pasa cuando la orden se cerró con un monto distinto al de sus
+      // ítems (cobro que no cubrió todo, ítems editados tras emitir el NCF,
+      // etc.). En ese caso el NCF manda: imprimimos los totales oficiales del
+      // fiscal document (igual que el modal de detalle), no un recálculo que
+      // saldría distinto a lo que registró la DGII y a lo que ve el cajero.
+      final itemsSummary = summarizeOrderPricing(printOrder, printItems);
+      final fdMismatch =
+          printOrder.total > 0 &&
+          (itemsSummary.total - printOrder.total).abs() > 1.0;
+
       // Anti-doble-conteo del service fee (LEY): cuando los ítems ya traen sus
       // `order_item_tax_lines` (modelo unificado), el fee YA está contado dentro
       // de ellos. Si además dejamos `order.serviceFee > 0`, summarizeOrderPricing
@@ -906,7 +917,12 @@ mixin _PaymentActionsMixin {
       // SIN tax_lines conservamos el serviceFee (ahí el fee solo vive a nivel de
       // orden y debe seguir imprimiéndose). Aplica a ambas ramas (full-order y
       // sub-cuenta, donde check.toOrder también copia serviceFee).
-      if (printOrder.serviceFee != 0 &&
+      //
+      // EXCEPCIÓN: si hay desajuste con el NCF (`fdMismatch`), conservamos el
+      // serviceFee del fiscal document — se imprimirá como parte de los totales
+      // oficiales, no recalculado desde ítems.
+      if (!fdMismatch &&
+          printOrder.serviceFee != 0 &&
           printItems.any((item) => item.taxLines.isNotEmpty)) {
         printOrder = printOrder.copyWith(serviceFee: 0);
       }
@@ -949,8 +965,23 @@ mixin _PaymentActionsMixin {
 
       // Build per-tax breakdown for the reprint receipt
       final reprintTaxBreakdown = <({String label, double amount})>[];
-      try {
-        final taxRows = await Supabase.instance.client
+      if (fdMismatch) {
+        // NCF manda: desglose desde los montos OFICIALES del fiscal document,
+        // consistente con el subtotal/total que imprimirá generateInvoice vía
+        // `preferStoredOrderTotals`. Sin porcentaje en la etiqueta porque el fd
+        // solo guarda montos agregados (itbis_amount, service_fee), no por tasa.
+        if (printOrder.tax > 0.005) {
+          reprintTaxBreakdown.add((label: 'ITBIS', amount: printOrder.tax));
+        }
+        if (printOrder.serviceFee > 0.005) {
+          reprintTaxBreakdown.add((
+            label: 'Servicio',
+            amount: printOrder.serviceFee,
+          ));
+        }
+      } else {
+        try {
+          final taxRows = await Supabase.instance.client
             .from('taxes')
             .select(
               'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
@@ -985,8 +1016,9 @@ mixin _PaymentActionsMixin {
             configuredBreakdown: configuredBreakdown,
           ),
         );
-      } catch (_) {
-        // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
+        } catch (_) {
+          // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
+        }
       }
 
       // e-CF: fresh fetch del fiscal_document. Crítico en re-impresión porque

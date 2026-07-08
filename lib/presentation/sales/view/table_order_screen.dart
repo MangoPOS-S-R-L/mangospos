@@ -2247,6 +2247,66 @@ class _CartView extends ConsumerWidget {
       }
     }
 
+    // ── GUARD DE COBERTURA: cobro a nivel de orden ───────────────────────
+    // Un cobro full-order (checkId == null) marca TODOS los ítems no anulados
+    // como pagados y cierra la orden (server: fn_process_payment_v3, rama
+    // full-order). Si el total capturado al tocar "Pagar" quedó stale, o
+    // acotado a una sub-cuenta (ej. split donde un ítem quedó SIN check), ese
+    // total puede NO cubrir todos los ítems abiertos → el ítem se cerraría
+    // como pagado SIN cobrarse (sub-cobro + NCF sub-declarado — caso real:
+    // orden de RD$600 cobrada 500, el jugo suelto quedó fuera). Recalculamos
+    // el total autoritativo desde los ítems frescos (mismo filtro que la
+    // vista global: abiertos y fuera de checks cerrados). Si el capturado se
+    // quedó corto, avisamos al cajero y cobramos el correcto. Nada queda
+    // fuera de la cuenta.
+    if (checkId == null) {
+      final coverageItems = currentOrderState.items.where((i) {
+        if (i.status == 'paid' || i.status == 'void') return false;
+        final inClosedCheck = currentOrderState.checks.any(
+          (c) => c.id == i.checkId && c.isClosed,
+        );
+        return !inClosedCheck;
+      }).toList();
+      final coverageTotal = summarizeOrderPricing(
+        currentOrderState.order,
+        coverageItems,
+        forcedOrigin: currentOrderState.origin,
+      ).total;
+      // Umbral > RD$1 para tolerar redondeo de centavos; solo dispara ante
+      // un ítem realmente ausente del total.
+      if (coverageTotal - total > 1.0) {
+        if (!context.mounted) return;
+        final cov = currentBusinessCurrencyOrFallback(ref).formatter;
+        final missing = coverageTotal - total;
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (dctx) => AlertDialog(
+            title: const Text('La cuenta tiene ítems sin incluir'),
+            content: Text(
+              'El total a cobrar (${cov.format(total)}) no cubre todos los '
+              'productos abiertos de la mesa (${cov.format(coverageTotal)}). '
+              'Faltan ${cov.format(missing)} — probablemente un producto '
+              'quedó fuera de la cuenta al dividir.\n\n'
+              'Si cobras así, ese producto se cerraría como PAGADO sin '
+              'cobrarse. Revisa la cuenta o cobra el total correcto.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dctx, false),
+                child: const Text('Revisar cuenta'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dctx, true),
+                child: Text('Cobrar ${cov.format(coverageTotal)}'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true) return;
+        total = coverageTotal;
+      }
+    }
+
     // Usamos el tableCode disponible en la vista
     final tableName = tableCode;
 

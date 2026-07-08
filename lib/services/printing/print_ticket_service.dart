@@ -123,7 +123,26 @@ class PrintTicketService {
     // recomputada y no los valores antiguos del trigger backend, que para
     // takeout inclusive sobreestimaba el ITBIS y subestimaba el subtotal.
     final summaryIsDegenerate = summary.tax <= 0 && order.tax > 0;
-    final useStoredTotals = hasStoredTotals && summaryIsDegenerate;
+
+    // Reimpresión de comprobantes ya emitidos (`preferStoredOrderTotals`):
+    // el NCF manda. Si el total recomputado desde ítems difiere del total
+    // GUARDADO en el comprobante por más de RD$1, imprimimos los valores
+    // oficiales del fiscal document (subtotal/impuestos/total) en vez del
+    // recálculo. Pasa cuando la orden se cerró con un monto distinto al de
+    // sus ítems (ej. cobro que no cubrió todo, o ítems editados tras emitir):
+    // el papel debe coincidir con la pantalla y con lo que registró la DGII,
+    // no inflar/desinflar según los ítems. Igual que el guard del modal en
+    // sales_history_view. Gate estricto (flag + total guardado > 0 +
+    // desajuste real) → facturas en vivo y reimpresiones que cuadran NO se
+    // ven afectadas.
+    final mismatchVsStored =
+        preferStoredOrderTotals &&
+        hasStoredTotals &&
+        order.total > 0 &&
+        (summary.total - order.total).abs() > 1.0;
+
+    final useStoredTotals =
+        (hasStoredTotals && summaryIsDegenerate) || mismatchVsStored;
 
     if (!useStoredTotals) {
       return _PrintableReceiptTotals(
