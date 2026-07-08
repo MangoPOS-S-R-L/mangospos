@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
+import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 
 import '../state/detailed_wizard_state.dart';
 
@@ -59,12 +60,12 @@ class _StepReviewSignState extends ConsumerState<StepReviewSign> {
           const SizedBox(height: 8),
           _SummaryRow(
             label: 'Tarjeta',
-            value: 'RD\$ ${_formatInt(state.numericCard.round())}',
+            value: formatRDigital(state.numericCard),
           ),
           const SizedBox(height: 8),
           _SummaryRow(
             label: 'Transferencia',
-            value: 'RD\$ ${_formatInt(state.numericTransfer.round())}',
+            value: formatRDigital(state.numericTransfer),
           ),
           const SizedBox(height: 16),
           _ReportedTotalCard(value: state.totalReported),
@@ -184,7 +185,7 @@ class _ReportedTotalCard extends StatelessWidget {
             ),
           ),
           Text(
-            'RD\$ ${_formatInt(value.round())}',
+            formatRDigital(value),
             style: const TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 24,

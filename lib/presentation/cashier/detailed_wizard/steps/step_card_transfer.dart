@@ -4,8 +4,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
+import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 
 import '../state/detailed_wizard_state.dart';
+
+/// Permite montos con centavos: dígitos, un separador decimal y hasta dos
+/// decimales. Normaliza la coma a punto (teclados es_DO usan coma) para que
+/// coincida con `_sanitizeDecimal` del notifier. Rechaza cualquier entrada
+/// que no calce con el patrón, conservando el valor previo.
+class _DecimalMoneyInputFormatter extends TextInputFormatter {
+  const _DecimalMoneyInputFormatter();
+
+  static final RegExp _pattern = RegExp(r'^\d*\.?\d{0,2}$');
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final normalized = newValue.text.replaceAll(',', '.');
+    if (normalized.isEmpty) return newValue.copyWith(text: '');
+    if (!_pattern.hasMatch(normalized)) return oldValue;
+    return TextEditingValue(
+      text: normalized,
+      selection: TextSelection.collapsed(offset: normalized.length),
+    );
+  }
+}
 
 /// Paso 2 — Tarjeta y Transferencia.
 ///
@@ -185,13 +210,13 @@ class _MethodInputState extends State<_MethodInput> {
           TextField(
             controller: _controller,
             autofocus: widget.autofocus,
-            keyboardType: TextInputType.number,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             textInputAction: TextInputAction.next,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            inputFormatters: const [_DecimalMoneyInputFormatter()],
             onChanged: widget.onChanged,
             decoration: InputDecoration(
               prefixText: 'RD\$ ',
-              hintText: '0',
+              hintText: '0.00',
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(
                 horizontal: 12,
@@ -256,7 +281,7 @@ class _TotalCard extends StatelessWidget {
             ),
           ),
           Text(
-            'RD\$ ${_format(total.round())}',
+            formatRDigital(total),
             style: const TextStyle(
               fontWeight: FontWeight.w600,
               fontSize: 22,
@@ -267,14 +292,4 @@ class _TotalCard extends StatelessWidget {
       ),
     );
   }
-}
-
-String _format(int v) {
-  final s = v.toString();
-  final buf = StringBuffer();
-  for (var i = 0; i < s.length; i++) {
-    if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-    buf.write(s[i]);
-  }
-  return buf.toString();
 }

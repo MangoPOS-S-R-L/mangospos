@@ -67,6 +67,13 @@ class KitchenTicketCard extends StatelessWidget {
     final total = items.length;
     final allTakeout = items.isNotEmpty && items.every((i) => i.isTakeout);
 
+    // Ítems que la cocina aún está trabajando. Cuando queda UNO solo (o la
+    // comanda es de un solo producto), NO se permite marcarlo con el tap de
+    // arriba: ese camino (bump) no imprime el ticket de listo. El último se
+    // completa con "Marcar todo listo", que sí imprime la comanda.
+    final activeCount = items.where(_canBump).length;
+    final allowIndividualBump = activeCount > 1;
+
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -102,7 +109,9 @@ class KitchenTicketCard extends StatelessWidget {
                   _ItemRow(
                     item: item,
                     showTakeoutBadge: !allTakeout && item.isTakeout,
-                    onTap: _canBump(item) ? () => onBumpItem(item.id) : null,
+                    onTap: (_canBump(item) && allowIndividualBump)
+                        ? () => onBumpItem(item.id)
+                        : null,
                   ),
               ],
             ),
