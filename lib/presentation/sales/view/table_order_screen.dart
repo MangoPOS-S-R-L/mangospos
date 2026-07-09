@@ -6583,7 +6583,6 @@ class _CartLineItem extends ConsumerWidget {
       currentOrder,
       item,
     );
-    final modifiers = item.modifiers;
 
     return Tooltip(
       // Tooltip de auditoría: solo hover de mouse (~1s). triggerMode manual
@@ -6701,62 +6700,9 @@ class _CartLineItem extends ConsumerWidget {
                           color: _salesTextPrimary,
                         ),
                       ),
-                      if (modifiers.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: modifiers
-                              .map((modifier) {
-                                final hasExtraCost = modifier.price > 0.009;
-                                // qty efectiva = item.quantity * modifier.qty.
-                                // Asi el chip muestra "7x Ceresa (+RD$ 1050.00)"
-                                // cuando hay 7 items con 1 ceresa cada uno —
-                                // alineado con la formula per-unit del backend.
-                                final itemQty = item.quantity <= 0
-                                    ? 1.0
-                                    : item.quantity;
-                                final effectiveQty = itemQty * modifier.qty;
-                                final totalCost = modifier.price * effectiveQty;
-                                final qtyLabel = effectiveQty > 1.0001
-                                    ? '${effectiveQty.toStringAsFixed(effectiveQty % 1 == 0 ? 0 : 1)}x '
-                                    : '';
-                                final isComboChoice = modifier.name.contains(
-                                  ': ',
-                                );
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isComboChoice
-                                        ? const Color(0xFFFFF7ED)
-                                        : const Color(0xFFF8FAFC),
-                                    borderRadius: BorderRadius.circular(999),
-                                    border: Border.all(
-                                      color: isComboChoice
-                                          ? const Color(0xFFFED7AA)
-                                          : const Color(0xFFE2E8F0),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    hasExtraCost
-                                        ? '$qtyLabel${modifier.name} (+${currentBusinessCurrencyOrFallback(ref).formatAmount(totalCost)})'
-                                        : '$qtyLabel${modifier.name}',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: isComboChoice
-                                          ? const Color(0xFF9A3412)
-                                          : const Color(0xFF475569),
-                                    ),
-                                  ),
-                                );
-                              })
-                              .toList(growable: false),
-                        ),
-                      ],
+                      // Los extras/modificadores NO se listan bajo cada línea
+                      // del carrito: la lista se mantiene limpia y el extra se
+                      // ve al abrir el detalle del producto (clic).
                     ],
                   ),
                 ),

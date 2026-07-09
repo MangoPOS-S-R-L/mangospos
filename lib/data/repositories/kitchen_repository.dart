@@ -69,7 +69,8 @@ class KitchenRepository {
           .map(KitchenItem.fromMap)
           .toList()
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      return items;
+      if (items.isEmpty) return items;
+      return _attachModifiers(items);
     } catch (e) {
       throw Exception('Error al obtener items de cocina (abiertas): $e');
     }

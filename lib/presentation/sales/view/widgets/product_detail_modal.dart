@@ -865,6 +865,72 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                 const SizedBox(height: 12),
               ],
 
+              // Modo agrupado: no se editan modifiers por unidad, pero SÍ se
+              // muestran los extras de todas las unidades (solo lectura) para
+              // que el extra sea visible al hacer clic en el producto.
+              if (_isGroupedMode) ...[
+                Builder(
+                  builder: (context) {
+                    final chips = _groupedModifierChips();
+                    if (chips.isEmpty) return const SizedBox.shrink();
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Modificadores',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: kTextPrimary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: chips.map((m) {
+                            final qtyPrefix = m.qty > 1.0001
+                                ? '${m.qty.toStringAsFixed(m.qty % 1 == 0 ? 0 : 1)}× '
+                                : '';
+                            final priceLabel = m.hasCost
+                                ? ' (+RD\$ ${m.cost.toStringAsFixed(2)})'
+                                : '';
+                            return Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: m.combo
+                                    ? const Color(0xFFFFF7ED)
+                                    : const Color(0xFFF8FAFC),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: m.combo
+                                      ? const Color(0xFFFED7AA)
+                                      : kBorder,
+                                ),
+                              ),
+                              child: Text(
+                                '$qtyPrefix${m.name}$priceLabel',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: m.combo
+                                      ? const Color(0xFF9A3412)
+                                      : const Color(0xFF475569),
+                                ),
+                              ),
+                            );
+                          }).toList(growable: false),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    );
+                  },
+                ),
+              ],
+
               // Cortesía
               Row(
                 children: [
@@ -1094,6 +1160,47 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     0.0,
     (sum, modifier) => sum + (modifier.price * modifier.qty),
   );
+
+  /// Consolida los modifiers de TODAS las unidades agrupadas en la línea
+  /// (modo agrupado) para poder mostrarlos en modo lectura al abrir el
+  /// detalle. La clave de agrupación de la línea es `nombre|takeout` y NO
+  /// incluye modifiers, así que unidades con y sin extra caen en el mismo
+  /// grupo; aquí sumamos qty efectiva y costo por nombre de modifier.
+  List<({String name, double qty, double cost, bool hasCost, bool combo})>
+  _groupedModifierChips() {
+    final order = <String>[];
+    final byKey =
+        <String, ({String name, double qty, double cost, bool hasCost, bool combo})>{};
+    for (final item in _scopedItems) {
+      final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+      for (final mod in item.modifiers) {
+        final effectiveQty = itemQty * mod.qty;
+        final totalCost = mod.price * effectiveQty;
+        final hasCost = mod.price > 0.009;
+        final key = '${mod.name}|$hasCost';
+        final existing = byKey[key];
+        if (existing == null) {
+          order.add(key);
+          byKey[key] = (
+            name: mod.name,
+            qty: effectiveQty,
+            cost: totalCost,
+            hasCost: hasCost,
+            combo: mod.name.contains(': '),
+          );
+        } else {
+          byKey[key] = (
+            name: existing.name,
+            qty: existing.qty + effectiveQty,
+            cost: existing.cost + totalCost,
+            hasCost: existing.hasCost,
+            combo: existing.combo,
+          );
+        }
+      }
+    }
+    return [for (final k in order) byKey[k]!];
+  }
 
   /// Subtotal estimado para `quantity` unidades del item, usando la formula
   /// per-unit alineada con el trigger backend fn_compute_item_totals

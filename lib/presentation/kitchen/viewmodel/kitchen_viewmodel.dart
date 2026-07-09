@@ -237,7 +237,10 @@ class KitchenViewModel extends ChangeNotifier {
       // (independiente del tablero) para el stat "Completados Hoy".
       final results = await Future.wait([
         _completeOnPayment
-            ? _repository.getActiveItems(businessId: _businessId)
+            ? _repository.getActiveItems(
+                businessId: _businessId,
+                includeModifiers: true,
+              )
             : _repository.getOpenItems(businessId: _businessId),
         _repository.getCompletedTodayItems(businessId: _businessId),
       ]);
