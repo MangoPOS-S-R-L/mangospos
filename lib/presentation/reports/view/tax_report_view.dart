@@ -78,17 +78,6 @@ class _TaxReportBody extends StatelessWidget {
     // en columnas/descripciones — rompía multi-país.
     final taxBreakdownRows =
         (fs['tax_breakdown'] as List?)?.cast<Map>() ?? const <Map>[];
-    final primaryTaxLabel = taxBreakdownRows.length == 1
-        ? ((taxBreakdownRows.first['label']?.toString().trim() ?? '').isNotEmpty
-            ? taxBreakdownRows.first['label'].toString().trim()
-            : 'Impuesto')
-        : 'Impuesto';
-    final primaryTaxRate =
-        (taxBreakdownRows.isNotEmpty ? taxBreakdownRows.first['rate'] : null);
-    final primaryTaxRateNum = (primaryTaxRate as num?)?.toDouble() ?? 0;
-    final primaryTaxRowLabel = primaryTaxRateNum > 0
-        ? '$primaryTaxLabel (${primaryTaxRateNum == primaryTaxRateNum.truncateToDouble() ? primaryTaxRateNum.toInt() : primaryTaxRateNum.toStringAsFixed(2)}%)'
-        : primaryTaxLabel;
     final serviceFeeLabel =
         (fs['service_fee_label'] as String?)?.trim().isNotEmpty == true
             ? (fs['service_fee_label'] as String).trim()
@@ -98,6 +87,24 @@ class _TaxReportBody extends StatelessWidget {
     final serviceFeeRateStr = serviceFeeRate > 0
         ? ' (${serviceFeeRate == serviceFeeRate.truncateToDouble() ? serviceFeeRate.toInt() : serviceFeeRate.toStringAsFixed(2)}%)'
         : '';
+    // Nombre real del impuesto principal desde la config del negocio (ITBIS,
+    // IVA, IGV…), no un genérico "Impuesto". Se toma el impuesto DECLARADO de
+    // mayor monto del desglose (excluye la propina/cargo de servicio, que se
+    // muestra en su propia fila). Antes caía a "Impuesto" cuando había más de
+    // una fila (p. ej. ITBIS + LEY), que es justo el caso común.
+    final declaredTaxRows = taxBreakdownRows
+        .where((r) => (r['label']?.toString().trim() ?? '') != serviceFeeLabel)
+        .toList(growable: false);
+    final primaryTaxLabel = declaredTaxRows.isNotEmpty &&
+            (declaredTaxRows.first['label']?.toString().trim() ?? '').isNotEmpty
+        ? declaredTaxRows.first['label'].toString().trim()
+        : 'Impuesto';
+    final primaryTaxRate =
+        declaredTaxRows.isNotEmpty ? declaredTaxRows.first['rate'] : null;
+    final primaryTaxRateNum = (primaryTaxRate as num?)?.toDouble() ?? 0;
+    final primaryTaxRowLabel = primaryTaxRateNum > 0
+        ? '$primaryTaxLabel (${primaryTaxRateNum == primaryTaxRateNum.truncateToDouble() ? primaryTaxRateNum.toInt() : primaryTaxRateNum.toStringAsFixed(2)}%)'
+        : primaryTaxLabel;
 
     return ListView(
       padding: reportBodyPadding(context),

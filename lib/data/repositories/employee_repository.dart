@@ -358,6 +358,37 @@ class EmployeeRepository {
     );
   }
 
+  /// Lee si el usuario (empleado) está marcado como compartido entre
+  /// sucursales. RPC SECURITY DEFINER porque `user_businesses` tiene RLS por
+  /// `user_id = auth.uid()` (el admin no puede leer la fila de otro).
+  Future<bool> getUserSharedAcrossBranches({
+    required String employeeId,
+    required String businessId,
+  }) async {
+    final res = await _client.rpc(
+      'fn_get_user_shared_across_branches',
+      params: {'p_employee_id': employeeId, 'p_business_id': businessId},
+    );
+    return res == true;
+  }
+
+  /// Marca/desmarca al usuario como compartido entre sucursales. El RPC exige
+  /// que el llamador sea owner/admin del negocio.
+  Future<void> setUserSharedAcrossBranches({
+    required String employeeId,
+    required String businessId,
+    required bool shared,
+  }) async {
+    await _client.rpc(
+      'fn_set_user_shared_across_branches',
+      params: {
+        'p_employee_id': employeeId,
+        'p_business_id': businessId,
+        'p_shared': shared,
+      },
+    );
+  }
+
   Future<void> updateUserPassword({
     required String userId,
     required String newPassword,

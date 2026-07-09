@@ -783,11 +783,29 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         final active = state.taxSummary?['active_taxes_count'] ?? 0;
         final currency = state.currency.formatter;
         final numberFormat = NumberFormat('#,##0', 'en_US');
+        // Enumera cada impuesto configurado por su nombre real (ITBIS, LEY,
+        // IVA…) en vez del par fijo "Impuestos | Propina de ley". Refleja
+        // exactamente lo que el negocio configuró en Ajustes → Impuestos, sin
+        // depender de is_service_fee.
+        final breakdown =
+            (state.taxSummary?['tax_breakdown'] as List?)?.cast<Map>() ??
+                const <Map>[];
+        final perTax = breakdown
+            .where((r) => ((r['amount'] as num?)?.toDouble() ?? 0).abs() > 0.005)
+            .map((r) {
+          final label = (r['label']?.toString().trim().isNotEmpty == true)
+              ? r['label'].toString().trim()
+              : 'Impuesto';
+          final amount = (r['amount'] as num?)?.toDouble() ?? 0;
+          return '$label: ${currency.format(amount)}';
+        }).join(' | ');
+        final taxesDesc = perTax.isEmpty
+            ? 'Total: ${currency.format(totalCharges)}'
+            : '$perTax | Total: ${currency.format(totalCharges)}';
         return [
           ReportItem(
-            title: 'Impuestos y ley generados',
-            description:
-                'Impuestos: ${currency.format(totalTax)} | Propina de ley: ${currency.format(serviceFee)} | Total: ${currency.format(totalCharges)}',
+            title: 'Impuestos generados',
+            description: taxesDesc,
           ),
           ReportItem(
             title: 'Configuración fiscal',

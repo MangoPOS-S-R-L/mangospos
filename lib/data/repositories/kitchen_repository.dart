@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/kitchen_models.dart';
@@ -7,6 +8,30 @@ class KitchenRepository {
   final SupabaseClient _client;
 
   KitchenRepository(this._client);
+
+  // Columnas base del tablero (comunes a kds_active_items y kds_open_orders).
+  static const String _kdsBaseColumns =
+      'id,order_id,order_number,product_name,quantity,notes,status,'
+      'created_at,started_at,ready_at,table_name,waiter_name,business_id,'
+      'area_code,area_name,is_takeout';
+
+  // `kitchen_sent_at` la agrega la migración 20260707_0001 (comandas por
+  // ronda). Si la vista aún NO la tiene (migración sin aplicar en ese
+  // entorno), el select fallaría con 42703 y el tablero quedaría en blanco.
+  // Este flag se apaga la primera vez que la vista la rechaza para degradar
+  // sin ruptura: el KDS cae al modo "ronda legacy" (una tarjeta por orden).
+  bool _kitchenSentAtAvailable = true;
+
+  String get _kdsSelectColumns => _kitchenSentAtAvailable
+      ? '$_kdsBaseColumns,kitchen_sent_at'
+      : _kdsBaseColumns;
+
+  /// Detecta el error de "columna kitchen_sent_at inexistente" (vista sin la
+  /// migración de rondas). Postgres usa 42703 (undefined_column); también
+  /// cubrimos por mensaje por si el código no viene poblado.
+  bool _isMissingRoundColumn(Object e) =>
+      e is PostgrestException &&
+      (e.code == '42703' || e.message.contains('kitchen_sent_at'));
 
   // ============================================================
   // 📊 OBTENER ITEMS ACTIVOS
@@ -29,6 +54,19 @@ class KitchenRepository {
         limit: limit,
       );
     } on PostgrestException catch (e) {
+      // Vista sin la columna de rondas (migración 20260707_0001 sin aplicar):
+      // apagamos el flag y reintentamos sin `kitchen_sent_at` para no dejar el
+      // tablero en blanco. El KDS cae a "ronda legacy" (una tarjeta por orden).
+      if (_isMissingRoundColumn(e) && _kitchenSentAtAvailable) {
+        _kitchenSentAtAvailable = false;
+        return _fetchActiveItems(
+          businessId: businessId,
+          areaCode: areaCode,
+          status: status,
+          includeModifiers: includeModifiers,
+          limit: limit,
+        );
+      }
       // Fallback para evitar que la UI quede bloqueada en ambientes con dataset grande.
       if (e.code == '57014') {
         return _fetchActiveItems(
@@ -55,9 +93,8 @@ class KitchenRepository {
     String? areaCode,
   }) async {
     try {
-      const selectColumns =
-          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout,kitchen_sent_at';
-      var query = _client.from('kds_open_orders').select(selectColumns);
+      var query =
+          _client.from('kds_open_orders').select(_kdsSelectColumns);
       if (businessId != null && businessId.isNotEmpty) {
         query = query.eq('business_id', businessId);
       }
@@ -71,6 +108,14 @@ class KitchenRepository {
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (items.isEmpty) return items;
       return _attachModifiers(items);
+    } on PostgrestException catch (e) {
+      // Vista sin `kitchen_sent_at` (migración de rondas sin aplicar):
+      // degradamos y reintentamos una vez sin la columna.
+      if (_isMissingRoundColumn(e) && _kitchenSentAtAvailable) {
+        _kitchenSentAtAvailable = false;
+        return getOpenItems(businessId: businessId, areaCode: areaCode);
+      }
+      throw Exception('Error al obtener items de cocina (abiertas): $e');
     } catch (e) {
       throw Exception('Error al obtener items de cocina (abiertas): $e');
     }
@@ -329,9 +374,9 @@ class KitchenRepository {
     // `area_code` y `area_name` agregados al view en migration
     // 20260527_0002_kds_active_items_area_code.sql. Antes el view devolvía
     // NULL hardcoded para area_code; ahora vienen del oi.print_area_code +
-    // LEFT JOIN a print_areas.name.
-    const selectColumns =
-        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout,kitchen_sent_at';
+    // LEFT JOIN a print_areas.name. `kitchen_sent_at` es opcional (ver
+    // _kdsSelectColumns): degrada solo si la vista no la tiene.
+    final selectColumns = _kdsSelectColumns;
 
     final baseQuery = _client.from('kds_active_items').select(selectColumns);
     var query = baseQuery;
@@ -410,44 +455,107 @@ class KitchenRepository {
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
     if (items.isEmpty) return items;
-    final withTakeout = await _attachTakeoutFlags(items);
-    if (!includeModifiers) return withTakeout;
-    return _attachModifiers(withTakeout);
+    // is_takeout ya viene de la vista (oi.is_takeout). El área se resuelve
+    // desde el N:M en _attachProductionAreas (ver nota ahí). Los modifiers se
+    // adjuntan ANTES de expandir por área para no reconsultar por duplicados.
+    final withMods = includeModifiers ? await _attachModifiers(items) : items;
+    return _attachProductionAreas(withMods);
   }
 
-  Future<List<KitchenItem>> _attachTakeoutFlags(
+  /// Resuelve el ÁREA DE PRODUCCIÓN real de cada ítem desde
+  /// `menu_item_print_areas` (N:M) — la MISMA fuente que usa la impresión
+  /// (`_groupItemsByPrintArea`) — y expande un ítem con varias áreas en una
+  /// entrada por área, para que el tablero pueda separar las comandas por
+  /// estación (Cocina, Bar, ...).
+  ///
+  /// ¿Por qué no basta `order_items.print_area_code`? Ese campo legacy es
+  /// `NOT NULL DEFAULT 'kitchen_hot'` y `fn_add_item_from_menu` lo copia del
+  /// legacy de `menu_items`. Cuando el área se configura por el editor N:M sin
+  /// tocar el legacy, el ítem queda con `'kitchen_hot'` aunque su área real sea
+  /// Bar → el KDS lo mostraba con área equivocada (agua de Bar que no aparecía
+  /// al filtrar Bar) y no separaba estaciones (todo caía en el mismo código).
+  ///
+  /// Estrategia por ítem (idéntica a impresión):
+  ///   1. product_id → áreas ACTIVAS del N:M (una entrada por área).
+  ///   2. Sin N:M → cae al `print_area_code` legacy que ya trae la vista.
+  ///   3. Sin legacy tampoco → se deja tal cual (área null: el filtro lo excluye
+  ///      y el negocio nota que falta configurar el producto).
+  Future<List<KitchenItem>> _attachProductionAreas(
     List<KitchenItem> items,
   ) async {
-    // kds_active_items no expone is_takeout, asi que lo traemos directo
-    // de order_items en lotes para no excederse en el filtro `in`.
-    final itemIds = items.map((i) => i.id).toList(growable: false);
-    final flagsByItem = <String, bool>{};
+    if (items.isEmpty) return items;
     const chunkSize = 100;
 
-    for (var i = 0; i < itemIds.length; i += chunkSize) {
-      final end = (i + chunkSize > itemIds.length)
-          ? itemIds.length
-          : i + chunkSize;
-      final chunk = itemIds.sublist(i, end);
+    // 1) product_id por order_item (la vista del KDS no lo expone).
+    final productIdByItem = <String, String>{};
+    final itemIds = items.map((i) => i.id).toSet().toList(growable: false);
+    try {
+      for (var i = 0; i < itemIds.length; i += chunkSize) {
+        final end =
+            (i + chunkSize > itemIds.length) ? itemIds.length : i + chunkSize;
+        final rows = await _client
+            .from('order_items')
+            .select('id,product_id')
+            .inFilter('id', itemIds.sublist(i, end));
+        for (final row in List<Map<String, dynamic>>.from(rows)) {
+          final id = row['id']?.toString();
+          final pid = row['product_id']?.toString();
+          if (id != null && id.isNotEmpty && pid != null && pid.isNotEmpty) {
+            productIdByItem[id] = pid;
+          }
+        }
+      }
+    } catch (e) {
+      // Sin product_id no podemos resolver el N:M → conservamos el área legacy.
+      debugPrint('KDS _attachProductionAreas: product_id lookup falló: $e');
+      return items;
+    }
 
-      final rows = await _client
-          .from('order_items')
-          .select('id,is_takeout')
-          .inFilter('id', chunk);
-
-      for (final row in List<Map<String, dynamic>>.from(rows)) {
-        final id = row['id']?.toString();
-        if (id == null || id.isEmpty) continue;
-        flagsByItem[id] = row['is_takeout'] == true;
+    // 2) Áreas activas (code + name) por menu_item_id desde el N:M.
+    final areasByProduct = <String, List<({String code, String name})>>{};
+    final productIds =
+        productIdByItem.values.toSet().toList(growable: false);
+    for (var i = 0; i < productIds.length; i += chunkSize) {
+      final end =
+          (i + chunkSize > productIds.length) ? productIds.length : i + chunkSize;
+      try {
+        final rows = await _client
+            .from('menu_item_print_areas')
+            .select('menu_item_id, print_areas!inner(code, name, is_active)')
+            .inFilter('menu_item_id', productIds.sublist(i, end));
+        for (final row in List<Map<String, dynamic>>.from(rows)) {
+          final mid = row['menu_item_id']?.toString();
+          final area = row['print_areas'] as Map?;
+          if (mid == null || area == null) continue;
+          if (area['is_active'] == false) continue;
+          final code = area['code']?.toString();
+          if (code == null || code.isEmpty) continue;
+          final name = area['name']?.toString();
+          areasByProduct.putIfAbsent(mid, () => []).add(
+                (code: code, name: (name == null || name.isEmpty) ? code : name),
+              );
+        }
+      } catch (e) {
+        // N:M no disponible para este lote → esos ítems usan su área legacy.
+        debugPrint('KDS _attachProductionAreas: N:M lookup falló: $e');
       }
     }
 
-    return items
-        .map(
-          (item) =>
-              item.copyWith(isTakeout: flagsByItem[item.id] ?? item.isTakeout),
-        )
-        .toList(growable: false);
+    // 3) Reescribir el área desde el N:M / expandir un ítem por cada área.
+    final result = <KitchenItem>[];
+    for (final item in items) {
+      final pid = productIdByItem[item.id];
+      final nmAreas = pid == null ? null : areasByProduct[pid];
+      if (nmAreas != null && nmAreas.isNotEmpty) {
+        for (final a in nmAreas) {
+          result.add(item.copyWith(areaCode: a.code, areaName: a.name));
+        }
+      } else {
+        // Sin N:M → conserva el `print_area_code`/`area_name` legacy de la vista.
+        result.add(item);
+      }
+    }
+    return result;
   }
 
   Future<List<KitchenItem>> _attachModifiers(List<KitchenItem> items) async {

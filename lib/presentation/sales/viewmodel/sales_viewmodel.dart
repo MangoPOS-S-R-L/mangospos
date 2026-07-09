@@ -4501,35 +4501,34 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .toList(growable: false);
 
     if (promos.isEmpty) {
-      final managedItems = openItems
-          .where((item) => _extractAutoPromoId(item.notes) != null)
-          .toList(growable: false);
-      if (managedItems.isEmpty) return false;
-
-      await Future.wait(
-        managedItems.map(
-          (item) => ref
-              .read(salesRepositoryProvider)
-              .updateItemDiscountAndNotes(
-                itemId: item.id,
-                discounts: 0,
-                notes: _stripManagedNotes(item.notes).isEmpty
-                    ? null
-                    : _stripManagedNotes(item.notes),
-                writePromotion: true,
-                promotionId: null,
-              ),
-        ),
-      );
-      return true;
+      // Antes se QUITABAN todas las auto-ofertas ya aplicadas cuando no había
+      // ninguna promo activa/en-franja. Eso borraba la oferta de cuentas
+      // abiertas al desactivar la promo o cerrar el happy hour (ej. aplicada a
+      // las 8:55, pago a las 9:30). Ahora se CONGELAN: no se toca nada. Una
+      // oferta ya aplicada solo se recalcula/quita mientras su promo siga
+      // vigente (ver activePromoIds abajo).
+      return false;
     }
+
+    // IDs de las promos ACTUALMENTE activas y dentro de su franja horaria. Una
+    // oferta ya aplicada cuya promo NO esté aquí (se desactivó o su happy hour
+    // cerró) se congela: el motor no la recalcula ni la quita.
+    final activePromoIds = promos
+        .map((promo) => promo['id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet();
 
     final eligibleBaseItems = openItems
         .where((item) {
           if (_hasCourtesyNote(item.notes)) return false;
           if (_isDealNote(item.notes)) return false;
           final existingPromoId = _extractAutoPromoId(item.notes);
-          if (existingPromoId != null) return true;
+          if (existingPromoId != null) {
+            // Oferta ya aplicada: solo re-evaluable si su promo SIGUE activa/en
+            // franja; si no, se congela (el motor no la toca).
+            return activePromoIds.contains(existingPromoId);
+          }
           return item.discounts <= 0.009;
         })
         .toList(growable: false);
@@ -4697,7 +4696,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final staleManagedItems = openItems
         .where((item) {
           final promoId = _extractAutoPromoId(item.notes);
+          // Solo se re-evalúa (y eventualmente se quita) si la promo SIGUE
+          // activa/en-franja — churn normal de una promo vigente al cambiar el
+          // carrito. Si la promo ya no está activa, la oferta se congela.
           return promoId != null &&
+              activePromoIds.contains(promoId) &&
               !updates.any((update) => update.itemId == item.id);
         })
         .toList(growable: false);

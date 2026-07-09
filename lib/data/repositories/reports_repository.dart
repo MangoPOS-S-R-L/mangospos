@@ -896,7 +896,7 @@ class ReportsRepository {
     final taxes = List<Map<String, dynamic>>.from(
       await _client
           .from(ReportsQueries.tableTaxes)
-          .select('id, name, rate, is_active, is_service_fee')
+          .select('id, name, rate, is_active, include_in_ecf')
           .eq('business_id', businessId),
     );
 
@@ -909,11 +909,11 @@ class ReportsRepository {
     final serviceFeeRate = _toDouble(
       businessSettings?['service_fee_rate'],
     ).clamp(0, 100);
-    // Nombre del cargo de servicio configurado por el comercio (taxes table
-    // con is_service_fee=true). Fallback genérico — antes era 'Propina de
-    // ley' hardcoded en la fila del breakdown, rompía multi-config.
+    // Nombre del cargo de servicio configurado por el comercio: el impuesto que
+    // el negocio marcó como NO incluido en e-CF (propina de ley). Fallback
+    // genérico. Ya NO se usa is_service_fee (config fantasma sin UI).
     final serviceFeeTaxRow = taxes.firstWhere(
-      (t) => t['is_service_fee'] == true,
+      (t) => t['include_in_ecf'] == false,
       orElse: () => const <String, dynamic>{},
     );
     final serviceFeeName =
@@ -973,13 +973,14 @@ class ReportsRepository {
       if (id == null) continue;
       (taxLinesByItem[id] ??= <Map<String, dynamic>>[]).add(row);
     }
-    // IDs de impuestos marcados como cargo de servicio (propina de ley): se
-    // bucketean aparte del ITBIS, igual que el path heurístico.
-    final serviceFeeTaxIds = taxes
-        .where((t) => t['is_service_fee'] == true)
-        .map((t) => t['id']?.toString())
-        .whereType<String>()
-        .toSet();
+    // MODELO CONFIG-DRIVEN: el reporte refleja los impuestos tal como el negocio
+    // los configuró en Ajustes → Impuestos. Cada impuesto (por `tax_id`) es su
+    // propia fila del desglose — NO existe un bucket especial de "cargo de
+    // servicio". Se eliminó la dependencia de `is_service_fee` (config fantasma
+    // sin toggle en la UI, siempre false → la Ley nunca se reconocía y quedaba
+    // sumada dentro del ITBIS). La Ley/propina ahora sale como su propio
+    // impuesto configurado, igual que el ITBIS.
+    const Set<String> serviceFeeTaxIds = <String>{};
 
     final orderRows = await _selectInBatches(
       table: ReportsQueries.tableOrders,
@@ -1457,16 +1458,37 @@ class ReportsRepository {
       taxConfigs = List<Map<String, dynamic>>.from(
         await _client
             .from(ReportsQueries.tableTaxes)
-            .select('id, name, rate, is_active, is_service_fee')
+            .select('id, name, rate, is_active, include_in_ecf')
             .eq('business_id', businessId),
       );
     }
+    // include_in_ecf NO viene en el bundle RPC (get_fiscal_summary_bundle), así
+    // que lo consultamos aparte (tabla diminuta). Es la señal CONFIGURADA por el
+    // negocio en Ajustes → Impuestos (toggle "Incluir en e-CF DGII"): un impuesto
+    // con include_in_ecf=false es la propina de ley / cargo de servicio (se cobra
+    // al cliente pero NO se declara a DGII). Reemplaza al flag muerto
+    // is_service_fee (que no tenía toggle en la UI → siempre false).
+    final excludedFromEcfIds = <String>{};
+    try {
+      final ecfRows = List<Map<String, dynamic>>.from(
+        await _client
+            .from(ReportsQueries.tableTaxes)
+            .select('id, include_in_ecf')
+            .eq('business_id', businessId),
+      );
+      for (final r in ecfRows) {
+        if (r['include_in_ecf'] == false) {
+          final id = r['id']?.toString();
+          if (id != null && id.isNotEmpty) excludedFromEcfIds.add(id);
+        }
+      }
+    } catch (_) {
+      // Si la consulta falla, caemos al fallback de nombre de abajo.
+    }
+
     final taxNameByRate = <String, String>{};
     double configuredServiceFeeRate = 0;
     double configuredTaxOnlyRate = 0;
-    // Default neutral. Si el comercio tiene un tax con is_service_fee=true,
-    // sobreescribimos abajo con su nombre real. Antes default era 'Propina
-    // de ley' que es DR-específico.
     String configuredServiceFeeName = 'Cargo de servicio';
     for (final t in taxConfigs) {
       final rate = _toDouble(t['rate']);
@@ -1474,20 +1496,21 @@ class ReportsRepository {
       if (name.isNotEmpty) {
         taxNameByRate[rate.toStringAsFixed(4)] = name;
       }
-      final isService = t['is_service_fee'] == true;
+      // Señal PRIMARIA (config-driven): el negocio marcó este impuesto como NO
+      // incluido en el e-CF → es la propina de ley / cargo de servicio.
+      final excludedFromEcf = excludedFromEcfIds.contains(t['id']?.toString());
+      // Fallback TRANSITORIO por nombre+tasa (10%): cubre negocios que todavía
+      // no apagaron "Incluir en e-CF DGII" en su propina. Se elimina una vez la
+      // config esté correcta. Ya NO se usa is_service_fee.
       final nameLower = name.toLowerCase();
-      // Heurística para detectar "propina de ley" en config legacy
-      // donde el flag is_service_fee no está seteado: nombre contiene
-      // alguna palabra clave + rate típico (10%). "ley" cubre el caso
-      // del usuario que tiene el tax llamado solo "LEY".
-      final isHeuristic = (rate - 10).abs() < 0.001 &&
+      final isLeyByName = (rate - 10).abs() < 0.001 &&
           (nameLower.contains('propina') ||
               nameLower.contains('servicio') ||
               nameLower == 'ley' ||
               nameLower.contains(' ley') ||
               nameLower.startsWith('ley '));
       if (t['is_active'] == true) {
-        if (isService || isHeuristic) {
+        if (excludedFromEcf || isLeyByName) {
           configuredServiceFeeRate = rate;
           if (name.isNotEmpty) configuredServiceFeeName = name;
         } else {

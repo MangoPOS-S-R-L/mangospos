@@ -142,6 +142,17 @@ class _Header extends StatelessWidget {
         ? 'Para llevar'
         : (table == null || table.isEmpty ? 'Mostrador' : table);
 
+    // Área de producción de la tarjeta. Todos los ítems de una tarjeta comparten
+    // área (la vista agrupa por área), así que basta el primero. Vacío = ítems
+    // sin área configurada → chip "Sin área" en tono de alerta.
+    final areaName = order.items.isEmpty
+        ? null
+        : (order.items.first.areaName?.trim().isNotEmpty ?? false)
+            ? order.items.first.areaName!.trim()
+            : null;
+    final hasArea = (order.items.isNotEmpty) &&
+        (order.items.first.areaCode?.isNotEmpty ?? false);
+
     final subParts = <String>[
       if (order.orderNumber.trim().isNotEmpty)
         'Orden ${order.orderNumber.trim()}',
@@ -173,6 +184,13 @@ class _Header extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (areaName != null) ...[
+                      const SizedBox(width: 8),
+                      _AreaBadge(name: areaName),
+                    ] else if (!hasArea) ...[
+                      const SizedBox(width: 8),
+                      const _AreaBadge(name: 'Sin área', warning: true),
+                    ],
                     if (allTakeout) ...[
                       const SizedBox(width: 8),
                       const _TakeoutBadge(),
@@ -446,6 +464,48 @@ class _Footer extends StatelessWidget {
                 'Marcar todo listo',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chip del área de producción de la tarjeta (Cocina, Bar, ...). En tono de
+/// marca normalmente; en tono de alerta cuando el ítem no tiene área
+/// configurada ("Sin área"), para que el negocio note qué producto arreglar.
+class _AreaBadge extends StatelessWidget {
+  final String name;
+  final bool warning;
+
+  const _AreaBadge({required this.name, this.warning = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = warning ? AppColors.warning : AppColors.primary;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.full),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            warning ? Icons.warning_amber_rounded : Icons.storefront_outlined,
+            size: 12,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            name,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              color: color,
             ),
           ),
         ],

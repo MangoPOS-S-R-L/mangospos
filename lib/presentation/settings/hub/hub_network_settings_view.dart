@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/offline/hub/hub_client.dart';
 import '../../../core/offline/hub/hub_config.dart';
+import '../../../core/offline/hub/hub_lan_scan.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/printing/agent_discovery.dart';
@@ -162,64 +163,23 @@ class _HubNetworkSettingsViewState
     }
   }
 
-  /// Busca por mDNS los equipos MangoPOS en la red local y deja elegir uno
-  /// como Hub. El agente de la caja principal (Windows/desktop) se anuncia, así
-  /// que aparece aquí; al elegirlo guardamos su IP (el puerto del Hub —4000 o
-  /// 4100— lo detecta solo la conexión).
+  /// Abre de inmediato una hoja que escanea la LAN por mDNS mostrando el
+  /// progreso y los equipos encontrados (con reintento y opción de IP manual).
+  /// El agente de la caja principal (Windows/desktop) se anuncia, así que
+  /// aparece aquí; al elegirlo guardamos su IP (el puerto del Hub —4000 o
+  /// 4100— lo detecta solo la conexión). Antes esperaba hasta ~35s en silencio
+  /// y solo mostraba algo si encontraba equipos; ahora el modal sale al toque.
   Future<void> _discoverDevices() async {
     if (_discovering) return;
     setState(() => _discovering = true);
-    List<DiscoveredAgent> found = const [];
-    try {
-      final disc = AgentDiscovery();
-      // Detección de 30s: mDNS en redes reales (Windows/routers) puede tardar
-      // en responder; una ventana amplia asegura encontrar la caja principal.
-      // Primero filtrando por negocio; si no aparece nada (el agente no anuncia
-      // business_id), reintento corto sin filtro mostrando todo lo de la red.
-      found = await disc.discover(
-        businessIdFilter: _businessId,
-        timeout: const Duration(seconds: 30),
-      );
-      if (found.isEmpty) {
-        found = await disc.discover(timeout: const Duration(seconds: 5));
-      }
-    } catch (_) {
-      found = const [];
-    }
-    if (!mounted) return;
-    setState(() => _discovering = false);
-
-    if (found.isEmpty) {
-      _toast('No se encontraron equipos en la red. Verifica que estén en la '
-          'misma red/Wi-Fi, o escribe la IP manualmente.');
-      return;
-    }
-
     final chosen = await showModalBottomSheet<DiscoveredAgent>(
       context: context,
+      isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Text('Equipos encontrados en la red',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            ),
-            for (final a in found)
-              ListTile(
-                leading: const Icon(Icons.computer_outlined),
-                title: Text(a.name.trim().isNotEmpty ? a.name : (a.ip ?? a.host)),
-                subtitle: Text('${a.ip ?? a.host}:${a.port}'),
-                onTap: () => Navigator.of(ctx).pop(a),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+      builder: (_) => _DeviceDiscoverySheet(businessId: _businessId),
     );
+    if (!mounted) return;
+    setState(() => _discovering = false);
 
     if (chosen == null) return;
     setState(() => _urlController.text = chosen.ip ?? chosen.host);
@@ -496,6 +456,205 @@ class _HubNetworkSettingsViewState
                 style: const TextStyle(fontSize: 13)),
           ),
       ],
+    );
+  }
+}
+
+/// Hoja de "Buscar equipos en la red": escanea la LAN por mDNS mostrando el
+/// progreso y los resultados. Se abre al instante (el escaneo corre dentro),
+/// así el usuario ve que está buscando en vez de esperar en silencio. Devuelve
+/// el [DiscoveredAgent] elegido, o `null` si se cierra / se prefiere IP manual.
+class _DeviceDiscoverySheet extends StatefulWidget {
+  const _DeviceDiscoverySheet({required this.businessId});
+
+  final String? businessId;
+
+  @override
+  State<_DeviceDiscoverySheet> createState() => _DeviceDiscoverySheetState();
+}
+
+class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
+  bool _scanning = true;
+  List<DiscoveredAgent> _results = const [];
+  int _sweepDone = 0;
+  int _sweepTotal = 0;
+
+  // Acumulador dedupeado por IP/host de ambas fuentes (mDNS + barrido TCP).
+  final Map<String, DiscoveredAgent> _byKey = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _scan();
+  }
+
+  void _merge(Iterable<DiscoveredAgent> agents) {
+    for (final a in agents) {
+      _byKey[a.ip ?? a.host] = a;
+    }
+    if (mounted) {
+      setState(() => _results = _byKey.values.toList(growable: false));
+    }
+  }
+
+  Future<void> _scan() async {
+    setState(() {
+      _scanning = true;
+      _results = const [];
+      _sweepDone = 0;
+      _sweepTotal = 0;
+      _byKey.clear();
+    });
+
+    // Dos fuentes en paralelo, igual que la búsqueda de impresoras:
+    //  1) mDNS (multicast pasivo): rápido si responde, pero en Mac suele
+    //     quedar vacío por el sandbox de Red local.
+    //  2) Barrido TCP activo de la subred (plan B robusto): conecta a cada IP
+    //     en 4000/4100 y confirma que hay un MangoPOS detrás.
+    final mdns = () async {
+      try {
+        final disc = AgentDiscovery();
+        final a = await disc.discover(
+          businessIdFilter: widget.businessId,
+          timeout: const Duration(seconds: 6),
+        );
+        _merge(a);
+      } catch (_) {/* el barrido TCP cubre el fallo de mDNS */}
+    }();
+
+    final sweep = () async {
+      try {
+        final agents = await HubLanScanner().scan(
+          onProgress: (done, total) {
+            if (!mounted) return;
+            setState(() {
+              _sweepDone = done;
+              _sweepTotal = total;
+            });
+          },
+        );
+        _merge(agents);
+      } catch (_) {/* mDNS cubre el fallo del barrido */}
+    }();
+
+    await Future.wait([mdns, sweep]);
+    if (!mounted) return;
+    setState(() => _scanning = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.wifi_tethering, size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Equipos en la red',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                  ),
+                ),
+                if (!_scanning)
+                  IconButton(
+                    tooltip: 'Volver a buscar',
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _scan,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // Progreso: visible mientras busca (mDNS + barrido TCP en paralelo).
+            if (_scanning)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        _sweepTotal > 0
+                            ? 'Buscando equipos… revisando la red '
+                                '($_sweepDone/$_sweepTotal)'
+                            : 'Buscando equipos en la red…',
+                        style: const TextStyle(fontSize: 13.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Resultados: se muestran a medida que cada fuente los encuentra.
+            if (_results.isNotEmpty)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.5,
+                ),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final a in _results)
+                      ListTile(
+                        leading: const Icon(Icons.computer_outlined),
+                        title: Text(
+                          a.name.trim().isNotEmpty ? a.name : (a.ip ?? a.host),
+                        ),
+                        subtitle: Text('${a.ip ?? a.host}:${a.port}'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).pop(a),
+                      ),
+                  ],
+                ),
+              ),
+
+            // Estado vacío: solo cuando terminó el escaneo sin resultados.
+            if (!_scanning && _results.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'No se encontraron equipos. Verifica que estén '
+                      'encendidos y en la misma red/Wi-Fi que este dispositivo. '
+                      'En Mac, permite el acceso a la "Red local" cuando el '
+                      'sistema lo pida.',
+                      style: TextStyle(fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: _scan,
+                          icon: const Icon(Icons.refresh, size: 18),
+                          label: const Text('Reintentar'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Escribir IP manual'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

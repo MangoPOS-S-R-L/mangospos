@@ -161,13 +161,19 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     List<KitchenItem> items,
     bool completeOnPayment,
   ) {
-    // Clave de RONDA = orden + kitchen_sent_at. Cada envío a cocina forma su
-    // propia comanda/tarjeta. Los ítems legacy sin marca caen en la ronda
-    // 'legacy' (una sola tarjeta por orden, como antes).
+    // Clave de tarjeta = orden + ronda (kitchen_sent_at) + ÁREA de producción.
+    // Cada envío a cocina forma su ronda, y dentro de la ronda cada área
+    // (Cocina, Bar, ...) es su PROPIA tarjeta, para que la estación vea solo lo
+    // suyo (burrito→Cocina y agua→Bar no se mezclan). El área ya viene resuelta
+    // desde el N:M en el repositorio; los ítems sin área caen en '__none__'
+    // (una tarjeta "Sin área" que delata productos sin configurar).
     final map = <String, List<KitchenItem>>{};
     for (final item in items) {
       final round = item.kitchenSentAt?.toIso8601String() ?? 'legacy';
-      map.putIfAbsent('${item.orderId}::$round', () => []).add(item);
+      final area = (item.areaCode == null || item.areaCode!.isEmpty)
+          ? '__none__'
+          : item.areaCode!;
+      map.putIfAbsent('${item.orderId}::$round::$area', () => []).add(item);
     }
 
     final orders = <KitchenOrder>[];

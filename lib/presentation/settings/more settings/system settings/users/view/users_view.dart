@@ -1346,6 +1346,7 @@ class _UserDialogState extends State<_UserDialog> {
   bool _loadingAccess = false;
   bool _accessDirty = false;
   bool _hasLoginAccess = false;
+  bool _sharedAcrossBranches = false;
 
   @override
   void initState() {
@@ -1434,6 +1435,16 @@ class _UserDialogState extends State<_UserDialog> {
               .toSet() ??
           <String>{};
 
+      var shared = false;
+      try {
+        shared = await widget.repo.getUserSharedAcrossBranches(
+          employeeId: user.id,
+          businessId: widget.businessId,
+        );
+      } catch (_) {
+        // Sin flag legible (empleado sin login, permisos, etc.): queda false.
+      }
+
       if (!mounted) return;
       setState(() {
         _selectedRoles
@@ -1444,6 +1455,7 @@ class _UserDialogState extends State<_UserDialog> {
         );
         _effectivePermissionCodes = effectivePermissions;
         _hasLoginAccess = payload['has_login'] == true;
+        _sharedAcrossBranches = shared;
         _loadingAccess = false;
       });
     } catch (_) {
@@ -1500,6 +1512,14 @@ class _UserDialogState extends State<_UserDialog> {
           return _canAssignRole(widget.callerBusinessRole, name);
         })
         .toList(growable: false);
+  }
+
+  /// Solo owner/admin pueden compartir un usuario entre sucursales (el RPC
+  /// `fn_set_user_shared_across_branches` también lo exige). Gatea el checkbox
+  /// en la UI y evita llamar al RPC (que denegaría) para roles no-admin.
+  bool get _canShareAcrossBranches {
+    final role = normalizeBusinessRole(widget.callerBusinessRole);
+    return role == 'owner' || role == 'admin';
   }
 
   Map<String, int> _categoryCounts(Set<String> codes) {
@@ -2134,6 +2154,17 @@ class _UserDialogState extends State<_UserDialog> {
           effectivePermissionCodes: _effectivePermissionCodes,
         );
 
+        // Solo owner/admin: el RPC exige is_admin_of_business, así que no lo
+        // llamamos para roles no-admin (evita un "access denied" que rompería
+        // el guardado completo).
+        if (_canShareAcrossBranches) {
+          await widget.repo.setUserSharedAcrossBranches(
+            employeeId: widget.user!.id,
+            businessId: widget.businessId,
+            shared: _sharedAcrossBranches,
+          );
+        }
+
         if (mounted) {
           Navigator.of(context).pop(true);
           AppToast.success(context, 'Usuario actualizado correctamente.');
@@ -2174,6 +2205,16 @@ class _UserDialogState extends State<_UserDialog> {
           primaryRole: _primaryBusinessRole,
           effectivePermissionCodes: _effectivePermissionCodes,
         );
+
+        // Marca de compartido entre sucursales (solo owner/admin; ver rama de
+        // edición). En creación el empleado ya trae su fila de user_businesses.
+        if (_canShareAcrossBranches && _sharedAcrossBranches) {
+          await widget.repo.setUserSharedAcrossBranches(
+            employeeId: createdEmployee.id,
+            businessId: widget.businessId,
+            shared: true,
+          );
+        }
 
         if (mounted) {
           Navigator.of(context).pop(true);
@@ -2720,6 +2761,38 @@ class _UserDialogState extends State<_UserDialog> {
                   ),
                 );
               }),
+            if (_canShareAcrossBranches) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8F7F5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _sharedAcrossBranches,
+                  onChanged: _hasLoginAccess
+                      ? (value) =>
+                            setState(() => _sharedAcrossBranches = value)
+                      : null,
+                  title: const Text(
+                    'Compartir entre sucursales',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  subtitle: Text(
+                    _hasLoginAccess
+                        ? 'El usuario podrá ver y operar TODAS las sucursales del grupo (mismo dueño) con este mismo cargo.'
+                        : 'Disponible cuando el usuario tenga login enlazado.',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 13),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(16),

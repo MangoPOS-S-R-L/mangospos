@@ -376,7 +376,12 @@ class KitchenViewModel extends ChangeNotifier {
             businessId: _businessId!,
             itemIds: allActiveIds,
           );
-          if (report.nothingPrinted && report.missingReadyPrinter) {
+          // Avisar SIEMPRE que un área se haya saltado por falta de impresora
+          // de "listo" — incluso si OTRA área sí imprimió (caso parcial: p. ej.
+          // Cocina imprime pero Bar no). Antes se exigía `nothingPrinted`, así
+          // que el salto parcial quedaba mudo y el usuario no sabía por qué su
+          // segunda área nunca imprimía el ticket de LISTO.
+          if (report.missingReadyPrinter) {
             notice = _readyPrinterNotice(report.areasWithoutReadyPrinter);
           }
         } catch (e) {
@@ -404,10 +409,10 @@ class KitchenViewModel extends ChangeNotifier {
       }
       return code;
     }).toList(growable: false);
-    final areas = names.isEmpty ? '' : ' (${names.join(', ')})';
-    return 'La comanda se marcó lista, pero no salió impresa: ninguna '
-        'impresora del área$areas tiene activado "Imprimir al marcar listo". '
-        'Actívalo en Ajustes → Impresoras → Asignaciones de área.';
+    final areas = names.isEmpty ? 'un área' : names.join(', ');
+    return 'El ticket de LISTO no salió en: $areas. Esa área no tiene una '
+        'impresora con "Imprimir al marcar listo" activado. Actívalo en '
+        'Ajustes → Impresoras → Asignaciones de área.';
   }
 
   void _subscribeRealtime(SupabaseClient client, String businessId) {

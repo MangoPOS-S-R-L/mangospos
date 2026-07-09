@@ -393,51 +393,138 @@ class SessionController extends Notifier<SessionState> {
           user.userMetadata?['full_name'] as String? ??
           'Usuario';
 
-      final memberships = await client
+      final membershipRows = await client
           .from('user_businesses')
-          .select('business_id, role, created_at')
+          .select('business_id, role, created_at, shared_across_branches')
           .eq('user_id', user.id)
           .order('created_at', ascending: true);
 
-      if (memberships.isEmpty) {
+      // Propietario multi-sucursal: además de sus filas en `user_businesses`,
+      // incluimos TODAS las sucursales que posee (`businesses.owner_id`), aunque
+      // no tenga una fila explícita — p. ej. una sucursal creada por un empleado
+      // suyo queda con owner_id = él. Así el dueño ve y puede cambiar a todas
+      // sus sucursales. El acceso a los DATOS lo respalda el RLS
+      // (`current_user_business_ids()` incluye las de owner_id).
+      final ownedRows = await client
+          .from('businesses')
+          .select('id, business_name, branch_name, status, domain')
+          .eq('owner_id', user.id);
+
+      if ((membershipRows as List).isEmpty && (ownedRows as List).isEmpty) {
         setUnauthenticated();
         return false;
       }
 
-      final businessIds = (memberships as List)
+      final membershipBusinessIds = membershipRows
           .map((row) => row['business_id']?.toString())
           .whereType<String>()
           .where((id) => id.isNotEmpty)
           .toList(growable: false);
 
-      final businessesResp = await client
-          .from('businesses')
-          .select('id, business_name, branch_name, status, domain')
-          .inFilter('id', businessIds);
+      // Info de negocios para las filas de user_businesses (los `ownedRows` ya
+      // traen su propia info).
+      final businessesResp = membershipBusinessIds.isEmpty
+          ? const <Map<String, dynamic>>[]
+          : await client
+                .from('businesses')
+                .select('id, business_name, branch_name, status, domain, owner_id')
+                .inFilter('id', membershipBusinessIds);
 
       final businessMap = {
         for (final row in (businessesResp as List).cast<Map<String, dynamic>>())
           row['id'].toString(): row,
       };
 
-      final availableBusinesses = (memberships)
-          .map<SessionBusiness>((row) {
-            final businessId = row['business_id'].toString();
-            final business =
-                businessMap[businessId] ?? const <String, dynamic>{};
-            final displayName =
-                (business['branch_name']?.toString().trim().isNotEmpty == true)
-                ? business['branch_name'].toString().trim()
-                : (business['business_name']?.toString().trim() ?? 'Negocio');
-            return SessionBusiness(
-              id: businessId,
-              name: displayName,
-              companyName: business['business_name']?.toString(),
-              role: row['role']?.toString() ?? 'owner',
-              status: business['status']?.toString(),
-              domain: business['domain']?.toString(),
-            );
-          })
+      String displayNameOf(Map<String, dynamic> b) =>
+          (b['branch_name']?.toString().trim().isNotEmpty == true)
+          ? b['branch_name'].toString().trim()
+          : (b['business_name']?.toString().trim() ?? 'Negocio');
+
+      // Dedupe por id preservando orden: primero las filas de user_businesses
+      // (respetan su role), luego las poseídas sin fila (role 'owner').
+      final availableById = <String, SessionBusiness>{};
+      for (final row in membershipRows) {
+        final businessId = row['business_id'].toString();
+        final business = businessMap[businessId] ?? const <String, dynamic>{};
+        availableById[businessId] = SessionBusiness(
+          id: businessId,
+          name: displayNameOf(business),
+          companyName: business['business_name']?.toString(),
+          role: row['role']?.toString() ?? 'owner',
+          status: business['status']?.toString(),
+          domain: business['domain']?.toString(),
+        );
+      }
+      for (final row in (ownedRows).cast<Map<String, dynamic>>()) {
+        final businessId = row['id'].toString();
+        if (availableById.containsKey(businessId)) continue;
+        availableById[businessId] = SessionBusiness(
+          id: businessId,
+          name: displayNameOf(row),
+          companyName: row['business_name']?.toString(),
+          role: 'owner',
+          status: row['status']?.toString(),
+          domain: row['domain']?.toString(),
+        );
+      }
+
+      // --- Usuario compartido entre sucursales (shared_across_branches) ---
+      // Para cada fila marcada, el usuario accede a TODAS las hermanas (mismo
+      // `owner_id`) del grupo, con el rol de esa fila. Menor rank = más
+      // privilegio; si varias filas apuntan al mismo grupo, gana la de mayor
+      // privilegio. El acceso a los DATOS lo respalda el RLS
+      // (`current_user_business_ids()` incluye las hermanas del grupo).
+      int roleRank(String? r) {
+        const order = [
+          'owner',
+          'admin',
+          'manager',
+          'cashier',
+          'waiter',
+          'cook',
+          'chef',
+          'delivery',
+        ];
+        final i = order.indexOf(r ?? '');
+        return i < 0 ? order.length : i;
+      }
+
+      final sharedOwnerRole = <String, String>{}; // owner_id -> mejor role
+      for (final row in membershipRows) {
+        if (row['shared_across_branches'] != true) continue;
+        final home = businessMap[row['business_id']?.toString()];
+        final ownerId = home?['owner_id']?.toString();
+        if (ownerId == null || ownerId.isEmpty) continue;
+        final role = row['role']?.toString() ?? 'owner';
+        final existing = sharedOwnerRole[ownerId];
+        if (existing == null || roleRank(role) < roleRank(existing)) {
+          sharedOwnerRole[ownerId] = role;
+        }
+      }
+
+      if (sharedOwnerRole.isNotEmpty) {
+        final siblingRows = await client
+            .from('businesses')
+            .select('id, business_name, branch_name, status, domain, owner_id')
+            .inFilter('owner_id', sharedOwnerRole.keys.toList());
+        for (final row in (siblingRows as List).cast<Map<String, dynamic>>()) {
+          final businessId = row['id'].toString();
+          if (availableById.containsKey(businessId)) continue;
+          final ownerId = row['owner_id']?.toString();
+          availableById[businessId] = SessionBusiness(
+            id: businessId,
+            name: displayNameOf(row),
+            companyName: row['business_name']?.toString(),
+            role: sharedOwnerRole[ownerId] ?? 'cashier',
+            status: row['status']?.toString(),
+            domain: row['domain']?.toString(),
+          );
+        }
+      }
+
+      final availableBusinesses = availableById.values.toList(growable: false);
+      final businessIds = availableBusinesses
+          .map((b) => b.id)
           .toList(growable: false);
 
       final requestedBusinessId = _requestedBusinessIdFromUrl();
@@ -528,7 +615,42 @@ class SessionController extends Notifier<SessionState> {
         .eq('business_id', businessId)
         .maybeSingle();
 
-    final roleStr = membership?['role']?.toString();
+    var roleStr = membership?['role']?.toString();
+
+    // Propietario sin fila en `user_businesses` de ESTA sucursal: si es el
+    // `owner_id` del negocio, se le trata como 'owner' (acceso a todas sus
+    // sucursales). Evita que cambiar a una sucursal propia sin fila explícita
+    // lo desloguee; los permisos caen en wildcard vía _fallbackPermissions y
+    // el acceso a datos lo garantiza el RLS por owner_id.
+    String? targetOwnerId;
+    if (roleStr == null) {
+      final target = await client
+          .from('businesses')
+          .select('id, owner_id')
+          .eq('id', businessId)
+          .maybeSingle();
+      targetOwnerId = target?['owner_id']?.toString();
+      if (target != null && targetOwnerId == userId) roleStr = 'owner';
+    }
+
+    // Usuario compartido entre sucursales: sin fila directa ni owner_id, pero
+    // con una fila marcada `shared_across_branches` en otra sucursal del mismo
+    // grupo (mismo `owner_id`). Hereda el rol de esa fila. El RLS respalda el
+    // acceso a datos vía la rama de usuario compartido.
+    if (roleStr == null &&
+        targetOwnerId != null &&
+        targetOwnerId.isNotEmpty) {
+      final shared = await client
+          .from('user_businesses')
+          .select('role, businesses!inner(owner_id)')
+          .eq('user_id', userId)
+          .eq('shared_across_branches', true)
+          .eq('businesses.owner_id', targetOwnerId)
+          .limit(1)
+          .maybeSingle();
+      if (shared != null) roleStr = shared['role']?.toString() ?? 'cashier';
+    }
+
     final posRole = _mapRole(roleStr);
 
     if (roleStr == null || posRole == null) {

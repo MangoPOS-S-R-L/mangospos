@@ -6700,9 +6700,25 @@ class _CartLineItem extends ConsumerWidget {
                           color: _salesTextPrimary,
                         ),
                       ),
-                      // Los extras/modificadores NO se listan bajo cada línea
-                      // del carrito: la lista se mantiene limpia y el extra se
-                      // ve al abrir el detalle del producto (clic).
+                      // Extras/modificadores en una línea compacta y sutil bajo
+                      // el nombre: así se distingue de un vistazo un producto con
+                      // extra de uno sin extra, sin saturar la lista con chips.
+                      // El dato ya viene en item.modifiers (bundle). El detalle
+                      // completo (precios/editar) sigue al hacer clic.
+                      if (item.modifiers.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            item.modifiers.map(_formatModifierLabel).join(' · '),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              height: 1.25,
+                              color: _salesTextSecondary,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -6725,6 +6741,20 @@ class _CartLineItem extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  /// Etiqueta compacta de un modificador para la línea del carrito. Prefija la
+  /// cantidad solo cuando es >1 (los extras normales son x1), p. ej. "Queso" o
+  /// "2× Tocineta".
+  String _formatModifierLabel(OrderItemModifier m) {
+    final name = m.name.trim();
+    if (m.qty > 1) {
+      final qtyStr = m.qty == m.qty.roundToDouble()
+          ? m.qty.toStringAsFixed(0)
+          : m.qty.toStringAsFixed(1);
+      return '$qtyStr× $name';
+    }
+    return name;
   }
 
   /// Tooltip de auditoría que aparece al pasar el mouse sobre el item:
