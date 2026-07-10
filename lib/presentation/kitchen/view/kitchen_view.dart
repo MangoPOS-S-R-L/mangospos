@@ -91,10 +91,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       });
     }
 
-    final activeOrders = _activeOrders(
-      vm.visibleActiveItems,
-      vm.completeOnPayment,
-    );
+    final activeOrders = _activeOrders(vm.visibleActiveItems);
     final queueItems = activeOrders.fold<int>(
       0,
       (sum, o) => sum + o.items.where((i) => i.status != 'ready').length,
@@ -148,19 +145,20 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   // TABLERO
   // ============================================================
 
-  /// Agrupa los ítems activos por orden.
+  /// Agrupa los ítems activos en tarjetas (orden + ronda + área) y deja en el
+  /// tablero SOLO las que aún tienen trabajo pendiente (pending/preparing).
   ///
-  /// - Modo "sale al pagar" ([completeOnPayment] true): solo se muestran las
-  ///   comandas con trabajo pendiente (pending/preparing). Al cocinarlas o
-  ///   pagarlas salen solas del tablero.
-  /// - Modo "esperar al cocinero" ([completeOnPayment] false): la fuente ya es
-  ///   `kds_open_orders` (órdenes sin sello de cocina), así que se muestran
-  ///   TODAS — incluso pagadas — hasta que el cocinero presione "Marcar todo
-  ///   listo".
-  List<KitchenOrder> _activeOrders(
-    List<KitchenItem> items,
-    bool completeOnPayment,
-  ) {
+  /// Una tarjeta 100% lista se despacha (sale del tablero) en AMBOS modos:
+  /// - "sale al pagar": la fuente (`kds_active_items`) ya excluye lo pagado.
+  /// - "esperar al cocinero": la fuente (`kds_open_orders`) mantiene la orden
+  ///   hasta que se selle `kitchen_done_at`, pero ese sello es POR ORDEN. Como
+  ///   una orden puede tener varias tarjetas (rondas/áreas), sellar al marcar
+  ///   una sola sería incorrecto — así que el despacho visual es POR TARJETA
+  ///   aquí. Si no filtráramos, al "Marcar todo listo" una tarjeta cuya orden
+  ///   aún tiene otras rondas pendientes reaparecería "toda lista" en el
+  ///   siguiente refresh (bug reportado). El sello por-orden sigue disparando
+  ///   solo cuando la orden completa terminó, para sacarla de la vista.
+  List<KitchenOrder> _activeOrders(List<KitchenItem> items) {
     // Clave de tarjeta = orden + ronda (kitchen_sent_at) + ÁREA de producción.
     // Cada envío a cocina forma su ronda, y dentro de la ronda cada área
     // (Cocina, Bar, ...) es su PROPIA tarjeta, para que la estación vea solo lo
@@ -182,9 +180,9 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       final hasOpen = list.any(
         (i) => i.status == 'pending' || i.status == 'preparing',
       );
-      // En modo "sale al pagar", una comanda sin trabajo pendiente ya está
-      // cocinada/pagada → fuera del tablero.
-      if (completeOnPayment && !hasOpen) continue;
+      // Tarjeta sin trabajo pendiente = cocinada/despachada → fuera del tablero
+      // (en ambos modos). Ver la nota del doc sobre por qué es por-tarjeta.
+      if (!hasOpen) continue;
 
       // No-listos primero; dentro de cada grupo, por antigüedad.
       list.sort((a, b) {
