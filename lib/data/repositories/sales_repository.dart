@@ -1909,6 +1909,22 @@ class SalesRepository {
       } catch (_) {
         // La marca de ronda es best-effort; el pedido ya entró a cocina.
       }
+      // Reabrir la cocina de la orden. Si una ronda anterior de esta MISMA orden
+      // ya fue despachada ("Marcar todo listo" sella `orders.kitchen_done_at`),
+      // la orden salió de `kds_open_orders` — que filtra `kitchen_done_at IS
+      // NULL` — y esta ronda NUEVA no aparecería en el KDS en modo "esperar al
+      // cocinero". Al enviar ítems nuevos hay trabajo de cocina otra vez, así
+      // que limpiamos el sello. Solo escribe si estaba sellada (evita writes y
+      // eventos realtime redundantes). Best-effort: no debe tumbar el envío.
+      try {
+        await _client
+            .from('orders')
+            .update({'kitchen_done_at': null})
+            .eq('id', orderId)
+            .not('kitchen_done_at', 'is', null);
+      } catch (_) {
+        // El des-sellado es best-effort; el pedido ya entró a cocina.
+      }
     } catch (e) {
       throw Exception('Error al enviar a cocina: $e');
     }

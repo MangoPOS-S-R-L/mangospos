@@ -258,10 +258,28 @@ class KitchenViewModel extends ChangeNotifier {
     }
   }
 
+  /// True si el ítem está actualmente 'paid' en el tablero. Solo ocurre en modo
+  /// "esperar al cocinero" (kds_open_orders trae los pagados); en modo "sale al
+  /// pagar" los pagados nunca llegan al KDS. Ver [stampItemCookProgress].
+  bool _isPaidItem(String itemId) {
+    for (final i in _items) {
+      if (i.id == itemId) return i.status == 'paid';
+    }
+    return false;
+  }
+
   Future<void> startCooking(String itemId) async {
+    // Ítem ya pagado (modo "esperar al cocinero"): sellamos solo `started_at`
+    // sin revertir el 'paid'. En cualquier otro estado, la transición normal
+    // a 'preparing' aplica.
+    final preservePaid = _isPaidItem(itemId) && !_isHubMode;
     _applyLocalItemStatus(itemId, 'preparing');
     try {
-      await _setItemStatus(itemId, 'preparing');
+      if (preservePaid) {
+        await _repository.stampItemCookProgress(itemId: itemId, ready: false);
+      } else {
+        await _setItemStatus(itemId, 'preparing');
+      }
       _clearOverride(itemId);
       _scheduleRefresh(immediate: true);
     } catch (e) {
@@ -295,9 +313,16 @@ class KitchenViewModel extends ChangeNotifier {
   }
 
   Future<void> markReady(String itemId) async {
+    // Ítem ya pagado (modo "esperar al cocinero"): sellamos solo `ready_at`
+    // sin revertir el 'paid' (del que depende la reapertura al anular el pago).
+    final preservePaid = _isPaidItem(itemId) && !_isHubMode;
     _applyLocalItemStatus(itemId, 'ready');
     try {
-      await _setItemStatus(itemId, 'ready');
+      if (preservePaid) {
+        await _repository.stampItemCookProgress(itemId: itemId, ready: true);
+      } else {
+        await _setItemStatus(itemId, 'ready');
+      }
       _clearOverride(itemId);
       _scheduleRefresh(immediate: true);
     } catch (e) {

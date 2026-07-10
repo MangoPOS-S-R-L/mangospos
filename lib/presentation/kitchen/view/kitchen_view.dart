@@ -91,7 +91,10 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       });
     }
 
-    final activeOrders = _activeOrders(vm.visibleActiveItems);
+    final activeOrders = _activeOrders(
+      vm.visibleActiveItems,
+      vm.completeOnPayment,
+    );
     final queueItems = activeOrders.fold<int>(
       0,
       (sum, o) => sum + o.items.where((i) => i.status != 'ready').length,
@@ -158,7 +161,10 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   ///   aún tiene otras rondas pendientes reaparecería "toda lista" en el
   ///   siguiente refresh (bug reportado). El sello por-orden sigue disparando
   ///   solo cuando la orden completa terminó, para sacarla de la vista.
-  List<KitchenOrder> _activeOrders(List<KitchenItem> items) {
+  List<KitchenOrder> _activeOrders(
+    List<KitchenItem> items,
+    bool completeOnPayment,
+  ) {
     // Clave de tarjeta = orden + ronda (kitchen_sent_at) + ÁREA de producción.
     // Cada envío a cocina forma su ronda, y dentro de la ronda cada área
     // (Cocina, Bar, ...) es su PROPIA tarjeta, para que la estación vea solo lo
@@ -177,11 +183,22 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     final orders = <KitchenOrder>[];
     for (final entry in map.entries) {
       final list = entry.value;
-      final hasOpen = list.any(
-        (i) => i.status == 'pending' || i.status == 'preparing',
-      );
-      // Tarjeta sin trabajo pendiente = cocinada/despachada → fuera del tablero
-      // (en ambos modos). Ver la nota del doc sobre por qué es por-tarjeta.
+      final hasOpen = list.any((i) {
+        if (i.status == 'pending' || i.status == 'preparing') return true;
+        // Modo "esperar al cocinero" (completeOnPayment == false): al cobrar,
+        // fn_process_payment_v3 marca los ítems 'paid', pero eso NO significa
+        // que la cocina los preparó. Un ítem pagado que aún no tiene `readyAt`
+        // sigue por cocinar, así que la tarjeta debe permanecer en el tablero
+        // hasta que el cocinero la marque (lo que sella `ready_at`). En el modo
+        // "sale al pagar" esto no aplica: la orden ya salió del KDS al cobrar y
+        // los pagados nunca llegan a esta vista.
+        if (!completeOnPayment && i.status == 'paid' && i.readyAt == null) {
+          return true;
+        }
+        return false;
+      });
+      // Tarjeta sin trabajo pendiente = cocinada/despachada → fuera del tablero.
+      // Ver la nota del doc sobre por qué es por-tarjeta.
       if (!hasOpen) continue;
 
       // No-listos primero; dentro de cada grupo, por antigüedad.

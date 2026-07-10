@@ -7,6 +7,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/payment_models.dart';
+import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -24,6 +25,9 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   // RPC de resumen. La lista sola no tiene el esperado total (solo la de
   // efectivo en session.difference), así que la traemos aparte.
   Map<String, double> _netDiffById = const {};
+  // Sesión cuya reimpresión de cierre está en curso (para el spinner en el
+  // botón). null = ninguna en curso.
+  String? _reprintingId;
 
   ({double cash, double card, double transfer, double total})
   _reportedBreakdown(CashRegisterSession session) {
@@ -442,6 +446,30 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     }
   }
 
+  /// Reimprime el ticket de cierre de una sesión ya cerrada, en el mismo
+  /// formato que el cierre original (marcado como REIMPRESION). Reusa
+  /// `CashClosePrintService.reprintForSession`, que reconstruye los datos
+  /// desde el resumen + el conteo firmado / notas.
+  Future<void> _reprint(CashRegisterSession session) async {
+    if (_reprintingId != null) return;
+    setState(() => _reprintingId = session.id);
+    try {
+      final service = CashClosePrintService(Supabase.instance.client);
+      await service.reprintForSession(
+        sessionId: session.id,
+        cashierName: _resolveCashierName(session),
+        businessName: ref.read(cashierViewModelProvider).businessName,
+      );
+      if (!mounted) return;
+      AppToast.success(context, 'Cierre reimpreso correctamente');
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo reimprimir el cierre: $e');
+    } finally {
+      if (mounted) setState(() => _reprintingId = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -568,9 +596,36 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                           ),
                       ],
                     ),
-                    trailing: TextButton(
-                      onPressed: () => _showSummary(session),
-                      child: const Text('Ver resumen'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Reimpresión del ticket de cierre. Solo para sesiones
+                        // cerradas (una abierta no tiene cierre que reimprimir).
+                        if (!isOpen)
+                          _reprintingId == session.id
+                              ? const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                )
+                              : IconButton(
+                                  tooltip: 'Reimprimir cierre',
+                                  icon: const Icon(Icons.print_outlined),
+                                  color: MangoColors.primaryOrange,
+                                  onPressed: _reprintingId == null
+                                      ? () => _reprint(session)
+                                      : null,
+                                ),
+                        TextButton(
+                          onPressed: () => _showSummary(session),
+                          child: const Text('Ver resumen'),
+                        ),
+                      ],
                     ),
                   ),
                 );

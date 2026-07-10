@@ -172,6 +172,22 @@ class KitchenRepository {
         .isFilter('kitchen_done_at', null);
   }
 
+  /// Sella el progreso de cocina de UN ítem SIN tocar su `status`. Se usa en
+  /// modo "esperar al cocinero" cuando el cocinero avanza un ítem que YA está
+  /// pagado: si cambiáramos su `status` a 'preparing'/'ready' perderíamos el
+  /// marcador 'paid' del que depende la reapertura al anular el pago
+  /// (sales_repository reabre ítems filtrando por `status = 'paid'`). Solo
+  /// escribimos el timestamp correspondiente: `started_at` (al empezar) o
+  /// `ready_at` (al terminar). La señal de "cocinado" del KDS es `ready_at`.
+  Future<void> stampItemCookProgress({
+    required String itemId,
+    required bool ready,
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    final updates = ready ? {'ready_at': now} : {'started_at': now};
+    await _client.from('order_items').update(updates).eq('id', itemId);
+  }
+
   /// Obtener órdenes agrupadas
   Future<List<KitchenOrder>> getActiveOrders({
     String? businessId,

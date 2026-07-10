@@ -231,16 +231,12 @@ class PrintTicketService {
     gen.setTextSize();
     gen.doubleSeparator();
 
-    // ─── INFO DE ORDEN en 2 columnas ────────────────────────────────
-    // Sin linefeed entre filas: las labels (ORDEN/MESA, MESERO/HORA)
-    // y sus valores quedan apilados directamente para un look mas
-    // compacto.
-    gen.textRow('ORDEN', 'MESA');
+    // ─── INFO DE ORDEN ──────────────────────────────────────────────
+    // La MESA ya NO va aquí: baja al bloque del CLIENTE y se imprime
+    // como "Mesa: NU01" en la misma linea, para que cocina identifique
+    // comensal + mesa de un solo vistazo. Aqui queda solo la ORDEN.
     gen.setBold(true);
-    gen.textRow(
-      '#${order.id.substring(0, 8).toUpperCase()}',
-      tableName.isNotEmpty ? tableName : '-',
-    );
+    gen.text('ORDEN: #${order.id.substring(0, 8).toUpperCase()}');
     gen.setBold(false);
 
     if ((waiterName != null && waiterName.isNotEmpty) ||
@@ -260,17 +256,20 @@ class PrintTicketService {
     if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
       gen.text('CAJERO: ${resolvedCashier.toUpperCase()}');
     }
-    // CLIENTE: nombre que el mesero capturó al abrir la mesa
-    // (table_sessions.customer_name). Línea propia debajo de cajero
-    // para que cocina identifique el comensal de un vistazo. Se omite
-    // si la mesa no tiene cliente asignado (caso típico walk-in sin
-    // registro previo).
+    // CLIENTE + MESA en la MISMA linea. El nombre lo captura el mesero
+    // al abrir la mesa (table_sessions.customer_name); la mesa va a la
+    // derecha como "Mesa: NU01". Si la mesa no tiene cliente asignado
+    // (walk-in sin registro previo), igual imprimimos la linea con solo
+    // la mesa para no perderla nunca.
     final resolvedCustomer = customerName?.trim();
+    final mesaLabel = 'MESA: ${tableName.isNotEmpty ? tableName : '-'}';
+    gen.setBold(true);
     if (resolvedCustomer != null && resolvedCustomer.isNotEmpty) {
-      gen.setBold(true);
-      gen.text('CLIENTE: ${resolvedCustomer.toUpperCase()}');
-      gen.setBold(false);
+      gen.textRow('CLIENTE: ${resolvedCustomer.toUpperCase()}', mesaLabel);
+    } else {
+      gen.text(mesaLabel);
     }
+    gen.setBold(false);
     gen.doubleSeparator();
 
     // ─── BLOQUES DE FRANJAS ─────────────────────────────────────────

@@ -208,6 +208,33 @@ class CashierRepository {
     }
   }
 
+  /// Último conteo firmado (mayor `attempt_number`) de `cash_count_blind`
+  /// para una sesión. Sirve para reconstruir el ticket de cierre en una
+  /// REIMPRESIÓN: trae el reportado por método + las denominaciones (JSONB).
+  ///
+  /// Devuelve `null` si la sesión no tiene conteo firmado —p.ej. cierres en
+  /// modo compacto, que solo persisten las notas de la sesión— o ante
+  /// cualquier error (best-effort: la reimpresión cae a parsear las notas y
+  /// el ticket va sin desglose de denominaciones).
+  Future<Map<String, dynamic>?> getBlindCountForSession(
+    String sessionId,
+  ) async {
+    try {
+      final row = await _client
+          .from('cash_count_blind')
+          .select(
+            'cash_amount, card_amount, transfer_amount, denominations, attempt_number',
+          )
+          .eq('cash_register_session_id', sessionId)
+          .order('attempt_number', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      return row == null ? null : Map<String, dynamic>.from(row);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Cuántos conteos firmados existen para la sesión (1 o 2). 0 si la
   /// sesión aún no fue cerrada. Útil para decidir si el botón "Volver
   /// a contar" debe mostrarse (solo si count < 2) y para asignar el

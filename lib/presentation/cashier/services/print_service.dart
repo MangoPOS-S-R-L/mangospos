@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
@@ -24,6 +25,7 @@ class CashClosePrintService {
     String? cashRegisterId,
     int recountCount = 0,
     String? sessionId,
+    bool reprint = false,
   }) async {
     // Desglose por área de producción: solo si el negocio activó el toggle
     // y tenemos la sesión para acotar el periodo. Best-effort — si falla,
@@ -46,9 +48,268 @@ class CashClosePrintService {
       recountCount: recountCount,
       salesByArea: salesByArea,
       productsByArea: productsByArea,
+      reprint: reprint,
     );
 
     await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
+  }
+
+  /// Reimprime el ticket de cierre de una sesión YA cerrada, reconstruyendo
+  /// exactamente los mismos datos que se imprimieron al cerrarla:
+  ///  - esperados + estadísticas del turno vía la RPC `fn_get_cash_session_summary`
+  ///    (misma fuente de verdad que el cierre real),
+  ///  - reportado por método + denominaciones desde el conteo firmado
+  ///    (`cash_count_blind`, cierre detallado); si no existe (cierre compacto),
+  ///    el reportado se parsea de las notas de la sesión y el ticket va sin el
+  ///    desglose de denominaciones (que ese modo nunca persiste),
+  ///  - movimientos manuales del turno (depósitos/retiros/gastos) con su razón.
+  ///
+  /// Usa el MISMO layout que `printCloseTicket` — solo agrega la marca
+  /// "REIMPRESION" bajo el encabezado. La fecha/hora del ticket son las del
+  /// cierre original (no las de la reimpresión).
+  ///
+  /// [businessName]/[cashierName] son opcionales: si el caller ya los tiene
+  /// (las vistas de cierres/reportes los muestran) se pasan para evitar
+  /// lookups; si no, se resuelven aquí best-effort.
+  Future<void> reprintForSession({
+    required String sessionId,
+    String? businessName,
+    String? cashierName,
+  }) async {
+    // 1. Fila de la sesión. Debe estar cerrada para tener un cierre que reimprimir.
+    final session = await _client
+        .from('cash_register_sessions')
+        .select(
+          'opened_at, closed_at, start_amount, notes, user_id, cash_register_id, status',
+        )
+        .eq('id', sessionId)
+        .maybeSingle();
+    if (session == null) {
+      throw Exception('No se encontró la sesión de caja para reimprimir.');
+    }
+    final closedAtRaw = session['closed_at']?.toString();
+    if (closedAtRaw == null || closedAtRaw.isEmpty) {
+      throw Exception('Esta sesión de caja aún no está cerrada.');
+    }
+    final closedAt = DateTime.tryParse(closedAtRaw) ?? DateTime.now();
+    final startAmount = (session['start_amount'] as num?)?.round() ?? 0;
+    final notes = session['notes']?.toString() ?? '';
+    final cashRegisterId = session['cash_register_id']?.toString();
+    final userId = session['user_id']?.toString() ?? '';
+
+    // 2. Esperados + estadísticas del turno (misma RPC que el cierre real).
+    final summaryResp = Map<String, dynamic>.from(
+      await _client.rpc(
+        'fn_get_cash_session_summary',
+        params: {'p_session_id': sessionId},
+      ),
+    );
+    final summary = (summaryResp['success'] as bool? ?? true)
+        ? summaryResp
+        : const <String, dynamic>{};
+
+    int toInt(dynamic v) {
+      if (v == null) return 0;
+      if (v is int) return v;
+      if (v is num) return v.round();
+      return int.tryParse(v.toString()) ?? 0;
+    }
+
+    double toDouble(dynamic v) => (v as num?)?.toDouble() ?? 0;
+
+    final expectedCash = toInt(summary['expected_cash']);
+    final expectedCard = toInt(summary['expected_card']);
+    final expectedTransfer = toInt(summary['expected_transfer']);
+
+    final repo = CashierRepository(_client);
+    final businessId = await resolveBusinessIdOrNull(_client, 'auto');
+
+    // 3. Movimientos manuales del turno (depósitos/retiros/gastos) con razón
+    //    resuelta desde el catálogo. No crítico: si falla, va sin movimientos.
+    List<CashMovementEntry> movements = const <CashMovementEntry>[];
+    try {
+      final allTx = await repo.getSessionTransactions(sessionId);
+      final reasons = (businessId == null || businessId.isEmpty)
+          ? const <Map<String, dynamic>>[]
+          : await repo.getCashTransactionReasons(businessId: businessId);
+      final reasonByCode = <String, String>{
+        for (final r in reasons)
+          if (r['code'] != null && r['label'] != null)
+            r['code'].toString(): r['label'].toString(),
+      };
+      movements = allTx
+          .where((tx) =>
+              tx.type == 'deposit' ||
+              tx.type == 'withdrawal' ||
+              tx.type == 'expense')
+          .map((tx) {
+            final code = tx.reasonCode;
+            final label = (code != null && reasonByCode[code] != null)
+                ? reasonByCode[code]
+                : tx.description;
+            return CashMovementEntry(
+              type: tx.type,
+              amount: tx.amount,
+              reasonLabel: label,
+              description: tx.description,
+              createdAt: tx.createdAt,
+            );
+          })
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('[CashClosePrint] movimientos no disponibles (reimpresión): $e');
+    }
+
+    // 4. Lado reportado + denominaciones. Preferimos el conteo firmado
+    //    (cash_count_blind, cierre detallado); si no existe (cierre compacto),
+    //    parseamos las notas y el ticket va sin desglose de denominaciones.
+    final blind = await repo.getBlindCountForSession(sessionId);
+    int reportedCash;
+    double reportedCard;
+    double reportedTransfer;
+    List<DenominationCount> denominations;
+    if (blind != null) {
+      reportedCash = toInt(blind['cash_amount']);
+      reportedCard = toDouble(blind['card_amount']);
+      reportedTransfer = toDouble(blind['transfer_amount']);
+      denominations = _denominationsFromJson(blind['denominations']);
+    } else {
+      final parsed = _reportedFromNotes(notes);
+      reportedCash = parsed.cash.round();
+      reportedCard = parsed.card;
+      reportedTransfer = parsed.transfer;
+      denominations = const <DenominationCount>[];
+    }
+    final totalReported = reportedCash + reportedCard + reportedTransfer;
+
+    // 5. Nombre del negocio / cajero (fallback a lookups si no vienen del caller).
+    final resolvedBusinessName =
+        (businessName != null && businessName.trim().isNotEmpty)
+            ? businessName.trim()
+            : await _resolveBusinessName(businessId);
+    final resolvedCashier =
+        (cashierName != null && cashierName.trim().isNotEmpty)
+            ? cashierName.trim()
+            : await _resolveCashierName(userId);
+
+    final input = CashCloseInput(
+      expectedCash: expectedCash,
+      expectedCard: expectedCard,
+      expectedTransfer: expectedTransfer,
+      totalSales: toInt(summary['total_sales_all_methods']),
+      transactionCount: toInt(summary['transaction_count']),
+      cashierName: resolvedCashier,
+      businessName: resolvedBusinessName,
+      startAmount: startAmount,
+      cashSalesNet: toInt(summary['cash_sales_net']),
+      totalDeposits: toInt(summary['total_deposits']),
+      totalWithdrawals: toInt(summary['total_withdrawals']),
+      totalExpenses: toInt(summary['total_expenses']),
+      movements: movements,
+    );
+
+    // Diferencias reconstruidas igual que CashCloseCalculator.calculate.
+    final result = CashCloseResult(
+      totalCounted: reportedCash,
+      numericCard: reportedCard,
+      numericTransfer: reportedTransfer,
+      totalReported: totalReported.toDouble(),
+      expectedTotal: input.expectedTotal,
+      cashDifference: reportedCash - expectedCash,
+      cardDifference: reportedCard - expectedCard,
+      transferDifference: reportedTransfer - expectedTransfer,
+      totalDifference: totalReported - input.expectedTotal,
+    );
+
+    int recountCount = 0;
+    try {
+      recountCount =
+          await PosSettingsRepository(_client).getCashRecountCount(sessionId);
+    } catch (_) {}
+
+    await printCloseTicket(
+      input: input,
+      result: result,
+      denominations: denominations,
+      printedAt: closedAt,
+      cashRegisterId: cashRegisterId,
+      recountCount: recountCount,
+      sessionId: sessionId,
+      reprint: true,
+    );
+  }
+
+  /// Reconstruye la lista de denominaciones desde el JSONB de `cash_count_blind`
+  /// (`{"1000": 3, "500": 2}` → valor:conteo). El label no se usa en el ticket
+  /// (solo value/count), así que va vacío. Se ordena descendente por valor para
+  /// imprimir de mayor a menor, igual que el conteo en vivo.
+  List<DenominationCount> _denominationsFromJson(dynamic raw) {
+    if (raw is! Map) return const <DenominationCount>[];
+    final list = <DenominationCount>[];
+    raw.forEach((k, v) {
+      final value = int.tryParse(k.toString());
+      final count = v is num ? v.toInt() : int.tryParse(v.toString()) ?? 0;
+      if (value != null && count > 0) {
+        list.add(DenominationCount(value: value, label: '', count: count));
+      }
+    });
+    list.sort((a, b) => b.value.compareTo(a.value));
+    return list;
+  }
+
+  /// Parsea el reportado por método desde las notas del cierre. Acepta singular
+  /// o plural porque el modo compacto escribe "Tarjetas"/"Transferencias" y el
+  /// detallado "Tarjeta"/"Transferencia". Usado solo cuando NO hay conteo
+  /// firmado (cierres compactos).
+  ({double cash, double card, double transfer, double total}) _reportedFromNotes(
+    String notes,
+  ) {
+    double extract(String label) {
+      final match =
+          RegExp('$label:\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(notes);
+      return match == null ? 0 : (double.tryParse(match.group(1) ?? '') ?? 0);
+    }
+
+    final cash = extract('Efectivo');
+    final card = extract('Tarjetas?');
+    final transfer = extract('Transferencias?');
+    final total = extract('Total reportado');
+    return (
+      cash: cash,
+      card: card,
+      transfer: transfer,
+      total: total > 0 ? total : cash + card + transfer,
+    );
+  }
+
+  Future<String> _resolveBusinessName(String? businessId) async {
+    if (businessId == null || businessId.isEmpty) return 'MangoPOS Restaurant';
+    try {
+      final row = await _client
+          .from('businesses')
+          .select('name')
+          .eq('id', businessId)
+          .maybeSingle();
+      final name = row?['name']?.toString().trim();
+      return (name != null && name.isNotEmpty) ? name : 'MangoPOS Restaurant';
+    } catch (_) {
+      return 'MangoPOS Restaurant';
+    }
+  }
+
+  Future<String> _resolveCashierName(String userId) async {
+    if (userId.isEmpty) return 'Cajero';
+    try {
+      final row = await _client
+          .from('profiles')
+          .select('full_name')
+          .eq('id', userId)
+          .maybeSingle();
+      final name = row?['full_name']?.toString().trim();
+      return (name != null && name.isNotEmpty) ? name : 'Cajero';
+    } catch (_) {
+      return 'Cajero';
+    }
   }
 
   /// Lee el toggle `cash_close_print_sales_by_area`; si está activo, trae el
@@ -146,6 +407,7 @@ class CashClosePrintService {
     int recountCount = 0,
     List<Map<String, dynamic>> salesByArea = const [],
     List<Map<String, dynamic>> productsByArea = const [],
+    bool reprint = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     gen.initialize();
@@ -155,6 +417,14 @@ class CashClosePrintService {
     gen.setTextSize();
     gen.setBold(false);
     gen.textCentered('CIERRE DE CAJA');
+    // Marca de auditoría: este ticket es una reimpresión de un cierre ya
+    // firmado, no el cierre original. Solo aparece en reimpresiones — los
+    // cierres en vivo salen byte-idénticos a como estaban.
+    if (reprint) {
+      gen.setBold(true);
+      gen.textCentered('** REIMPRESION **');
+      gen.setBold(false);
+    }
     gen.textCentered('Fecha: ${formatDateEsDo(printedAt)}');
     gen.textCentered('Hora: ${formatTimeEsDo(printedAt)}');
     gen.doubleSeparator();

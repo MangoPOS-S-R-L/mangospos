@@ -5,9 +5,12 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
 import 'package:mangopos/presentation/reports/widgets/report_scaffold.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class FinanceReportView extends StatelessWidget {
   const FinanceReportView({super.key});
@@ -348,7 +351,74 @@ class _CashClosureCard extends StatelessWidget {
               );
             },
           ),
+          if ((closure['id']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.lg),
+            Align(
+              alignment: Alignment.centerRight,
+              child: _ReprintClosureButton(
+                sessionId: closure['id'].toString(),
+                cashierName: closure['cashier_name']?.toString(),
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+/// Botón de reimpresión del ticket de cierre desde el reporte de finanzas.
+/// Stateful para su propio spinner/guard porque `_CashClosureCard` es
+/// stateless. Reusa `CashClosePrintService.reprintForSession` (mismo formato
+/// que el cierre original, marcado como REIMPRESION).
+class _ReprintClosureButton extends StatefulWidget {
+  const _ReprintClosureButton({required this.sessionId, this.cashierName});
+
+  final String sessionId;
+  final String? cashierName;
+
+  @override
+  State<_ReprintClosureButton> createState() => _ReprintClosureButtonState();
+}
+
+class _ReprintClosureButtonState extends State<_ReprintClosureButton> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await CashClosePrintService(Supabase.instance.client).reprintForSession(
+        sessionId: widget.sessionId,
+        cashierName: widget.cashierName,
+      );
+      if (!mounted) return;
+      AppToast.success(context, 'Cierre reimpreso correctamente');
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo reimprimir el cierre: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _busy ? null : _run,
+      icon: _busy
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.print_outlined, size: 18),
+      label: const Text('Reimprimir cierre'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: MangoColors.primaryOrange,
+        side: BorderSide(
+          color: MangoColors.primaryOrange.withValues(alpha: 0.4),
+        ),
       ),
     );
   }
