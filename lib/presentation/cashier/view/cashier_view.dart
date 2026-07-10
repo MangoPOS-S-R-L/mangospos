@@ -14,6 +14,7 @@ import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/blind_cash_close_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/cashier/widgets/variance_confirm_dialog.dart';
+import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -155,15 +156,29 @@ class _CashierViewState extends ConsumerState<CashierView>
       return;
     }
 
-    // Validar que la sesión pertenece al usuario actual
+    // La sesión puede pertenecer a otro usuario (la abrió otro cajero, o se
+    // transfirió). Antes esto bloqueaba en seco y dejaba la caja imposible de
+    // cerrar en un cambio de turno. Ahora: el dueño del negocio cierra directo;
+    // cualquier otro necesita PIN de Supervisor/Admin. El server no valida
+    // usuario (fn_close_cash_session), así que este es el único gate real.
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
-    if (currentUserId == null ||
-        session['user_id']?.toString() != currentUserId) {
-      AppToast.error(
-        context,
-        'Esta sesión de caja no te pertenece. Solo el cajero que la abrió puede cerrarla.',
-      );
-      return;
+    final isOwnSession = currentUserId != null &&
+        session['user_id']?.toString() == currentUserId;
+    if (!isOwnSession) {
+      final isOwner = ref.read(sessionProvider).isOwner;
+      if (!isOwner) {
+        final authorized = await showPinVerificationModal(
+          context,
+          ref,
+          level: PinAccessLevel.supervisor,
+          title: 'Cerrar caja de otro usuario',
+          subtitle:
+              'Esta caja fue abierta por otro cajero. Se requiere PIN de '
+              'Supervisor o Administrador para cerrarla.',
+        );
+        if (!authorized) return;
+        if (!mounted) return;
+      }
     }
 
     final pending = await ref

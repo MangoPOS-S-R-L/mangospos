@@ -111,7 +111,12 @@ class CashierViewModel extends ChangeNotifier {
   // reabrir la app offline el cajero queda bloqueado en `ensureCashOpenFast`.
   String? _cachedSessionKey() {
     if (_businessId == null || _currentRegisterId == null) return null;
-    return 'cashier_last_session_${_businessId}_$_currentRegisterId';
+    // Escopeado por usuario: sin el user_id, un cajero heredaba offline la
+    // sesión que dejó cacheada OTRO usuario en el mismo dispositivo/registradora
+    // (la caja se carga por register, no por usuario). Con el user_id, cada
+    // quien solo restaura de cache lo que él mismo vio abierto.
+    final userId = Supabase.instance.client.auth.currentUser?.id ?? 'anon';
+    return 'cashier_last_session_${_businessId}_${_currentRegisterId}_$userId';
   }
 
   Future<void> _persistLastSession(Map<String, dynamic>? session) async {

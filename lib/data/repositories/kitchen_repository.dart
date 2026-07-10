@@ -93,8 +93,14 @@ class KitchenRepository {
     String? areaCode,
   }) async {
     try {
-      var query =
-          _client.from('kds_open_orders').select(_kdsSelectColumns);
+      // `kds_open_orders` incluye cada ítem no anulado de órdenes abiertas
+      // (status <> 'void'), lo que arrastra los 'draft' aún NO enviados a
+      // cocina → aparecían en el KDS "antes de enviar". Un ítem sin enviar no
+      // pertenece al tablero en ningún modo: lo excluimos explícitamente.
+      var query = _client
+          .from('kds_open_orders')
+          .select(_kdsSelectColumns)
+          .neq('status', 'draft');
       if (businessId != null && businessId.isNotEmpty) {
         query = query.eq('business_id', businessId);
       }
