@@ -3,6 +3,7 @@
 // implica solo tocar este archivo.
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/router/routes.dart';
 import '../../data/repositories/pos_settings_repository.dart';
@@ -146,4 +147,62 @@ bool isDestinationActive(ShellDestination d, String currentLocation) {
     return true;
   }
   return false;
+}
+
+/// Índice de la rama del `StatefulShellRoute.indexedStack` principal (definido
+/// en `app_router.dart`) a la que pertenece la ruta "home" de un destino de
+/// navegación. **El orden DEBE coincidir con el orden de `branches:` en
+/// `app_router.dart`.** Se usa para `goBranch(index)`, que conserva el estado
+/// (scroll/página/filtro) de la rama al volver a ella.
+///
+/// Devuelve -1 si la ruta no es la home de una rama conocida; en ese caso se
+/// navega con `context.go`, que igual preserva las OTRAS ramas.
+int shellBranchIndexForDestination(String route) {
+  switch (route) {
+    case AppRoutes.dashboard:
+      return 0;
+    case AppRoutes.sales:
+      return 1;
+    case AppRoutes.cashier:
+      return 2;
+    case AppRoutes.kitchen:
+      return 3;
+    case AppRoutes.reservations:
+      return 4;
+    case AppRoutes.customers:
+      return 5;
+    case AppRoutes.products:
+      return 6;
+    case AppRoutes.reports:
+      return 7;
+    case AppRoutes.settings:
+      return 8;
+    case AppRoutes.inventoryHome:
+      return 9;
+    case AppRoutes.purchasesList:
+      return 10;
+    case AppRoutes.promosCenter:
+      return 11;
+    case AppRoutes.menu:
+      return 12;
+    default:
+      return -1;
+  }
+}
+
+/// Navega a un destino del shell conservando el estado de las demás secciones.
+/// Si el destino mapea a una rama del `StatefulShellRoute`, usa `goBranch`
+/// (restaura la última ubicación de esa rama; o la resetea a su home si ya
+/// estás parado en ella). Si no mapea a ninguna rama, cae a `context.go`.
+void goToShellDestination(
+  BuildContext context,
+  StatefulNavigationShell shell,
+  String route,
+) {
+  final idx = shellBranchIndexForDestination(route);
+  if (idx >= 0) {
+    shell.goBranch(idx, initialLocation: idx == shell.currentIndex);
+  } else {
+    context.go(route);
+  }
 }

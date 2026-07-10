@@ -203,6 +203,15 @@ class PurchasesRepository {
     final tax = items.fold<double>(0, (sum, item) => sum + item.taxValue);
     final total = subtotal + tax;
 
+    // Cuando el usuario registra la compra ya "Recibida", NO insertamos la
+    // orden directamente en ese estado: la creamos como 'sent' (pendiente) y
+    // dejamos que `fn_receive_purchase_order` sea quien postee el stock y la
+    // marque como 'received'. Así, si la recepción falla (permisos, red), la
+    // orden queda pendiente y consistente (sin stock, no marcada recibida) en
+    // lugar de aparecer "Recibida" pero sin haber sumado nada al inventario.
+    final bool receiveNow = status == 'received';
+    final String insertStatus = receiveNow ? 'sent' : status;
+
     final createdOrder = await _client
         .from(PurchasesQueries.tablePurchaseOrders)
         .insert({
@@ -211,7 +220,7 @@ class PurchasesRepository {
           'warehouse_id': warehouseId,
           'order_number': orderNumber,
           'invoice_number': invoiceNumber,
-          'status': status,
+          'status': insertStatus,
           'subtotal': subtotal,
           'tax': tax,
           'total': total,
@@ -272,6 +281,15 @@ class PurchasesRepository {
           // tumbar el registro de la compra (la orden ya quedó guardada).
         }
       }
+    }
+
+    // Postea el stock al inventario cuando la compra se registra "Recibida".
+    // `fn_receive_purchase_order` crea los movimientos (tipo 'purchase') por
+    // cada línea con insumo vinculado; el trigger de inventario sincroniza
+    // `inventory_stock` y la RPC marca la orden como 'received'. Este era el
+    // eslabón faltante: registrar la compra no sumaba nada al inventario.
+    if (receiveNow) {
+      await receivePurchaseOrder(orderId, notes: notes);
     }
   }
 

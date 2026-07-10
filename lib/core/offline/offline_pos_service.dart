@@ -246,6 +246,28 @@ class OfflinePosService {
     }
   }
 
+  /// Fix #1 (F3 hardening): cuando ESTE equipo es el Hub host y aplica una
+  /// mutación ONLINE (que YA escribió a Supabase por el flujo normal), la
+  /// espeja al op-log local SOLO para que las cajas cliente la VEAN por la LAN
+  /// (`/hub/salon`, `/hub/order`). Antes el host saltaba el op-log al estar
+  /// online → las mesas que abría eran invisibles para los clientes.
+  ///
+  /// La op se marca `hub_applied: true`: el uplink la PROYECTA pero NUNCA la
+  /// vuelve a subir a Supabase (evita doble escritura). Se normaliza para que
+  /// lleve `id`/`fingerprint` (dedup). Best-effort: nunca lanza — el espejo al
+  /// Hub jamás debe afectar la mutación real del cajero.
+  Future<void> publishHostOp(
+    String businessId,
+    Map<String, dynamic> op,
+  ) async {
+    try {
+      final normalized = _normalizeAction({...op, 'hub_applied': true});
+      await appendToLocalHubOpLog(businessId, normalized);
+    } catch (_) {
+      // best-effort: el espejo LAN no bloquea ni rompe la caja.
+    }
+  }
+
   /// H4: proyecta el salón desde el op-log LOCAL (cuando ESTE equipo es el
   /// Hub). Devuelve la lista de mesas ocupadas con el mismo shape que el
   /// endpoint `/hub/salon`, para que el grid del propio Hub no necesite un
@@ -1148,6 +1170,13 @@ class OfflinePosService {
     for (final op in ops) {
       final opId = op['op_id']?.toString() ?? op['id']?.toString();
       final fingerprint = op['fingerprint']?.toString();
+      // Fix #1: op que el propio Hub host ya aplicó a Supabase (mutación online
+      // espejada al op-log SOLO para visibilidad LAN) → NO re-subir; ya vive en
+      // el server. Se cuenta como completada para la idempotencia/poda.
+      if (op['hub_applied'] == true) {
+        completed++;
+        continue;
+      }
       // Ya aplicada (re-run o subió antes) → idempotente, saltar.
       if ((opId != null && completedOps.contains(opId)) ||
           (fingerprint != null && completedFingerprints.contains(fingerprint))) {
@@ -1195,10 +1224,20 @@ class OfflinePosService {
       }
     }
 
-    // Solo vaciamos el op-log si todo subió. Si algo falló, lo conservamos
-    // para reintentar (idempotencia evita doble aplicación).
+    // Fix #2: solo podamos si todo subió (si algo falló lo conservamos para
+    // reintentar; la idempotencia evita doble aplicación). Antes esto vaciaba
+    // el op-log completo con clear() → borraba el estado vivo del salón que las
+    // cajas cliente proyectan. Ahora conservamos las ops de las mesas AÚN
+    // ABIERTAS (incl. las `hub_applied` del host) y podamos el resto: órdenes
+    // cerradas/anuladas y ops sin order_id (caja/inventario) ya subidas.
     if (failed == 0) {
-      await _hubOpLog.clear(businessId);
+      final remaining = await _hubOpLog.since(businessId, seq: 0);
+      final keep = HubOrderProjector.openOrderIds(remaining);
+      if (keep.isEmpty) {
+        await _hubOpLog.clear(businessId);
+      } else {
+        await _hubOpLog.retainOrders(businessId, keep);
+      }
     }
 
     return OfflineQueueSyncResult(

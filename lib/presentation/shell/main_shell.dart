@@ -36,8 +36,12 @@ import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 
 class MainShell extends ConsumerStatefulWidget {
-  final Widget child;
-  const MainShell({super.key, required this.child});
+  /// El shell de navegación con estado del `StatefulShellRoute.indexedStack`.
+  /// Es un `Widget` que renderiza el `IndexedStack` de las ramas (cada sección
+  /// se mantiene viva) y expone `goBranch(index)` para cambiar de sección
+  /// conservando el estado de las demás.
+  final StatefulNavigationShell navigationShell;
+  const MainShell({super.key, required this.navigationShell});
 
   @override
   ConsumerState<MainShell> createState() => _MainShellState();
@@ -82,7 +86,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     // Rutas exentas (registro, onboarding, login, billing) las maneja
     // cada guard internamente.
     final child = PendingApprovalGuard(
-      child: BillingGuard(child: widget.child),
+      child: BillingGuard(child: widget.navigationShell),
     );
 
     // Escuchamos el resultado del último sync para notificar al cajero
@@ -105,7 +109,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     // En anchos compactos (<600dp) usamos el shell móvil con bottom nav +
     // drawer. El topbar horizontal solo tiene sentido en tablet/desktop.
     if (ResponsiveHelper.useCompactShell(context)) {
-      return MobileShell(child: child);
+      return MobileShell(navigationShell: widget.navigationShell);
     }
 
     const topBarHeight = 64.0;
@@ -183,7 +187,10 @@ class _MainShellState extends ConsumerState<MainShell> {
                           children: [
                             for (var i = 0; i < visible.length; i++) ...[
                               if (i > 0) const SizedBox(width: navGap),
-                              _TopNavItem(destination: visible[i]),
+                              _TopNavItem(
+                                destination: visible[i],
+                                navigationShell: widget.navigationShell,
+                              ),
                             ],
                           ],
                         );
@@ -619,7 +626,11 @@ class _OfflineQueueBadge extends ConsumerWidget {
 // ===== ITEM DEL MENÚ (PILL SHAPE) =====
 class _TopNavItem extends ConsumerStatefulWidget {
   final ShellDestination destination;
-  const _TopNavItem({required this.destination});
+  final StatefulNavigationShell navigationShell;
+  const _TopNavItem({
+    required this.destination,
+    required this.navigationShell,
+  });
 
   @override
   ConsumerState<_TopNavItem> createState() => _TopNavItemState();
@@ -670,7 +681,13 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
         waitDuration: const Duration(milliseconds: 400),
         child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: hasAccess ? () => context.go(d.route) : null,
+        onTap: hasAccess
+            ? () => goToShellDestination(
+                  context,
+                  widget.navigationShell,
+                  d.route,
+                )
+            : null,
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: showLabel ? (labelCompact ? 12 : 16) : 10,

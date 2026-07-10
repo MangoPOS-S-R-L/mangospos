@@ -357,14 +357,26 @@ class AppRouter {
       ),
 
       // ---------- Shell principal (app autenticada) ----------
-      ShellRoute(
-        builder: (context, state, child) => MainShell(child: child),
-        routes: [
+      // StatefulShellRoute.indexedStack: cada rama mantiene VIVO su Navigator
+      // en un IndexedStack, así que al cambiar de sección y volver se conserva
+      // el estado (scroll/página/filtro/pestaña). El menú superior/móvil usa
+      // goBranch(index) para restaurar la última ubicación de cada rama; ver
+      // shellBranchIndexForDestination en shell_destinations.dart — su orden
+      // DEBE coincidir con el orden de estas `branches`.
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            MainShell(navigationShell: navigationShell),
+        branches: [
+          // ── Rama 0: Dashboard ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.dashboard,
             builder: (context, state) => const DashboardView(),
           ),
+          ]),
 
+          // ── Rama 1: Ventas (shell anidado + mesa a pantalla completa) ──
+          StatefulShellBranch(routes: [
           // ---------- Shell anidado: Ventas ----------
           ShellRoute(
             builder: (context, state, child) => SalesShellView(child: child),
@@ -478,7 +490,10 @@ class AppRouter {
               );
             },
           ),
+          ]),
 
+          // ── Rama 2: Caja ──
+          StatefulShellBranch(routes: [
           // ---------- Otros módulos (placeholder por ahora) ----------
           GoRoute(
             path: AppRoutes.cashier,
@@ -496,16 +511,28 @@ class AppRouter {
             path: AppRoutes.cashierIncomeExpense,
             builder: (context, state) => const IncomeExpenseView(),
           ),
+          ]),
+
+          // ── Rama 3: Cocina (KDS) ──
+          StatefulShellBranch(routes: [
           // 2026-05-13: removida la ruta cashierSessionsHealth del cliente.
           // El dashboard NOC se traslada a mango_administrador. Ver PRD-12.
           GoRoute(
             path: AppRoutes.kitchen,
             builder: (context, state) => const KitchenView(),
           ),
+          ]),
+
+          // ── Rama 4: Reservas ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.reservations,
             builder: (context, state) => const ReservationsView(),
           ),
+          ]),
+
+          // ── Rama 5: Clientes ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.customers,
             builder: (context, state) => const CustomersView(),
@@ -527,10 +554,18 @@ class AppRouter {
               ),
             ],
           ),
+          ]),
+
+          // ── Rama 6: Productos ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.products,
             builder: (context, state) => const ProductsView(),
           ),
+          ]),
+
+          // ── Rama 7: Reportes ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.reports,
             builder: (context, state) => ReportsView(
@@ -571,7 +606,10 @@ class AppRouter {
             path: AppRoutes.reportsFiscal,
             builder: (context, state) => const FiscalReportView(),
           ),
+          ]),
 
+          // ── Rama 8: Ajustes (+ billing, sucursales, moneda, etc.) ──
+          StatefulShellBranch(routes: [
           // ✅ Ajustes (vista principal)
           GoRoute(
             path: AppRoutes.settings,
@@ -694,6 +732,10 @@ class AppRouter {
             path: AppRoutes.settingsDeviceBinding,
             builder: (context, state) => const DeviceBindingView(),
           ),
+          ]),
+
+          // ── Rama 9: Inventario ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.inventoryHome,
             builder: (context, state) => const InventoryHubView(),
@@ -766,6 +808,10 @@ class AppRouter {
             path: AppRoutes.inventoryReorder,
             builder: (context, state) => const InventoryReorderView(),
           ),
+          ]),
+
+          // ── Rama 10: Compras ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.purchasesList,
             builder: (context, state) => const PurchasesListView(),
@@ -774,6 +820,10 @@ class AppRouter {
             path: AppRoutes.purchasesRegister,
             builder: (context, state) => const PurchasesRegisterView(),
           ),
+          ]),
+
+          // ── Rama 11: Promociones ──
+          StatefulShellBranch(routes: [
           GoRoute(
             path: AppRoutes.promosCenter,
             // ?offers=1 abre el modo solo-ofertas (sin cupones ni gift cards),
@@ -783,7 +833,10 @@ class AppRouter {
               offersOnly: state.uri.queryParameters['offers'] == '1',
             ),
           ),
+          ]),
 
+          // ── Rama 12: Menú (shell anidado) ──
+          StatefulShellBranch(routes: [
           // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
           ShellRoute(
             builder: (context, state, child) => MenuShellView(child: child),
@@ -836,6 +889,10 @@ class AppRouter {
               ),
             ],
           ),
+          ]),
+
+          // ── Rama 13: Impresión (shell anidado) ──
+          StatefulShellBranch(routes: [
           // =======================================================================
 
           // ===================== GESTIÓN DE IMPRESIÓN =====================
@@ -893,6 +950,7 @@ class AppRouter {
             ],
           ),
           // =======================================================================
+          ]),
         ],
       ),
     ],

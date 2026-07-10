@@ -139,9 +139,8 @@ class _InventoryDirectReceiptsViewState
     if (!mounted) return;
     await showDialog<void>(
       context: context,
-      builder: (_) => _ReceiptDetailDialog(
-        receipt: receipt.copyWith(items: items),
-      ),
+      builder: (_) =>
+          _ReceiptDetailDialog(receipt: receipt.copyWith(items: items)),
     );
   }
 
@@ -324,9 +323,7 @@ class _Chip extends StatelessWidget {
           color: selected ? accent.withValues(alpha: 0.12) : Colors.white,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected
-                ? accent.withValues(alpha: 0.4)
-                : AppColors.border,
+            color: selected ? accent.withValues(alpha: 0.4) : AppColors.border,
           ),
         ),
         child: Text(
@@ -441,141 +438,144 @@ class _ReceiptCard extends StatelessWidget {
     );
     final dateFmt = DateFormat('dd/MM/yyyy HH:mm');
     final statusColor = _statusColor();
-    return Material(
-      color: AppColors.card,
-      borderRadius: BorderRadius.circular(AppRadius.card),
-      child: InkWell(
-        onTap: onTap,
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
         borderRadius: BorderRadius.circular(AppRadius.card),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.card),
-            border: Border.all(color: AppColors.border),
-            boxShadow: AppShadows.cardElevated,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: statusColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      _statusLabel(),
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.5,
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.cardElevated,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _statusLabel(),
+                        style: TextStyle(
+                          color: statusColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    receipt.receiptNumber,
-                    style: TextStyle(
-                      color: AppColors.foreground,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (receipt.createdAt != null)
+                    const SizedBox(width: 8),
                     Text(
-                      dateFmt.format(receipt.createdAt!.toLocal()),
+                      receipt.receiptNumber,
+                      style: TextStyle(
+                        color: AppColors.foreground,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (receipt.createdAt != null)
+                      Text(
+                        dateFmt.format(receipt.createdAt!.toLocal()),
+                        style: TextStyle(
+                          color: AppColors.mutedForeground,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.warehouse_outlined,
+                      size: 14,
+                      color: AppColors.mutedForeground,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      receipt.warehouseName,
+                      style: TextStyle(
+                        color: AppColors.foreground,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    if (receipt.supplierName != null &&
+                        receipt.supplierName!.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      Icon(
+                        Icons.local_shipping_outlined,
+                        size: 14,
+                        color: AppColors.mutedForeground,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          receipt.supplierName!,
+                          style: TextStyle(
+                            color: AppColors.mutedForeground,
+                            fontSize: 12,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ] else
+                      const Spacer(),
+                    Text(
+                      currency.format(receipt.total),
+                      style: TextStyle(
+                        color: AppColors.foreground,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 13,
+                      color: AppColors.mutedForeground,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${receipt.itemCount} ítem(s) · ${receipt.totalQuantity.toStringAsFixed(2)} unidad(es)',
                       style: TextStyle(
                         color: AppColors.mutedForeground,
                         fontSize: 12,
                       ),
                     ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.warehouse_outlined,
-                    size: 14,
-                    color: AppColors.mutedForeground,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    receipt.warehouseName,
-                    style: TextStyle(
-                      color: AppColors.foreground,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
-                  ),
-                  if (receipt.supplierName != null &&
-                      receipt.supplierName!.isNotEmpty) ...[
-                    const SizedBox(width: 12),
-                    Icon(
-                      Icons.local_shipping_outlined,
-                      size: 14,
-                      color: AppColors.mutedForeground,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        receipt.supplierName!,
-                        style: TextStyle(
-                          color: AppColors.mutedForeground,
-                          fontSize: 12,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ] else
                     const Spacer(),
-                  Text(
-                    currency.format(receipt.total),
-                    style: TextStyle(
-                      color: AppColors.foreground,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Icon(
-                    Icons.inventory_2_outlined,
-                    size: 13,
-                    color: AppColors.mutedForeground,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    '${receipt.itemCount} ítem(s) · ${receipt.totalQuantity.toStringAsFixed(2)} unidad(es)',
-                    style: TextStyle(
-                      color: AppColors.mutedForeground,
-                      fontSize: 12,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (onCancel != null)
-                    TextButton.icon(
-                      onPressed: onCancel,
-                      icon: const Icon(Icons.cancel_outlined, size: 16),
-                      label: const Text('Cancelar'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.red.shade600,
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                    if (onCancel != null)
+                      TextButton.icon(
+                        onPressed: onCancel,
+                        icon: const Icon(Icons.cancel_outlined, size: 16),
+                        label: const Text('Cancelar'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.red.shade600,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        ),
                       ),
-                    ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -661,8 +661,7 @@ class _ReceiptDetailDialog extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       line.itemName,
