@@ -15,6 +15,7 @@ import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -482,8 +483,9 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
           Expanded(flex: 2, child: _HeaderText('Cliente')),
           Expanded(flex: 2, child: _HeaderText('N° de documento')),
           Expanded(flex: 2, child: _HeaderText('Total')),
+          Expanded(flex: 2, child: _HeaderText('Forma de pago')),
           SizedBox(
-            width: 120,
+            width: 160,
             child: _HeaderText('Opciones', textAlign: TextAlign.right),
           ),
         ],
@@ -711,8 +713,17 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
               ),
             ),
           ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              payment['payment_method_summary']?.toString() ?? '—',
+              style: TextStyle(
+                decoration: isVoided ? TextDecoration.lineThrough : null,
+              ),
+            ),
+          ),
           SizedBox(
-            width: 120,
+            width: 160,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -721,6 +732,7 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
                   onPressed: () => _showDetailDialog(context, ref, payment),
                   tooltip: 'Ver detalle',
                   color: MangoColors.muted,
+                  visualDensity: VisualDensity.compact,
                 ),
                 if (!isVoided) ...[
                   IconButton(
@@ -732,6 +744,18 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
                     ),
                     tooltip: 'Reimprimir',
                     color: Colors.blue,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.swap_horiz,
+                      size: 20,
+                      color: Colors.orange,
+                    ),
+                    onPressed: () =>
+                        _editPaymentMethod(context, ref, payment),
+                    tooltip: 'Editar tipo de pago',
+                    visualDensity: VisualDensity.compact,
                   ),
                   IconButton(
                     icon: const Icon(
@@ -747,6 +771,7 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
                       checkId: checkId,
                     ),
                     tooltip: 'Anular',
+                    visualDensity: VisualDensity.compact,
                   ),
                 ] else
                   const Padding(
@@ -1307,6 +1332,225 @@ mixin _PaymentActionsMixin {
     }
   }
 
+  /// Corrige el tipo de pago de una venta ya cobrada (error del cajero) sin
+  /// tener que anularla. Soporta ventas con pago dividido: si hay más de un
+  /// pago, el usuario elige cuál corregir. Requiere PIN de supervisor a roles
+  /// no gerenciales (misma barrera que anular) y reusa el permiso
+  /// `pagos.anular_pago` — corregir es menos destructivo que anular.
+  void _editPaymentMethod(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> payment,
+  ) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('pagos.anular_pago')) {
+      AppToast.info(context, 'No tienes permiso para editar pagos.');
+      return;
+    }
+
+    final isVoided =
+        payment['status'] == 'void' || payment['status'] == 'cancelled';
+    if (isVoided) {
+      AppToast.info(context, 'La venta está anulada; no se puede editar.');
+      return;
+    }
+
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    final fdId = payment['fiscal_document_id']?.toString();
+    final repPaymentId = payment['id']?.toString() ?? '';
+    if (repPaymentId.isEmpty && (fdId == null || fdId.isEmpty)) return;
+
+    try {
+      final client = Supabase.instance.client;
+
+      // Pagos que componen esta venta. Por `fiscal_document_id` obtenemos
+      // exactamente los pagos que arman el resumen de método (incluye los de
+      // un pago dividido/Mixto); si no hay fd, caemos al pago representativo.
+      final selectCols =
+          'id, amount, change_amount, payment_method_id, status, '
+          'payment_methods(name, code)';
+      final rawPayments = (fdId != null && fdId.isNotEmpty)
+          ? await client
+                .from('payments')
+                .select(selectCols)
+                .eq('fiscal_document_id', fdId)
+                .eq('status', 'completed')
+                .order('created_at')
+          : await client
+                .from('payments')
+                .select(selectCols)
+                .eq('id', repPaymentId)
+                .eq('status', 'completed');
+      final salePayments = List<Map<String, dynamic>>.from(rawPayments);
+      if (salePayments.isEmpty) {
+        if (!context.mounted) return;
+        AppToast.info(context, 'No hay pagos activos para editar.');
+        return;
+      }
+
+      // Métodos de pago activos del negocio.
+      final rawMethods = await client
+          .from('payment_methods')
+          .select('id, name, code, is_active, position')
+          .eq('business_id', businessId ?? '')
+          .eq('is_active', true)
+          .order('position');
+      final methods = List<Map<String, dynamic>>.from(rawMethods);
+      if (methods.isEmpty) {
+        if (!context.mounted) return;
+        AppToast.info(context, 'No hay métodos de pago configurados.');
+        return;
+      }
+
+      if (!context.mounted) return;
+
+      // 1) Elegir cuál pago corregir (solo si la venta tiene varios).
+      Map<String, dynamic> target;
+      if (salePayments.length == 1) {
+        target = salePayments.first;
+      } else {
+        final picked = await _pickPaymentToEditDialog(context, salePayments);
+        if (picked == null) return;
+        target = picked;
+      }
+
+      if (!context.mounted) return;
+
+      // 2) Elegir el nuevo método.
+      final currentMethodId = target['payment_method_id']?.toString();
+      final newMethodId = await _pickPaymentMethodDialog(
+        context,
+        methods,
+        currentMethodId,
+      );
+      if (newMethodId == null || newMethodId == currentMethodId) return;
+
+      if (!context.mounted) return;
+
+      // 3) Autorización: PIN de supervisor para roles no gerenciales.
+      final session = ref.read(sessionProvider);
+      final role = session.activeRole;
+      final isManager =
+          role == PosRole.administrador || role == PosRole.supervisor;
+      if (!isManager) {
+        final authorized = await showPinVerificationModal(
+          context,
+          ref,
+          level: PinAccessLevel.supervisor,
+          title: 'Autorización requerida',
+          subtitle: 'Ingrese PIN de Supervisor para editar el tipo de pago',
+        );
+        if (!authorized) return;
+      }
+
+      if (!context.mounted) return;
+      AppToast.info(context, 'Actualizando tipo de pago...');
+
+      await ref.read(salesRepositoryProvider).updatePaymentMethod(
+            paymentId: target['id'].toString(),
+            newMethodId: newMethodId,
+          );
+
+      if (!context.mounted) return;
+      AppToast.success(context, 'Tipo de pago actualizado.');
+      onRefresh();
+    } catch (e) {
+      if (!context.mounted) return;
+      AppToast.error(context, 'No se pudo editar el tipo de pago: $e');
+    }
+  }
+
+  /// Diálogo para elegir cuál pago corregir en una venta con pago dividido.
+  Future<Map<String, dynamic>?> _pickPaymentToEditDialog(
+    BuildContext context,
+    List<Map<String, dynamic>> payments,
+  ) {
+    return showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('¿Cuál pago quieres corregir?'),
+        children: payments.map((p) {
+          final method = p['payment_methods'] as Map<String, dynamic>?;
+          final methodName = method?['name']?.toString() ?? 'Sin método';
+          final net = netPaymentAmount(p['amount'], p['change_amount']);
+          return SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, p),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  const Icon(Icons.payments_outlined, size: 20),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(methodName)),
+                  Text(
+                    currency.format(net),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(growable: false),
+      ),
+    );
+  }
+
+  /// Diálogo para elegir el nuevo método de pago. Marca el método actual.
+  Future<String?> _pickPaymentMethodDialog(
+    BuildContext context,
+    List<Map<String, dynamic>> methods,
+    String? currentMethodId,
+  ) {
+    return showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Nuevo tipo de pago'),
+        children: methods.map((m) {
+          final id = m['id']?.toString() ?? '';
+          final name = m['name']?.toString() ?? 'Método';
+          final isCurrent = id == currentMethodId;
+          return SimpleDialogOption(
+            onPressed: isCurrent ? null : () => Navigator.pop(context, id),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    isCurrent
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                    color: isCurrent ? MangoColors.primaryOrange : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontWeight:
+                          isCurrent ? FontWeight.w700 : FontWeight.w500,
+                      color: isCurrent ? MangoColors.muted : null,
+                    ),
+                  ),
+                  if (isCurrent) ...[
+                    const SizedBox(width: 8),
+                    const Text(
+                      '(actual)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        }).toList(growable: false),
+      ),
+    );
+  }
+
   Future<String?> _showAnulacionReasonDialog(BuildContext context) async {
     final controller = TextEditingController();
     return showDialog<String>(
@@ -1636,6 +1880,14 @@ mixin _PaymentActionsMixin {
                           color: MangoColors.muted,
                         ),
                       ),
+                    Text(
+                      'Forma de pago: '
+                      '${payment['payment_method_summary']?.toString() ?? '—'}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: MangoColors.muted,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -2350,6 +2602,13 @@ class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
                       _InfoRow(icon: Icons.person_outline, text: customerName, isVoided: isVoided),
                       const SizedBox(height: 4),
                       _InfoRow(icon: Icons.support_agent_outlined, text: waiterName, isVoided: isVoided),
+                      const SizedBox(height: 4),
+                      _InfoRow(
+                        icon: Icons.payments_outlined,
+                        text: payment['payment_method_summary']?.toString() ??
+                            'Sin método',
+                        isVoided: isVoided,
+                      ),
                     ],
                   ),
                 ),
@@ -2366,6 +2625,14 @@ class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
                         icon: const Icon(Icons.print_outlined, size: 20),
                         onPressed: () => _reprintInvoice(context, ref, payment),
                         color: Colors.blue,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.swap_horiz, size: 20),
+                        onPressed: () =>
+                            _editPaymentMethod(context, ref, payment),
+                        color: Colors.orange,
+                        tooltip: 'Editar tipo de pago',
                         visualDensity: VisualDensity.compact,
                       ),
                       IconButton(

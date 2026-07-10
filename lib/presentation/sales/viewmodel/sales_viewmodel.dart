@@ -906,6 +906,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return ref.read(hubModeProvider) == TerminalMode.hubClient;
   }
 
+  /// Fix #1 (F3 hardening): cuando ESTE equipo es el Hub host, espeja una
+  /// mutación YA aplicada a Supabase al op-log local para que las cajas cliente
+  /// la VEAN por la LAN (`/hub/salon`, `/hub/order`). Antes el host, estando
+  /// online, saltaba el op-log → las mesas que abría eran invisibles para los
+  /// clientes. Inerte salvo en modo hubHost — un negocio en modo cloud NUNCA lo
+  /// es, así que no afecta el flujo normal. Fire-and-forget: no bloquea ni
+  /// puede romper la mutación del cajero (`publishHostOp` es best-effort).
+  void _mirrorHostMutationToHub(Map<String, dynamic> op) {
+    if (ref.read(hubModeProvider) != TerminalMode.hubHost) return;
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    unawaited(_offlinePos.publishHostOp(businessId, op));
+  }
+
   /// Abre una mesa en modo Hub: resume el borrador local si ya existe en este
   /// equipo, si no crea uno nuevo y notifica al Hub con la op `open_table`
   /// (que mapea order↔table para el salón y el uplink). Reusa el camino offline
@@ -1167,6 +1181,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         caller: 'openTable',
         preloadedBundle: result.bundle,
       );
+
+      // Fix #1: si soy el Hub host, publico la apertura al op-log para que las
+      // cajas cliente vean esta mesa por la LAN (mapea order↔table).
+      _mirrorHostMutationToHub({
+        'type': 'open_table',
+        'order_id': orderId,
+        'table_id': tableId,
+      });
     } catch (e) {
       final businessId = _activeBusinessId;
       if (businessId != null && businessId.isNotEmpty) {
@@ -2181,6 +2203,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       // Bypassear el debounce para que la respuesta sea instantánea
       await _loadOrderDetail(orderId, caller: 'addItem');
+
+      // Fix #1: espejo del ítem al op-log del Hub (visibilidad LAN en clientes).
+      // Id estable por item_id real → append idempotente.
+      _mirrorHostMutationToHub({
+        'id': 'host-add-$itemId',
+        'type': 'add_item',
+        'order_id': orderId,
+        'item_id': itemId,
+        'product_name': productName,
+        'product_price': productPrice,
+        'qty': qty,
+        'check_pos': effectiveCheckPos,
+        'takeout': takeout,
+        'notes': notes,
+      });
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -2577,6 +2614,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
 
       refreshOrder();
+
+      // Fix #1: espejo del borrado al op-log del Hub (visibilidad LAN).
+      _mirrorHostMutationToHub({
+        'type': 'delete_item',
+        'order_id': orderId,
+        'item_id': itemId,
+      });
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -2690,6 +2734,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .read(salesRepositoryProvider)
           .updateItemQuantity(itemId: itemId, quantity: quantity);
       refreshOrder();
+
+      // Fix #1: espejo del cambio de cantidad al op-log del Hub.
+      _mirrorHostMutationToHub({
+        'type': 'update_item_quantity',
+        'order_id': orderId,
+        'item_id': itemId,
+        'quantity': quantity,
+      });
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -3382,6 +3434,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .closeOrder(orderId: orderId, status: 'void');
+
+      // Fix #1: espejo de la anulación al op-log del Hub → libera la mesa en
+      // las cajas cliente.
+      _mirrorHostMutationToHub({
+        'type': 'void_order',
+        'order_id': orderId,
+      });
     } catch (e) {
       if (!isNetworkError(e)) rethrow;
       debugPrint(

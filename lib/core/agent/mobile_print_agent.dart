@@ -23,11 +23,13 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../offline/hub/hub_config.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
 import '../offline/offline_pos_service.dart';
 import '../../data/repositories/sales_repository.dart';
 import '../offline/ncf_offline_allocator.dart';
+import '../storage/storage_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
@@ -223,10 +225,30 @@ class MobilePrintAgent {
   /// Handshake del Hub Local (F3). `seq` es el último número de operación
   /// aplicado por el Hub; en F3a aún no hay op-log, así que es 0. El cliente
   /// (HubClient) usa esto para confirmar que el endpoint es un Hub alcanzable.
-  shelf.Response _handleHubHealth(shelf.Request request) {
+  Future<shelf.Response> _handleHubHealth(shelf.Request request) async {
+    // Reporta el rol REAL de ESTE dispositivo (el designado en
+    // `hub_device_role_<negocio>`), no 'hub' a ciegas. Antes cada caja corría
+    // el agente de impresión y respondía 'hub', así que una caja cliente podía
+    // engancharse a OTRA caja (o a sí misma) en vez de al Hub verdadero → leía
+    // un op-log vacío y la mesa salía vacía. Ahora solo el equipo configurado
+    // como Hub responde 'hub'. Best-effort: ante cualquier fallo cae a 'pos'
+    // (no-hub), que es el lado seguro (el cliente NO lo tomará como Hub).
+    var role = 'pos';
+    try {
+      final storage = await StorageService.getInstance();
+      final businessId =
+          await storage.read(StorageKeys.activeBusinessId) ?? '';
+      if (businessId.isNotEmpty) {
+        role = hubDeviceRoleToString(
+          await HubConfigService().getDeviceRole(businessId),
+        );
+      }
+    } catch (_) {
+      // best-effort → 'pos'
+    }
     return _jsonOk({
       'status': 'ok',
-      'role': 'hub',
+      'role': role,
       'hub_protocol': 1,
       'seq': 0,
     });

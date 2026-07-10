@@ -25,8 +25,11 @@ import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
-  final Widget child;
-  const MobileShell({super.key, required this.child});
+  /// Shell de navegación con estado del `StatefulShellRoute.indexedStack`
+  /// (ver `MainShell`). Renderiza el `IndexedStack` de ramas y expone
+  /// `goBranch` para cambiar de sección conservando el estado de las demás.
+  final StatefulNavigationShell navigationShell;
+  const MobileShell({super.key, required this.navigationShell});
 
   @override
   ConsumerState<MobileShell> createState() => _MobileShellState();
@@ -109,12 +112,15 @@ class _MobileShellState extends ConsumerState<MobileShell> {
           SizedBox(width: 8),
         ],
       ),
-      drawer: _MobileDrawer(currentLocation: loc),
+      drawer: _MobileDrawer(
+        currentLocation: loc,
+        navigationShell: widget.navigationShell,
+      ),
       body: Column(
         children: [
           // Banner de actualización (solo web, solo si hay deploy nuevo).
           const UpdateAvailableBanner(),
-          Expanded(child: widget.child),
+          Expanded(child: widget.navigationShell),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -149,7 +155,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
                   return;
                 }
               }
-              if (loc != d.route) context.go(d.route);
+              goToShellDestination(context, widget.navigationShell, d.route);
             },
             items: _bottomDestinations
                 .map((d) => BottomNavigationBarItem(
@@ -186,7 +192,11 @@ class _BottomDest {
 
 class _MobileDrawer extends ConsumerWidget {
   final String currentLocation;
-  const _MobileDrawer({required this.currentLocation});
+  final StatefulNavigationShell navigationShell;
+  const _MobileDrawer({
+    required this.currentLocation,
+    required this.navigationShell,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -248,9 +258,11 @@ class _MobileDrawer extends ConsumerWidget {
                         currentLocation: currentLocation,
                         onTap: () {
                           Navigator.of(context).pop();
-                          if (currentLocation != d.route) {
-                            context.go(d.route);
-                          }
+                          goToShellDestination(
+                            context,
+                            navigationShell,
+                            d.route,
+                          );
                         },
                       ),
                     );

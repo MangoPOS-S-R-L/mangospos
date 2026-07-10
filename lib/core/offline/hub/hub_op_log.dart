@@ -95,6 +95,24 @@ class HubOpLog {
     await storage.write(_key(businessId), '[]');
   }
 
+  /// Poda tras un uplink exitoso: conserva SOLO las ops cuyo `order_id` está en
+  /// [keepOrderIds] (las mesas AÚN ABIERTAS que las cajas cliente siguen
+  /// proyectando por `/hub/salon` y `/hub/order`). Elimina el resto —órdenes ya
+  /// cerradas/anuladas y ops sin `order_id` (caja/inventario) ya subidas—. A
+  /// diferencia de [clear], NO borra el estado vivo del salón. Devuelve cuántas
+  /// ops quedaron.
+  Future<int> retainOrders(String businessId, Set<String> keepOrderIds) async {
+    final storage = await _storage;
+    final log = await _readLog(businessId);
+    final kept = log.where((e) {
+      final oid = e['order_id']?.toString() ?? '';
+      return oid.isNotEmpty && keepOrderIds.contains(oid);
+    }).toList(growable: false);
+    if (kept.length == log.length) return kept.length; // nada que podar
+    await storage.writeList(_key(businessId), kept);
+    return kept.length;
+  }
+
   Future<List<Map<String, dynamic>>> _readLog(String businessId) async {
     final storage = await _storage;
     final raw = await storage.readList(_key(businessId)) ?? const [];

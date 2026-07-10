@@ -70,6 +70,21 @@ class HubOrderProjector {
     return result;
   }
 
+  /// IDs de las órdenes AÚN ABIERTAS en [ops] (existen y no están cerradas por
+  /// cobro full-order/cierre explícito ni anuladas). Lo usa el uplink del Hub
+  /// para PODAR el op-log tras subir: conserva solo las ops de estas órdenes
+  /// (las mesas que las cajas cliente siguen proyectando) y descarta el resto
+  /// —órdenes ya terminadas y ops sin `order_id` (caja/inventario) ya subidas—.
+  /// Puro/testeable, como el resto del proyector.
+  static Set<String> openOrderIds(List<Map<String, dynamic>> ops) {
+    final byOrder = _fold(ops);
+    final out = <String>{};
+    for (final acc in byOrder.values) {
+      if (!acc.closed && !acc.voided) out.add(acc.orderId);
+    }
+    return out;
+  }
+
   static Map<String, _OrderAcc> _fold(List<Map<String, dynamic>> ops) {
     final sorted = [...ops]..sort((a, b) =>
         ((a['seq'] as num?)?.toInt() ?? 0)

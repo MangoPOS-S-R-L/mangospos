@@ -44,7 +44,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   final _invoiceNumberCtrl = TextEditingController();
   String? _supplierId;
   String? _warehouseId;
-  String _status = 'draft';
+  // Por defecto la compra se registra ya "Recibida": el caso común es que la
+  // mercancía ya llegó, así que el registro debe sumar el stock de una vez.
+  // El usuario puede bajarlo a Borrador/Enviada para órdenes que aún no llegan.
+  String _status = 'received';
   DateTime _expectedDate = DateTime.now().add(const Duration(days: 3));
 
   /// Productos ya agregados a la factura (la lista de abajo). Empieza vacía;
@@ -298,10 +301,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                 items: const [
                   DropdownMenuItem(value: 'draft', child: Text('Borrador')),
                   DropdownMenuItem(value: 'sent', child: Text('Enviada')),
-                  DropdownMenuItem(
-                    value: 'received',
-                    child: Text('Recibida'),
-                  ),
+                  DropdownMenuItem(value: 'received', child: Text('Recibida')),
                 ],
                 onChanged: (value) {
                   if (value == null) return;
@@ -371,6 +371,15 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         const SizedBox(height: 12),
         Row(
           children: [
+            const Text(
+              'Fecha de entrega',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF475569),
+              ),
+            ),
+            const SizedBox(width: 12),
             OutlinedButton.icon(
               onPressed: () async {
                 final picked = await showDatePicker(
@@ -382,10 +391,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                 if (picked == null) return;
                 setState(() => _expectedDate = picked);
               },
-              icon: const Icon(Icons.event_outlined),
-              label: Text(
-                'Entrega ${DateFormat('dd/MM/yyyy').format(_expectedDate)}',
-              ),
+              icon: const Icon(Icons.event_outlined, size: 18),
+              label: Text(DateFormat('dd/MM/yyyy').format(_expectedDate)),
             ),
           ],
         ),
@@ -466,10 +473,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                flex: 4,
-                child: _buildProductAutocomplete(state),
-              ),
+              Expanded(flex: 4, child: _buildProductAutocomplete(state)),
               const SizedBox(width: 10),
               Expanded(
                 flex: 2,
@@ -591,8 +595,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               if (_entryHasPack && selected != null)
                 Builder(
                   builder: (_) {
-                    final qty =
-                        double.tryParse(_entryQtyCtrl.text.trim()) ?? 0;
+                    final qty = double.tryParse(_entryQtyCtrl.text.trim()) ?? 0;
                     final base = packToBase(qty, _entryPackSize);
                     return Text(
                       '= ${_trimNum(base)} $_entryBaseUnit '
@@ -632,23 +635,22 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         return matches;
       },
       onSelected: (opt) => _onProductOptionSelected(opt),
-      fieldViewBuilder:
-          (context, textController, focusNode, onFieldSubmitted) {
-            _productFieldCtrl = textController;
-            _productFocus = focusNode;
-            return TextField(
-              controller: textController,
-              focusNode: focusNode,
-              decoration: const InputDecoration(
-                labelText: 'Producto',
-                hintText: 'Busca por nombre o SKU…',
-                prefixIcon: Icon(Icons.search),
-                filled: true,
-                fillColor: Colors.white,
-              ),
-              onSubmitted: (_) => onFieldSubmitted(),
-            );
-          },
+      fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
+        _productFieldCtrl = textController;
+        _productFocus = focusNode;
+        return TextField(
+          controller: textController,
+          focusNode: focusNode,
+          decoration: const InputDecoration(
+            labelText: 'Producto',
+            hintText: 'Busca por nombre o SKU…',
+            prefixIcon: Icon(Icons.search),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+          onSubmitted: (_) => onFieldSubmitted(),
+        );
+      },
       optionsViewBuilder: (context, onSelected, options) {
         final currency = NumberFormat.currency(
           locale: 'en_US',
@@ -704,9 +706,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     PurchaseInventoryItem? item = opt.item;
     if (opt.isCreate) {
       try {
-        item = await ref.read(purchasesViewModelProvider).createInventoryItem(
-          name: opt.rawText,
-        );
+        item = await ref
+            .read(purchasesViewModelProvider)
+            .createInventoryItem(name: opt.rawText);
       } catch (_) {
         return; // el error ya quedó en el state.error de la vista
       }
@@ -727,9 +729,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       final prefill = netPurchaseUnit <= 0
           ? ''
           : (_entryTaxMode == _TaxMode.included
-                  ? netPurchaseUnit * (1 + _kIvaRate)
-                  : netPurchaseUnit)
-              .toStringAsFixed(2);
+                    ? netPurchaseUnit * (1 + _kIvaRate)
+                    : netPurchaseUnit)
+                .toStringAsFixed(2);
       _entryCostCtrl.text = prefill;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -798,7 +800,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               Expanded(flex: 2, child: _HeaderCell('Costo')),
               SizedBox(width: 118, child: _HeaderCell('ITBIS')),
               Expanded(flex: 2, child: _HeaderCell('Pagado')),
-              Expanded(flex: 2, child: _HeaderCell('ITBIS \$', alignRight: true)),
+              Expanded(
+                flex: 2,
+                child: _HeaderCell('ITBIS \$', alignRight: true),
+              ),
               Expanded(flex: 2, child: _HeaderCell('Valor', alignRight: true)),
               SizedBox(width: 36),
             ],
@@ -862,9 +867,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     const SizedBox(height: 12),
                     Expanded(
                       child: items.isEmpty
-                          ? const Center(
-                              child: Text('Sin resultados'),
-                            )
+                          ? const Center(child: Text('Sin resultados'))
                           : ListView.builder(
                               itemCount: items.length,
                               itemBuilder: (context, index) {
@@ -879,8 +882,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                                   subtitle: Text(
                                     [
                                       if (it.sku.trim().isNotEmpty) it.sku,
-                                      if (it.cost > 0)
-                                        currency.format(it.cost),
+                                      if (it.cost > 0) currency.format(it.cost),
                                     ].join(' · '),
                                   ),
                                   onChanged: (v) => setLocal(() {
@@ -924,8 +926,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         // No duplicar: si el insumo ya está en la lista, se omite.
         final already = _lines.any((l) => l.inventoryItemId == it.id);
         if (already) continue;
-        final hasPack =
-            it.packSize > 1 && it.purchaseUnit.trim().isNotEmpty;
+        final hasPack = it.packSize > 1 && it.purchaseUnit.trim().isNotEmpty;
         final netPU = hasPack ? it.cost * it.packSize : it.cost;
         // Se agregan con el modo de ITBIS actual del renglón de captura.
         final cost = _entryTaxMode == _TaxMode.included
@@ -1101,17 +1102,19 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       return;
     }
 
-    await ref.read(purchasesViewModelProvider).createPurchaseOrder(
-      supplierId: _supplierId!,
-      warehouseId: _warehouseId!,
-      orderNumber: _orderNumberCtrl.text.trim(),
-      status: _status,
-      expectedDate: _expectedDate,
-      notes: _notesCtrl.text.trim(),
-      invoiceNumber: _invoiceNumberCtrl.text.trim(),
-      items: items,
-      updateItemCost: true,
-    );
+    await ref
+        .read(purchasesViewModelProvider)
+        .createPurchaseOrder(
+          supplierId: _supplierId!,
+          warehouseId: _warehouseId!,
+          orderNumber: _orderNumberCtrl.text.trim(),
+          status: _status,
+          expectedDate: _expectedDate,
+          notes: _notesCtrl.text.trim(),
+          invoiceNumber: _invoiceNumberCtrl.text.trim(),
+          items: items,
+          updateItemCost: true,
+        );
 
     if (!mounted) return;
     if (ref.read(purchasesViewModelProvider).state.error != null) return;
@@ -1138,10 +1141,18 @@ class _AddIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: IconButton.filledTonal(
+      child: IconButton.outlined(
         tooltip: tooltip,
         onPressed: onPressed,
-        icon: const Icon(Icons.add),
+        icon: const Icon(Icons.add, size: 20),
+        style: IconButton.styleFrom(
+          foregroundColor: Theme.of(context).colorScheme.primary,
+          side: const BorderSide(color: Color(0xFFCBD5E1)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          minimumSize: const Size(48, 48),
+        ),
       ),
     );
   }
@@ -1178,12 +1189,7 @@ class _TaxModeDropdown extends StatelessWidget {
             color: const Color(0xFF0F172A),
           ),
           items: _TaxMode.values
-              .map(
-                (m) => DropdownMenuItem(
-                  value: m,
-                  child: Text(m.short),
-                ),
-              )
+              .map((m) => DropdownMenuItem(value: m, child: Text(m.short)))
               .toList(growable: false),
           onChanged: (m) {
             if (m != null) onChanged(m);
@@ -1270,10 +1276,7 @@ class _LineRow extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             flex: 2,
-            child: _MiniField(
-              controller: line.unitCost,
-              onChanged: onChanged,
-            ),
+            child: _MiniField(controller: line.unitCost, onChanged: onChanged),
           ),
           const SizedBox(width: 8),
           SizedBox(
@@ -1293,11 +1296,14 @@ class _LineRow extends StatelessWidget {
             child: isSeparate
                 ? _MiniField(
                     controller: line.paid,
-                    hint: 'Pagado',
+                    hint: 'Total (opc.)',
                     onChanged: onChanged,
                   )
                 : const Center(
-                    child: Text('—', style: TextStyle(color: Color(0xFFCBD5E1))),
+                    child: Text(
+                      '—',
+                      style: TextStyle(color: Color(0xFFCBD5E1)),
+                    ),
                   ),
           ),
           const SizedBox(width: 8),
@@ -1322,11 +1328,7 @@ class _LineRow extends StatelessWidget {
             child: IconButton(
               tooltip: 'Quitar',
               onPressed: onRemove,
-              icon: const Icon(
-                Icons.close,
-                size: 18,
-                color: Color(0xFF94A3B8),
-              ),
+              icon: const Icon(Icons.close, size: 18, color: Color(0xFF94A3B8)),
             ),
           ),
         ],
@@ -1353,20 +1355,27 @@ class _MiniField extends StatelessWidget {
     return TextField(
       controller: controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [
-        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-      ],
+      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
       textAlign: TextAlign.center,
       style: const TextStyle(fontSize: 14),
       decoration: InputDecoration(
         isDense: true,
         hintText: hint,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 8,
-          vertical: 8,
-        ),
+        filled: true,
+        fillColor: const Color(0xFFF8FAFC),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         suffixText: suffix,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(
+            color: Theme.of(context).colorScheme.primary,
+            width: 1.5,
+          ),
+        ),
       ),
       onChanged: (_) => onChanged(),
     );
@@ -1459,10 +1468,10 @@ class _DraftItemControllers {
     this.purchaseUnit = '',
     this.packSize = 1,
     this.baseUnit = '',
-  })  : description = TextEditingController(text: description),
-        quantity = TextEditingController(text: _fmt(quantity)),
-        unitCost = TextEditingController(text: _fmt(unitCost)),
-        paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid));
+  }) : description = TextEditingController(text: description),
+       quantity = TextEditingController(text: _fmt(quantity)),
+       unitCost = TextEditingController(text: _fmt(unitCost)),
+       paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid));
 
   factory _DraftItemControllers.fromItem(
     PurchaseInventoryItem item, {
@@ -1471,8 +1480,7 @@ class _DraftItemControllers {
     required _TaxMode taxMode,
     required double paid,
   }) {
-    final hasPack =
-        item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
+    final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
     return _DraftItemControllers(
       description: item.name,
       quantity: qty,
@@ -1498,8 +1506,9 @@ class _DraftItemControllers {
   double get _enteredPaid => double.tryParse(paid.text.trim()) ?? 0;
 
   /// Costo NETO (sin ITBIS) por unidad de compra.
-  double get _netUnitEntered =>
-      taxMode == _TaxMode.included ? _enteredCost / (1 + _kIvaRate) : _enteredCost;
+  double get _netUnitEntered => taxMode == _TaxMode.included
+      ? _enteredCost / (1 + _kIvaRate)
+      : _enteredCost;
 
   /// Base NETA de la línea (cantidad × costo neto). Consistente en unidad de
   /// compra o base porque packToBase(q)·packCostToBase(c) = q·c.
@@ -1513,6 +1522,11 @@ class _DraftItemControllers {
       case _TaxMode.included:
         return (_enteredCost * _enteredQty) - baseSubtotal;
       case _TaxMode.separate:
+        // Si no se digita el "Total pagado", se asume el ITBIS estándar del
+        // 18% sobre el neto (comportamiento esperado al elegir "Aparte").
+        // Escribir el total real de la factura lo sobreescribe
+        // (ITBIS = pagado − neto).
+        if (_enteredPaid <= 0) return baseSubtotal * _kIvaRate;
         final t = _enteredPaid - baseSubtotal;
         return t > 0 ? t : 0;
     }

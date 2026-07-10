@@ -73,4 +73,37 @@ void main() {
     expect(await log.length('biz-A'), 1);
     expect(await log.length('biz-B'), 1);
   });
+
+  // Fix #2: la poda del uplink conserva las mesas abiertas y descarta el resto.
+  group('retainOrders (poda que conserva mesas abiertas)', () {
+    test('conserva solo las ops de las órdenes indicadas; poda el resto '
+        '(incl. ops sin order_id)', () async {
+      await log.append(biz, {'op_id': '1', 'type': 'open_table', 'order_id': 'o1'});
+      await log.append(biz, {'op_id': '2', 'type': 'add_item', 'order_id': 'o1'});
+      await log.append(biz, {'op_id': '3', 'type': 'open_table', 'order_id': 'o2'});
+      await log.append(biz, {'op_id': '4', 'type': 'add_item', 'order_id': 'o2'});
+      await log.append(biz, {'op_id': '5', 'type': 'cash_transaction'}); // sin order_id
+
+      final remaining = await log.retainOrders(biz, {'o1'});
+
+      expect(remaining, 2);
+      final all = await log.since(biz);
+      expect(all.map((e) => e['order_id']), ['o1', 'o1']);
+      expect(all.any((e) => e['order_id'] == 'o2'), false);
+      expect(all.any((e) => e['type'] == 'cash_transaction'), false);
+    });
+
+    test('set vacío deja el log vacío', () async {
+      await log.append(biz, {'op_id': '1', 'type': 'open_table', 'order_id': 'o1'});
+      expect(await log.retainOrders(biz, <String>{}), 0);
+      expect(await log.length(biz), 0);
+    });
+
+    test('no toca el log si todas las órdenes se conservan', () async {
+      await log.append(biz, {'op_id': '1', 'type': 'open_table', 'order_id': 'o1'});
+      await log.append(biz, {'op_id': '2', 'type': 'add_item', 'order_id': 'o1'});
+      expect(await log.retainOrders(biz, {'o1', 'o2'}), 2);
+      expect(await log.length(biz), 2);
+    });
+  });
 }

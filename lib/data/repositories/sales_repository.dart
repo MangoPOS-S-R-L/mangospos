@@ -363,6 +363,104 @@ class SalesRepository {
     }
   }
 
+  /// Corrige el tipo de pago (método) de un pago YA cobrado. Sirve para
+  /// arreglar errores del cajero (marcó "Efectivo" cuando fue "Tarjeta", etc.)
+  /// sin tener que anular la venta.
+  ///
+  /// Ajusta la caja: si el método pasa de efectivo a no-efectivo se retira el
+  /// monto neto de la sesión de caja del pago; si pasa de no-efectivo a
+  /// efectivo se agrega. Entre dos métodos no-efectivo (tarjeta ↔ transferencia)
+  /// no se toca la caja. Reusa el mismo criterio que la anulación.
+  Future<void> updatePaymentMethod({
+    required String paymentId,
+    required String newMethodId,
+  }) async {
+    final trimmedPaymentId = paymentId.trim();
+    final trimmedNewMethodId = newMethodId.trim();
+    if (trimmedPaymentId.isEmpty) {
+      throw Exception('PAYMENT_ID_REQUIRED');
+    }
+    if (trimmedNewMethodId.isEmpty) {
+      throw Exception('PAYMENT_METHOD_REQUIRED');
+    }
+
+    try {
+      final paymentRaw = await _client
+          .from('payments')
+          .select(
+            'id, order_id, payment_method_id, amount, change_amount, session_id, status',
+          )
+          .eq('id', trimmedPaymentId)
+          .maybeSingle();
+
+      if (paymentRaw == null) {
+        throw Exception('PAYMENT_NOT_FOUND');
+      }
+      final payment = Map<String, dynamic>.from(paymentRaw);
+      if ((payment['status']?.toString() ?? '') != 'completed') {
+        throw Exception('PAYMENT_NOT_COMPLETED');
+      }
+
+      final oldMethodId = payment['payment_method_id']?.toString();
+      if (oldMethodId == trimmedNewMethodId) {
+        // Sin cambio: no tocar nada.
+        return;
+      }
+
+      // Códigos de método (cash/card/transfer/...) para decidir el ajuste
+      // de caja. Traemos ambos en una sola consulta.
+      final ids = <String>{
+        if (oldMethodId != null && oldMethodId.isNotEmpty) oldMethodId,
+        trimmedNewMethodId,
+      }.toList();
+      final methodsRaw = await _client
+          .from('payment_methods')
+          .select('id, code')
+          .inFilter('id', ids);
+      final codeById = <String, String>{};
+      for (final m in List<Map<String, dynamic>>.from(methodsRaw)) {
+        codeById[m['id']?.toString() ?? ''] = m['code']?.toString() ?? '';
+      }
+      final oldCode = oldMethodId == null ? '' : (codeById[oldMethodId] ?? '');
+      final newCode = codeById[trimmedNewMethodId] ?? '';
+
+      // Cambia el método del pago.
+      await _client
+          .from('payments')
+          .update({'payment_method_id': trimmedNewMethodId})
+          .eq('id', trimmedPaymentId);
+
+      // Ajuste de caja (solo si cruza la frontera efectivo / no-efectivo).
+      final wasCash = oldCode == 'cash';
+      final isCash = newCode == 'cash';
+      if (wasCash != isCash) {
+        final cashierSessionId = payment['session_id']?.toString();
+        final orderId = payment['order_id']?.toString();
+        final netAmount = netPaymentAmount(
+          payment['amount'],
+          payment['change_amount'],
+        );
+        if (cashierSessionId != null &&
+            cashierSessionId.isNotEmpty &&
+            netAmount > 0) {
+          // De efectivo → no-efectivo: sale de caja (negativo).
+          // De no-efectivo → efectivo: entra a caja (positivo).
+          final delta = wasCash ? -netAmount : netAmount;
+          await _client.from('cash_transactions').insert({
+            'session_id': cashierSessionId,
+            'amount': delta,
+            'type': 'sale',
+            'description':
+                'Correccion metodo pago ${trimmedPaymentId.substring(0, 8)}',
+            'related_order_id': orderId,
+          });
+        }
+      }
+    } catch (e) {
+      throw Exception('Error al editar tipo de pago: $e');
+    }
+  }
+
   // ============================================================
   // 📊 SESIONES DE MESA
   // ============================================================
