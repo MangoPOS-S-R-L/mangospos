@@ -34,14 +34,21 @@ bool _canBump(KitchenItem item) =>
 /// 🧾 Comanda del tablero de cocina (tema claro, colores MangoPOS).
 ///
 /// Modelo de interacción:
-/// - Tap a un ítem pendiente lo marca como listo ([onBumpItem]) — queda
-///   tachado pero la card NO desaparece.
-/// - La card solo sale del tablero con "Marcar todo listo" ([onCompleteOrder]),
-///   que marca lo que falte, imprime el ticket LISTO y despacha la orden.
+/// - "Esperar al cocinero" (completeOnPayment == false): tap a cualquier ítem
+///   lo marca como listo ([onBumpItem]) — queda tachado y la comanda SE QUEDA
+///   en el tablero (aunque se marquen todos). Solo sale con "Marcar todo listo"
+///   ([onCompleteOrder]), que los despacha ('served') e imprime el ticket LISTO.
+/// - "Sacar al pagar" (completeOnPayment == true): marcar es progreso, pero el
+///   ÚLTIMO ítem por cocinar despacha la comanda (si no, desaparecería sin
+///   imprimir, porque ahí una comanda 100% lista se saca sola).
 ///
 /// La card crece según su contenido (sin recortes ni scroll interno).
 class KitchenTicketCard extends StatelessWidget {
   final KitchenOrder order;
+
+  /// Modo del tablero (`kds_complete_on_payment`). Cambia si marcar el último
+  /// círculo despacha (true) o solo marca y la comanda se queda (false).
+  final bool completeOnPayment;
 
   /// Marca un solo ítem como listo (sin imprimir, sin despachar la orden).
   final void Function(String itemId) onBumpItem;
@@ -53,6 +60,7 @@ class KitchenTicketCard extends StatelessWidget {
   const KitchenTicketCard({
     super.key,
     required this.order,
+    required this.completeOnPayment,
     required this.onBumpItem,
     required this.onCompleteOrder,
   });
@@ -67,12 +75,11 @@ class KitchenTicketCard extends StatelessWidget {
     final total = items.length;
     final allTakeout = items.isNotEmpty && items.every((i) => i.isTakeout);
 
-    // Ítems que la cocina aún está trabajando. Cuando queda UNO solo (o la
-    // comanda es de un solo producto), NO se permite marcarlo con el tap de
-    // arriba: ese camino (bump) no imprime el ticket de listo. El último se
-    // completa con "Marcar todo listo", que sí imprime la comanda.
+    // Ítems que la cocina aún está trabajando. En "esperar al cocinero" marcar
+    // cualquiera es solo progreso (la comanda se queda). En "sacar al pagar",
+    // marcar el ÚLTIMO despacha la comanda (si no, desaparecería sin imprimir).
+    // Ver el modelo de interacción arriba.
     final activeCount = items.where(_canBump).length;
-    final allowIndividualBump = activeCount > 1;
 
     return Container(
       clipBehavior: Clip.antiAlias,
@@ -109,9 +116,16 @@ class KitchenTicketCard extends StatelessWidget {
                   _ItemRow(
                     item: item,
                     showTakeoutBadge: !allTakeout && item.isTakeout,
-                    onTap: (_canBump(item) && allowIndividualBump)
-                        ? () => onBumpItem(item.id)
-                        : null,
+                    onTap: !_canBump(item)
+                        ? null
+                        // "Esperar al cocinero": marcar es siempre solo progreso
+                        // (la comanda se queda hasta "Marcar todo listo").
+                        : (!completeOnPayment
+                            ? () => onBumpItem(item.id)
+                            // "Sacar al pagar": el último despacha e imprime.
+                            : (activeCount > 1
+                                ? () => onBumpItem(item.id)
+                                : () => onCompleteOrder(order.orderId))),
                   ),
               ],
             ),

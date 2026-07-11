@@ -34,6 +34,18 @@ final kitchenViewModelProvider = ChangeNotifierProvider<KitchenViewModel>((
   );
 });
 
+/// Clave de una tarjeta del KDS: orden + ronda (`kitchen_sent_at`) + área de
+/// producción. Debe coincidir EXACTAMENTE con la agrupación del tablero
+/// ([_KitchenViewState._activeOrders]) para que el guard anti-vaciado
+/// ([KitchenViewModel._bumpWouldEmptyCard]) identifique la tarjeta correcta.
+String kitchenCardKey(KitchenItem item) {
+  final round = item.kitchenSentAt?.toIso8601String() ?? 'legacy';
+  final area = (item.areaCode == null || item.areaCode!.isEmpty)
+      ? '__none__'
+      : item.areaCode!;
+  return '${item.orderId}::$round::$area';
+}
+
 class KitchenViewModel extends ChangeNotifier {
   final KitchenRepository _repository;
   final PrintingService _printingService;
@@ -313,6 +325,9 @@ class KitchenViewModel extends ChangeNotifier {
   }
 
   Future<void> markReady(String itemId) async {
+    // El bump individual solo MARCA el ítem como listo (progreso). La comanda
+    // se queda en el tablero —aunque se marquen todos los ítems— hasta que se
+    // despache con "Marcar todo listo" (que los pasa a 'served' e imprime).
     // Ítem ya pagado (modo "esperar al cocinero"): sellamos solo `ready_at`
     // sin revertir el 'paid' (del que depende la reapertura al anular el pago).
     final preservePaid = _isPaidItem(itemId) && !_isHubMode;
@@ -348,15 +363,21 @@ class KitchenViewModel extends ChangeNotifier {
     bool inScope(KitchenItem i) =>
         i.orderId == orderId && (scope == null || scope.contains(i.id));
 
-    // Items que aún faltaban (los que esta acción transiciona a 'ready').
-    final openItems = _items
+    // Ítems que se estaban cocinando (incluye los que el chef ya marcó 'ready'
+    // por su círculo): esta acción los DESPACHA a 'served'. 'served' es un
+    // estado terminal PERSISTENTE que saca la comanda del tablero de verdad
+    // (sobrevive recargas), a diferencia de dejarlos 'ready' —que solo tacha—.
+    // Los 'paid' no se tocan (mantienen su cobro); salen por el sello + ready_at.
+    final cookingItems = _items
         .where(
           (item) =>
               inScope(item) &&
-              (item.status == 'pending' || item.status == 'preparing'),
+              (item.status == 'pending' ||
+                  item.status == 'preparing' ||
+                  item.status == 'ready'),
         )
         .toList(growable: false);
-    final affectedIds = openItems.map((item) => item.id).toSet();
+    final affectedIds = cookingItems.map((item) => item.id).toSet();
 
     // TODA la ronda activa, incluidos los ítems que el chef ya marcó listos
     // uno por uno. El ticket LISTO debe reflejar la comanda completa, no solo
@@ -371,21 +392,27 @@ class KitchenViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Marcado confiable ítem por ítem. NO usamos el RPC `fn_mark_order_ready`
-      // porque en este entorno no persistía y la card "se devolvía"; el update
-      // directo por ítem es el mismo camino probado del bump individual.
-      for (final item in openItems) {
-        await _setItemStatus(item.id, 'ready');
+      // Despacho a 'served'. En nube usamos un update por lote (marca ready_at
+      // si falta y pasa a 'served' solo lo que se estaba cocinando). En hub,
+      // encolamos la op por ítem —el tablero del Hub ya saca la comanda por el
+      // estado de sus ítems y se reconcilia al subir—.
+      if (_isHubMode) {
+        for (final item in cookingItems) {
+          await _setItemStatus(item.id, 'served');
+        }
+      } else {
+        await _repository.markCardItemsServed(affectedIds.toList());
       }
       // Sello de cocina terminada: solo si a la orden ya no le queda trabajo
       // pendiente en NINGUNA ronda (todo está listo/servido). Así, en modo
       // "esperar al cocinero", una ronda aún por cocinar no saca del tablero
-      // toda la orden. Los ítems 'ready' de rondas previas no cuentan como
-      // trabajo pendiente.
+      // toda la orden.
       final orderHasPendingWork = _items.any(
         (item) =>
             item.orderId == orderId &&
-            (item.status == 'pending' || item.status == 'preparing'),
+            (item.status == 'pending' ||
+                item.status == 'preparing' ||
+                item.status == 'ready'),
       );
       // En modo hub el "sello" de cocina terminada (kitchen_done_at) se
       // reconcilia al subir; el tablero del Hub ya saca la comanda por el

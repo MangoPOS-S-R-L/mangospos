@@ -173,11 +173,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     // (una tarjeta "Sin área" que delata productos sin configurar).
     final map = <String, List<KitchenItem>>{};
     for (final item in items) {
-      final round = item.kitchenSentAt?.toIso8601String() ?? 'legacy';
-      final area = (item.areaCode == null || item.areaCode!.isEmpty)
-          ? '__none__'
-          : item.areaCode!;
-      map.putIfAbsent('${item.orderId}::$round::$area', () => []).add(item);
+      map.putIfAbsent(kitchenCardKey(item), () => []).add(item);
     }
 
     final orders = <KitchenOrder>[];
@@ -185,20 +181,23 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       final list = entry.value;
       final hasOpen = list.any((i) {
         if (i.status == 'pending' || i.status == 'preparing') return true;
-        // Modo "esperar al cocinero" (completeOnPayment == false): al cobrar,
-        // fn_process_payment_v3 marca los ítems 'paid', pero eso NO significa
-        // que la cocina los preparó. Un ítem pagado que aún no tiene `readyAt`
-        // sigue por cocinar, así que la tarjeta debe permanecer en el tablero
-        // hasta que el cocinero la marque (lo que sella `ready_at`). En el modo
-        // "sale al pagar" esto no aplica: la orden ya salió del KDS al cobrar y
-        // los pagados nunca llegan a esta vista.
-        if (!completeOnPayment && i.status == 'paid' && i.readyAt == null) {
-          return true;
+        if (!completeOnPayment) {
+          // Modo "esperar al cocinero": la comanda se queda mientras tenga
+          // ítems cocinándose O ya marcados listos por el chef (bump = 'ready')
+          // pero AÚN sin despachar. Al despachar con "Marcar todo listo" pasan
+          // a 'served' → dejan de contar → la comanda sale del tablero de forma
+          // PERSISTENTE (sobrevive recargas; no reaparece con otra ronda).
+          if (i.status == 'ready') return true;
+          // Ítem pagado sin cocinar (paid + ready_at null): sigue por cocinar,
+          // así que la comanda debe permanecer hasta que la cocina la despache.
+          if (i.status == 'paid' && i.readyAt == null) return true;
         }
+        // Modo "sacar al pagar": la orden ya salió del KDS al cobrar y los
+        // pagados/listos no la mantienen (kds_active_items la excluye).
         return false;
       });
-      // Tarjeta sin trabajo pendiente = cocinada/despachada → fuera del tablero.
-      // Ver la nota del doc sobre por qué es por-tarjeta.
+      // Sin ítems que la mantengan (todo 'served'/despachado, o cocinado+pagado)
+      // → fuera del tablero.
       if (!hasOpen) continue;
 
       // No-listos primero; dentro de cada grupo, por antigüedad.
@@ -310,6 +309,9 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         KitchenTicketCard(
                           key: ValueKey(order.roundKey),
                           order: order,
+                          completeOnPayment: ref
+                              .read(kitchenViewModelProvider)
+                              .completeOnPayment,
                           onBumpItem: (itemId) => ref
                               .read(kitchenViewModelProvider)
                               .markReady(itemId),

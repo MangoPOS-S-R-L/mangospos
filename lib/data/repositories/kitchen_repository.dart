@@ -113,7 +113,13 @@ class KitchenRepository {
           .toList()
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (items.isEmpty) return items;
-      return _attachModifiers(items);
+      // Misma resolución de área que el modo "sacar al pagar": el área real
+      // sale del N:M (menu_item_print_areas), no del `print_area_code` legacy
+      // de la vista. Sin esto, el filtro por área y la separación por estación
+      // (Cocina/Bar) salían mal en modo "esperar al cocinero", y un producto
+      // con 2 áreas no se duplicaba. Ver _fetchActiveItems.
+      final withMods = await _attachModifiers(items);
+      return _attachProductionAreas(withMods);
     } on PostgrestException catch (e) {
       // Vista sin `kitchen_sent_at` (migración de rondas sin aplicar):
       // degradamos y reintentamos una vez sin la columna.
@@ -153,6 +159,36 @@ class KitchenRepository {
   /// "esperar al cocinero" (`kitchen_done_at`). También sella `ready_at` en los
   /// ítems que no lo tengan —SIN tocar su `status` (p. ej. ítems ya 'paid')—
   /// para dejar registrado cuándo la cocina los completó. No afecta el pago.
+  /// Despacha los ítems de una comanda al marcarla con "Marcar todo listo":
+  /// los pasa a 'served'. 'served' es un estado terminal PERSISTENTE que saca
+  /// la comanda del tablero de verdad (sobrevive recargas) —a diferencia de
+  /// dejarlos 'ready', que solo tacha y la deja visible—, y así una comanda ya
+  /// despachada no reaparece cuando llega otra ronda de la misma orden.
+  ///
+  /// Solo toca lo que aún se estaba cocinando (pending/preparing/ready); nunca
+  /// 'paid'/'void'. Sella `ready_at` si faltaba (para "Completados Hoy" y el
+  /// tiempo de cocina del ticket). El pago marca 'paid' igual desde 'served'
+  /// (fn_process_payment_v3 usa `status <> 'void'`), así que no interfiere con
+  /// cobro/anulación.
+  Future<void> markCardItemsServed(List<String> itemIds) async {
+    if (itemIds.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+    try {
+      await _client
+          .from('order_items')
+          .update({'ready_at': now})
+          .inFilter('id', itemIds)
+          .isFilter('ready_at', null);
+    } catch (_) {
+      // El sello de ready_at es best-effort; lo importante es el 'served'.
+    }
+    await _client
+        .from('order_items')
+        .update({'status': 'served'})
+        .inFilter('id', itemIds)
+        .inFilter('status', ['pending', 'preparing', 'ready']);
+  }
+
   Future<void> markOrderKitchenDone(String orderId) async {
     final now = DateTime.now().toIso8601String();
     try {
