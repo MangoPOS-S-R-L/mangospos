@@ -401,6 +401,20 @@ class PrintingService {
             );
             return KitchenPrintOutcome.directSuccess;
           }
+          // ─── PREFLIGHT (paridad con el test de página) ────────────
+          // Si la IP cacheada no responde a una sonda TCP corta, releer
+          // la fila fresca en BD ANTES de quemar los 4 intentos contra
+          // una IP muerta (era el caso "el test imprime pero la comanda
+          // no": el cache de impresoras por área servía una IP vieja).
+          // Sin recovery por MAC aquí: en impresora de cocina compartida
+          // la sonda puede fallar por puerto ocupado por otra tablet y
+          // el escaneo LAN metería segundos de latencia — los retries
+          // con jitter de abajo ya cubren ese caso.
+          final targetIp = await _printingRepo.resolveReachableNetworkIp(
+            printer: printer,
+            cachedIp: ip,
+            includeMacRecovery: false,
+          );
           try {
             // attempts:4 (vs 2 por defecto) — en un setup multi-tablet a una
             // impresora de cocina COMPARTIDA, el puerto 9100 puede estar
@@ -409,7 +423,7 @@ class PrintingService {
             // puerto y que la comanda NO se pierda antes de caer al fallback
             // de agente/cloud (que en solo-tablets no existe / no se drena).
             await _printingRepo.printRawDirectTcp(
-              ip: ip,
+              ip: targetIp,
               port: printer.port ?? 9100,
               data: bytes,
               attempts: 4,
@@ -427,7 +441,7 @@ class PrintingService {
               '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
             );
             await _printingRepo.printRawViaAgent(
-              ip: ip,
+              ip: targetIp,
               port: printer.port ?? 9100,
               data: bytes,
             );

@@ -1517,6 +1517,9 @@ class PrintingRepository {
     String? idempotencyKey,
     String kind = 'other',
     String? areaCode,
+    // Guard interno anti-recursión del retry con config fresca
+    // (_retryWithFreshConfig). Los callers externos no deben pasarlo.
+    bool refreshOnFailure = true,
   }) async {
     // PRD 5 F2.5: routing por host_device_id.
     // Si la impresora está vinculada a un device físico (USB/BT) que NO es
@@ -1562,8 +1565,24 @@ class PrintingRepository {
               );
               return PrintOutcome.directSuccess;
             } catch (_) {
-              // Local tampoco anduvo: caer al cloud queue normal.
+              // Local tampoco anduvo: caer al retry fresco / cloud queue.
             }
+          }
+
+          // Paridad con el test de página: releer la fila de la impresora
+          // en BD y, si algo material cambió (host re-anclado, IP nueva,
+          // etc.), reintentar UNA vez con la config fresca antes de
+          // escalar al cloud.
+          if (refreshOnFailure) {
+            final retried = await _retryWithFreshConfig(
+              stale: printer,
+              data: data,
+              timeout: timeout,
+              idempotencyKey: idempotencyKey,
+              kind: kind,
+              areaCode: areaCode,
+            );
+            if (retried != null) return retried;
           }
 
           if (idempotencyKey == null) rethrow;
@@ -1584,6 +1603,21 @@ class PrintingRepository {
       await _printEscPosLocal(printer: printer, data: data, timeout: timeout);
       return PrintOutcome.directSuccess;
     } catch (e) {
+      // Paridad con el test de página: antes de rendirnos, releer la
+      // fila fresca de la impresora en BD y reintentar una vez si la
+      // config cacheada quedó stale (IP/host/puerto/ruta USB viejos).
+      if (refreshOnFailure) {
+        final retried = await _retryWithFreshConfig(
+          stale: printer,
+          data: data,
+          timeout: timeout,
+          idempotencyKey: idempotencyKey,
+          kind: kind,
+          areaCode: areaCode,
+        );
+        if (retried != null) return retried;
+      }
+
       // FALLBACK FINAL: todos los caminos directos (TCP/agent/USB/BT)
       // fallaron. Si tenemos contexto (idempotencyKey + businessId),
       // escalamos al cloud queue. El agent procesará con retry exp.
@@ -1598,6 +1632,77 @@ class PrintingRepository {
       );
       return PrintOutcome.escalatedToCloud;
     }
+  }
+
+  /// Paridad con el "test de página" de Settings: el test siempre imprime
+  /// con la fila FRESCA de la impresora (recién cargada de BD), mientras
+  /// que factura/precuenta/comanda llegan a [printEscPos] con una
+  /// PrinterConfig que puede venir de un cache (memoria o disco, TTL 5
+  /// min) con IP / host_device_id / puerto viejos. Por eso el test
+  /// "funciona mejor".
+  ///
+  /// Si el intento de impresión falló, releemos la fila en BD y — SOLO si
+  /// algo material cambió — reintentamos una única vez con la config
+  /// fresca (recursión con `refreshOnFailure: false` como guard). Si nada
+  /// cambió o la BD no responde, devolvemos null y el caller sigue su
+  /// escalación normal (cloud queue / rethrow) con el error original.
+  Future<PrintOutcome?> _retryWithFreshConfig({
+    required PrinterConfig stale,
+    required List<int> data,
+    required Duration timeout,
+    String? idempotencyKey,
+    required String kind,
+    String? areaCode,
+  }) async {
+    PrinterConfig? fresh;
+    try {
+      // Timeout corto: offline no debe demorar la escalación al cloud
+      // queue (que también maneja offline con su propio flujo).
+      fresh = await getPrinterById(stale.id)
+          .timeout(const Duration(seconds: 2), onTimeout: () => null);
+    } catch (_) {
+      fresh = null;
+    }
+    if (fresh == null || !_printerConfigMateriallyChanged(stale, fresh)) {
+      return null;
+    }
+    debugPrint(
+      '[PrintFresh] ${stale.name}: la config en BD difiere del cache '
+      '(ip ${stale.ipAddress}→${fresh.ipAddress}, '
+      'host ${stale.hostDeviceId}→${fresh.hostDeviceId}) — '
+      'reintentando con la fila fresca.',
+    );
+    // El cache por área quedó stale: limpiarlo para que las próximas
+    // impresiones partan de la config correcta sin pasar por aquí.
+    _clearLookupCaches();
+    try {
+      return await printEscPos(
+        printer: fresh,
+        data: data,
+        timeout: timeout,
+        idempotencyKey: idempotencyKey,
+        kind: kind,
+        areaCode: areaCode,
+        refreshOnFailure: false,
+      );
+    } catch (_) {
+      // El retry fresco tampoco anduvo — que el caller escale con el
+      // error ORIGINAL (más informativo que este segundo fallo).
+      return null;
+    }
+  }
+
+  /// ¿Cambió algún campo que afecte CÓMO llegamos a la impresora?
+  /// Nombre, área, flags de UI, etc. no cuentan — reintentar con eso
+  /// igual daría el mismo resultado.
+  bool _printerConfigMateriallyChanged(PrinterConfig a, PrinterConfig b) {
+    String norm(String? s) => (s ?? '').trim();
+    return norm(a.ipAddress) != norm(b.ipAddress) ||
+        (a.port ?? 9100) != (b.port ?? 9100) ||
+        norm(a.hostDeviceId) != norm(b.hostDeviceId) ||
+        norm(a.devicePath) != norm(b.devicePath) ||
+        norm(a.mac) != norm(b.mac) ||
+        a.printerType != b.printerType;
   }
 
   /// Detecta los errores de [_printViaRemoteHost] donde la mejor estrategia
@@ -1645,6 +1750,20 @@ class PrintingRepository {
           );
           return;
         }
+        // ─── PREFLIGHT (paridad con el test de página) ──────────────
+        // El test de página "siempre funciona" porque imprime con la
+        // fila fresca de la impresora y un payload mínimo. Aquí, antes
+        // de mandar el ticket completo, hacemos una sonda TCP corta. Si
+        // la IP cacheada no responde, buscamos la IP real (fila fresca
+        // en BD → recovery por MAC) ANTES de quemar ~10s de retries con
+        // backoff contra una IP muerta. Si la sonda falla pero no
+        // aparece una IP mejor (ej. impresora ocupada con otra
+        // conexión), seguimos con el flujo normal — retries y fallbacks
+        // de siempre quedan intactos.
+        final targetIp = await resolveReachableNetworkIp(
+          printer: printer,
+          cachedIp: ip,
+        );
         try {
           // Retry silencioso con backoff exponencial antes de escalar a
           // recovery por MAC. Cubre fallos transitorios típicos: blip de
@@ -1654,7 +1773,7 @@ class PrintingRepository {
           // (impresora cambió de IP, está apagada, etc.) y caemos al
           // path de recovery / agent fallback / cloud queue.
           await _printTcpWithRetries(
-            ip: ip,
+            ip: targetIp,
             port: printer.port ?? 9100,
             data: data,
             timeout: timeout,
@@ -1677,7 +1796,10 @@ class PrintingRepository {
           // tiene MAC guardado y el agente está vivo, le pedimos que escanee
           // la LAN. Si encuentra la impresora en otra IP, actualizamos
           // Supabase y reintentamos el print directo una vez.
-          final recoveredIp = await _tryRecoverPrinterIpByMac(printer, ip);
+          final recoveredIp = await _tryRecoverPrinterIpByMac(
+            printer,
+            targetIp,
+          );
           if (recoveredIp != null) {
             try {
               await printRawDirectTcp(
@@ -1693,7 +1815,7 @@ class PrintingRepository {
           }
           if (await isAgentUp()) {
             await printRawViaAgent(
-              ip: recoveredIp ?? ip,
+              ip: recoveredIp ?? targetIp,
               port: printer.port ?? 9100,
               data: data,
             );
@@ -3014,6 +3136,82 @@ finally {
         lower.contains('econnreset') ||
         lower.contains('broken pipe') ||
         lower.contains('socketexception');
+  }
+
+  /// Preflight compartido por factura/precuenta ([_printEscPosLocal]) y
+  /// comanda ([PrintingService._printKitchenTicketToPrinter]): devuelve
+  /// la IP a la que conviene mandar el ticket.
+  ///
+  /// Si la IP cacheada responde a una sonda TCP corta (~900ms), se usa
+  /// esa (costo: milisegundos en una LAN sana). Si no responde, se busca
+  /// una IP fresca — fila en BD y, si [includeMacRecovery], escaneo LAN
+  /// por MAC vía agente. Si no aparece nada mejor, se devuelve la
+  /// cacheada tal cual: el caller conserva sus retries y fallbacks.
+  ///
+  /// [includeMacRecovery] debe ir en `false` en flujos donde la sonda
+  /// puede fallar por CONTENCIÓN y no por IP muerta (ej. impresora de
+  /// cocina compartida entre tablets con el puerto 9100 ocupado) — ahí
+  /// el escaneo LAN solo agregaría segundos de latencia y los retries
+  /// del caller ya cubren el caso.
+  Future<String> resolveReachableNetworkIp({
+    required PrinterConfig printer,
+    required String cachedIp,
+    bool includeMacRecovery = true,
+  }) async {
+    if (kIsWeb) return cachedIp;
+    final reachable = await probePrinter(
+      ip: cachedIp,
+      port: printer.port ?? 9100,
+      timeout: const Duration(milliseconds: 900),
+    );
+    if (reachable) return cachedIp;
+    final fresh = await _resolveFreshNetworkIp(
+      printer,
+      cachedIp,
+      includeMacRecovery: includeMacRecovery,
+    );
+    return fresh ?? cachedIp;
+  }
+
+  /// Busca la IP actual de una impresora de red cuya IP cacheada no
+  /// respondió a la sonda TCP del preflight. Orden:
+  ///   1. Fila fresca en BD — otra caja / el alta de impresoras pudo
+  ///      haberla actualizado (el test de página usa siempre este dato,
+  ///      por eso "funciona mejor" que factura/comanda con cache stale).
+  ///   2. Recovery por MAC vía agente (escaneo LAN).
+  /// Devuelve null si no hay una IP distinta que responda — el caller
+  /// sigue con la IP original y sus fallbacks normales.
+  Future<String?> _resolveFreshNetworkIp(
+    PrinterConfig printer,
+    String currentIp, {
+    bool includeMacRecovery = true,
+  }) async {
+    final port = printer.port ?? 9100;
+    // Timeout corto: si estamos offline, no bloquear el flujo de
+    // impresión esperando a Supabase — el ticket puede salir igual por
+    // los paths locales.
+    PrinterConfig? fresh;
+    try {
+      fresh = await getPrinterById(printer.id)
+          .timeout(const Duration(seconds: 2), onTimeout: () => null);
+    } catch (_) {
+      fresh = null;
+    }
+    final freshIp = fresh?.ipAddress?.trim();
+    if (freshIp != null && freshIp.isNotEmpty && freshIp != currentIp) {
+      if (await probePrinter(ip: freshIp, port: port)) {
+        debugPrint(
+          '[PrintFresh] ${printer.name}: BD tiene IP nueva '
+          '$currentIp → $freshIp; usando la fresca.',
+        );
+        // El cache por área quedó stale — limpiarlo para que las
+        // próximas impresiones ya partan de la IP correcta.
+        _clearLookupCaches();
+        return freshIp;
+      }
+    }
+    if (!includeMacRecovery) return null;
+    return _tryRecoverPrinterIpByMac(printer, currentIp);
   }
 
   Future<String?> _tryRecoverPrinterIpByMac(
