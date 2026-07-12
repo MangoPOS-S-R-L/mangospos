@@ -287,10 +287,10 @@ class CashClosePrintService {
     try {
       final row = await _client
           .from('businesses')
-          .select('name')
+          .select('business_name')
           .eq('id', businessId)
           .maybeSingle();
-      final name = row?['name']?.toString().trim();
+      final name = row?['business_name']?.toString().trim();
       return (name != null && name.isNotEmpty) ? name : 'MangoPOS Restaurant';
     } catch (_) {
       return 'MangoPOS Restaurant';

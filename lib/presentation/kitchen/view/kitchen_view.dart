@@ -149,18 +149,18 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   // ============================================================
 
   /// Agrupa los ítems activos en tarjetas (orden + ronda + área) y deja en el
-  /// tablero SOLO las que aún tienen trabajo pendiente (pending/preparing).
+  /// tablero las que aún NO fueron despachadas.
   ///
-  /// Una tarjeta 100% lista se despacha (sale del tablero) en AMBOS modos:
-  /// - "sale al pagar": la fuente (`kds_active_items`) ya excluye lo pagado.
-  /// - "esperar al cocinero": la fuente (`kds_open_orders`) mantiene la orden
-  ///   hasta que se selle `kitchen_done_at`, pero ese sello es POR ORDEN. Como
-  ///   una orden puede tener varias tarjetas (rondas/áreas), sellar al marcar
-  ///   una sola sería incorrecto — así que el despacho visual es POR TARJETA
-  ///   aquí. Si no filtráramos, al "Marcar todo listo" una tarjeta cuya orden
-  ///   aún tiene otras rondas pendientes reaparecería "toda lista" en el
-  ///   siguiente refresh (bug reportado). El sello por-orden sigue disparando
-  ///   solo cuando la orden completa terminó, para sacarla de la vista.
+  /// Marcar círculos es SOLO PROGRESO en ambos modos: una tarjeta con todos
+  /// sus ítems 'ready' se queda visible (tachada, al final del tablero) hasta
+  /// que se despache con "Marcar todo listo", que pasa sus ítems a 'served'
+  /// —estado terminal persistente— y ahí sí deja de contar y la tarjeta sale.
+  /// El despacho es POR TARJETA (una orden puede tener varias rondas/áreas);
+  /// el sello por-orden (`kitchen_done_at`) solo se dispara cuando la orden
+  /// completa terminó, para sacarla de `kds_open_orders`.
+  ///
+  /// Además, en modo "sale al pagar" la fuente (`kds_active_items`) excluye
+  /// lo pagado, así que cobrar también saca la tarjeta (semántica del modo).
   List<KitchenOrder> _activeOrders(
     List<KitchenItem> items,
     bool completeOnPayment,
@@ -181,19 +181,19 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
       final list = entry.value;
       final hasOpen = list.any((i) {
         if (i.status == 'pending' || i.status == 'preparing') return true;
+        // Ítem marcado listo por el chef (bump = 'ready') pero AÚN sin
+        // despachar: mantiene la comanda visible EN AMBOS MODOS (marcar todos
+        // los círculos es solo progreso). Al despachar con "Marcar todo listo"
+        // pasan a 'served' → dejan de contar → la comanda sale del tablero de
+        // forma PERSISTENTE (sobrevive recargas; no reaparece con otra ronda).
+        if (i.status == 'ready') return true;
         if (!completeOnPayment) {
-          // Modo "esperar al cocinero": la comanda se queda mientras tenga
-          // ítems cocinándose O ya marcados listos por el chef (bump = 'ready')
-          // pero AÚN sin despachar. Al despachar con "Marcar todo listo" pasan
-          // a 'served' → dejan de contar → la comanda sale del tablero de forma
-          // PERSISTENTE (sobrevive recargas; no reaparece con otra ronda).
-          if (i.status == 'ready') return true;
-          // Ítem pagado sin cocinar (paid + ready_at null): sigue por cocinar,
-          // así que la comanda debe permanecer hasta que la cocina la despache.
+          // Modo "esperar al cocinero": ítem pagado sin cocinar (paid +
+          // ready_at null) sigue por cocinar, así que la comanda debe
+          // permanecer hasta que la cocina la despache.
           if (i.status == 'paid' && i.readyAt == null) return true;
         }
-        // Modo "sacar al pagar": la orden ya salió del KDS al cobrar y los
-        // pagados/listos no la mantienen (kds_active_items la excluye).
+        // Lo demás ('served' despachado; 'paid' ya cocinado) no la mantiene.
         return false;
       });
       // Sin ítems que la mantengan (todo 'served'/despachado, o cocinado+pagado)
@@ -309,9 +309,6 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         KitchenTicketCard(
                           key: ValueKey(order.roundKey),
                           order: order,
-                          completeOnPayment: ref
-                              .read(kitchenViewModelProvider)
-                              .completeOnPayment,
                           onBumpItem: (itemId) => ref
                               .read(kitchenViewModelProvider)
                               .markReady(itemId),
