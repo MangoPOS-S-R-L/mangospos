@@ -26,6 +26,7 @@ import '../state/kardex_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/kardex_viewmodel.dart';
 import 'widgets/inventory_back_button.dart';
+import 'widgets/item_search_field.dart';
 
 class InventoryKardexView extends ConsumerStatefulWidget {
   const InventoryKardexView({super.key});
@@ -387,31 +388,11 @@ class _FiltersBar extends StatelessWidget {
         spacing: 12,
         runSpacing: 12,
         children: [
-          SizedBox(
-            width: 240,
-            child: DropdownButtonFormField<String>(
-              initialValue: filters.itemId ?? '',
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Insumo',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: [
-                const DropdownMenuItem(value: '', child: Text('Todos')),
-                ...items.map(
-                  (i) => DropdownMenuItem(
-                    value: i.id,
-                    child: Text(i.name, overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-              ],
-              onChanged: (v) => onChanged(
-                filters.copyWith(
-                  itemId: v == null || v.isEmpty ? null : v,
-                  clearItemId: v == null || v.isEmpty,
-                ),
-              ),
+          ItemSearchField(
+            items: items,
+            selectedItemId: filters.itemId,
+            onSelected: (id) => onChanged(
+              filters.copyWith(itemId: id, clearItemId: id == null),
             ),
           ),
           SizedBox(

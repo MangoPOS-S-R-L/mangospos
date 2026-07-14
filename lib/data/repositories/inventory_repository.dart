@@ -490,11 +490,13 @@ class InventoryRepository {
   // ── Sprint 4 Inventario — Recepción directa (sin OC) ────────────────────
 
   /// Lista recepciones directas desde `v_direct_receipts_log`. Filtros
-  /// opcionales por status ('received' | 'cancelled') y supplier.
+  /// opcionales por status ('received' | 'cancelled'), supplier y búsqueda
+  /// libre (número de recepción, proveedor o bodega).
   Future<List<Map<String, dynamic>>> listDirectReceipts({
     required String businessId,
     String? status,
     String? supplierId,
+    String? search,
     int limit = 50,
     int offset = 0,
   }) async {
@@ -507,6 +509,19 @@ class InventoryRepository {
     }
     if (supplierId != null && supplierId.isNotEmpty) {
       query = query.eq('supplier_id', supplierId);
+    }
+    final term = search?.trim() ?? '';
+    if (term.isNotEmpty) {
+      // Coma/paréntesis rompen la sintaxis de or() de PostgREST y % es
+      // comodín de ilike: se eliminan del término en vez de escaparlos.
+      final safe = term.replaceAll(RegExp(r'[,()%]'), '');
+      if (safe.isNotEmpty) {
+        query = query.or(
+          'receipt_number.ilike.%$safe%,'
+          'supplier_name.ilike.%$safe%,'
+          'warehouse_name.ilike.%$safe%',
+        );
+      }
     }
     final response = await query
         .order('created_at', ascending: false)

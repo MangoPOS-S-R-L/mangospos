@@ -823,6 +823,7 @@ class _AssignmentsPanel extends StatefulWidget {
 
 class _AssignmentsPanelState extends State<_AssignmentsPanel> {
   late Set<String> _localAssigned;
+  final _searchCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -840,7 +841,25 @@ class _AssignmentsPanelState extends State<_AssignmentsPanel> {
   }
 
   @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Productos que matchean la búsqueda. Filtro solo de presentación: las
+  /// selecciones ya hechas (_localAssigned) se conservan aunque el producto
+  /// no esté visible, y "Guardar" las envía todas.
+  List<ModifierProduct> get _visibleProducts {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return widget.products;
+    return widget.products
+        .where((p) => p.name.toLowerCase().contains(q))
+        .toList(growable: false);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final visible = _visibleProducts;
     return _Panel(
       title: 'Asignacion a productos',
       action: TextButton(
@@ -856,8 +875,34 @@ class _AssignmentsPanelState extends State<_AssignmentsPanel> {
           : widget.products.isEmpty
           ? const _EmptyPanelState(message: 'No hay productos disponibles.')
           : Column(
-              children: widget.products
-                  .map(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: TextField(
+                    controller: _searchCtrl,
+                    decoration: InputDecoration(
+                      hintText: 'Buscar producto…',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      suffixIcon: _searchCtrl.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.close, size: 16),
+                              tooltip: 'Limpiar búsqueda',
+                              onPressed: () =>
+                                  setState(() => _searchCtrl.clear()),
+                            ),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                if (visible.isEmpty)
+                  const _EmptyPanelState(
+                    message: 'Ningún producto coincide con la búsqueda.',
+                  ),
+                ...visible
+                    .map(
                     (product) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       decoration: BoxDecoration(
@@ -893,8 +938,8 @@ class _AssignmentsPanelState extends State<_AssignmentsPanel> {
                         },
                       ),
                     ),
-                  )
-                  .toList(growable: false),
+                  ),
+              ],
             ),
     );
   }

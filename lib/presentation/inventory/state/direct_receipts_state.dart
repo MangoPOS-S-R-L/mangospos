@@ -192,6 +192,8 @@ class DirectReceiptsState {
   final String? error;
   final String? businessId;
   final String? statusFilter; // 'received' | 'cancelled' | null
+  // Búsqueda libre (número de recepción, proveedor o bodega); server-side.
+  final String? searchQuery;
   final List<DirectReceipt> receipts;
   final bool hasMore;
 
@@ -202,9 +204,12 @@ class DirectReceiptsState {
     this.error,
     this.businessId,
     this.statusFilter,
+    this.searchQuery,
     this.receipts = const [],
     this.hasMore = false,
   });
+
+  bool get hasSearch => searchQuery != null && searchQuery!.trim().isNotEmpty;
 
   DirectReceiptsState copyWith({
     bool? loading,
@@ -213,10 +218,12 @@ class DirectReceiptsState {
     String? error,
     String? businessId,
     String? statusFilter,
+    String? searchQuery,
     List<DirectReceipt>? receipts,
     bool? hasMore,
     bool clearError = false,
     bool clearStatusFilter = false,
+    bool clearSearchQuery = false,
   }) {
     return DirectReceiptsState(
       loading: loading ?? this.loading,
@@ -227,6 +234,7 @@ class DirectReceiptsState {
       statusFilter: clearStatusFilter
           ? null
           : (statusFilter ?? this.statusFilter),
+      searchQuery: clearSearchQuery ? null : (searchQuery ?? this.searchQuery),
       receipts: receipts ?? this.receipts,
       hasMore: hasMore ?? this.hasMore,
     );

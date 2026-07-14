@@ -79,6 +79,29 @@ class DirectReceiptsViewModel extends ChangeNotifier {
     }
   }
 
+  /// Búsqueda libre server-side (número de recepción, proveedor o bodega).
+  /// La vista la llama ya debounceada.
+  Future<void> applySearch(String? query) async {
+    final q = query?.trim() ?? '';
+    if ((q.isEmpty ? null : q) == _state.searchQuery) return;
+    _state = _state.copyWith(
+      searchQuery: q,
+      clearSearchQuery: q.isEmpty,
+      loading: true,
+      clearError: true,
+    );
+    notifyListeners();
+    try {
+      await _reload();
+    } catch (e) {
+      _state = _state.copyWith(
+        loading: false,
+        error: 'Error buscando recepciones: $e',
+      );
+      notifyListeners();
+    }
+  }
+
   Future<void> _reload() async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -93,6 +116,7 @@ class DirectReceiptsViewModel extends ChangeNotifier {
     final rows = await _repository.listDirectReceipts(
       businessId: businessId,
       status: _state.statusFilter,
+      search: _state.searchQuery,
       limit: DirectReceiptsState.pageSize,
       offset: 0,
     );
@@ -117,6 +141,7 @@ class DirectReceiptsViewModel extends ChangeNotifier {
       final rows = await _repository.listDirectReceipts(
         businessId: businessId,
         status: _state.statusFilter,
+        search: _state.searchQuery,
         limit: DirectReceiptsState.pageSize,
         offset: _state.receipts.length,
       );

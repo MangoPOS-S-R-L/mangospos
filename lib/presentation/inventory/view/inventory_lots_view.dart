@@ -18,6 +18,7 @@ import '../state/lots_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/lots_viewmodel.dart';
 import 'widgets/inventory_back_button.dart';
+import 'widgets/item_search_field.dart';
 
 class InventoryLotsView extends ConsumerStatefulWidget {
   const InventoryLotsView({super.key});
@@ -289,28 +290,16 @@ class _FiltersBar extends ConsumerWidget {
           Row(
             children: [
               Expanded(
-                child: DropdownButtonFormField<String>(
-                  initialValue: filters.itemId ?? '',
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Insumo',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  items: [
-                    const DropdownMenuItem(value: '', child: Text('Todos')),
-                    ...items.where((i) => i.tracksLots).map(
-                      (i) => DropdownMenuItem(
-                        value: i.id,
-                        child: Text(i.name, overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                  ],
-                  onChanged: (v) => onChanged(
-                    filters.copyWith(
-                      itemId: v == null || v.isEmpty ? null : v,
-                      clearItemId: v == null || v.isEmpty,
-                    ),
+                child: ItemSearchField(
+                  // Solo insumos con tracking de lote (igual que el dropdown
+                  // que reemplaza).
+                  items: items
+                      .where((i) => i.tracksLots)
+                      .toList(growable: false),
+                  selectedItemId: filters.itemId,
+                  width: null,
+                  onSelected: (id) => onChanged(
+                    filters.copyWith(itemId: id, clearItemId: id == null),
                   ),
                 ),
               ),

@@ -1,8 +1,11 @@
 // Sprint 4 Inventario — Vista de recepciones directas.
 //
 // Lista las recepciones registradas (status received / cancelled) con
-// header de totales, filtro por status y botón para crear una nueva.
+// header de totales, filtro por status, buscador (número de recepción,
+// proveedor o bodega) y botón para crear una nueva.
 // Tap en una card abre el detail dialog con el desglose de líneas.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,11 +30,31 @@ class InventoryDirectReceiptsView extends ConsumerStatefulWidget {
 
 class _InventoryDirectReceiptsViewState
     extends ConsumerState<InventoryDirectReceiptsView> {
+  final _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(directReceiptsViewModelProvider).init();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Debounce para no disparar una consulta por tecla.
+  void _onSearchChanged(String text) {
+    setState(() {}); // refresca la X de limpiar
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      ref.read(directReceiptsViewModelProvider).applySearch(text);
     });
   }
 
@@ -57,6 +80,14 @@ class _InventoryDirectReceiptsViewState
           _FiltersBar(
             currentFilter: state.statusFilter,
             onChanged: (s) => vm.applyStatusFilter(s),
+            searchController: _searchCtrl,
+            onSearchChanged: _onSearchChanged,
+            onSearchCleared: () {
+              _searchDebounce?.cancel();
+              _searchCtrl.clear();
+              setState(() {});
+              vm.applySearch(null);
+            },
           ),
           if (state.error != null)
             Container(
@@ -87,8 +118,8 @@ class _InventoryDirectReceiptsViewState
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            state.statusFilter != null
-                                ? 'Sin recepciones en este filtro'
+                            (state.statusFilter != null || state.hasSearch)
+                                ? 'Sin recepciones que coincidan con el filtro o la búsqueda'
                                 : 'Aún no hay recepciones directas',
                             style: TextStyle(
                               fontSize: 16,
@@ -267,7 +298,17 @@ class _Header extends StatelessWidget {
 class _FiltersBar extends StatelessWidget {
   final String? currentFilter;
   final ValueChanged<String?> onChanged;
-  const _FiltersBar({required this.currentFilter, required this.onChanged});
+  final TextEditingController searchController;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onSearchCleared;
+
+  const _FiltersBar({
+    required this.currentFilter,
+    required this.onChanged,
+    required this.searchController,
+    required this.onSearchChanged,
+    required this.onSearchCleared,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +316,29 @@ class _FiltersBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
       child: Wrap(
         spacing: 10,
+        runSpacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          SizedBox(
+            width: 300,
+            child: TextField(
+              controller: searchController,
+              decoration: InputDecoration(
+                hintText: 'Buscar por número, proveedor o bodega…',
+                border: const OutlineInputBorder(),
+                isDense: true,
+                prefixIcon: const Icon(Icons.search, size: 18),
+                suffixIcon: searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, size: 16),
+                        tooltip: 'Limpiar búsqueda',
+                        onPressed: onSearchCleared,
+                      ),
+              ),
+              onChanged: onSearchChanged,
+            ),
+          ),
           _Chip(
             label: 'Todas',
             selected: currentFilter == null,
