@@ -9,6 +9,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/router/routes.dart';
@@ -66,7 +67,7 @@ class PlanSelectionView extends ConsumerWidget {
               ),
             );
           }
-          final currentPlan = stateAsync.valueOrNull?.plan;
+          final currentPlan = stateAsync.value?.plan;
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
             itemCount: plans.length,

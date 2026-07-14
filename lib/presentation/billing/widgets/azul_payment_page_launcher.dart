@@ -79,7 +79,7 @@ class _AzulPaymentPageLauncherState
         if (!mounted || !_isWaiting) return;
         final pm = ref
             .read(defaultPaymentMethodProvider(widget.businessId))
-            .valueOrNull;
+            .value;
         if (pm == null || pm.id == _beforeCardId) {
           setState(() => _isWaiting = false);
           AppToast.info(
@@ -114,7 +114,7 @@ class _AzulPaymentPageLauncherState
     try {
       _beforeCardId = ref
           .read(defaultPaymentMethodProvider(widget.businessId))
-          .valueOrNull
+          .value
           ?.id;
       final session =
           await repo.createTokenizationSession(businessId: widget.businessId);
@@ -157,7 +157,7 @@ class _AzulPaymentPageLauncherState
     // no disparaba cuando el padre reconstruía en el mismo ciclo). Si mientras
     // esperábamos apareció una tarjeta distinta a la previa → registro exitoso.
     final current =
-        ref.watch(defaultPaymentMethodProvider(widget.businessId)).valueOrNull;
+        ref.watch(defaultPaymentMethodProvider(widget.businessId)).value;
     if (_isWaiting && current != null && current.id != _beforeCardId) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onSuccess());
     }

@@ -105,7 +105,7 @@ class OfflineAuthService {
     // ACL (-128 si se cancelan) ya no tronan: las lecturas están blindadas.
     mOptions: MacOsOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
-      useDataProtectionKeyChain: false,
+      usesDataProtectionKeychain: false,
     ),
   );
 

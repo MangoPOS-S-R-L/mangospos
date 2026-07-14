@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../services/session/session_controller.dart';

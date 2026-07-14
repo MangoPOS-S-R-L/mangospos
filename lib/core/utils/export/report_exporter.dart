@@ -108,6 +108,10 @@ class ReportExporter {
 
   /// Construye un PDF tabular y abre el diálogo nativo de impresión/compartir.
   /// El parámetro [subtitle] aparece debajo del título (ej. "Período: 30 días").
+  ///
+  /// [columnFlex] (opcional) fija el ancho relativo de cada columna
+  /// (`FlexColumnWidth`). Sin él, la tabla auto-ajusta por contenido, lo que
+  /// con muchas columnas parte headers y números letra por letra.
   static Future<void> exportPdf({
     required String filename,
     required String title,
@@ -116,12 +120,22 @@ class ReportExporter {
     required List<ExportRow> rows,
     bool landscape = false,
     List<int>? columnNumericIndices,
+    List<double>? columnFlex,
+    List<String>? summaryLines,
   }) async {
     final doc = pw.Document();
     final pageFormat = landscape
         ? PdfPageFormat.a4.landscape
         : PdfPageFormat.a4;
     final numericSet = (columnNumericIndices ?? const []).toSet();
+    // La fuente base (Helvetica WinAnsi) no tiene glifos para em-dash,
+    // flechas, etc. — saldrían como ⊠ en el documento.
+    title = _pdfSafe(title);
+    subtitle = subtitle == null ? null : _pdfSafe(subtitle);
+    headers = headers.map(_pdfSafe).toList(growable: false);
+    rows = rows
+        .map((r) => r.map(_pdfSafe).toList(growable: false))
+        .toList(growable: false);
 
     doc.addPage(
       pw.MultiPage(
@@ -189,7 +203,35 @@ class ReportExporter {
               color: PdfColors.grey300,
               width: 0.5,
             ),
+            columnWidths: columnFlex == null
+                ? null
+                : {
+                    for (var i = 0; i < columnFlex.length; i++)
+                      i: pw.FlexColumnWidth(columnFlex[i]),
+                  },
           ),
+          if (summaryLines != null && summaryLines.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            pw.Container(
+              alignment: pw.Alignment.centerRight,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  for (final line in summaryLines)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(bottom: 2),
+                      child: pw.Text(
+                        _pdfSafe(line),
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -209,7 +251,7 @@ class ReportExporter {
     required String mimeType,
   }) async {
     try {
-      final result = await FilePicker.platform.saveFile(
+      final result = await FilePicker.saveFile(
         fileName: filename,
         bytes: bytes,
       );
@@ -232,6 +274,15 @@ class ReportExporter {
     if (filename.toLowerCase().endsWith(ext)) return filename;
     return '$filename$ext';
   }
+
+  /// Reemplaza caracteres sin glifo en las fuentes base-14 del PDF
+  /// (Helvetica/WinAnsi) por equivalentes ASCII. Solo para el contenido
+  /// PDF — CSV/Excel son UTF-8 y no lo necesitan.
+  static String _pdfSafe(String value) => value
+      .replaceAll('—', '-') // — em-dash
+      .replaceAll('–', '-') // – en-dash
+      .replaceAll('→', '->') // → flecha
+      .replaceAll('…', '...'); // … elipsis
 
   static String _csvCell(String value) {
     if (value.contains(',') || value.contains('"') || value.contains('\n')) {

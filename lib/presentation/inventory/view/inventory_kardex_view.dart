@@ -13,10 +13,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:mangopos/core/currency/business_currency.dart';
+import 'package:mangopos/core/currency/business_currency_provider.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import '../../../core/utils/export/report_exporter.dart';
 import '../state/inventory_state.dart';
 import '../state/kardex_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -32,6 +36,13 @@ class InventoryKardexView extends ConsumerStatefulWidget {
 }
 
 class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
+  bool _exporting = false;
+
+  /// Modo valorizado: muestra el valor de cada movimiento en base al costo
+  /// (`total_value = |cantidad| × costo unitario` de la vista SQL). Solo
+  /// presentación — el dato ya viene en cada fila, no recarga nada.
+  bool _valued = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +51,143 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
       await ref.read(inventoryViewModelProvider).init();
       await ref.read(kardexViewModelProvider).init();
     });
+  }
+
+  /// Describe los filtros activos para el subtítulo del PDF, así el
+  /// documento es auto-explicativo ("de qué es este reporte").
+  String _filtersSummary(KardexFilters filters, InventoryState istate) {
+    final fmt = DateFormat('dd/MM/yyyy');
+    final parts = <String>[];
+    if (filters.itemId != null) {
+      final item = istate.items
+          .where((i) => i.id == filters.itemId)
+          .firstOrNull;
+      parts.add('Insumo: ${item?.name ?? filters.itemId}');
+    }
+    if (filters.warehouseId != null) {
+      final wh = istate.warehouses
+          .where((w) => w.id == filters.warehouseId)
+          .firstOrNull;
+      parts.add('Bodega: ${wh?.name ?? filters.warehouseId}');
+    }
+    if (filters.movementType != null) {
+      parts.add('Tipo: ${_movementTypeLabel(filters.movementType!)}');
+    }
+    if (filters.from != null || filters.to != null) {
+      final from = filters.from != null ? fmt.format(filters.from!) : 'inicio';
+      final to = filters.to != null ? fmt.format(filters.to!) : 'hoy';
+      parts.add('Período: $from a $to');
+    }
+    if (parts.isEmpty) return 'Todos los movimientos';
+    return parts.join('  ·  ');
+  }
+
+  Future<void> _exportPdf() async {
+    if (_exporting) return;
+    setState(() => _exporting = true);
+    try {
+      final kvm = ref.read(kardexViewModelProvider);
+      final istate = ref.read(inventoryViewModelProvider).state;
+      final filters = kvm.state.filters;
+
+      // Trae el set COMPLETO que matchea los filtros (la lista en pantalla
+      // solo tiene las páginas ya scrolleadas).
+      final result = await kvm.fetchAllForExport();
+      if (!mounted) return;
+      if (result.movements.isEmpty) {
+        AppToast.info(context, 'No hay movimientos para exportar.');
+        return;
+      }
+
+      // Fecha corta (yy) para que quepa en su columna sin partirse.
+      final dateFmt = DateFormat('dd/MM/yy HH:mm');
+      final qtyFmt = NumberFormat.decimalPattern('es_DO');
+      final currency = currentBusinessCurrencyOrFallback(ref);
+      final rows = result.movements
+          .map(
+            (m) => <String>[
+              m.createdAt != null ? dateFmt.format(m.createdAt!.toLocal()) : '—',
+              m.itemName,
+              m.warehouseName,
+              _movementTypeLabel(m.movementType),
+              '${m.quantity > 0 ? '+' : ''}${qtyFmt.format(m.quantity)} ${m.itemUnit}',
+              if (_valued) ...[
+                m.costPerUnit != null
+                    ? currency.formatAmount(m.costPerUnit!)
+                    : '—',
+                m.costPerUnit != null
+                    ? currency.formatAmount(m.totalValue)
+                    : '—',
+              ],
+              qtyFmt.format(m.runningBalance),
+              m.createdByName ?? '—',
+              m.notes ?? '',
+            ],
+          )
+          .toList(growable: false);
+
+      var subtitle =
+          '${_filtersSummary(filters, istate)}  ·  ${result.movements.length} movimiento(s)';
+      List<String>? summaryLines;
+      if (_valued) {
+        // Totales valorizados del set exportado. total_value viene sin signo
+        // (|cantidad| × costo), así que separamos entradas y salidas.
+        var inbound = 0.0;
+        var outbound = 0.0;
+        var withoutCost = 0;
+        for (final m in result.movements) {
+          if (m.costPerUnit == null) {
+            withoutCost++;
+            continue;
+          }
+          if (m.quantity > 0) {
+            inbound += m.totalValue;
+          } else {
+            outbound += m.totalValue;
+          }
+        }
+        summaryLines = [
+          'Entradas: ${currency.formatAmount(inbound)}',
+          'Salidas: ${currency.formatAmount(outbound)}',
+          'Total neto: ${currency.formatAmount(inbound - outbound)}',
+          if (withoutCost > 0) '($withoutCost movimiento(s) sin costo, excluidos)',
+        ];
+      }
+      if (result.truncated) {
+        subtitle += '  ·  TRUNCADO: solo los primeros ${result.movements.length}';
+      }
+
+      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      await ReportExporter.exportPdf(
+        filename: 'kardex_$stamp',
+        title: 'Kardex de Inventario',
+        subtitle: subtitle,
+        headers: [
+          'Fecha',
+          'Insumo',
+          'Bodega',
+          'Tipo',
+          'Cantidad',
+          if (_valued) ...['Costo Unit.', 'Valor'],
+          'Saldo',
+          'Usuario',
+          'Notas',
+        ],
+        rows: rows,
+        landscape: true,
+        columnNumericIndices: _valued ? const [4, 5, 6, 7] : const [4, 5],
+        // Anchos relativos fijos: sin esto la tabla auto-ajusta por contenido
+        // y con tantas columnas parte headers y montos letra por letra.
+        columnFlex: _valued
+            ? const [1.3, 2.2, 1.3, 1.1, 1.2, 1.2, 1.4, 0.9, 1.3, 2.4]
+            : const [1.4, 2.4, 1.4, 1.1, 1.2, 0.9, 1.4, 2.6],
+        summaryLines: summaryLines,
+      );
+    } catch (e) {
+      if (mounted) AppToast.info(context, 'No se pudo exportar: $e');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
   }
 
   @override
@@ -56,6 +204,9 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
         children: [
           _Header(
             onRefresh: kstate.loading ? null : () => kvm.refresh(),
+            onExportPdf:
+                (_exporting || kstate.loading) ? null : () => _exportPdf(),
+            exporting: _exporting,
             count: kstate.movements.length,
             hasMore: kstate.hasMore,
           ),
@@ -64,6 +215,8 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
             items: istate.items,
             warehouses: istate.warehouses,
             onChanged: (f) => kvm.applyFilters(f),
+            valued: _valued,
+            onValuedChanged: (v) => setState(() => _valued = v),
           ),
           if (kstate.error != null)
             Container(
@@ -101,6 +254,8 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
                     hasMore: kstate.hasMore,
                     loadingMore: kstate.loadingMore,
                     onLoadMore: () => kvm.loadMore(),
+                    valued: _valued,
+                    currency: currentBusinessCurrencyOrFallback(ref),
                   ),
           ),
         ],
@@ -111,10 +266,14 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
 
 class _Header extends StatelessWidget {
   final VoidCallback? onRefresh;
+  final VoidCallback? onExportPdf;
+  final bool exporting;
   final int count;
   final bool hasMore;
   const _Header({
     required this.onRefresh,
+    required this.onExportPdf,
+    required this.exporting,
     required this.count,
     required this.hasMore,
   });
@@ -163,6 +322,18 @@ class _Header extends StatelessWidget {
             ),
           ),
           IconButton.filledTonal(
+            onPressed: onExportPdf,
+            icon: exporting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.2),
+                  )
+                : const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Exportar PDF (respeta los filtros aplicados)',
+          ),
+          const SizedBox(width: 8),
+          IconButton.filledTonal(
             onPressed: onRefresh,
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Refrescar',
@@ -196,12 +367,16 @@ class _FiltersBar extends StatelessWidget {
   final List<InventoryItemSummary> items;
   final List<InventoryWarehouse> warehouses;
   final ValueChanged<KardexFilters> onChanged;
+  final bool valued;
+  final ValueChanged<bool> onValuedChanged;
 
   const _FiltersBar({
     required this.filters,
     required this.items,
     required this.warehouses,
     required this.onChanged,
+    required this.valued,
+    required this.onValuedChanged,
   });
 
   @override
@@ -301,6 +476,15 @@ class _FiltersBar extends StatelessWidget {
               ),
             ),
           ),
+          FilterChip(
+            selected: valued,
+            onSelected: onValuedChanged,
+            avatar: valued
+                ? null
+                : const Icon(Icons.attach_money_rounded, size: 18),
+            label: const Text('Valorizado'),
+            tooltip: 'Mostrar valor de cada movimiento en base al costo',
+          ),
           if (!filters.isEmpty)
             TextButton.icon(
               onPressed: () => onChanged(const KardexFilters()),
@@ -374,12 +558,16 @@ class _MovementsList extends StatelessWidget {
   final bool hasMore;
   final bool loadingMore;
   final VoidCallback onLoadMore;
+  final bool valued;
+  final BusinessCurrency currency;
 
   const _MovementsList({
     required this.movements,
     required this.hasMore,
     required this.loadingMore,
     required this.onLoadMore,
+    required this.valued,
+    required this.currency,
   });
 
   @override
@@ -411,7 +599,11 @@ class _MovementsList extends StatelessWidget {
             ),
           );
         }
-        return _MovementCard(movement: movements[index]);
+        return _MovementCard(
+          movement: movements[index],
+          valued: valued,
+          currency: currency,
+        );
       },
     );
   }
@@ -419,7 +611,13 @@ class _MovementsList extends StatelessWidget {
 
 class _MovementCard extends StatelessWidget {
   final KardexMovement movement;
-  const _MovementCard({required this.movement});
+  final bool valued;
+  final BusinessCurrency currency;
+  const _MovementCard({
+    required this.movement,
+    required this.valued,
+    required this.currency,
+  });
 
   Color _typeColor() {
     if (movement.isInbound) return const Color(0xFF059669);
@@ -459,11 +657,15 @@ class _MovementCard extends StatelessWidget {
     final signedQty = movement.quantity;
     final qtyText = (signedQty > 0 ? '+' : '') + qtyFmt.format(signedQty);
     return Material(
-      color: AppColors.card,
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
+          // El color va en el BoxDecoration, no en el Material: la sombra
+          // del decoration se pinta como silueta completa del rect y sin
+          // un fill opaco encima se transparenta (tarjetas grises).
+          color: AppColors.card,
           borderRadius: BorderRadius.circular(AppRadius.card),
           border: Border.all(color: AppColors.border),
           boxShadow: AppShadows.cardElevated,
@@ -521,7 +723,8 @@ class _MovementCard extends StatelessWidget {
                   Text(
                     '${movement.warehouseName}'
                     '${movement.createdByName != null ? ' · ${movement.createdByName}' : ''}'
-                    '${movement.createdAt != null ? ' · ${dateFmt.format(movement.createdAt!.toLocal())}' : ''}',
+                    '${movement.createdAt != null ? ' · ${dateFmt.format(movement.createdAt!.toLocal())}' : ''}'
+                    '${valued && movement.costPerUnit != null ? ' · Costo u.: ${currency.formatAmount(movement.costPerUnit!)}' : ''}',
                     style: TextStyle(
                       fontSize: 12,
                       color: AppColors.mutedForeground,
@@ -563,6 +766,21 @@ class _MovementCard extends StatelessWidget {
                     color: AppColors.mutedForeground,
                   ),
                 ),
+                if (valued) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    movement.costPerUnit == null
+                        ? 'Sin costo'
+                        : 'Valor: ${currency.formatAmount(movement.totalValue)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: movement.costPerUnit == null
+                          ? AppColors.mutedForeground
+                          : AppColors.foreground,
+                    ),
+                  ),
+                ],
               ],
             ),
           ],

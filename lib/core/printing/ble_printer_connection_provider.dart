@@ -28,7 +28,7 @@ final blePrinterStatesProvider =
 /// Estado agregado derivado, listo para pintar un badge único.
 final blePrinterOverallProvider =
     Provider.autoDispose<BlePrinterOverall>((ref) {
-  final states = ref.watch(blePrinterStatesProvider).valueOrNull;
+  final states = ref.watch(blePrinterStatesProvider).value;
   if (states == null || states.isEmpty) return BlePrinterOverall.idle;
   if (states.values.every((s) => s == BleConnState.connected)) {
     return BlePrinterOverall.connected;

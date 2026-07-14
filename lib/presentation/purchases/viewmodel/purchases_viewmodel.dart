@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/repositories/inventory_repository.dart';
@@ -205,7 +206,9 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> createPurchaseOrder({
+  /// Devuelve el id de la orden creada (para vincular la CxP en compras a
+  /// crédito).
+  Future<String> createPurchaseOrder({
     required String supplierId,
     required String warehouseId,
     required String orderNumber,
@@ -225,7 +228,7 @@ class PurchasesViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _repository.createPurchaseOrder(
+      final orderId = await _repository.createPurchaseOrder(
         businessId: businessId,
         supplierId: supplierId,
         warehouseId: warehouseId,
@@ -239,6 +242,7 @@ class PurchasesViewModel extends ChangeNotifier {
       );
       _state = _state.copyWith(saving: false);
       await refresh();
+      return orderId;
     } catch (e) {
       _state = _state.copyWith(
         saving: false,

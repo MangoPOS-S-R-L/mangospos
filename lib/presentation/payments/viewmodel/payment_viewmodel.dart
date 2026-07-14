@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:decimal/decimal.dart';
@@ -17,9 +18,11 @@ import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/cashier_repository.dart';
+import '../../../data/repositories/credits_repository.dart';
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/repositories/sales_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../services/session/session_controller.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart'; // Import para usar salesRepositoryProvider
 import '../state/payment_state.dart';
 
@@ -145,6 +148,17 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         throw Exception('No se pudo identificar el negocio');
       }
 
+      // Venta a crédito: solo visible con permiso. El seed del método
+      // 'credit' es best-effort para negocios creados antes de la migración.
+      final canSellCredit = _ref
+          .read(sessionProvider.notifier)
+          .hasPermission('creditos.vender');
+      if (_connectivity.isConnected && canSellCredit) {
+        await CreditsRepository(
+          Supabase.instance.client,
+        ).ensureCreditPaymentMethod(businessId);
+      }
+
       var methods = <PaymentMethod>[];
       if (_connectivity.isConnected) {
         methods = await _cashierRepo.getPaymentMethods(businessId);
@@ -155,6 +169,10 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         if (!methods.any((m) => m.code == fixed.code)) {
           methods = [...methods, fixed];
         }
+      }
+
+      if (!canSellCredit) {
+        methods = methods.where((m) => !m.isCredit).toList();
       }
 
       methods.sort((a, b) => a.position.compareTo(b.position));
@@ -465,6 +483,51 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     _processingLocal = true;
 
     state = state.copyWith(processingPayment: true, error: null);
+
+    // Venta a crédito: validación previa (cliente con crédito habilitado y
+    // dentro del límite). El trigger de BD es el backstop; aquí damos el
+    // mensaje amigable. Requiere conexión — el fiao no se cobra offline
+    // porque no podemos validar el límite ni crear la CxC hasta el sync.
+    if (state.isCreditPayment) {
+      String? creditError;
+      if (!_connectivity.isConnected) {
+        creditError =
+            'La venta a crédito no está disponible sin conexión.';
+      } else if (state.customerId == null || state.customerId!.isEmpty) {
+        creditError = 'Selecciona el cliente para la venta a crédito.';
+      } else {
+        try {
+          final businessId = await resolveBusinessIdOrNull(
+            Supabase.instance.client,
+            'auto',
+          );
+          final standing = await CreditsRepository(
+            Supabase.instance.client,
+          ).getCustomerCreditStanding(
+            businessId: businessId ?? '',
+            customerId: state.customerId!,
+          );
+          if (!standing.creditEnabled) {
+            creditError =
+                'El cliente no tiene crédito habilitado. Actívalo en su '
+                'ficha (Clientes).';
+          } else if (!standing.canTake(state.totalToPay)) {
+            final available = standing.availableCredit ?? 0;
+            creditError =
+                'Límite de crédito excedido. Disponible: '
+                '${available.toStringAsFixed(2)}';
+          }
+        } catch (e) {
+          creditError =
+              'No se pudo validar el crédito del cliente: ${_cleanError(e)}';
+        }
+      }
+      if (creditError != null) {
+        _processingLocal = false;
+        state = state.copyWith(processingPayment: false, error: creditError);
+        return;
+      }
+    }
 
     final orderId = state.order!.id;
     final checkId = state.check?.id;

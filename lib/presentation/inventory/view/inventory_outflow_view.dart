@@ -1123,6 +1123,7 @@ class _InventoryOutflowDialog extends StatefulWidget {
 
 class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
   late String _selectedItemId;
+  final TextEditingController _searchController = TextEditingController();
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   bool _saving = false;
@@ -1135,42 +1136,112 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _quantityController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
+  List<InventoryItemSummary> get _filteredItems {
+    final q = _searchController.text.trim().toLowerCase();
+    if (q.isEmpty) return widget.items;
+    return widget.items
+        .where(
+          (i) =>
+              i.name.toLowerCase().contains(q) ||
+              i.sku.toLowerCase().contains(q) ||
+              i.description.toLowerCase().contains(q),
+        )
+        .toList(growable: false);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filtered = _filteredItems;
     return AlertDialog(
       title: const Text('Registrar salida de inventario'),
       content: SizedBox(
         width: 420,
-        child: Column(
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            DropdownButtonFormField<String>(
-              initialValue: _selectedItemId,
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
-                labelText: 'Insumo',
+                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                hintText: 'Buscar insumo...',
+                isDense: true,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                      ),
               ),
-              items: widget.items
-                  .map(
-                    (item) => DropdownMenuItem(
-                      value: item.id,
-                      child: Text(item.name),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppRadius.card),
+              ),
+              child: filtered.isEmpty
+                  ? Center(
+                      child: Text(
+                        'No se encontraron insumos.',
+                        style: TextStyle(color: AppColors.mutedForeground),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        final item = filtered[index];
+                        final selected = item.id == _selectedItemId;
+                        return ListTile(
+                          dense: true,
+                          selected: selected,
+                          selectedTileColor:
+                              AppColors.primary.withValues(alpha: 0.08),
+                          title: Text(
+                            item.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            [
+                              if (item.sku.isNotEmpty) item.sku,
+                              'Stock: ${item.stock.toStringAsFixed(2)} ${item.unit}',
+                            ].join(' · '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: selected
+                              ? Icon(
+                                  Icons.check_circle,
+                                  color: AppColors.primary,
+                                  size: 20,
+                                )
+                              : null,
+                          onTap: _saving
+                              ? null
+                              : () => setState(
+                                    () => _selectedItemId = item.id,
+                                  ),
+                        );
+                      },
                     ),
-                  )
-                  .toList(growable: false),
-              onChanged: _saving
-                  ? null
-                  : (value) {
-                      if (value == null) return;
-                      setState(() => _selectedItemId = value);
-                    },
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1188,7 +1259,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _notesController,
-              maxLines: 3,
+              maxLines: 2,
               decoration: InputDecoration(
                 labelText: 'Motivo / notas',
                 border: OutlineInputBorder(
@@ -1197,6 +1268,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
               ),
             ),
           ],
+          ),
         ),
       ),
       actions: [

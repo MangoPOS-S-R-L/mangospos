@@ -53,7 +53,7 @@ class SecureBlobCipher {
     // blindaje de _loadOrCreateKey degrada con gracia en vez de tronar.
     mOptions: MacOsOptions(
       accessibility: KeychainAccessibility.first_unlock_this_device,
-      useDataProtectionKeyChain: false,
+      usesDataProtectionKeychain: false,
     ),
   );
 

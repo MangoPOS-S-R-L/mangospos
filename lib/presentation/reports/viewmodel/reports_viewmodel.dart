@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -112,6 +113,26 @@ class ProductSalesReportRow {
     required this.grossProfit,
     this.marginPct,
     required this.tickets,
+  });
+}
+
+/// Una categoría con sus productos vendidos y los totales agregados,
+/// para el desglose de "Ventas por categoría".
+class CategoryProductBreakdown {
+  final String category;
+  final List<ProductSalesReportRow> products;
+  final double quantitySold;
+  final double grossSales;
+  final double discounts;
+  final double netSales;
+
+  const CategoryProductBreakdown({
+    required this.category,
+    required this.products,
+    required this.quantitySold,
+    required this.grossSales,
+    required this.discounts,
+    required this.netSales,
   });
 }
 
@@ -1043,6 +1064,32 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
           ),
         )
         .toList(growable: false);
+  }
+
+  /// Agrupa las ventas por producto dentro de su categoría, ordenando las
+  /// categorías y sus productos por venta neta descendente.
+  List<CategoryProductBreakdown> getCategoryProductBreakdown() {
+    final grouped = <String, List<ProductSalesReportRow>>{};
+    for (final row in getProductSalesRows()) {
+      final category =
+          row.category.trim().isEmpty ? 'Sin categoría' : row.category.trim();
+      grouped.putIfAbsent(category, () => <ProductSalesReportRow>[]).add(row);
+    }
+    final breakdown = grouped.entries.map((entry) {
+      final products = entry.value.toList(growable: false)
+        ..sort((a, b) => b.netSales.compareTo(a.netSales));
+      return CategoryProductBreakdown(
+        category: entry.key,
+        products: products,
+        quantitySold:
+            products.fold<double>(0, (sum, p) => sum + p.quantitySold),
+        grossSales: products.fold<double>(0, (sum, p) => sum + p.grossSales),
+        discounts: products.fold<double>(0, (sum, p) => sum + p.discounts),
+        netSales: products.fold<double>(0, (sum, p) => sum + p.netSales),
+      );
+    }).toList(growable: false)
+      ..sort((a, b) => b.netSales.compareTo(a.netSales));
+    return breakdown;
   }
 
   List<SalesBreakdownRow> getEmployeeRows() {

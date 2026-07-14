@@ -170,6 +170,13 @@ class PaymentState extends Equatable {
       return amountReceived >= totalToPay;
     }
 
+    // Venta a crédito: exige cliente asignado (la cuenta por cobrar se
+    // registra a su nombre). Límite/habilitación se validan al procesar
+    // (consulta online) y el trigger server-side es el backstop.
+    if (isCreditPayment) {
+      return customerId != null && customerId!.isNotEmpty;
+    }
+
     // Para transferencia, exigimos seleccionar la cuenta destino. La
     // referencia es opcional por ahora (puede que el cajero la cargue
     // después de validar manual con el cliente).
@@ -187,6 +194,7 @@ class PaymentState extends Equatable {
   }
 
   bool get isCashPayment => selectedMethod?.isCash ?? false;
+  bool get isCreditPayment => selectedMethod?.isCredit ?? false;
   bool get requiresReference => selectedMethod?.requiresReference ?? false;
 
   /// `true` si el método activo es transferencia. Match defensivo:

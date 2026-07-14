@@ -179,7 +179,9 @@ class PurchasesRepository {
     return PurchaseWarehouse.fromMap(Map<String, dynamic>.from(row));
   }
 
-  Future<void> createPurchaseOrder({
+  /// Crea la orden (y postea stock si va "Recibida"). Devuelve el id de la
+  /// orden creada — lo usa la compra a crédito para vincular la CxP.
+  Future<String> createPurchaseOrder({
     required String businessId,
     required String supplierId,
     required String warehouseId,
@@ -262,6 +264,11 @@ class PurchasesRepository {
       // digitado (ya en unidad base). Si una línea con costo 0 comparte insumo
       // con otra de costo válido, gana la de costo > 0; si hay varias válidas,
       // gana la última de la lista.
+      //
+      // Política formal: costeo por ÚLTIMO PRECIO (mig 20260714_0001). El
+      // trigger trg_inventory_movement_recost aplica la misma regla al
+      // recibir cualquier movimiento de compra (incluye recepciones
+      // directas); este update solo adelanta el valor al registrar la orden.
       final latestCostByItem = <String, double>{};
       for (final item in items) {
         final id = item.inventoryItemId;
@@ -291,6 +298,8 @@ class PurchasesRepository {
     if (receiveNow) {
       await receivePurchaseOrder(orderId, notes: notes);
     }
+
+    return orderId;
   }
 
   Future<void> receivePurchaseOrder(String orderId, {String? notes}) async {

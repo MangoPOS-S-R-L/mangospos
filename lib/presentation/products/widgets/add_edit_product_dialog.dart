@@ -1540,7 +1540,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   Future<void> _pickImage() async {
     try {
-      final r = await FilePicker.platform.pickFiles(
+      final r = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
         allowMultiple: false,

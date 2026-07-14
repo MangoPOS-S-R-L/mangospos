@@ -3,6 +3,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
@@ -888,20 +889,26 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     try {
       if (!mounted) return;
-      await ref
-          .read(currentOrderProvider.notifier)
-          .applyDiscountPercentToItems(
-            itemIds: targetIds,
-            percent: result.percent,
-            preAuthorized: true,
-          );
+      final notifier = ref.read(currentOrderProvider.notifier);
+      if (result.mode == _DiscountMode.percent) {
+        await notifier.applyDiscountPercentToItems(
+          itemIds: targetIds,
+          percent: result.value,
+          preAuthorized: true,
+        );
+      } else {
+        await notifier.applyDiscountAmountToItems(
+          itemIds: targetIds,
+          amount: result.value,
+          preAuthorized: true,
+        );
+      }
       if (!context.mounted) return;
+      final appliedLabel = result.mode == _DiscountMode.percent
+          ? 'Descuento ${result.value.toStringAsFixed(0)}% aplicado.'
+          : 'Descuento de ${currentBusinessCurrencyOrFallback(ref).formatAmount(result.value)} aplicado.';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Descuento ${result.percent.toStringAsFixed(0)}% aplicado.',
-          ),
-        ),
+        SnackBar(content: Text(appliedLabel)),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -3132,7 +3139,7 @@ class _CartView extends ConsumerWidget {
     final discountModeAsync = ref.watch(
       discountDisplayModeProvider(discountBiz),
     );
-    final resolvedMode = discountModeAsync.valueOrNull;
+    final resolvedMode = discountModeAsync.value;
     if (resolvedMode != null && discountBiz.isNotEmpty) {
       _stickyDiscountModeByBiz[discountBiz] = resolvedMode;
     }
@@ -6347,7 +6354,8 @@ class _RailButton extends StatelessWidget {
   }
 }
 
-/// Gate de fee de delivery propio: presets + monto libre (≥ mínimo).
+/// Gate de fee de delivery propio: presets + monto libre (≥ mínimo) +
+/// opción de delivery gratis (devuelve 0, exenta del mínimo/obligatorio).
 /// Devuelve el monto elegido o `null` si el cajero cancela.
 Future<double?> _promptDeliveryFee(
   BuildContext context, {
@@ -6415,15 +6423,18 @@ class _DeliveryFeeDialogState extends State<_DeliveryFeeDialog> {
   bool get _isValid {
     final a = _amount;
     if (a == null) return false;
-    if (a < widget.min) return false;
-    if (widget.isRequired && a <= 0) return false;
-    return a >= 0;
+    // 0 escrito a mano = delivery gratis: válido siempre, igual que el
+    // botón "Gratis" (el mínimo/obligatorio solo aplican a montos > 0).
+    if (a == 0) return true;
+    if (a < 0) return false;
+    return a >= widget.min;
   }
 
   @override
   Widget build(BuildContext context) {
     final amount = _amount;
-    final belowMin = amount != null && amount < widget.min;
+    // 0 = gratis, no cuenta como "debajo del mínimo".
+    final belowMin = amount != null && amount > 0 && amount < widget.min;
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: const Row(
@@ -6440,28 +6451,38 @@ class _DeliveryFeeDialogState extends State<_DeliveryFeeDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Cargo de envío (exento de impuestos). Elige un monto o escríbelo.',
+              'Cargo de envío (exento de impuestos). Elige un monto, '
+              'escríbelo o márcalo gratis.',
               style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
             const SizedBox(height: 16),
-            if (widget.presets.isNotEmpty) ...[
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final preset in widget.presets)
-                    OutlinedButton(
-                      onPressed: () => setState(() {
-                        _controller.text = preset == preset.roundToDouble()
-                            ? preset.toStringAsFixed(0)
-                            : preset.toStringAsFixed(2);
-                      }),
-                      child: Text(widget.formatAmount(preset)),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 16),
-            ],
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                // Delivery gratis: confirma 0 directo, sin pasar por el
+                // mínimo ni por el flag de obligatorio (el gate solo exige
+                // una decisión explícita, no un monto > 0).
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(0.0),
+                  icon: const Icon(Icons.money_off, size: 18),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF16A34A),
+                  ),
+                  label: const Text('Gratis'),
+                ),
+                for (final preset in widget.presets)
+                  OutlinedButton(
+                    onPressed: () => setState(() {
+                      _controller.text = preset == preset.roundToDouble()
+                          ? preset.toStringAsFixed(0)
+                          : preset.toStringAsFixed(2);
+                    }),
+                    child: Text(widget.formatAmount(preset)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
             TextField(
               controller: _controller,
               autofocus: true,
@@ -10015,6 +10036,8 @@ class _ModifiersSelectionDialogState
 
 enum _DiscountScope { table, products }
 
+enum _DiscountMode { percent, amount }
+
 class _SalesModifierDialogHeader extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -10070,12 +10093,16 @@ class _SalesModifierDialogHeader extends StatelessWidget {
 
 class _DiscountDialogResult {
   final _DiscountScope scope;
-  final double percent;
+  final _DiscountMode mode;
+
+  /// Porcentaje (0-100) si [mode] es percent; monto en dinero si es amount.
+  final double value;
   final List<String> selectedItemIds;
 
   const _DiscountDialogResult({
     required this.scope,
-    required this.percent,
+    required this.mode,
+    required this.value,
     required this.selectedItemIds,
   });
 }
@@ -10092,7 +10119,8 @@ class _DiscountDialog extends ConsumerStatefulWidget {
 
 class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
   _DiscountScope _scope = _DiscountScope.table;
-  final TextEditingController _percentController = TextEditingController(
+  _DiscountMode _mode = _DiscountMode.percent;
+  final TextEditingController _valueController = TextEditingController(
     text: '10',
   );
   final Set<String> _selectedItemIds = <String>{};
@@ -10100,8 +10128,22 @@ class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
 
   @override
   void dispose() {
-    _percentController.dispose();
+    _valueController.dispose();
     super.dispose();
+  }
+
+  /// Base máxima descontable de los ítems objetivo según el alcance actual
+  /// (misma base que usa el viewmodel: subtotal + impuesto por ítem).
+  double _targetMaxAmount() {
+    final targets = _scope == _DiscountScope.table
+        ? widget.items
+        : widget.items
+              .where((i) => _selectedItemIds.contains(i.id))
+              .toList(growable: false);
+    return targets.fold<double>(
+      0,
+      (s, i) => s + (i.subtotal + i.tax).clamp(0, double.infinity).toDouble(),
+    );
   }
 
   String _formatQty(double qty) {
@@ -10150,14 +10192,44 @@ class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
                 },
               ),
               const SizedBox(height: 10),
+              SegmentedButton<_DiscountMode>(
+                segments: [
+                  const ButtonSegment<_DiscountMode>(
+                    value: _DiscountMode.percent,
+                    label: Text('Porcentaje (%)'),
+                  ),
+                  ButtonSegment<_DiscountMode>(
+                    value: _DiscountMode.amount,
+                    label: Text(
+                      'Monto (${currentBusinessCurrencyOrFallback(ref).symbol})',
+                    ),
+                  ),
+                ],
+                selected: <_DiscountMode>{_mode},
+                onSelectionChanged: (selection) {
+                  if (selection.isEmpty) return;
+                  setState(() {
+                    _mode = selection.first;
+                    _valueController.text = _mode == _DiscountMode.percent
+                        ? '10'
+                        : '';
+                    _error = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 10),
               TextField(
-                controller: _percentController,
+                controller: _valueController,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
                 decoration: InputDecoration(
-                  labelText: 'Porcentaje (%)',
-                  hintText: 'Ejemplo: 10',
+                  labelText: _mode == _DiscountMode.percent
+                      ? 'Porcentaje (%)'
+                      : 'Monto a descontar',
+                  hintText: _mode == _DiscountMode.percent
+                      ? 'Ejemplo: 10'
+                      : 'Ejemplo: 500',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -10226,14 +10298,24 @@ class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
                       foregroundColor: Colors.white,
                     ),
                     onPressed: () {
-                      final percent = double.tryParse(
-                        _percentController.text.trim().replaceAll(',', '.'),
+                      final value = double.tryParse(
+                        _valueController.text.trim().replaceAll(',', '.'),
                       );
-                      if (percent == null || percent <= 0 || percent > 100) {
-                        setState(() {
-                          _error = 'Ingresa un porcentaje válido (0.01 - 100).';
-                        });
-                        return;
+                      if (_mode == _DiscountMode.percent) {
+                        if (value == null || value <= 0 || value > 100) {
+                          setState(() {
+                            _error =
+                                'Ingresa un porcentaje válido (0.01 - 100).';
+                          });
+                          return;
+                        }
+                      } else {
+                        if (value == null || value <= 0) {
+                          setState(() {
+                            _error = 'Ingresa un monto válido mayor a 0.';
+                          });
+                          return;
+                        }
                       }
 
                       if (_scope == _DiscountScope.products &&
@@ -10244,11 +10326,23 @@ class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
                         return;
                       }
 
+                      if (_mode == _DiscountMode.amount) {
+                        final maxAmount = _targetMaxAmount();
+                        if (value > maxAmount + 0.009) {
+                          setState(() {
+                            _error =
+                                'El monto supera el total descontable (${currentBusinessCurrencyOrFallback(ref).formatAmount(maxAmount)}).';
+                          });
+                          return;
+                        }
+                      }
+
                       Navigator.pop(
                         context,
                         _DiscountDialogResult(
                           scope: _scope,
-                          percent: percent,
+                          mode: _mode,
+                          value: value,
                           selectedItemIds: _selectedItemIds.toList(
                             growable: false,
                           ),

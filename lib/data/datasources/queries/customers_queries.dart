@@ -1,7 +1,8 @@
 class CustomersQueries {
   static const tableCustomers = 'customers';
   static const selectBase =
-      'id, business_id, name, legal_name, email, phone, address, tax_id, notes, created_at, updated_at';
+      'id, business_id, name, legal_name, email, phone, address, tax_id, notes, '
+      'credit_enabled, credit_limit, credit_days, created_at, updated_at';
 
   // OJO: el campo en la DB es `tax_id`, no `rnc`. Antes este string usaba
   // `rnc.ilike` y Supabase ignoraba silenciosamente la cláusula → la

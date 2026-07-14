@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:mangopos/core/auth/offline_auth_service.dart';
+import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -320,6 +321,7 @@ class SessionController extends Notifier<SessionState> {
         permissions ??
         (role == null ? <String>{} : _rolePermissions[role] ?? <String>{});
 
+    _clearActiveWaiterIfForeign(businessId);
     BusinessResolver.setActiveBusinessId(businessId);
 
     _safeSet(
@@ -360,8 +362,22 @@ class SessionController extends Notifier<SessionState> {
   }
 
   void setActiveBusiness(String businessId) {
+    _clearActiveWaiterIfForeign(businessId);
     BusinessResolver.setActiveBusinessId(businessId);
     _safeSet(state.copyWith(activeBusinessId: businessId));
+  }
+
+  /// Descarta el PIN multimesero cacheado si pertenece a otro negocio.
+  /// Un waiter validado en el negocio A no debe quedar como identidad
+  /// activa al cambiar al negocio B.
+  void _clearActiveWaiterIfForeign(String? businessId) {
+    final waiter = ref.read(activeWaiterProvider);
+    if (waiter == null) return;
+    if (businessId == null ||
+        businessId.isEmpty ||
+        waiter.businessId != businessId) {
+      ref.read(activeWaiterProvider.notifier).clear();
+    }
   }
 
   Future<bool> restoreFromSupabaseSession({Session? session}) async {
@@ -941,6 +957,66 @@ class SessionController extends Notifier<SessionState> {
     return false;
   }
 
+  /// Como [verifyPin] pero devuelve el `user_id` del empleado que autorizó
+  /// (para persistirlo en columnas de auditoría tipo `approved_by`).
+  /// Devuelve null si el PIN es inválido o el rol no alcanza el nivel.
+  ///
+  /// Mismo orden offline-first que [verifyPin]: roster cacheado primero,
+  /// RPC `fn_verify_employee_pin` como fallback online. No incluye el
+  /// SELECT directo legacy ni los PINs de demo porque este método existe
+  /// para auditoría y ahí un user_id real es obligatorio.
+  Future<String?> verifyPinApprover({
+    required String pin,
+    PinAccessLevel level = PinAccessLevel.supervisor,
+  }) async {
+    final businessId = state.activeBusinessId;
+    final normalizedPin = pin.trim();
+    if (normalizedPin.isEmpty) return null;
+    if (businessId == null || businessId.isEmpty) return null;
+
+    try {
+      final matched = await OfflineAuthService().verifyPin(
+        businessId: businessId,
+        pin: normalizedPin,
+      );
+      if (matched != null) {
+        final role = _mapRole(matched.role);
+        if (role != null &&
+            _meetsPinAccess(role, level) &&
+            matched.userId.isNotEmpty) {
+          return matched.userId;
+        }
+        // Rol insuficiente en cache: caemos al path online por si cambió.
+      }
+    } catch (e) {
+      debugPrint('verifyPinApprover: offline check falló: $e');
+    }
+
+    try {
+      final result = await Supabase.instance.client.rpc(
+        'fn_verify_employee_pin',
+        params: <String, dynamic>{
+          'p_business_id': businessId,
+          'p_pin': normalizedPin,
+        },
+      );
+      if (result is Map) {
+        final resultMap = Map<String, dynamic>.from(result);
+        final role = _mapRole(resultMap['role']?.toString());
+        final userId = resultMap['user_id']?.toString();
+        if (role != null &&
+            userId != null &&
+            userId.isNotEmpty &&
+            _meetsPinAccess(role, level)) {
+          return userId;
+        }
+      }
+    } catch (e) {
+      debugPrint('verifyPinApprover: RPC fn_verify_employee_pin falló: $e');
+    }
+    return null;
+  }
+
   Future<bool> verifyCurrentUserPin({required String pin}) async {
     final businessId = state.activeBusinessId;
     final userId = state.userId;
@@ -1019,6 +1095,10 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> setUnauthenticated() async {
+    // El PIN multimesero es identidad del usuario/turno, no del device:
+    // si sobrevive al logout, el próximo usuario abre mesas atribuidas
+    // al mesero anterior (precuenta/factura salen con otro nombre).
+    ref.read(activeWaiterProvider.notifier).clear();
     BusinessResolver.resetCache();
     final completer = Completer<void>();
     WidgetsBinding.instance.addPostFrameCallback((_) {

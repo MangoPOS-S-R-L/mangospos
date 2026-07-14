@@ -10,6 +10,7 @@
 //     histórico de cobros que se refresca por pull-to-refresh).
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../data/models/billing_charge.dart';
 import '../../../data/models/billing_payment_method.dart';

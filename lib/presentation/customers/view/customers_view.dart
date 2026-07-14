@@ -475,6 +475,9 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
   late final TextEditingController _phoneController;
   late final TextEditingController _addressController;
   late final TextEditingController _rncController;
+  late final TextEditingController _creditLimitController;
+  late final TextEditingController _creditDaysController;
+  bool _creditEnabled = false;
 
   bool _isLookingUpDgii = false;
   bool _isSaving = false;
@@ -512,6 +515,13 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
     _rncController = TextEditingController(
       text: c?['tax_id']?.toString() ?? '',
     );
+    _creditEnabled = (c?['credit_enabled'] as bool?) ?? false;
+    _creditLimitController = TextEditingController(
+      text: c?['credit_limit']?.toString() ?? '',
+    );
+    _creditDaysController = TextEditingController(
+      text: c?['credit_days']?.toString() ?? '',
+    );
   }
 
   @override
@@ -522,6 +532,8 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
     _phoneController.dispose();
     _addressController.dispose();
     _rncController.dispose();
+    _creditLimitController.dispose();
+    _creditDaysController.dispose();
     super.dispose();
   }
 
@@ -658,6 +670,14 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
     // Sanea: campos vacíos van como null para no ensuciar la DB con
     // strings vacíos.
     data.updateAll((k, v) => (v is String && v.isEmpty) ? null : v);
+
+    // Crédito (fiao): límite/plazo solo tienen sentido con el switch activo,
+    // pero los preservamos aunque se apague para no perder la config.
+    data['credit_enabled'] = _creditEnabled;
+    data['credit_limit'] = double.tryParse(
+      _creditLimitController.text.trim().replaceAll(',', ''),
+    );
+    data['credit_days'] = int.tryParse(_creditDaysController.text.trim());
 
     setState(() => _isSaving = true);
     try {
@@ -799,6 +819,50 @@ class _CustomerFormDialogState extends ConsumerState<_CustomerFormDialog> {
                 'Agregar Dirección del Cliente',
                 _addressController,
               ),
+              const SizedBox(height: AppSpacing.lg),
+
+              // ─── Crédito (fiao) ───────────────────────────────────
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _creditEnabled,
+                onChanged: (v) => setState(() => _creditEnabled = v),
+                title: const Text(
+                  'Permitir venta a crédito',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.foreground,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Habilita el método de pago Crédito para este cliente.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+              ),
+              if (_creditEnabled) ...[
+                const SizedBox(height: AppSpacing.sm),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildField(
+                        'Límite de crédito',
+                        'Vacío = sin límite',
+                        _creditLimitController,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.lg),
+                    Expanded(
+                      child: _buildField(
+                        'Plazo (días)',
+                        'Ej. 30 — vacío = sin fecha',
+                        _creditDaysController,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: AppSpacing.xxxl),
               Row(
                 children: [

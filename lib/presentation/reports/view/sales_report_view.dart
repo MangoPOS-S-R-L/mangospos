@@ -359,6 +359,11 @@ class _SalesReportBody extends StatelessWidget {
             countLabel: 'Tickets',
             isFullReport: true,
           ),
+          const SizedBox(height: AppSpacing.sectionGap),
+          _CategoryProductBreakdownCard(
+            breakdown: viewModel.getCategoryProductBreakdown(),
+            currency: currency,
+          ),
         ];
       case SalesSubReport.byEmployee:
         return [
@@ -1301,6 +1306,238 @@ class _ProductSalesDataTable extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// Desglose expandible: cada categoría con los productos que vendió en el
+/// rango (cantidad, brutas, descuentos y netas por producto).
+class _CategoryProductBreakdownCard extends StatelessWidget {
+  const _CategoryProductBreakdownCard({
+    required this.breakdown,
+    required this.currency,
+  });
+
+  final List<CategoryProductBreakdown> breakdown;
+  final NumberFormat currency;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.cardPadding),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(reportRadius),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(reportRadius),
+                ),
+                child: const Icon(
+                  Icons.segment_outlined,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.itemGap),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Desglose por categoría',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Toca una categoría para ver qué productos vendió en el rango.',
+                      style: TextStyle(
+                        color: AppColors.mutedForeground,
+                        fontSize: 13,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          if (breakdown.isEmpty)
+            const Text(
+              'No hay ventas por categoría en el rango.',
+              style: TextStyle(color: AppColors.mutedForeground),
+            )
+          else
+            ...breakdown.map(
+              (group) => Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.tightGap),
+                child: _CategoryBreakdownTile(
+                  group: group,
+                  currency: currency,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CategoryBreakdownTile extends StatelessWidget {
+  const _CategoryBreakdownTile({
+    required this.group,
+    required this.currency,
+  });
+
+  final CategoryProductBreakdown group;
+  final NumberFormat currency;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(reportRadius),
+        border: Border.all(color: AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          // La flecha va al inicio porque `trailing` está ocupado por el
+          // monto de la categoría.
+          controlAffinity: ListTileControlAffinity.leading,
+          tilePadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.cardPadding,
+            vertical: 4,
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(
+            AppSpacing.cardPadding,
+            0,
+            AppSpacing.cardPadding,
+            AppSpacing.cardPadding,
+          ),
+          title: Text(
+            group.category,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              color: AppColors.foreground,
+            ),
+          ),
+          subtitle: Text(
+            '${group.products.length} producto${group.products.length == 1 ? '' : 's'} · ${group.quantitySold.toStringAsFixed(group.quantitySold == group.quantitySold.roundToDouble() ? 0 : 2)} unidades',
+            style: const TextStyle(
+              color: AppColors.mutedForeground,
+              fontSize: 12,
+            ),
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                currency.format(group.netSales),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.foreground,
+                ),
+              ),
+              if (group.discounts > 0)
+                Text(
+                  '-${currency.format(group.discounts)} desc.',
+                  style: const TextStyle(
+                    color: AppColors.destructive,
+                    fontSize: 11,
+                  ),
+                ),
+            ],
+          ),
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: MediaQuery.of(context).size.width -
+                      4 * AppSpacing.cardPadding,
+                ),
+                child: DataTable(
+                  headingRowHeight: 40,
+                  dataRowMinHeight: 40,
+                  dataRowMaxHeight: 48,
+                  headingTextStyle: const TextStyle(
+                    color: AppColors.mutedForeground,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                  columns: const [
+                    DataColumn(label: Text('Producto')),
+                    DataColumn(numeric: true, label: Text('Cantidad')),
+                    DataColumn(numeric: true, label: Text('Brutas')),
+                    DataColumn(numeric: true, label: Text('Descuentos')),
+                    DataColumn(numeric: true, label: Text('Netas')),
+                  ],
+                  rows: [
+                    for (final row in group.products)
+                      DataRow(
+                        cells: [
+                          DataCell(
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                  minWidth: 140, maxWidth: 240),
+                              child: Text(
+                                row.product,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                          DataCell(Text(row.quantitySold.toStringAsFixed(
+                              row.quantitySold ==
+                                      row.quantitySold.roundToDouble()
+                                  ? 0
+                                  : 2))),
+                          DataCell(Text(currency.format(row.grossSales))),
+                          DataCell(
+                            Text(
+                              row.discounts > 0
+                                  ? '-${currency.format(row.discounts)}'
+                                  : '--',
+                              style: TextStyle(
+                                color: row.discounts > 0
+                                    ? AppColors.destructive
+                                    : AppColors.mutedForeground,
+                              ),
+                            ),
+                          ),
+                          DataCell(
+                            Text(
+                              currency.format(row.netSales),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

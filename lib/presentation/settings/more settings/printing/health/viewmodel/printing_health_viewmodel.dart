@@ -30,7 +30,7 @@ final printingHealthViewModelProvider = NotifierProvider.autoDispose<
     PrintingHealthViewModel,
     PrintingHealthState>(PrintingHealthViewModel.new);
 
-class PrintingHealthViewModel extends AutoDisposeNotifier<PrintingHealthState> {
+class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   String? _businessId;
   RealtimeChannel? _channel;
   Timer? _refreshDebounce;

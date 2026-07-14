@@ -170,7 +170,11 @@ class OfflinePosService {
         msg.contains('connection reset') ||
         msg.contains('network is unreachable') ||
         msg.contains('software caused connection abort') ||
-        msg.contains('handshake');
+        msg.contains('handshake') ||
+        // AuthRetryableFetchException: supabase-flutter no pudo refrescar
+        // la sesión por red. Es transitorio — no debe contar contra el
+        // tope de reintentos ni mandar la acción a dead-letter.
+        msg.contains('retryablefetch');
   }
 
   /// Público: expone la clasificación de errores de TRANSPORTE (red) para que
@@ -818,6 +822,19 @@ class OfflinePosService {
         .toList(growable: false);
   }
 
+  /// Lista TODAS las acciones no-completadas (pending/processing/failed/
+  /// dead) en orden FIFO para el visor de la cola en la UI: tipo, payload,
+  /// intentos, `last_error` y estado. Copias inmutables.
+  Future<List<Map<String, dynamic>>> unsettledActions(
+    String businessId,
+  ) async {
+    final queue = await _readQueue(businessId);
+    return queue
+        .where((a) => !_isCompleted(a))
+        .map((a) => Map<String, dynamic>.unmodifiable(a))
+        .toList(growable: false);
+  }
+
   /// Resucita las acciones en dead-letter: vuelven a `pending` con el
   /// contador de intentos en cero para que el próximo sync las reintente.
   /// Útil cuando el cajero corrigió la causa raíz (ej: reabrió la mesa).
@@ -984,9 +1001,12 @@ class OfflinePosService {
       final action = queue[i];
       final actionId = action['id']?.toString();
       final fingerprint = action['fingerprint']?.toString();
-      // Saltamos lo ya resuelto: completadas Y dead-letter. Las dead no
-      // reintentan solas — esperan acción manual del cajero.
-      if (_isSettled(action)) continue;
+      // Las completadas nunca se reprocesan. Las dead-letter no reintentan
+      // en el sync automático, pero en el manual (force = botón
+      // "Sincronizar ahora") se les da otra oportunidad: el cajero pidió
+      // sincronizar la cola completa, no solo lo pendiente.
+      if (_isCompleted(action)) continue;
+      if (!force && _isDead(action)) continue;
       if ((actionId != null && completedOps.contains(actionId)) ||
           (fingerprint != null && completedFingerprints.contains(fingerprint))) {
         queue[i] = Map<String, dynamic>.from(action)

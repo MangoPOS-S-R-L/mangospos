@@ -284,6 +284,31 @@ const accessPermissions = <AccessPermission>[
     description: 'Consulta cierres y arqueos de caja.',
   ),
   AccessPermission(
+    code: 'creditos.acceso',
+    label: 'Ver créditos (CxC / CxP)',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Acceso a la sección de Créditos: cuentas por cobrar y por pagar.',
+  ),
+  AccessPermission(
+    code: 'creditos.vender',
+    label: 'Vender a crédito',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Habilita el método de pago Crédito en el cobro (requiere cliente '
+        'con crédito habilitado).',
+  ),
+  AccessPermission(
+    code: 'creditos.abonar',
+    label: 'Registrar abonos de crédito',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Registra abonos a cuentas por cobrar y pagos a cuentas por pagar.',
+  ),
+  AccessPermission(
     code: 'kds.acceso',
     label: 'Acceso a cocina',
     categoryId: 'kds',
@@ -765,6 +790,9 @@ final rolePresets = <String, RolePresetDefinition>{
       'pagos.asignar_referencia',
       'pagos.anular_pago',
       'pagos.reimprimir_recibo',
+      'creditos.acceso',
+      'creditos.vender',
+      'creditos.abonar',
       'caja.apertura',
       'caja.cierre',
       'caja.movimientos_ver',
@@ -862,6 +890,10 @@ final rolePresets = <String, RolePresetDefinition>{
       'pagos.cobrar_transferencia',
       'pagos.asignar_referencia',
       'pagos.reimprimir_recibo',
+      // Créditos — vender fiao y recibir abonos en caja
+      'creditos.acceso',
+      'creditos.vender',
+      'creditos.abonar',
       // Caja
       'caja.apertura',
       'caja.cierre',

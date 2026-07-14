@@ -82,7 +82,7 @@ class _RegisterStep2ViewState extends ConsumerState<RegisterStep2View> {
     final step1 = ref.watch(registerStep1VmProvider);
     final step2 = ref.watch(registerStep2VmProvider);
     final plansAsync = ref.watch(signupPlansProvider);
-    final plans = plansAsync.valueOrNull ?? const <BillingPlan>[];
+    final plans = plansAsync.value ?? const <BillingPlan>[];
     final BillingPlan? selectedPlan = plans.isEmpty
         ? null
         : plans.firstWhere(

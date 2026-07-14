@@ -63,17 +63,29 @@ class ZonesRepository {
       final zones = await fetchZones(businessId);
       return (zones: zones, fromCache: false, cachedAt: null);
     } catch (_) {
-      final snap = await ZonesOfflineCache().loadZonesSnapshot(
-        businessId: businessId,
-      );
-      if (snap == null) rethrow;
-      final zones = snap.zones
-          .where((m) => (m['is_active'] ?? true) == true)
-          .map(Zone.fromMap)
-          .where((z) => !_isVirtualSalesZone(z))
-          .toList();
-      return (zones: zones, fromCache: true, cachedAt: snap.savedAt);
+      final cached = await loadCachedZones(businessId);
+      if (cached == null) rethrow;
+      return (zones: cached.zones, fromCache: true, cachedAt: cached.savedAt);
     }
+  }
+
+  /// Lee el snapshot local de zonas SIN tocar la red (mismos filtros que
+  /// [fetchZonesWithCache]: activas y sin zonas virtuales). Usado para el
+  /// primer pintado cache-first del salón mientras la red responde, y como
+  /// fallback offline. Devuelve null si no hay snapshot.
+  Future<({List<Zone> zones, DateTime savedAt})?> loadCachedZones(
+    String businessId,
+  ) async {
+    final snap = await ZonesOfflineCache().loadZonesSnapshot(
+      businessId: businessId,
+    );
+    if (snap == null) return null;
+    final zones = snap.zones
+        .where((m) => (m['is_active'] ?? true) == true)
+        .map(Zone.fromMap)
+        .where((z) => !_isVirtualSalesZone(z))
+        .toList();
+    return (zones: zones, savedAt: snap.savedAt);
   }
 
   bool _isVirtualSalesZone(Zone zone) {
@@ -147,6 +159,42 @@ class ZonesRepository {
     return rows.map(TableStatus.fromMap).toList();
   }
 
+  /// PERF: estado de las mesas de TODAS las zonas del negocio en UNA sola
+  /// consulta a `v_zone_table_status` (antes: 1 consulta por zona disparada
+  /// al montar cada grid). Devuelve las filas agrupadas por `zone_id` y
+  /// persiste los mismos snapshots por zona que [fetchByZone] para que el
+  /// fallback offline y el pintado cache-first sigan funcionando.
+  Future<Map<String, List<TableStatus>>> fetchStatusByBusiness(
+    String businessId,
+  ) async {
+    final rows = List<Map<String, dynamic>>.from(
+      await sb
+          .from('v_zone_table_status')
+          .select()
+          .eq('business_id', businessId)
+          .order('code', ascending: true),
+    );
+
+    final rawByZone = <String, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      final zoneId = row['zone_id']?.toString();
+      if (zoneId == null || zoneId.isEmpty) continue;
+      rawByZone.putIfAbsent(zoneId, () => []).add(row);
+    }
+
+    for (final entry in rawByZone.entries) {
+      unawaited(ZonesOfflineCache().saveZoneStatusSnapshot(
+        zoneId: entry.key,
+        rowsRaw: entry.value,
+      ));
+    }
+
+    return {
+      for (final entry in rawByZone.entries)
+        entry.key: entry.value.map(TableStatus.fromMap).toList(),
+    };
+  }
+
   /// Variante de [fetchByZone] con fallback al cache offline. Devuelve un
   /// flag + timestamp cuando los datos vienen del cache para que la vista
   /// pueda mostrar el banner "modo offline".
@@ -163,13 +211,24 @@ class ZonesRepository {
       final rows = await fetchByZone(zoneId, businessId: businessId);
       return (rows: rows, fromCache: false, cachedAt: null);
     } catch (_) {
-      final snap = await ZonesOfflineCache().loadZoneStatusSnapshot(
-        zoneId: zoneId,
-      );
-      if (snap == null) rethrow;
-      final rows = snap.rows.map(TableStatus.fromMap).toList();
-      return (rows: rows, fromCache: true, cachedAt: snap.savedAt);
+      final cached = await loadCachedZoneStatus(zoneId);
+      if (cached == null) rethrow;
+      return (rows: cached.rows, fromCache: true, cachedAt: cached.savedAt);
     }
+  }
+
+  /// Lee el snapshot local del estado de una zona SIN tocar la red. Usado
+  /// para el primer pintado cache-first del salón y como fallback offline.
+  /// Devuelve null si no hay snapshot para esa zona.
+  Future<({List<TableStatus> rows, DateTime savedAt})?> loadCachedZoneStatus(
+    String zoneId,
+  ) async {
+    final snap = await ZonesOfflineCache().loadZoneStatusSnapshot(
+      zoneId: zoneId,
+    );
+    if (snap == null) return null;
+    final rows = snap.rows.map(TableStatus.fromMap).toList();
+    return (rows: rows, savedAt: snap.savedAt);
   }
 
   // ---- MESAS POR ZONA (para Ajustes → Salones y mesas) ----

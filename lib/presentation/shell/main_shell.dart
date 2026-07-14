@@ -167,7 +167,7 @@ class _MainShellState extends ConsumerState<MainShell> {
                         // Mientras carga la config, usamos `[]` —
                         // muestra todos los destinos permitidos por rol,
                         // que es el comportamiento histórico.
-                        final disabledRoutes = disabledAsync.valueOrNull ??
+                        final disabledRoutes = disabledAsync.value ??
                             const <String>[];
                         final features = ref.watchBusinessFeatures();
                         final modules = ref.watchEnabledModules();
@@ -297,13 +297,23 @@ class _MainShellState extends ConsumerState<MainShell> {
         behavior: SnackBarBehavior.floating,
         duration: Duration(seconds: r.hasConflicts ? 8 : 4),
         content: Text(message),
-        action: r.hasConflicts
+        // Con fallos o dead-letter el detalle útil es la cola misma (tipo
+        // de operación + last_error); con solo conflictos, el resumen de
+        // conflictos cross-device.
+        action: r.hasFailures || r.dead > 0
             ? SnackBarAction(
                 label: 'Ver detalle',
                 textColor: Colors.white,
-                onPressed: () => _showConflictsDialog(context, r.conflicts),
+                onPressed: () =>
+                    unawaited(showOfflineQueueDetailDialog(context, ref)),
               )
-            : null,
+            : r.hasConflicts
+                ? SnackBarAction(
+                    label: 'Ver detalle',
+                    textColor: Colors.white,
+                    onPressed: () => _showConflictsDialog(context, r.conflicts),
+                  )
+                : null,
       ),
     );
   }
@@ -403,6 +413,19 @@ class _OfflineQueueBadge extends ConsumerWidget {
       context: context,
       position: position,
       items: [
+        // Visor de la cola: qué operaciones hay, en qué estado y con qué
+        // error real — para diagnosticar antes de decidir limpiar.
+        const PopupMenuItem(
+          value: 'view',
+          child: Row(
+            children: [
+              Icon(Icons.receipt_long_rounded,
+                  size: 18, color: Color(0xFF111827)),
+              SizedBox(width: 8),
+              Text('Ver operaciones...'),
+            ],
+          ),
+        ),
         const PopupMenuItem(
           value: 'sync',
           child: Row(
@@ -444,7 +467,9 @@ class _OfflineQueueBadge extends ConsumerWidget {
 
     if (!context.mounted) return;
 
-    if (action == 'sync') {
+    if (action == 'view') {
+      await showOfflineQueueDetailDialog(context, ref);
+    } else if (action == 'sync') {
       await ref
           .read(currentOrderProvider.notifier)
           .syncPendingOfflineActions(force: true);
@@ -484,7 +509,11 @@ class _OfflineQueueBadge extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
   ) async {
-    final pending = ref.read(offlineQueueStatusProvider).pending;
+    // clearPendingActions borra todas las no-completadas (pendientes +
+    // dead-letter); el conteo del aviso debe reflejar ambas para no
+    // subestimar lo que se va a descartar.
+    final status = ref.read(offlineQueueStatusProvider);
+    final pending = status.pending + status.dead;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -619,6 +648,277 @@ class _OfflineQueueBadge extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Visor de la cola offline: lista cada operación no sincronizada con su
+/// estado, intentos y el último error real (`last_error`). Antes este
+/// detalle no era visible en ninguna vista, así que un atasco solo tenía
+/// una salida: "Limpiar cola" a ciegas (perdiendo las operaciones). Desde
+/// aquí el cajero diagnostica y puede forzar un sync que también reintenta
+/// las dead-letter.
+Future<void> showOfflineQueueDetailDialog(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final businessId = ref.read(sessionProvider).activeBusinessId;
+  if (businessId == null || businessId.isEmpty) return;
+
+  final actions = await OfflinePosService().unsettledActions(businessId);
+  if (!context.mounted) return;
+
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.receipt_long_rounded, color: Color(0xFF111827)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              actions.isEmpty
+                  ? 'Operaciones offline'
+                  : 'Operaciones offline (${actions.length})',
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 520,
+        child: actions.isEmpty
+            ? const Text('No hay operaciones pendientes. Cola al día.')
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Estas operaciones aún no llegan al servidor. Las '
+                    'marcadas "Sin resolver" agotaron sus reintentos '
+                    'automáticos; "Sincronizar ahora" las reintenta todas.',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 380),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: actions.length,
+                        separatorBuilder: (_, _) => const Divider(height: 16),
+                        itemBuilder: (_, i) =>
+                            _OfflineQueueActionRow(action: actions[i]),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Cerrar'),
+        ),
+        if (actions.isNotEmpty)
+          FilledButton.icon(
+            icon: const Icon(Icons.sync_rounded, size: 18),
+            label: const Text('Sincronizar ahora'),
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              unawaited(ref
+                  .read(currentOrderProvider.notifier)
+                  .syncPendingOfflineActions(force: true));
+            },
+          ),
+      ],
+    ),
+  );
+}
+
+/// Fila del visor: tipo legible + contexto (producto/monto), estado,
+/// intentos y último error de la operación encolada.
+class _OfflineQueueActionRow extends StatelessWidget {
+  const _OfflineQueueActionRow({required this.action});
+
+  final Map<String, dynamic> action;
+
+  static String _label(String? type) {
+    switch (type) {
+      case 'add_item':
+        return 'Agregar producto';
+      case 'delete_item':
+        return 'Eliminar producto';
+      case 'update_item_quantity':
+        return 'Cambiar cantidad';
+      case 'update_item_notes':
+        return 'Editar notas';
+      case 'toggle_item_takeout':
+        return 'Producto para llevar';
+      case 'move_item_to_check':
+        return 'Mover a otra cuenta';
+      case 'mark_order_takeout':
+        return 'Orden para llevar';
+      case 'process_payment':
+        return 'Cobro';
+      case 'void_order':
+        return 'Anular orden';
+      case 'send_to_kitchen':
+        return 'Enviar a cocina';
+      case 'confirm_local_order':
+        return 'Crear orden';
+      case 'open_table':
+        return 'Abrir mesa';
+      case 'open_cash_session':
+        return 'Apertura de caja';
+      case 'close_cash_session':
+        return 'Cierre de caja';
+      case 'cash_transaction':
+        return 'Movimiento de caja';
+      case 'inventory_adjust':
+        return 'Ajuste de inventario';
+      case 'inventory_movement':
+        return 'Movimiento de inventario';
+      case 'kds_item_status':
+        return 'Estado de cocina (KDS)';
+      case 'set_delivery_fee':
+        return 'Fee de delivery';
+      case 'add_item_modifier':
+        return 'Modificadores de producto';
+      default:
+        return type == null || type.isEmpty ? 'Operación' : type;
+    }
+  }
+
+  /// Contexto corto según el tipo: producto ×cantidad para acciones de
+  /// items, monto para cobros/movimientos de caja.
+  static String? _detail(Map<String, dynamic> a) {
+    final product = a['product_name']?.toString().trim();
+    if (product != null && product.isNotEmpty) {
+      final qty = (a['qty'] ?? a['quantity']) as num?;
+      if (qty != null && qty > 0) {
+        final q = qty == qty.truncateToDouble()
+            ? qty.toInt().toString()
+            : qty.toString();
+        return '$product ×$q';
+      }
+      return product;
+    }
+    final amount = (a['amount'] as num?)?.toDouble();
+    if (amount != null && amount > 0) {
+      return 'Monto: ${amount.toStringAsFixed(2)}';
+    }
+    return null;
+  }
+
+  static String _two(int v) => v.toString().padLeft(2, '0');
+
+  @override
+  Widget build(BuildContext context) {
+    final status = action['status']?.toString() ?? 'pending';
+    final isDead = status == 'dead';
+    final attempts = (action['attempts'] as num?)?.toInt() ?? 0;
+    final lastError = action['last_error']?.toString().trim();
+    final queuedAt =
+        DateTime.tryParse(action['queued_at']?.toString() ?? '')?.toLocal();
+
+    final String chipLabel;
+    final Color chipColor;
+    if (isDead) {
+      chipLabel = 'Sin resolver';
+      chipColor = const Color(0xFFB91C1C);
+    } else if (status == 'failed') {
+      chipLabel = 'Con error';
+      chipColor = const Color(0xFFB45309);
+    } else if (status == 'processing') {
+      chipLabel = 'En proceso';
+      chipColor = const Color(0xFF2563EB);
+    } else {
+      chipLabel = 'Pendiente';
+      chipColor = const Color(0xFF6B7280);
+    }
+
+    final detail = _detail(action);
+    final meta = [
+      if (queuedAt != null)
+        'Encolada ${_two(queuedAt.day)}/${_two(queuedAt.month)} '
+            '${_two(queuedAt.hour)}:${_two(queuedAt.minute)}',
+      if (attempts > 0) '$attempts intento(s)',
+    ].join(' · ');
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(
+            isDead ? Icons.error_outline_rounded : Icons.schedule_rounded,
+            size: 18,
+            color: chipColor,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _label(action['type']?.toString()),
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: chipColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      chipLabel,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: chipColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (detail != null)
+                Text(
+                  detail,
+                  style: TextStyle(fontSize: 12.5, color: Colors.grey[700]),
+                ),
+              if (meta.isNotEmpty)
+                Text(
+                  meta,
+                  style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
+                ),
+              if (lastError != null && lastError.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    lastError,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xFFB91C1C),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1535,7 +1835,7 @@ class _PrinterHeartbeatBadge extends ConsumerWidget {
     if (businessId.isEmpty) return const SizedBox.shrink();
 
     final heartbeatAsync = ref.watch(printerHeartbeatProvider(businessId));
-    final snapshot = heartbeatAsync.valueOrNull;
+    final snapshot = heartbeatAsync.value;
 
     final Color bg;
     final Color fg;

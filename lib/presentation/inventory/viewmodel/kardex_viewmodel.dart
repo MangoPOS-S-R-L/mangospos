@@ -2,6 +2,7 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/repositories/inventory_repository.dart';
@@ -102,6 +103,46 @@ class KardexViewModel extends ChangeNotifier {
       clearError: true,
     );
     notifyListeners();
+  }
+
+  /// Trae TODOS los movimientos que matchean los filtros actuales, paginando
+  /// server-side hasta [maxRows]. Para exportación (PDF/Excel): la lista en
+  /// pantalla solo tiene las páginas ya scrolleadas y exportar eso a medias
+  /// confunde. No toca el state de la vista.
+  ///
+  /// `truncated` = true si había más filas que [maxRows]; el caller debe
+  /// avisarlo en el documento para que nadie asuma que el reporte es completo.
+  Future<({List<KardexMovement> movements, bool truncated})>
+      fetchAllForExport({int maxRows = 3000}) async {
+    final businessId = _state.businessId;
+    if (businessId == null) {
+      return (movements: const <KardexMovement>[], truncated: false);
+    }
+    final all = <KardexMovement>[];
+    var offset = 0;
+    while (all.length < maxRows) {
+      final rows = await _repository.getKardexMovements(
+        businessId: businessId,
+        itemId: _state.filters.itemId,
+        warehouseId: _state.filters.warehouseId,
+        movementType: _state.filters.movementType,
+        createdBy: _state.filters.createdBy,
+        from: _state.filters.from,
+        to: _state.filters.to,
+        limit: KardexState.pageSize,
+        offset: offset,
+      );
+      final page = rows.map(KardexMovement.fromMap).toList(growable: false);
+      all.addAll(page);
+      if (page.length < KardexState.pageSize) {
+        return (movements: all, truncated: false);
+      }
+      offset += page.length;
+    }
+    return (
+      movements: all.take(maxRows).toList(growable: false),
+      truncated: true,
+    );
   }
 
   /// Carga la siguiente página y la concatena.

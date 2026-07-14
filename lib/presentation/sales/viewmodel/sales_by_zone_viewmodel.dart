@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/table_status.dart';
 import '../../../data/models/dining_table.dart';
+import '../../../data/models/zone.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../core/offline/offline_pos_service.dart';
@@ -36,6 +37,12 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
   final OfflinePosService _offlinePos = OfflinePosService();
+
+  // PERF: consulta business-wide (todas las zonas en 1 viaje) en vuelo.
+  // Los grids la consultan vía [isBusinessStatusFetchInFlight] para no
+  // disparar su consulta por zona duplicada al montar.
+  Future<Map<String, List<TableStatus>>?>? _businessStatusFetch;
+  bool get isBusinessStatusFetchInFlight => _businessStatusFetch != null;
 
   // H4 m2c: feed en vivo del Hub (modo cliente). Reemplaza el Realtime de
   // Supabase dentro de la LAN: cada op del Hub dispara un reload debounced del
@@ -87,16 +94,27 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
       final repo = ref.read(zonesRepoProvider);
 
-      final result = await repo.fetchZonesWithCache(bizId);
-      final zones = result.zones.where((z) {
-        final name = z.name.toLowerCase();
-        return name != 'ventas manuales' && name != 'ventas rápidas' && name != 'delivery';
-      }).toList();
+      // PERF: zonas + estado de TODAS las mesas del negocio viajan en
+      // PARALELO (antes: zonas primero y luego 1 consulta por zona
+      // disparada al montar cada grid → 2 viajes en serie hasta ver mesas).
+      // El flag in-flight lo consultan los grids para no duplicar la
+      // consulta por zona mientras esta respuesta viene en camino.
+      final zonesFetch = repo.fetchZonesWithCache(bizId);
+      final statusFetch = repo
+          .fetchStatusByBusiness(bizId)
+          .then<Map<String, List<TableStatus>>?>((v) => v)
+          .catchError((_) => null);
+      _businessStatusFetch = statusFetch;
 
-      zones.sort((a, b) {
-        final sortCompare = a.sortIndex.compareTo(b.sortIndex);
-        return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
-      });
+      // Pintado instantáneo en arranque frío: mientras la red responde,
+      // hidrata zonas y mesas desde los snapshots locales. La respuesta
+      // fresca lo pisa en cuanto llega.
+      if (state.zones.isEmpty) {
+        await _hydrateFromCache(repo, bizId);
+      }
+
+      final result = await zonesFetch;
+      final zones = _visibleZones(result.zones);
 
       final validZoneIds = zones.map((z) => z.id).toSet();
       final filteredStatus = Map<String, List<TableStatus>>.fromEntries(
@@ -133,9 +151,109 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         // Throttled y fire-and-forget para no pegar el RPC en cada refresh.
         _maybeSweepEmptyTables(bizId);
       }
+
+      final statusMap = await statusFetch;
+      if (statusMap != null) {
+        await _applyBusinessStatus(statusMap, validZoneIds);
+      } else {
+        // La consulta business-wide falló (p.ej. sin red): carga por zona
+        // solo las que quedaron sin datos; fetchByZoneWithCache cae al
+        // snapshot offline si tampoco hay red.
+        for (final zone in zones) {
+          if (!state.statusByZone.containsKey(zone.id)) {
+            unawaited(loadZoneStatus(zone.id, emitError: false));
+          }
+        }
+      }
     } catch (e) {
       state = state.copyWith(loading: false, error: '$e');
+    } finally {
+      _businessStatusFetch = null;
     }
+  }
+
+  /// Mismo filtro/orden que siempre aplicó el salón: fuera zonas virtuales
+  /// de venta y orden por sort_index + nombre.
+  List<Zone> _visibleZones(List<Zone> all) {
+    final zones = all.where((z) {
+      final name = z.name.toLowerCase();
+      return name != 'ventas manuales' &&
+          name != 'ventas rápidas' &&
+          name != 'delivery';
+    }).toList();
+    zones.sort((a, b) {
+      final sortCompare = a.sortIndex.compareTo(b.sortIndex);
+      return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
+    });
+    return zones;
+  }
+
+  /// Pintado cache-first en arranque frío: hidrata zonas + mesas desde los
+  /// snapshots locales para que el salón aparezca al instante. No toca
+  /// `loading` (la red sigue en vuelo) ni `isOffline` (esto no es un fallo
+  /// de red). Best-effort: sin snapshot se espera a la red como antes.
+  Future<void> _hydrateFromCache(ZonesRepository repo, String bizId) async {
+    try {
+      final cached = await repo.loadCachedZones(bizId);
+      if (cached == null || cached.zones.isEmpty) return;
+      final zones = _visibleZones(cached.zones);
+      if (zones.isEmpty) return;
+
+      final statusByZone = <String, List<TableStatus>>{};
+      await Future.wait(zones.map((zone) async {
+        final snap = await repo.loadCachedZoneStatus(zone.id);
+        if (snap == null) return;
+        final rows = List.of(snap.rows)
+          ..sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+        statusByZone[zone.id] = rows;
+      }));
+
+      // Si otra carga concurrente ya llenó el estado, no pisar lo fresco.
+      if (state.zones.isNotEmpty) return;
+
+      state = state.copyWith(
+        zones: zones,
+        statusByZone: statusByZone,
+        businessId: bizId,
+        lastSyncAt: cached.savedAt,
+      );
+      for (final entry in statusByZone.entries) {
+        _indexZone(entry.key, entry.value);
+      }
+    } catch (_) {}
+  }
+
+  /// Aplica el resultado de la consulta business-wide: ordena por zona,
+  /// overlaya borradores locales y mesas del Hub (UNA sola lectura de cada
+  /// fuente para todas las zonas, antes era por zona) y actualiza el estado.
+  /// Las zonas sin filas reciben lista vacía para salir del skeleton.
+  Future<void> _applyBusinessStatus(
+    Map<String, List<TableStatus>> statusMap,
+    Set<String> validZoneIds,
+  ) async {
+    final drafts = await _fetchDraftsByTable();
+    final hubTables = await _fetchHubTablesByTableId();
+
+    final updatedStatus = {...state.statusByZone};
+    final updatedErrors = {...state.errorByZone};
+    for (final zoneId in validZoneIds) {
+      final rows = List.of(statusMap[zoneId] ?? const <TableStatus>[])
+        ..sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+      final overlaid = _applyHubOverlay(
+        _applyDraftOverlay(rows, drafts),
+        hubTables,
+      );
+      updatedStatus[zoneId] = overlaid;
+      updatedErrors[zoneId] = null;
+      _indexZone(zoneId, overlaid);
+    }
+
+    state = state.copyWith(
+      statusByZone: updatedStatus,
+      errorByZone: updatedErrors,
+      isOffline: false,
+      lastSyncAt: DateTime.now(),
+    );
   }
 
   void _maybeSweepEmptyTables(String businessId) {
@@ -216,36 +334,49 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   Future<List<TableStatus>> _overlayPendingDrafts(
     List<TableStatus> rows,
   ) async {
+    return _applyDraftOverlay(rows, await _fetchDraftsByTable());
+  }
+
+  /// Lee los borradores locales pendientes UNA vez, indexados por tableId.
+  /// Best-effort: ante fallo devuelve mapa vacío (sin overlay).
+  Future<Map<String, ({String tableId, int itemsCount, double total})>>
+      _fetchDraftsByTable() async {
     final businessId = state.businessId;
-    if (businessId == null || businessId.isEmpty) return rows;
+    if (businessId == null || businessId.isEmpty) return const {};
     try {
       final drafts = await _offlinePos.listPendingTableDrafts(businessId);
-      if (drafts.isEmpty) return rows;
-      final byTable = {for (final d in drafts) d.tableId: d};
-      return rows.map((r) {
-        final d = byTable[r.tableId];
-        // Solo overlay si hay borrador Y el server no la muestra ya ocupada.
-        if (d == null || r.sessionId != null) return r;
-        return TableStatus(
-          tableId: r.tableId,
-          zoneId: r.zoneId,
-          code: r.code,
-          sessionId: 'local-draft',
-          ordersCount: 1,
-          minutesOpen: r.minutesOpen,
-          itemsCount: d.itemsCount > 0 ? d.itemsCount : 1,
-          total: d.total,
-          peopleCount: r.peopleCount,
-          status: r.status,
-          waiterName: r.waiterName,
-          customerName: r.customerName,
-          isOwn: true,
-          isPendingSync: true,
-        );
-      }).toList();
+      return {for (final d in drafts) d.tableId: d};
     } catch (_) {
-      return rows;
+      return const {};
     }
+  }
+
+  List<TableStatus> _applyDraftOverlay(
+    List<TableStatus> rows,
+    Map<String, ({String tableId, int itemsCount, double total})> byTable,
+  ) {
+    if (byTable.isEmpty) return rows;
+    return rows.map((r) {
+      final d = byTable[r.tableId];
+      // Solo overlay si hay borrador Y el server no la muestra ya ocupada.
+      if (d == null || r.sessionId != null) return r;
+      return TableStatus(
+        tableId: r.tableId,
+        zoneId: r.zoneId,
+        code: r.code,
+        sessionId: 'local-draft',
+        ordersCount: 1,
+        minutesOpen: r.minutesOpen,
+        itemsCount: d.itemsCount > 0 ? d.itemsCount : 1,
+        total: d.total,
+        peopleCount: r.peopleCount,
+        status: r.status,
+        waiterName: r.waiterName,
+        customerName: r.customerName,
+        isOwn: true,
+        isPendingSync: true,
+      );
+    }).toList();
   }
 
   /// H4c: overlay de las mesas que el HUB conoce (modo hub). El equipo Hub lee
@@ -255,51 +386,64 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   /// una fila ya marcada (sesión real o borrador local de este equipo).
   /// Best-effort: ante cualquier fallo devuelve las filas sin tocar.
   Future<List<TableStatus>> _overlayHubSalon(List<TableStatus> rows) async {
+    return _applyHubOverlay(rows, await _fetchHubTablesByTableId());
+  }
+
+  /// Lee el salón del Hub UNA vez, indexado por tableId. Devuelve mapa
+  /// vacío si este equipo no está en modo hub, el Hub no es alcanzable o
+  /// la lectura falla (sin overlay).
+  Future<Map<String, Map<String, dynamic>>> _fetchHubTablesByTableId() async {
     final mode = ref.read(hubModeProvider);
     if (mode != TerminalMode.hubClient && mode != TerminalMode.hubHost) {
-      return rows;
+      return const {};
     }
     final businessId = state.businessId;
-    if (businessId == null || businessId.isEmpty) return rows;
+    if (businessId == null || businessId.isEmpty) return const {};
     try {
       List<Map<String, dynamic>> hubTables;
       if (mode == TerminalMode.hubHost) {
         hubTables = await _offlinePos.localHubSalon(businessId);
       } else {
         final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
-        if (url == null) return rows;
+        if (url == null) return const {};
         hubTables =
             await HubClient().getSalon(url, businessId: businessId) ?? const [];
       }
-      if (hubTables.isEmpty) return rows;
-      final byTable = <String, Map<String, dynamic>>{
+      return {
         for (final t in hubTables)
           if (t['table_id'] != null) t['table_id'].toString(): t,
       };
-      return rows.map((r) {
-        final t = byTable[r.tableId];
-        if (t == null || r.sessionId != null) return r;
-        final itemsCount = (t['items_count'] as num?)?.toInt() ?? 1;
-        final total = (t['total'] as num?)?.toDouble() ?? 0;
-        return TableStatus(
-          tableId: r.tableId,
-          zoneId: r.zoneId,
-          code: r.code,
-          sessionId: 'hub',
-          ordersCount: 1,
-          minutesOpen: r.minutesOpen,
-          itemsCount: itemsCount > 0 ? itemsCount : 1,
-          total: total,
-          peopleCount: r.peopleCount,
-          status: r.status,
-          waiterName: r.waiterName,
-          customerName: r.customerName,
-          isOwn: false,
-        );
-      }).toList();
     } catch (_) {
-      return rows;
+      return const {};
     }
+  }
+
+  List<TableStatus> _applyHubOverlay(
+    List<TableStatus> rows,
+    Map<String, Map<String, dynamic>> byTable,
+  ) {
+    if (byTable.isEmpty) return rows;
+    return rows.map((r) {
+      final t = byTable[r.tableId];
+      if (t == null || r.sessionId != null) return r;
+      final itemsCount = (t['items_count'] as num?)?.toInt() ?? 1;
+      final total = (t['total'] as num?)?.toDouble() ?? 0;
+      return TableStatus(
+        tableId: r.tableId,
+        zoneId: r.zoneId,
+        code: r.code,
+        sessionId: 'hub',
+        ordersCount: 1,
+        minutesOpen: r.minutesOpen,
+        itemsCount: itemsCount > 0 ? itemsCount : 1,
+        total: total,
+        peopleCount: r.peopleCount,
+        status: r.status,
+        waiterName: r.waiterName,
+        customerName: r.customerName,
+        isOwn: false,
+      );
+    }).toList();
   }
 
   /// H4 m2c: conecta/reconecta el feed en vivo del Hub cuando este equipo es

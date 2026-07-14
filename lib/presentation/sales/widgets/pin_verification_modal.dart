@@ -27,6 +27,37 @@ Future<bool> showPinVerificationModal(
   return result == true;
 }
 
+/// Igual que [showPinVerificationModal] con nivel supervisor, pero devuelve
+/// el `user_id` del empleado que autorizó (o null si canceló / PIN
+/// inválido). Útil cuando la operación persiste `approved_by` para
+/// auditoría, como los movimientos manuales de caja.
+Future<String?> showSupervisorApprovalPinModal(
+  BuildContext context,
+  WidgetRef ref, {
+  String title = 'Autorización requerida',
+  String subtitle = 'Ingrese PIN de Supervisor para continuar',
+}) async {
+  String? captured;
+  await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => _PinVerificationDialog(
+      title: title,
+      subtitle: subtitle,
+      onVerify: (pin) async {
+        final userId = await ref
+            .read(sessionProvider.notifier)
+            .verifyPinApprover(pin: pin, level: PinAccessLevel.supervisor);
+        if (userId == null) return false;
+        captured = userId;
+        return true;
+      },
+      invalidMessage: 'PIN inválido o sin jerarquía requerida.',
+    ),
+  );
+  return captured;
+}
+
 Future<bool> showCurrentUserPinVerificationModal(
   BuildContext context,
   WidgetRef ref, {

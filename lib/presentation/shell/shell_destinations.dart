@@ -92,6 +92,9 @@ const List<ShellDestination> kPrimaryDestinations = [
     svgAsset: 'assets/icons/reportes_principal.svg',
     permissionCode: 'reportes.ventas',
   ),
+  // Créditos NO va como destino principal: se entra desde Más Opciones
+  // (secciones "Crédito" y "Compras" de settings_view). La ruta y su rama
+  // del shell siguen vivas; solo se quitó el acceso del topbar/drawer.
   ShellDestination(
     label: 'Más Opciones',
     route: AppRoutes.settings,
@@ -185,6 +188,8 @@ int shellBranchIndexForDestination(String route) {
       return 11;
     case AppRoutes.menu:
       return 12;
+    case AppRoutes.credits:
+      return 14;
     default:
       return -1;
   }

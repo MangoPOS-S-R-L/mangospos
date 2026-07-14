@@ -35,6 +35,7 @@ import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/auth/register/register_step3_view.dart';
 import '../../presentation/auth/register/register_step4_view.dart';
 import '../../presentation/auth/cross_auth/cross_auth_view.dart';
+import '../../presentation/credits/view/credits_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
 import '../../presentation/cashier/view/cashier_view.dart';
@@ -950,6 +951,16 @@ class AppRouter {
             ],
           ),
           // =======================================================================
+          ]),
+
+          // ── Rama 14: Créditos (CxC / CxP) ──
+          // OJO: el índice debe coincidir con shellBranchIndexForDestination
+          // en shell_destinations.dart.
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: AppRoutes.credits,
+              builder: (context, state) => const CreditsView(),
+            ),
           ]),
         ],
       ),

@@ -1030,7 +1030,7 @@ class _NewItemDialogState extends ConsumerState<_NewItemDialog> {
                           ),
                           onPressed: () async {
                             try {
-                              final r = await FilePicker.platform.pickFiles(
+                              final r = await FilePicker.pickFiles(
                                 type: FileType.custom,
                                 allowedExtensions: [
                                   'png',

@@ -572,7 +572,19 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
 
   void _startZoneRefresh() {
     _zoneRefreshTimer?.cancel();
-    ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
+    // PERF: load() ya trae el estado de TODAS las zonas en 1 consulta
+    // business-wide. Si esa consulta viene en camino (o ya llegó), no
+    // dispares otra por zona al montar — pinta lo que hay y deja el
+    // refresh periódico. Solo consulta directo si no hay nada (p.ej. la
+    // consulta global falló).
+    final vm = ref.read(byZoneVmProvider.notifier);
+    final hasData = ref
+        .read(byZoneVmProvider)
+        .statusByZone
+        .containsKey(widget.zoneId);
+    if (!hasData && !vm.isBusinessStatusFetchInFlight) {
+      vm.loadZoneStatus(widget.zoneId);
+    }
     _zoneRefreshTimer = Timer.periodic(_zoneRefreshInterval, (timer) {
       if (mounted) {
         ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
@@ -829,7 +841,16 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
 
   void _startZoneRefresh() {
     _zoneRefreshTimer?.cancel();
-    ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
+    // PERF: mismo criterio que _ZoneGrid — el estado ya viene (o viene en
+    // camino) en la consulta business-wide de load(); no duplicar.
+    final vm = ref.read(byZoneVmProvider.notifier);
+    final hasData = ref
+        .read(byZoneVmProvider)
+        .statusByZone
+        .containsKey(widget.zoneId);
+    if (!hasData && !vm.isBusinessStatusFetchInFlight) {
+      vm.loadZoneStatus(widget.zoneId);
+    }
     _zoneRefreshTimer = Timer.periodic(_zoneRefreshInterval, (timer) {
       if (mounted) {
         ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);

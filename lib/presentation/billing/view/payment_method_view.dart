@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
@@ -35,7 +36,7 @@ class PaymentMethodView extends ConsumerWidget {
     final pmAsync = ref.watch(defaultPaymentMethodProvider(businessId));
     final billingState = ref
         .watch(billingStateProvider(businessId))
-        .valueOrNull;
+        .value;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F7),

@@ -66,7 +66,7 @@ class _RegisterStep1ViewState extends ConsumerState<RegisterStep1View> {
     // Auto-seleccionar el primer plan disponible si aún no hay selección.
     // El `initialPlan` (query param) si está, intenta matchear por code; si no
     // matchea, cae al primero. Esto cubre el caso del deep-link desde landing.
-    final plans = plansAsync.valueOrNull ?? const <BillingPlan>[];
+    final plans = plansAsync.value ?? const <BillingPlan>[];
     if (state.selectedPlanId == null && plans.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;

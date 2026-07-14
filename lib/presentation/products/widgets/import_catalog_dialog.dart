@@ -43,7 +43,7 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
 
   Future<void> _pickFile() async {
     setState(() => _error = null);
-    final picked = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['csv', 'txt', 'xlsx', 'xls'],
       withData: true,

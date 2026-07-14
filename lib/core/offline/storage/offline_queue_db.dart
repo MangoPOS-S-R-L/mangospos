@@ -23,6 +23,7 @@
 // Para regenerar el código: `flutter pub run build_runner build`.
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '_db_connection_io.dart'
     if (dart.library.html) '_db_connection_web.dart';
@@ -119,4 +120,11 @@ class OfflineQueueDb extends _$OfflineQueueDb {
   static OfflineQueueDb getInstance() {
     return _instance ??= OfflineQueueDb();
   }
+
+  /// Para tests: inyecta la instancia (típicamente [OfflineQueueDb.inMemory])
+  /// ANTES de que cualquier código llame a [getInstance]. En producción no
+  /// se usa — la conexión real necesita path_provider, que no existe en el
+  /// entorno de flutter_test.
+  @visibleForTesting
+  static set debugInstance(OfflineQueueDb db) => _instance = db;
 }

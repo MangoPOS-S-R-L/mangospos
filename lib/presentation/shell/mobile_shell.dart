@@ -239,7 +239,7 @@ class _MobileDrawer extends ConsumerWidget {
                       ),
                     );
                     final disabledRoutes =
-                        disabledAsync.valueOrNull ?? const <String>[];
+                        disabledAsync.value ?? const <String>[];
                     final features = ref.watchBusinessFeatures();
                     final modules = ref.watchEnabledModules();
                     return kPrimaryDestinations.where((d) {

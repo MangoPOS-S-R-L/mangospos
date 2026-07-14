@@ -16,6 +16,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -249,7 +250,7 @@ class _SummaryColumn extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final bid = businessId;
     final billing =
-        bid == null ? null : ref.watch(billingStateProvider(bid)).valueOrNull;
+        bid == null ? null : ref.watch(billingStateProvider(bid)).value;
     final plansAsync = ref.watch(availablePlansProvider);
     final selectedPlanId = ref.watch(registerStep1VmProvider).selectedPlanId;
 

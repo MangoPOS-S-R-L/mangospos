@@ -3,19 +3,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../app/router/routes.dart';
+import '../../../app/theme/mango_styles.dart';
 import '../../../core/inventory/pack_conversion.dart';
+import '../../../data/repositories/credits_repository.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 
 /// Cómo trae el ITBIS cada línea de la factura del proveedor.
-/// - [included]: el costo digitado YA trae el ITBIS → se desglosa (neto = costo/1.18).
-/// - [separate]: el costo es neto y el usuario escribe el TOTAL pagado → ITBIS = pagado − base.
+/// - [included]: el costo digitado YA trae el ITBIS → se desglosa con el %
+///   digitado (neto = costo / (1 + %/100), default 18).
+/// - [separate]: el costo es neto; ITBIS = % digitado (default 18) o, si se
+///   escribe el pagado POR UNIDAD con ITBIS, pagado − costo (escala con la
+///   cantidad).
 /// - [exempt]: la línea no lleva ITBIS.
 enum _TaxMode { included, separate, exempt }
-
-const _kIvaRate = 0.18;
 
 extension _TaxModeLabel on _TaxMode {
   String get short {
@@ -50,6 +54,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   String _status = 'received';
   DateTime _expectedDate = DateTime.now().add(const Duration(days: 3));
 
+  // Condición de pago: al contado (default) o a crédito. A crédito se crea
+  // una cuenta por pagar (supplier_credits) vinculada a la orden, visible
+  // en Créditos → Cuentas por Pagar. La UI para elegir crédito está APAGADA
+  // por ahora (decisión 2026-07-14); el flujo en _submit queda listo para
+  // cuando se reactive.
+  final bool _isCredit = false;
+  final DateTime _creditDueDate = DateTime.now().add(const Duration(days: 30));
+
   /// Productos ya agregados a la factura (la lista de abajo). Empieza vacía;
   /// se llena con el flujo rápido de teclado o con el buscador multi-selección.
   final List<_DraftItemControllers> _lines = [];
@@ -58,6 +70,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   final _entryQtyCtrl = TextEditingController(text: '1');
   final _entryCostCtrl = TextEditingController(text: '0');
   final _entryPaidCtrl = TextEditingController();
+  // % de ITBIS para el modo "Aparte". Se conserva entre líneas porque una
+  // misma factura suele traer la misma tasa en todos sus renglones.
+  final _entryTaxPctCtrl = TextEditingController(text: '18');
   final _qtyFocus = FocusNode();
   final _costFocus = FocusNode();
   final _paidFocus = FocusNode();
@@ -75,6 +90,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
 
   bool get _entryHasPack =>
       _entryPackSize > 1 && _entryPurchaseUnit.trim().isNotEmpty;
+
+  /// % de ITBIS vigente en el renglón de captura; vacío/ilegible cae al 18%.
+  double get _entryTaxPct =>
+      double.tryParse(_entryTaxPctCtrl.text.trim()) ?? 18;
 
   @override
   void initState() {
@@ -106,6 +125,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     _entryQtyCtrl.dispose();
     _entryCostCtrl.dispose();
     _entryPaidCtrl.dispose();
+    _entryTaxPctCtrl.dispose();
     _qtyFocus.dispose();
     _costFocus.dispose();
     _paidFocus.dispose();
@@ -119,13 +139,6 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(purchasesViewModelProvider);
     final state = vm.state;
-    final currency = NumberFormat.currency(
-      locale: 'en_US',
-      symbol: 'RD\$',
-      decimalDigits: 2,
-    );
-    final subtotal = _lines.fold<double>(0, (sum, l) => sum + l.baseSubtotal);
-    final estimatedTax = _lines.fold<double>(0, (sum, l) => sum + l.taxAmount);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -190,61 +203,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     ),
                     const SizedBox(height: 16),
                   ],
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _card(child: _buildHeaderCard(state)),
-                            const SizedBox(height: 20),
-                            _card(child: _buildProductsCard(state)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 20),
-                      SizedBox(
-                        width: 280,
-                        child: _card(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Resumen',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              _SummaryRow(
-                                label: 'Líneas',
-                                value: '${_lines.length}',
-                              ),
-                              const SizedBox(height: 10),
-                              _SummaryRow(
-                                label: 'Subtotal (neto)',
-                                value: currency.format(subtotal),
-                              ),
-                              const SizedBox(height: 10),
-                              _SummaryRow(
-                                label: 'ITBIS',
-                                value: currency.format(estimatedTax),
-                              ),
-                              const Divider(height: 24),
-                              _SummaryRow(
-                                label: 'Total',
-                                value: currency.format(subtotal + estimatedTax),
-                                bold: true,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  _card(child: _buildHeaderCard(state)),
+                  const SizedBox(height: 20),
+                  _card(child: _buildProductsCard(state)),
                 ],
               ),
             ),
@@ -371,29 +332,37 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         const SizedBox(height: 12),
         Row(
           children: [
-            const Text(
-              'Fecha de entrega',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF475569),
+            Expanded(
+              child: InputDecorator(
+                decoration: const InputDecoration(labelText: 'Fecha de entrega'),
+                child: InkWell(
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _expectedDate,
+                      firstDate: DateTime.now().subtract(const Duration(days: 90)),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked == null) return;
+                    setState(() => _expectedDate = picked);
+                  },
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        DateFormat('dd/MM/yyyy').format(_expectedDate),
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      const Icon(Icons.event_outlined, size: 18, color: Color(0xFF64748B)),
+                    ],
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 12),
-            OutlinedButton.icon(
-              onPressed: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _expectedDate,
-                  firstDate: DateTime.now().subtract(const Duration(days: 90)),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
-                );
-                if (picked == null) return;
-                setState(() => _expectedDate = picked);
-              },
-              icon: const Icon(Icons.event_outlined, size: 18),
-              label: Text(DateFormat('dd/MM/yyyy').format(_expectedDate)),
-            ),
+            const Expanded(child: SizedBox()),
+            const SizedBox(width: 12),
+            const Expanded(child: SizedBox()),
           ],
         ),
         const SizedBox(height: 12),
@@ -411,6 +380,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
 
   // ─────────────────────────────────────────────── Productos / captura ──
   Widget _buildProductsCard(PurchasesState state) {
+    final currency = NumberFormat.currency(
+      locale: 'en_US',
+      symbol: 'RD\$',
+      decimalDigits: 2,
+    );
+    final subtotal = _lines.fold<double>(0, (sum, l) => sum + l.baseSubtotal);
+    final estimatedTax = _lines.fold<double>(0, (sum, l) => sum + l.taxAmount);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -452,8 +429,56 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               style: TextStyle(color: Color(0xFF64748B)),
             ),
           )
-        else
+        else ...[
           _buildLinesTable(),
+          const SizedBox(height: 20),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              width: 320,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Resumen',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF0F172A),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _SummaryRow(
+                    label: 'Líneas',
+                    value: '${_lines.length}',
+                  ),
+                  const SizedBox(height: 8),
+                  _SummaryRow(
+                    label: 'Subtotal (neto)',
+                    value: currency.format(subtotal),
+                  ),
+                  const SizedBox(height: 8),
+                  _SummaryRow(
+                    label: 'ITBIS',
+                    value: currency.format(estimatedTax),
+                  ),
+                  const Divider(height: 20),
+                  _SummaryRow(
+                    label: 'Total',
+                    value: currency.format(subtotal + estimatedTax),
+                    bold: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -518,8 +543,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     labelText: _entryHasPack
                         ? 'Costo x $_entryPurchaseUnit'
                         : 'Costo unitario',
-                    helperText: _entryTaxMode == _TaxMode.included
-                        ? 'trae ITBIS'
+                    suffixText: _entryTaxMode == _TaxMode.included
+                        ? 'c/ITBIS'
                         : null,
                     filled: true,
                     fillColor: Colors.white,
@@ -534,15 +559,17 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                 ),
               ),
               const SizedBox(width: 10),
-              FilledButton(
-                onPressed: selected == null ? null : _commitEntry,
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 18,
+              SizedBox(
+                height: 48,
+                child: FilledButton(
+                  onPressed: selected == null ? null : _commitEntry,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                    ),
                   ),
+                  child: const Text('Agregar'),
                 ),
-                child: const Text('Agregar'),
               ),
             ],
           ),
@@ -566,10 +593,37 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                   if (m != _TaxMode.separate) _entryPaidCtrl.clear();
                 }),
               ),
-              if (_entryTaxMode == _TaxMode.separate) ...[
+              if (_entryTaxMode != _TaxMode.exempt) ...[
                 const SizedBox(width: 12),
                 SizedBox(
-                  width: 180,
+                  width: 90,
+                  child: TextField(
+                    controller: _entryTaxPctCtrl,
+                    enabled: selected != null,
+                    textInputAction: TextInputAction.done,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: '% ITBIS',
+                      isDense: true,
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    // % y pagado son alternativas: digitar el % descarta el
+                    // pagado (que tiene prioridad cuando existe).
+                    onChanged: (_) => setState(() => _entryPaidCtrl.clear()),
+                    onSubmitted: (_) => _commitEntry(),
+                  ),
+                ),
+              ],
+              if (_entryTaxMode == _TaxMode.separate) ...[
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 200,
                   child: TextField(
                     controller: _entryPaidCtrl,
                     focusNode: _paidFocus,
@@ -582,7 +636,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                     ],
                     decoration: const InputDecoration(
-                      labelText: 'Total pagado (con ITBIS)',
+                      labelText: 'Pagado por unidad (c/ITBIS)',
+                      helperText: 'opcional · manda sobre el %',
                       isDense: true,
                       filled: true,
                       fillColor: Colors.white,
@@ -648,7 +703,23 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             filled: true,
             fillColor: Colors.white,
           ),
-          onSubmitted: (_) => onFieldSubmitted(),
+          onSubmitted: (value) {
+            final query = value.trim().toLowerCase();
+            if (query.isNotEmpty) {
+              PurchaseInventoryItem? match;
+              for (final it in state.inventoryItems) {
+                if (it.sku.trim().toLowerCase() == query) {
+                  match = it;
+                  break;
+                }
+              }
+              if (match != null) {
+                _addSkuProductDirectly(match);
+                return;
+              }
+            }
+            onFieldSubmitted();
+          },
         );
       },
       optionsViewBuilder: (context, onSelected, options) {
@@ -725,11 +796,12 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       _entryBaseUnit = item!.unit;
       _entryQtyCtrl.text = '1';
       _entryPaidCtrl.clear();
-      // Si el modo es "incluido", el campo costo espera el precio CON ITBIS.
+      // Si el modo es "incluido", el campo costo espera el precio CON ITBIS
+      // (al % vigente del renglón de captura).
       final prefill = netPurchaseUnit <= 0
           ? ''
           : (_entryTaxMode == _TaxMode.included
-                    ? netPurchaseUnit * (1 + _kIvaRate)
+                    ? netPurchaseUnit * (1 + _entryTaxPct / 100)
                     : netPurchaseUnit)
                 .toStringAsFixed(2);
       _entryCostCtrl.text = prefill;
@@ -749,6 +821,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     }
     final cost = double.tryParse(_entryCostCtrl.text.trim()) ?? 0;
     final paid = double.tryParse(_entryPaidCtrl.text.trim()) ?? 0;
+    final taxPct = double.tryParse(_entryTaxPctCtrl.text.trim()) ?? 18;
     setState(() {
       _lines.add(
         _DraftItemControllers.fromItem(
@@ -757,6 +830,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           cost: cost,
           taxMode: _entryTaxMode,
           paid: paid,
+          taxPct: taxPct,
         ),
       );
     });
@@ -779,6 +853,35 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     });
   }
 
+  void _addSkuProductDirectly(PurchaseInventoryItem item) {
+    final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
+    final netPurchaseUnit = hasPack ? item.cost * item.packSize : item.cost;
+    final cost = _entryTaxMode == _TaxMode.included
+        ? netPurchaseUnit * (1 + _entryTaxPct / 100)
+        : netPurchaseUnit;
+
+    setState(() {
+      final existingIndex = _lines.indexWhere((l) => l.inventoryItemId == item.id);
+      if (existingIndex != -1) {
+        final currentQty = double.tryParse(_lines[existingIndex].quantity.text.trim()) ?? 0;
+        _lines[existingIndex].quantity.text = _trimNum(currentQty + 1);
+      } else {
+        _lines.add(
+          _DraftItemControllers.fromItem(
+            item,
+            qty: 1,
+            cost: cost,
+            taxMode: _entryTaxMode,
+            paid: 0,
+            taxPct: _entryTaxPct,
+          ),
+        );
+      }
+    });
+
+    _resetEntry();
+  }
+
   Widget _buildLinesTable() {
     final currency = NumberFormat.currency(
       locale: 'en_US',
@@ -796,15 +899,22 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           child: Row(
             children: const [
               Expanded(flex: 4, child: _HeaderCell('Descripción')),
-              Expanded(flex: 2, child: _HeaderCell('Cantidad')),
-              Expanded(flex: 2, child: _HeaderCell('Costo')),
-              SizedBox(width: 118, child: _HeaderCell('ITBIS')),
-              Expanded(flex: 2, child: _HeaderCell('Pagado')),
+              SizedBox(width: 8),
+              Expanded(flex: 2, child: _HeaderCell('Cantidad', alignCenter: true)),
+              SizedBox(width: 8),
+              Expanded(flex: 2, child: _HeaderCell('Costo', alignCenter: true)),
+              SizedBox(width: 8),
+              SizedBox(width: 176, child: _HeaderCell('ITBIS', alignCenter: true)),
+              SizedBox(width: 8),
+              Expanded(flex: 2, child: _HeaderCell('Pagado und.', alignCenter: true)),
+              SizedBox(width: 8),
               Expanded(
                 flex: 2,
                 child: _HeaderCell('ITBIS \$', alignRight: true),
               ),
+              SizedBox(width: 8),
               Expanded(flex: 2, child: _HeaderCell('Valor', alignRight: true)),
+              SizedBox(width: 8),
               SizedBox(width: 36),
             ],
           ),
@@ -928,9 +1038,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         if (already) continue;
         final hasPack = it.packSize > 1 && it.purchaseUnit.trim().isNotEmpty;
         final netPU = hasPack ? it.cost * it.packSize : it.cost;
-        // Se agregan con el modo de ITBIS actual del renglón de captura.
+        // Se agregan con el modo y % de ITBIS actuales del renglón de captura.
         final cost = _entryTaxMode == _TaxMode.included
-            ? netPU * (1 + _kIvaRate)
+            ? netPU * (1 + _entryTaxPct / 100)
             : netPU;
         _lines.add(
           _DraftItemControllers.fromItem(
@@ -939,6 +1049,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             cost: cost,
             taxMode: _entryTaxMode,
             paid: 0,
+            taxPct: _entryTaxPct,
           ),
         );
       }
@@ -1102,7 +1213,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       return;
     }
 
-    await ref
+    final orderId = await ref
         .read(purchasesViewModelProvider)
         .createPurchaseOrder(
           supplierId: _supplierId!,
@@ -1118,6 +1229,41 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
 
     if (!mounted) return;
     if (ref.read(purchasesViewModelProvider).state.error != null) return;
+
+    // Compra a crédito → cuenta por pagar vinculada a la orden. La orden ya
+    // quedó registrada; si la CxP falla, avisamos para registrarla manual en
+    // Créditos → Cuentas por Pagar (no se revierte la compra).
+    if (_isCredit) {
+      final total = items.fold<double>(
+        0,
+        (sum, item) => sum + item.total + item.taxValue,
+      );
+      try {
+        final businessId =
+            ref.read(purchasesViewModelProvider).state.businessId;
+        if (businessId == null) {
+          throw Exception('No hay negocio activo.');
+        }
+        await CreditsRepository(Supabase.instance.client).createPayable(
+          businessId: businessId,
+          supplierId: _supplierId!,
+          amount: double.parse(total.toStringAsFixed(2)),
+          purchaseOrderId: orderId,
+          invoiceNumber: _invoiceNumberCtrl.text.trim().isEmpty
+              ? null
+              : _invoiceNumberCtrl.text.trim(),
+          dueDate: _creditDueDate,
+          notes: 'Compra a crédito ${_orderNumberCtrl.text.trim()}',
+        );
+      } catch (e) {
+        _snack(
+          'Compra registrada, pero no se pudo crear la cuenta por pagar: $e. '
+          'Regístrala manualmente en Créditos → Cuentas por Pagar.',
+        );
+      }
+    }
+
+    if (!mounted) return;
     context.go(AppRoutes.purchasesList);
   }
 
@@ -1139,20 +1285,19 @@ class _AddIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: IconButton.outlined(
-        tooltip: tooltip,
-        onPressed: onPressed,
-        icon: const Icon(Icons.add, size: 20),
-        style: IconButton.styleFrom(
-          foregroundColor: Theme.of(context).colorScheme.primary,
-          side: const BorderSide(color: Color(0xFFCBD5E1)),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          minimumSize: const Size(48, 48),
+    final borderCol = Theme.of(context).colorScheme.outline;
+    return IconButton.outlined(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: const Icon(Icons.add, size: 20),
+      style: IconButton.styleFrom(
+        foregroundColor: Theme.of(context).colorScheme.primary,
+        side: BorderSide(color: borderCol),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MangoRadius.input),
         ),
+        minimumSize: const Size(48, 48),
+        maximumSize: const Size(48, 48),
       ),
     );
   }
@@ -1172,12 +1317,14 @@ class _TaxModeDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bgCol = dense ? const Color(0xFFF8FAFC) : Colors.white;
+    final borderCol = dense ? const Color(0xFFE2E8F0) : const Color(0xFFCBD5E1);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: dense ? 4 : 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: bgCol,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFCBD5E1)),
+        border: Border.all(color: borderCol),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<_TaxMode>(
@@ -1203,14 +1350,22 @@ class _TaxModeDropdown extends StatelessWidget {
 class _HeaderCell extends StatelessWidget {
   final String label;
   final bool alignRight;
+  final bool alignCenter;
 
-  const _HeaderCell(this.label, {this.alignRight = false});
+  const _HeaderCell(
+    this.label, {
+    this.alignRight = false,
+    this.alignCenter = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final align = alignRight
+        ? TextAlign.right
+        : (alignCenter ? TextAlign.center : TextAlign.left);
     return Text(
       label,
-      textAlign: alignRight ? TextAlign.right : TextAlign.left,
+      textAlign: align,
       style: const TextStyle(
         fontSize: 12,
         fontWeight: FontWeight.w700,
@@ -1265,6 +1420,7 @@ class _LineRow extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Expanded(
             flex: 2,
             child: _MiniField(
@@ -1280,14 +1436,33 @@ class _LineRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 118,
-            child: _TaxModeDropdown(
-              value: line.taxMode,
-              dense: true,
-              onChanged: (m) {
-                line.taxMode = m;
-                onChanged();
-              },
+            width: 176,
+            child: Row(
+              children: [
+                _TaxModeDropdown(
+                  value: line.taxMode,
+                  dense: true,
+                  onChanged: (m) {
+                    line.taxMode = m;
+                    onChanged();
+                  },
+                ),
+                if (line.taxMode != _TaxMode.exempt) ...[
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _MiniField(
+                      controller: line.taxPct,
+                      suffix: '%',
+                      onChanged: () {
+                        // % y pagado son alternativas: digitar el % descarta
+                        // el pagado (que tiene prioridad cuando existe).
+                        line.paid.clear();
+                        onChanged();
+                      },
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -1296,13 +1471,15 @@ class _LineRow extends StatelessWidget {
             child: isSeparate
                 ? _MiniField(
                     controller: line.paid,
-                    hint: 'Total (opc.)',
+                    hint: 'Pagado/und.',
                     onChanged: onChanged,
                   )
-                : const Center(
+                // En "incluido"/"exento" lo pagado por unidad ES el costo
+                // digitado; se muestra como referencia (no editable).
+                : Center(
                     child: Text(
-                      '—',
-                      style: TextStyle(color: Color(0xFFCBD5E1)),
+                      currency.format(line.paidPerUnitDisplay),
+                      style: const TextStyle(color: Color(0xFF64748B)),
                     ),
                   ),
           ),
@@ -1315,6 +1492,7 @@ class _LineRow extends StatelessWidget {
               style: const TextStyle(color: Color(0xFF64748B)),
             ),
           ),
+          const SizedBox(width: 8),
           Expanded(
             flex: 2,
             child: Text(
@@ -1323,6 +1501,7 @@ class _LineRow extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
           ),
+          const SizedBox(width: 8),
           SizedBox(
             width: 36,
             child: IconButton(
@@ -1448,8 +1627,11 @@ class _DraftItemControllers {
   final TextEditingController description;
   final TextEditingController quantity;
   final TextEditingController unitCost;
-  // Total pagado de la línea (con ITBIS) para el modo "aparte".
+  // Pagado POR UNIDAD (con ITBIS) para el modo "aparte". Es por unidad, no
+  // por línea, para que el ITBIS escale con la cantidad en vez de anularse.
   final TextEditingController paid;
+  // % de ITBIS para el modo "aparte" (editable; el pagado tiene prioridad).
+  final TextEditingController taxPct;
   String? inventoryItemId;
   _TaxMode taxMode;
   // Snapshot del empaque del insumo seleccionado. La cantidad/costo se
@@ -1463,6 +1645,7 @@ class _DraftItemControllers {
     double quantity = 1,
     double unitCost = 0,
     double paid = 0,
+    double taxPct = 18,
     this.inventoryItemId,
     this.taxMode = _TaxMode.included,
     this.purchaseUnit = '',
@@ -1471,7 +1654,8 @@ class _DraftItemControllers {
   }) : description = TextEditingController(text: description),
        quantity = TextEditingController(text: _fmt(quantity)),
        unitCost = TextEditingController(text: _fmt(unitCost)),
-       paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid));
+       paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid)),
+       taxPct = TextEditingController(text: _fmt(taxPct));
 
   factory _DraftItemControllers.fromItem(
     PurchaseInventoryItem item, {
@@ -1479,6 +1663,7 @@ class _DraftItemControllers {
     required double cost,
     required _TaxMode taxMode,
     required double paid,
+    double taxPct = 18,
   }) {
     final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
     return _DraftItemControllers(
@@ -1486,6 +1671,7 @@ class _DraftItemControllers {
       quantity: qty,
       unitCost: cost,
       paid: paid,
+      taxPct: taxPct,
       inventoryItemId: item.id,
       taxMode: taxMode,
       purchaseUnit: hasPack ? item.purchaseUnit : '',
@@ -1504,11 +1690,19 @@ class _DraftItemControllers {
   double get _enteredQty => double.tryParse(quantity.text.trim()) ?? 0;
   double get _enteredCost => double.tryParse(unitCost.text.trim()) ?? 0;
   double get _enteredPaid => double.tryParse(paid.text.trim()) ?? 0;
+  // % digitado; vacío o ilegible cae al 18% estándar.
+  double get _enteredTaxPct => double.tryParse(taxPct.text.trim()) ?? 18;
 
-  /// Costo NETO (sin ITBIS) por unidad de compra.
+  /// Costo NETO (sin ITBIS) por unidad de compra. En "incluido" el desglose
+  /// usa el % digitado (16, 18, lo que traiga la factura), no un 18% fijo.
   double get _netUnitEntered => taxMode == _TaxMode.included
-      ? _enteredCost / (1 + _kIvaRate)
+      ? _enteredCost / (1 + _enteredTaxPct / 100)
       : _enteredCost;
+
+  /// Pagado por unidad (con ITBIS) que muestra la tabla en modos sin campo
+  /// editable: en "incluido" es el costo digitado tal cual (ya trae ITBIS)
+  /// y en "exento" también (no lleva ITBIS).
+  double get paidPerUnitDisplay => _enteredCost;
 
   /// Base NETA de la línea (cantidad × costo neto). Consistente en unidad de
   /// compra o base porque packToBase(q)·packCostToBase(c) = q·c.
@@ -1522,13 +1716,15 @@ class _DraftItemControllers {
       case _TaxMode.included:
         return (_enteredCost * _enteredQty) - baseSubtotal;
       case _TaxMode.separate:
-        // Si no se digita el "Total pagado", se asume el ITBIS estándar del
-        // 18% sobre el neto (comportamiento esperado al elegir "Aparte").
-        // Escribir el total real de la factura lo sobreescribe
-        // (ITBIS = pagado − neto).
-        if (_enteredPaid <= 0) return baseSubtotal * _kIvaRate;
-        final t = _enteredPaid - baseSubtotal;
-        return t > 0 ? t : 0;
+        // Con "Pagado por unidad" digitado, el ITBIS unitario es
+        // pagado − costo neto y escala con la cantidad (antes se restaba
+        // contra la base de toda la línea y con cantidad > 1 se anulaba).
+        if (_enteredPaid > 0) {
+          final perUnit = _enteredPaid - _netUnitEntered;
+          return perUnit > 0 ? perUnit * _enteredQty : 0;
+        }
+        // Sin pagado, aplica el % digitado (default 18) sobre el neto.
+        return baseSubtotal * (_enteredTaxPct / 100);
     }
   }
 
@@ -1563,5 +1759,6 @@ class _DraftItemControllers {
     quantity.dispose();
     unitCost.dispose();
     paid.dispose();
+    taxPct.dispose();
   }
 }

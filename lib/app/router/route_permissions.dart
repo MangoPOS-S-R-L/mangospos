@@ -69,6 +69,9 @@ const Map<String, String> routePermissions = <String, String>{
   // --- Compras ---
   '/settings/purchases': 'compras.acceso',
 
+  // --- Créditos (CxC / CxP) ---
+  '/credits': 'creditos.acceso',
+
   // --- Promos / descuentos ---
   '/settings/promos': 'settings.descuentos_propinas.gestionar',
 

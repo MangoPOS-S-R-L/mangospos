@@ -9,7 +9,9 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -147,6 +149,20 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       return;
     }
 
+    // Autorización supervisor: la RPC exige `approved_by` cuando la razón
+    // tiene `requires_pin` (o el monto supera el umbral del negocio).
+    // Sin esto la vista era un callejón sin salida: nunca pedía PIN y el
+    // movimiento fallaba con APPROVAL_REQUIRED incluso para administradores.
+    String? approvedBy;
+    final reasonRow = data.reasons.firstWhere(
+      (r) => r['code'] == reasonCode,
+      orElse: () => <String, dynamic>{},
+    );
+    if (reasonRow['requires_pin'] == true) {
+      approvedBy = await _resolveApprovedBy();
+      if (approvedBy == null || !mounted) return;
+    }
+
     setState(() {
       _isSubmitting = true;
     });
@@ -154,15 +170,33 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
     try {
       // Vía viewmodel: si no hay red, encola el movimiento (cash_transaction)
       // en vez de perderlo. `appliedOnline=false` → quedó offline.
-      final appliedOnline = await ref
-          .read(cashierViewModelProvider)
-          .createManualTransaction(
-            sessionId: data.session.id,
-            amount: amount,
-            type: _selectedType,
-            reasonCode: reasonCode,
-            description: description.isEmpty ? null : description,
-          );
+      bool appliedOnline;
+      try {
+        appliedOnline = await _createMovement(
+          data: data,
+          amount: amount,
+          reasonCode: reasonCode,
+          description: description,
+          approvedBy: approvedBy,
+        );
+      } on CashRegisterException catch (e) {
+        // Umbral monetario (`cash_movement_pin_threshold`): no es visible
+        // desde el catálogo de razones, así que pedimos autorización recién
+        // cuando la RPC la exige y reintentamos una vez.
+        if (e.errorCode != 'APPROVAL_REQUIRED' || approvedBy != null) {
+          rethrow;
+        }
+        if (!mounted) rethrow;
+        approvedBy = await _resolveApprovedBy();
+        if (approvedBy == null) return;
+        appliedOnline = await _createMovement(
+          data: data,
+          amount: amount,
+          reasonCode: reasonCode,
+          description: description,
+          approvedBy: approvedBy,
+        );
+      }
 
       // Sprint Caja Pro — Print receipt fire-and-forget. Si falla la
       // impresión NO bloqueamos el flujo: el movimiento ya quedó
@@ -208,6 +242,41 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         });
       }
     }
+  }
+
+  Future<bool> _createMovement({
+    required _ManualCashData data,
+    required double amount,
+    required String reasonCode,
+    required String description,
+    String? approvedBy,
+  }) {
+    return ref.read(cashierViewModelProvider).createManualTransaction(
+          sessionId: data.session.id,
+          amount: amount,
+          type: _selectedType,
+          reasonCode: reasonCode,
+          description: description.isEmpty ? null : description,
+          approvedBy: approvedBy,
+        );
+  }
+
+  /// Resuelve quién autoriza un movimiento que exige PIN de supervisor.
+  /// Roles gerenciales se auto-aprueban (su user_id queda auditado en
+  /// `approved_by`); al resto se le pide el PIN con el modal estándar.
+  /// null = canceló o PIN inválido.
+  Future<String?> _resolveApprovedBy() async {
+    final session = ref.read(sessionProvider);
+    final role = session.activeRole;
+    if (role == PosRole.administrador || role == PosRole.supervisor) {
+      final selfId = session.userId;
+      if (selfId != null && selfId.isNotEmpty) return selfId;
+    }
+    return showSupervisorApprovalPinModal(
+      context,
+      ref,
+      subtitle: 'Ingrese PIN de Supervisor para registrar este movimiento',
+    );
   }
 
   @override

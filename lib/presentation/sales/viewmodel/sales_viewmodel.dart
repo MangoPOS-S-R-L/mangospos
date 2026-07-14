@@ -22,6 +22,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'retail_carts_provider.dart';
+import 'sales_by_zone_viewmodel.dart' show byZoneVmProvider;
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/order_item_tax_line.dart';
@@ -84,6 +85,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // motor de auto-ofertas debe IGNORARLA para no volver a descontarla.
   static const _dealPrefix = '[DEAL:';
   final Map<String, CurrentOrderState> _tableCache = {};
+  // Token de la apertura de mesa vigente: la hidratación cache-first desde
+  // disco (async) solo aplica si su token sigue siendo el actual — abrir la
+  // mesa A y saltar rápido a la B no debe pintar el snapshot de A.
+  int _openTableToken = 0;
   // Retail: slotId del carrito de venta rápida actualmente activo. null en
   // restaurante o cuando no hay carritos retail. Es la clave del snapshot
   // offline del carrito activo (persistencia por carrito). Ver
@@ -240,11 +245,35 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   ///   sesión).
   /// - El opener se resuelve cada vez porque puede cambiar entre mesas;
   ///   si esto se vuelve hot path, agregar cache por orderId.
+  /// ActiveWaiter "confiable" para atribución de identidad (opener de
+  /// mesa, created_by de items). Solo cuenta si:
+  ///   - el device opera con rol `mesero` — único flujo donde el salón
+  ///     pide PIN multimesero al abrir/entrar a cada mesa, así que el
+  ///     state está recién validado; y
+  ///   - el PIN pertenece al negocio activo.
+  /// Sin este gate, un PIN validado horas antes en el mismo device se
+  /// "pegaba" a mesas abiertas por otro usuario (cajero/admin u otro
+  /// mesero tras relogin) y la precuenta/factura salía con el mesero
+  /// equivocado.
+  ActiveWaiter? _trustedActiveWaiter() {
+    final waiter = ref.read(activeWaiterProvider);
+    if (waiter == null) return null;
+    final session = ref.read(sessionProvider);
+    if (session.activeRole != PosRole.mesero) return null;
+    final businessId = _activeBusinessId;
+    if (businessId == null ||
+        businessId.isEmpty ||
+        waiter.businessId != businessId) {
+      return null;
+    }
+    return waiter;
+  }
+
   Future<String?> _resolveItemEmployeeId() async {
     // 1) Active waiter (PIN multimesero) siempre tiene la máxima prioridad
     //    cuando está activo en el dispositivo, ya que es la persona física
     //    que está agregando el item en este momento.
-    final activeWaiter = ref.read(activeWaiterProvider);
+    final activeWaiter = _trustedActiveWaiter();
     if (activeWaiter != null) return activeWaiter.employeeId;
 
     // 2) Opener de la mesa actual vía `fn_order_opener_employee_id`
@@ -879,10 +908,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<bool> ensureCashSessionOpen() async {
     final cashierVm = ref.read(cashierViewModelProvider);
     try {
-      // force: true bypassea el TTL de 12s del cache (`_lastCashOpenValidationAt`).
-      // El cache producía falsos negativos cuando la caja se abría en otro
-      // proceso/empleado y este viewmodel aún tenía `_lastSession` stale.
-      final isOpen = await cashierVm.ensureCashOpenFast(force: true);
+      // PERF: primero la respuesta cacheada (TTL 12s). Solo si dice CERRADO
+      // revalidamos con force:true — se conserva el fix de falsos negativos
+      // (la caja se abría en otro proceso/empleado y este viewmodel tenía
+      // `_lastSession` stale) sin pagar un viaje de red por cada apertura
+      // de mesa cuando la caja ya está abierta. El falso positivo inverso
+      // (caja cerrada en otro device hace <12s) es el mismo tradeoff que ya
+      // documenta el camino offline de `ensureCashOpenFast`.
+      var isOpen = await cashierVm.ensureCashOpenFast();
+      if (!isOpen) {
+        isOpen = await cashierVm.ensureCashOpenFast(force: true);
+      }
       if (!isOpen) {
         state = state.copyWith(loading: false, error: _cashierClosedMessage);
         return false;
@@ -945,8 +981,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     tableId: tableId,
                     userId: Supabase.instance.client.auth.currentUser?.id,
                     peopleCount: peopleCount,
-                    openedByEmployeeId:
-                        ref.read(activeWaiterProvider)?.employeeId,
+                    openedByEmployeeId: _trustedActiveWaiter()?.employeeId,
                   );
           await _loadOrderDetail(
             result.orderId,
@@ -1111,6 +1146,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Si tenemos cache de esta mesa específica, mostramos eso (para
     // que abrir una mesa ya visitada se sienta instantáneo). Si no,
     // limpiamos completo. La data autoritativa llega en _loadOrderDetail.
+    final myOpenToken = ++_openTableToken;
     final cached = _tableCache[tableId];
     if (cached != null) {
       state = _normalizeHydratedState(
@@ -1124,6 +1160,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } else {
       _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState(loading: true, origin: 'table');
+      // Pintado cache-first (mismo patrón que el salón): sin cache en
+      // memoria (arranque frío), pinta el snapshot en disco de la mesa
+      // mientras el RPC responde. No autoritativo: _loadOrderDetail lo
+      // pisa al llegar la respuesta fresca.
+      unawaited(_hydrateTableFromDiskSnapshot(tableId, myOpenToken));
     }
 
     // Solo los roles con permisos de caja (cajero/admin/manager) necesitan
@@ -1134,10 +1175,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       'caja.cierre',
       'caja.movimientos_ver',
     ]);
-    if (hasCashierAccess) {
-      if (!await ensureCashSessionOpen()) return;
-    }
-    await _ensureBusinessTaxSettingsLoaded();
+    // PERF: validación de caja e impuestos viajan en PARALELO (antes eran
+    // 2 awaits en serie = 2 viajes de red antes de disparar el RPC de
+    // apertura). _ensureBusinessTaxSettingsLoaded nunca lanza (fail-loud
+    // vía state.taxConfigError), así que Future.wait no corta la caja.
+    var cashOk = true;
+    await Future.wait([
+      if (hasCashierAccess) ensureCashSessionOpen().then((ok) => cashOk = ok),
+      _ensureBusinessTaxSettingsLoaded(),
+    ]);
+    if (!cashOk) return;
 
     // Modo Hub (LAN-first): NO abrimos la mesa en Supabase. La abrimos como
     // borrador local y notificamos al Hub (op `open_table`, que mapea
@@ -1156,7 +1203,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // lo pasamos como opened_by_employee_id para trackear quién abre.
       // Si la mesa ya estaba abierta, el RPC NO sobreescribe el opened_by
       // original (es inmutable después del primer INSERT).
-      final activeWaiter = ref.read(activeWaiterProvider);
+      final activeWaiter = _trustedActiveWaiter();
 
       // Single round-trip: abrir mesa + cargar bundle completo (order +
       // items + checks + customer + modifiers + tax_lines). Antes eran
@@ -1236,6 +1283,70 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
       state = state.copyWith(loading: false, error: e.toString());
     }
+  }
+
+  /// Pintado cache-first al abrir mesa (mismo patrón que el salón): pinta el
+  /// snapshot en disco de la mesa (el que persiste `_persistCurrentState`
+  /// tras cada carga) mientras `openTableAndLoad` responde, para que abrir
+  /// una mesa se sienta instantáneo también en arranque frío (sin
+  /// [_tableCache]). SOLO pinta si el snapshot pertenece a la sesión VIVA
+  /// que muestra el salón, o a un borrador local de este device — el
+  /// snapshot de una sesión anterior ya cobrada nunca se muestra. No es
+  /// autoritativo: la respuesta fresca de `_loadOrderDetail` lo pisa; el
+  /// [token] invalida la hidratación si el usuario abrió otra mesa mientras
+  /// leíamos el disco. Best-effort: ante cualquier fallo no pinta nada.
+  Future<void> _hydrateTableFromDiskSnapshot(String tableId, int token) async {
+    try {
+      final businessId = _activeBusinessId;
+      if (businessId == null || businessId.isEmpty) return;
+
+      // Sesión viva según el salón. Sin fila o mesa libre → la apertura
+      // creará una sesión nueva (orden vacía): no hay nada que pintar.
+      // 'hub' → mesa de OTRA caja: el snapshot local no es su fuente.
+      final salonSessionId = _liveSalonSessionId(tableId);
+      if (salonSessionId == null || salonSessionId == 'hub') return;
+
+      final snap = await _offlinePos.loadSnapshot(
+        businessId: businessId,
+        slotId: tableId,
+      );
+      final snapOrder = snap?.order;
+      if (snap == null || snapOrder == null) return;
+      final isLocalDraft = salonSessionId == 'local-draft' ||
+          snapOrder.id.startsWith('local-order-');
+      if (!isLocalDraft && snapOrder.sessionId != salonSessionId) return;
+
+      // Aplica solo si ESTA apertura sigue vigente y nada pintó todavía
+      // (ni la respuesta fresca ni un error de caja). Sin awaits entre la
+      // comprobación y la escritura.
+      if (token != _openTableToken ||
+          !state.loading ||
+          state.order != null ||
+          state.origin != 'table') {
+        return;
+      }
+      state = _normalizeHydratedState(
+        snap.copyWith(
+          loading: true,
+          error: null,
+          checks: const [],
+          clearSelectedCheck: true,
+          origin: 'table',
+        ),
+      );
+    } catch (_) {}
+  }
+
+  /// SessionId de la mesa según el estado ya cargado del salón (memoria,
+  /// sin red). Devuelve null si el salón no tiene datos de esa mesa.
+  String? _liveSalonSessionId(String tableId) {
+    final byZone = ref.read(byZoneVmProvider);
+    for (final rows in byZone.statusByZone.values) {
+      for (final row in rows) {
+        if (row.tableId == tableId) return row.sessionId;
+      }
+    }
+    return null;
   }
 
   /// Decide si una mutación que acaba de fallar debe tratarse como offline
@@ -2044,7 +2155,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Item optimista: mostramos de inmediato el mesero activo (PIN
       // multimesero) si lo hay. La resolución completa del employee_id para
       // persistir se hace aparte vía _resolveItemEmployeeId().
-      final activeWaiter = ref.read(activeWaiterProvider);
+      final activeWaiter = _trustedActiveWaiter();
       optimisticItem = OrderItem(
         id: tempId,
         orderId: orderId,
@@ -2394,7 +2505,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
 
-      final activeWaiter = ref.read(activeWaiterProvider);
+      final activeWaiter = _trustedActiveWaiter();
       optimisticItem = OrderItem(
         id: tempId,
         orderId: orderId,
@@ -3110,6 +3221,108 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               .updateItemDiscountAndNotes(
                 itemId: item.id,
                 discounts: discount,
+                notes: notesWithoutCourtesy.isEmpty
+                    ? null
+                    : notesWithoutCourtesy,
+              );
+        }),
+      );
+
+      state = state.copyWith(
+        loading: false,
+        items: state.items
+            .map(
+              (item) => discountByItemId.containsKey(item.id)
+                  ? item.copyWith(discounts: discountByItemId[item.id])
+                  : item,
+            )
+            .toList(growable: false),
+      );
+
+      refreshOrder();
+    } catch (e) {
+      state = state.copyWith(
+        loading: false,
+        error: 'Error aplicando descuento: $e',
+      );
+      rethrow;
+    }
+  }
+
+  /// Aplica un descuento de monto fijo repartiéndolo entre los ítems
+  /// proporcionalmente a su base (subtotal + impuesto). Persiste por ítem con
+  /// el mismo canal que el descuento porcentual, así impresión, reportes y
+  /// split-bill no necesitan cambios.
+  Future<void> applyDiscountAmountToItems({
+    required List<String> itemIds,
+    required double amount,
+    bool preAuthorized = false,
+  }) async {
+    // Ver nota en applyDiscountPercentToItems: la pantalla autoriza con
+    // permiso o PIN de respaldo; aquí solo queda la red de seguridad.
+    if (!preAuthorized &&
+        !ref
+            .read(sessionProvider.notifier)
+            .hasPermission('ventas.orden.descuento_aplicar')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para aplicar descuentos.',
+      );
+      return;
+    }
+    final orderId = state.order?.id;
+    if (orderId == null || itemIds.isEmpty || amount <= 0) return;
+
+    final targetItems = state.items
+        .where(
+          (i) =>
+              itemIds.contains(i.id) &&
+              i.status != 'paid' &&
+              i.status != 'void',
+        )
+        .toList(growable: false);
+    if (targetItems.isEmpty) return;
+
+    final baseByItemId = <String, double>{
+      for (final item in targetItems)
+        item.id: (item.subtotal + item.tax).clamp(0, double.infinity).toDouble(),
+    };
+    final totalBase = baseByItemId.values.fold<double>(0, (s, b) => s + b);
+    if (totalBase <= 0) return;
+
+    // Nunca descontar más que el total de los ítems objetivo.
+    final effectiveAmount = amount.clamp(0, totalBase).toDouble();
+
+    // Prorrateo con ajuste de redondeo: los primeros llevan su parte
+    // redondeada a centavos y el último absorbe la diferencia para que la
+    // suma sea exactamente el monto pedido.
+    final discountByItemId = <String, double>{};
+    double assigned = 0;
+    for (var i = 0; i < targetItems.length; i++) {
+      final item = targetItems[i];
+      final base = baseByItemId[item.id]!;
+      double share;
+      if (i == targetItems.length - 1) {
+        share = (effectiveAmount - assigned).clamp(0, base).toDouble();
+      } else {
+        share = double.parse(
+          (effectiveAmount * (base / totalBase)).toStringAsFixed(2),
+        ).clamp(0, base).toDouble();
+      }
+      share = double.parse(share.toStringAsFixed(2));
+      discountByItemId[item.id] = share;
+      assigned += share;
+    }
+
+    state = state.copyWith(loading: true, error: null);
+    try {
+      await Future.wait(
+        targetItems.map((item) {
+          final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
+          return ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: item.id,
+                discounts: discountByItemId[item.id]!,
                 notes: notesWithoutCourtesy.isEmpty
                     ? null
                     : notesWithoutCourtesy,

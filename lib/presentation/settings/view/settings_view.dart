@@ -754,6 +754,7 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             subtitle: 'Cuentas por pagar',
             icon: Icons.credit_score_rounded,
             color: Color(0xFFFFF0D9),
+            route: AppRoutes.credits,
           ),
         ],
       ),
@@ -831,22 +832,11 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
         title: 'Crédito',
         items: const [
           _SettingsOption(
-            title: 'Venta a Crédito',
-            subtitle: 'Configuración de ventas a crédito',
-            icon: Icons.payments_rounded,
-            color: Color(0xFFFFE6D5),
-          ),
-          _SettingsOption(
             title: 'Gestión de Créditos',
-            subtitle: 'Administración de cuentas por cobrar',
+            subtitle: 'Cuentas por cobrar y por pagar, abonos e historial',
             icon: Icons.account_balance_wallet_rounded,
             color: Color(0xFFEAF0FF),
-          ),
-          _SettingsOption(
-            title: 'Créditos de Clientes',
-            subtitle: 'Créditos otorgados a clientes',
-            icon: Icons.person_rounded,
-            color: Color(0xFFE6F7EE),
+            route: AppRoutes.credits,
           ),
         ],
       ),

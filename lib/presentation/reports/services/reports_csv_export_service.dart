@@ -15,7 +15,7 @@ class ReportsCsvExportService {
     final filename =
         'reporte_${category.name}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
-    await FilePicker.platform.saveFile(
+    await FilePicker.saveFile(
       dialogTitle: 'Guardar reporte CSV',
       fileName: filename,
       bytes: utf8.encode(csv),

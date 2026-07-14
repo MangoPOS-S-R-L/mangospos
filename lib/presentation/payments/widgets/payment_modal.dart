@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../app/router/routes.dart';
 import '../../../core/currency/usd_equivalent_label.dart';
@@ -14,7 +15,10 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
+import '../../../data/repositories/credits_repository.dart';
+import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
+import '../../customers/viewmodel/customers_viewmodel.dart';
 import '../../settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
@@ -764,6 +768,12 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       );
     }
 
+    // Crédito (fiao): panel de cliente + situación crediticia. El total
+    // queda como cuenta por cobrar; no entra a caja.
+    if (state.isCreditPayment) {
+      return _CreditPanel(state: state, viewModel: viewModel);
+    }
+
     if (!state.isCashPayment) {
       // Transferencia: mostramos selector de cuenta bancaria del negocio
       // (cargado desde Ajustes \u2192 Tipos de Pago) + campo opcional de
@@ -999,6 +1009,7 @@ class _PaymentMethodButton extends StatelessWidget {
     if (method.isCash) return Icons.payments_outlined;
     if (method.isCard) return Icons.credit_card_outlined;
     if (method.isTransfer) return Icons.account_balance_outlined;
+    if (method.isCredit) return Icons.request_quote_outlined;
     return Icons.payment_outlined;
   }
 }
@@ -1564,6 +1575,343 @@ class _PrinterOfflineBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// =============================================================================
+// VENTA A CRÉDITO (FIAO)
+// =============================================================================
+
+/// Panel derecho cuando el método seleccionado es Crédito: cliente de la
+/// cuenta por cobrar + situación crediticia (deuda viva, límite, disponible).
+class _CreditPanel extends ConsumerWidget {
+  final PaymentState state;
+  final PaymentViewModel viewModel;
+
+  const _CreditPanel({required this.state, required this.viewModel});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final customerId = state.customerId;
+    final hasCustomer = customerId != null && customerId.isNotEmpty;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'VENTA A CRÉDITO',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: AppColors.mutedForeground,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        Container(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.person_outline,
+                  color: AppColors.mutedForeground),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: Text(
+                  hasCustomer
+                      ? (state.customerName ?? 'Cliente seleccionado')
+                      : 'Sin cliente asignado',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: hasCustomer
+                        ? AppColors.foreground
+                        : AppColors.mutedForeground,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => _pickCustomer(context, ref),
+                child: Text(hasCustomer ? 'Cambiar' : 'Elegir cliente'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        if (hasCustomer)
+          _CreditStandingInfo(
+            key: ValueKey(customerId),
+            customerId: customerId,
+            totalToPay: state.totalToPay,
+          )
+        else
+          const Text(
+            'La venta a crédito requiere un cliente con crédito habilitado. '
+            'El total quedará como cuenta por cobrar a su nombre y no '
+            'entrará a la caja.',
+            style: TextStyle(color: AppColors.mutedForeground),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _pickCustomer(BuildContext context, WidgetRef ref) async {
+    final selected = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => const _CreditCustomerPickerDialog(),
+    );
+    if (selected == null) return;
+    viewModel.setCustomer(
+      customerId: selected['id'] as String?,
+      customerName: selected['name'] as String?,
+      customerRnc: state.customerRnc,
+    );
+  }
+}
+
+/// Consulta y pinta la situación crediticia del cliente elegido.
+class _CreditStandingInfo extends StatefulWidget {
+  final String customerId;
+  final double totalToPay;
+
+  const _CreditStandingInfo({
+    super.key,
+    required this.customerId,
+    required this.totalToPay,
+  });
+
+  @override
+  State<_CreditStandingInfo> createState() => _CreditStandingInfoState();
+}
+
+class _CreditStandingInfoState extends State<_CreditStandingInfo> {
+  late Future<CustomerCreditStanding> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<CustomerCreditStanding> _load() async {
+    final client = Supabase.instance.client;
+    final businessId = await resolveBusinessIdOrNull(client, 'auto');
+    return CreditsRepository(client).getCustomerCreditStanding(
+      businessId: businessId ?? '',
+      customerId: widget.customerId,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<CustomerCreditStanding>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.all(AppSpacing.lg),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        if (snapshot.hasError) {
+          return Text(
+            'No se pudo consultar el crédito del cliente.',
+            style: TextStyle(color: Colors.orange.shade800),
+          );
+        }
+        final standing = snapshot.data!;
+        if (!standing.creditEnabled) {
+          return _warnBox(
+            'Este cliente NO tiene crédito habilitado. Actívalo en su '
+            'ficha (Clientes) antes de venderle a crédito.',
+          );
+        }
+        final available = standing.availableCredit;
+        final exceeds = !standing.canTake(widget.totalToPay);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Column(
+                children: [
+                  _row('Deuda actual',
+                      'RD\$ ${standing.openBalance.toStringAsFixed(2)}'),
+                  const SizedBox(height: AppSpacing.sm),
+                  _row(
+                    'Límite',
+                    standing.creditLimit != null && standing.creditLimit! > 0
+                        ? 'RD\$ ${standing.creditLimit!.toStringAsFixed(2)}'
+                        : 'Sin límite',
+                  ),
+                  if (available != null) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _row('Disponible',
+                        'RD\$ ${available.toStringAsFixed(2)}'),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            if (exceeds)
+              _warnBox(
+                'El total a cobrar supera el crédito disponible del cliente.',
+              )
+            else
+              const Text(
+                'El total quedará como cuenta por cobrar del cliente. '
+                'No entra a caja hasta que abone.',
+                style: TextStyle(color: AppColors.mutedForeground),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _row(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style: const TextStyle(color: AppColors.mutedForeground)),
+        Text(
+          value,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+            color: AppColors.foreground,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _warnBox(String message) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: const Color(0xFFFDBA74)),
+      ),
+      child: Text(
+        message,
+        style: const TextStyle(
+          color: Color(0xFF7C2D12),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+/// Selector simple de cliente para la venta a crédito. Reutiliza el
+/// CustomersViewModel (lista + búsqueda del módulo Clientes).
+class _CreditCustomerPickerDialog extends ConsumerStatefulWidget {
+  const _CreditCustomerPickerDialog();
+
+  @override
+  ConsumerState<_CreditCustomerPickerDialog> createState() =>
+      _CreditCustomerPickerDialogState();
+}
+
+class _CreditCustomerPickerDialogState
+    extends ConsumerState<_CreditCustomerPickerDialog> {
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(customersViewModelProvider).init();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = ref.watch(customersViewModelProvider);
+    return AlertDialog(
+      title: const Text('Cliente de la venta a crédito'),
+      content: SizedBox(
+        width: 440,
+        height: 420,
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Buscar cliente…',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (v) =>
+                  ref.read(customersViewModelProvider).search(v),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Expanded(
+              child: vm.isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : vm.customers.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Sin clientes. Créalos en la sección Clientes.',
+                            style: TextStyle(
+                                color: AppColors.mutedForeground),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: vm.customers.length,
+                          itemBuilder: (context, index) {
+                            final c = vm.customers[index];
+                            final creditEnabled =
+                                (c['credit_enabled'] as bool?) ?? false;
+                            return ListTile(
+                              title: Text(c['name'] as String? ?? ''),
+                              subtitle: Text(
+                                (c['phone'] as String?) ?? '',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              trailing: creditEnabled
+                                  ? const Icon(Icons.verified_outlined,
+                                      color: Colors.green, size: 20)
+                                  : const Text(
+                                      'Sin crédito',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.mutedForeground,
+                                      ),
+                                    ),
+                              onTap: () => Navigator.pop(context, c),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+      ],
     );
   }
 }
