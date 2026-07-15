@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import '../viewmodel/fiscal_viewmodel.dart';
 import '../../../../../../data/models/fiscal_models.dart';
@@ -212,7 +213,112 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
               ),
             ],
           ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Divider(height: 1),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: MangoColors.primaryOrange.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.receipt_long_rounded,
+                      color: MangoColors.primaryOrange,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Comprobante predefinido',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                      Text(
+                        'El que sale preseleccionado al cobrar; el cajero puede cambiarlo por venta.',
+                        style: TextStyle(fontSize: 13, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              _defaultNcfDropdown(vm),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+
+  /// Selector del comprobante predefinido. Opciones = tipos con secuencia
+  /// ACTIVA (solo esos pueden emitirse); si el guardado actual no tiene
+  /// secuencia activa, se incluye igual para que el valor sea visible.
+  Widget _defaultNcfDropdown(FiscalState vm) {
+    final codes = <String>{};
+    for (final s in vm.sequences) {
+      if (!s.activo) continue;
+      final code = '${s.serie}${s.tipo}'.toUpperCase();
+      if (code.length >= 3) codes.add(code);
+    }
+    codes.add(vm.defaultNcfType.toUpperCase());
+    final sorted = codes.toList()..sort();
+    return SizedBox(
+      width: 260,
+      child: DropdownButtonFormField<String>(
+        initialValue: sorted.contains(vm.defaultNcfType.toUpperCase())
+            ? vm.defaultNcfType.toUpperCase()
+            : null,
+        isExpanded: true,
+        decoration: InputDecoration(
+          isDense: true,
+          filled: true,
+          fillColor: MangoColors.sidebarBg.withValues(alpha: 0.3),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: MangoColors.cardBorder),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: MangoColors.cardBorder),
+          ),
+        ),
+        items: sorted
+            .map(
+              (code) => DropdownMenuItem(
+                value: code,
+                child: Text(
+                  '$code — ${ncfTypeName(code)}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            )
+            .toList(growable: false),
+        onChanged: (code) async {
+          if (code == null || code == vm.defaultNcfType) return;
+          await ref
+              .read(fiscalVmProvider.notifier)
+              .setDefaultNcfType(widget.businessId, code);
+          if (!mounted) return;
+          if (ref.read(fiscalVmProvider).error == null) {
+            AppToast.success(
+              context,
+              'Comprobante predefinido: $code — ${ncfTypeName(code)}',
+            );
+          }
+        },
       ),
     );
   }

@@ -15,6 +15,10 @@ class FiscalState {
   final String fiscalRnc;
   final String fiscalName;
 
+  /// Tipo de comprobante preseleccionado en el cobro (fiscal_settings.
+  /// default_ncf_type). El cajero siempre puede cambiarlo por venta.
+  final String defaultNcfType;
+
   FiscalState({
     this.sequences = const [],
     this.isLoading = false,
@@ -22,6 +26,7 @@ class FiscalState {
     this.preferElectronicBilling = false,
     this.fiscalRnc = '',
     this.fiscalName = '',
+    this.defaultNcfType = 'B02',
   });
 
   FiscalState copyWith({
@@ -31,6 +36,7 @@ class FiscalState {
     bool? preferElectronicBilling,
     String? fiscalRnc,
     String? fiscalName,
+    String? defaultNcfType,
   }) {
     return FiscalState(
       sequences: sequences ?? this.sequences,
@@ -40,6 +46,7 @@ class FiscalState {
           preferElectronicBilling ?? this.preferElectronicBilling,
       fiscalRnc: fiscalRnc ?? this.fiscalRnc,
       fiscalName: fiscalName ?? this.fiscalName,
+      defaultNcfType: defaultNcfType ?? this.defaultNcfType,
     );
   }
 }
@@ -74,6 +81,7 @@ class FiscalViewModel extends Notifier<FiscalState> {
         preferElectronicBilling: settings['ecf_enabled'] ?? false,
         fiscalRnc: settings['rnc'] ?? '',
         fiscalName: settings['business_legal_name'] ?? '',
+        defaultNcfType: (settings['default_ncf_type'] ?? 'B02').toString(),
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
@@ -85,17 +93,50 @@ class FiscalViewModel extends Notifier<FiscalState> {
       final bizId = businessId == 'auto'
           ? ref.read(sessionProvider).activeBusinessId ?? ''
           : businessId;
+      // Al cambiar de modalidad se conserva el predefinido elegido si su
+      // serie es compatible (E con e-CF, B sin e-CF); si no, cae al Consumo
+      // de la modalidad nueva.
+      final matchesModality = value
+          ? state.defaultNcfType.startsWith('E')
+          : state.defaultNcfType.startsWith('B');
+      final newDefault = matchesModality
+          ? state.defaultNcfType
+          : (value ? 'E32' : 'B02');
       await ref
           .read(fiscalServiceProvider)
           .updateBusinessFiscalSettings(bizId, {
             'rnc': state.fiscalRnc,
             'business_legal_name': state.fiscalName,
             'ecf_enabled': value,
-            'default_ncf_type': value ? 'E32' : 'B02',
+            'default_ncf_type': newDefault,
           });
-      state = state.copyWith(preferElectronicBilling: value);
+      state = state.copyWith(
+        preferElectronicBilling: value,
+        defaultNcfType: newDefault,
+      );
     } catch (e) {
       state = state.copyWith(error: 'Error al cambiar modalidad: $e');
+    }
+  }
+
+  /// Cambia el comprobante predefinido del negocio (el que sale
+  /// preseleccionado al cobrar). Conserva el resto de la config fiscal.
+  Future<void> setDefaultNcfType(String businessId, String type) async {
+    try {
+      final bizId = businessId == 'auto'
+          ? ref.read(sessionProvider).activeBusinessId ?? ''
+          : businessId;
+      await ref
+          .read(fiscalServiceProvider)
+          .updateBusinessFiscalSettings(bizId, {
+            'rnc': state.fiscalRnc,
+            'business_legal_name': state.fiscalName,
+            'ecf_enabled': state.preferElectronicBilling,
+            'default_ncf_type': type,
+          });
+      state = state.copyWith(defaultNcfType: type);
+    } catch (e) {
+      state = state.copyWith(error: 'Error al cambiar el predefinido: $e');
     }
   }
 
@@ -114,7 +155,8 @@ class FiscalViewModel extends Notifier<FiscalState> {
             'rnc': rnc,
             'business_legal_name': name,
             'ecf_enabled': state.preferElectronicBilling,
-            'default_ncf_type': state.preferElectronicBilling ? 'E32' : 'B02',
+            // Conserva el predefinido elegido (antes lo reseteaba a B02/E32).
+            'default_ncf_type': state.defaultNcfType,
           });
       state = state.copyWith(fiscalRnc: rnc, fiscalName: name);
     } catch (e) {
