@@ -107,6 +107,10 @@ class PurchasesViewModel extends ChangeNotifier {
     String? contactName,
     String? phone,
     String? email,
+    String? rnc,
+    String? address,
+    String? paymentTerms,
+    String? notes,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -123,6 +127,10 @@ class PurchasesViewModel extends ChangeNotifier {
         contactName: contactName,
         phone: phone,
         email: email,
+        rnc: rnc,
+        address: address,
+        paymentTerms: paymentTerms,
+        notes: notes,
       );
       _state = _state.copyWith(saving: false);
       await refresh();

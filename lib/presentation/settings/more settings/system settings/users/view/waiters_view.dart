@@ -57,7 +57,7 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
 
       final sessionsRaw = await sb
           .from('table_sessions')
-          .select('id, waiter_user_id, opened_by')
+          .select('id, waiter_user_id, opened_by, opened_by_employee_id')
           .eq('business_id', bid)
           .eq('origin', 'dine_in')
           .isFilter('closed_at', null);
@@ -143,56 +143,90 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
       final dayRange = AppTime.todayRangeUtc();
       final paidOrdersRaw = await sb
           .from('payments')
-          .select('order_id, amount, change_amount, orders!inner(session_id, table_sessions!inner(business_id, origin, waiter_user_id, opened_by))')
+          .select('order_id, amount, change_amount, orders!inner(session_id, table_sessions!inner(business_id, origin, waiter_user_id, opened_by, opened_by_employee_id))')
           .eq('status', 'completed')
           .eq('business_id', bid)
           .gte('created_at', dayRange.fromUtc.toIso8601String())
           .lt('created_at', dayRange.toUtc.toIso8601String());
 
-      final paidSalesByUserId = <String, double>{};
+      // Dueño de una sesión, con la MISMA prioridad que v_zone_table_status:
+      // empleado que abrió vía PIN (multimesero) > waiter_user_id > opened_by.
+      // En multimesero waiter_user_id/opened_by traen la cuenta compartida del
+      // dispositivo, así que sin opened_by_employee_id todas las mesas caían
+      // en el usuario logueado y el mesero real quedaba en 0.
+      String? ownerKeyOf(Map<String, dynamic>? session) {
+        final employeeId =
+            session?['opened_by_employee_id']?.toString().trim();
+        if (employeeId != null && employeeId.isNotEmpty) {
+          return 'emp:$employeeId';
+        }
+        final waiterUserId = session?['waiter_user_id']?.toString().trim();
+        if (waiterUserId != null && waiterUserId.isNotEmpty) {
+          return 'usr:$waiterUserId';
+        }
+        final openedBy = session?['opened_by']?.toString().trim();
+        if (openedBy != null && openedBy.isNotEmpty) {
+          return 'usr:$openedBy';
+        }
+        return null;
+      }
+
+      final paidSalesByOwner = <String, double>{};
       for (final payment in List<Map<String, dynamic>>.from(paidOrdersRaw)) {
         final order = payment['orders'] as Map<String, dynamic>?;
         final tableSession = order?['table_sessions'] as Map<String, dynamic>?;
         final origin = tableSession?['origin']?.toString().trim();
         if (origin != 'dine_in') continue;
 
-        final waiterUserId = tableSession?['waiter_user_id']?.toString().trim();
-        final openedBy = tableSession?['opened_by']?.toString().trim();
-        final ownerUserId = (waiterUserId?.isNotEmpty == true)
-            ? waiterUserId!
-            : (openedBy?.isNotEmpty == true ? openedBy! : null);
-        if (ownerUserId == null || ownerUserId.isEmpty) continue;
+        final ownerKey = ownerKeyOf(tableSession);
+        if (ownerKey == null) continue;
 
-        paidSalesByUserId[ownerUserId] =
-            (paidSalesByUserId[ownerUserId] ?? 0) +
+        paidSalesByOwner[ownerKey] =
+            (paidSalesByOwner[ownerKey] ?? 0) +
             netPaymentAmount(payment['amount'], payment['change_amount']);
       }
 
-      final openTablesByUserId = <String, int>{};
-      final pendingByUserId = <String, double>{};
+      final openTablesByOwner = <String, int>{};
+      final pendingByOwner = <String, double>{};
 
       for (final session in sessions) {
-        final waiterUserId = session['waiter_user_id']?.toString().trim();
-        final openedBy = session['opened_by']?.toString().trim();
-        final ownerUserId = (waiterUserId?.isNotEmpty == true)
-            ? waiterUserId!
-            : (openedBy?.isNotEmpty == true ? openedBy! : null);
+        final ownerKey = ownerKeyOf(session);
         final sessionId = session['id']?.toString().trim();
-        if (ownerUserId == null || ownerUserId.isEmpty) continue;
+        if (ownerKey == null) continue;
         if (sessionId == null || sessionId.isEmpty) continue;
 
-        openTablesByUserId[ownerUserId] = (openTablesByUserId[ownerUserId] ?? 0) + 1;
-        pendingByUserId[ownerUserId] =
-            (pendingByUserId[ownerUserId] ?? 0) + (pendingBySessionId[sessionId] ?? 0);
+        openTablesByOwner[ownerKey] = (openTablesByOwner[ownerKey] ?? 0) + 1;
+        pendingByOwner[ownerKey] =
+            (pendingByOwner[ownerKey] ?? 0) + (pendingBySessionId[sessionId] ?? 0);
+      }
+
+      // Cada sesión cae en UNO solo de los dos buckets (emp: o usr:), así
+      // que sumar ambos por empleado no duplica.
+      double sumOwner(Map<String, double> map, Employee employee) {
+        final byEmployee = map['emp:${employee.id}'] ?? 0;
+        final userId = employee.userId?.trim();
+        final byUser = (userId == null || userId.isEmpty)
+            ? 0.0
+            : (map['usr:$userId'] ?? 0);
+        return byEmployee + byUser;
+      }
+
+      int sumOwnerInt(Map<String, int> map, Employee employee) {
+        final byEmployee = map['emp:${employee.id}'] ?? 0;
+        final userId = employee.userId?.trim();
+        final byUser = (userId == null || userId.isEmpty)
+            ? 0
+            : (map['usr:$userId'] ?? 0);
+        return byEmployee + byUser;
       }
 
       final metrics = waiters
           .map(
             (employee) => _WaiterMetric(
               employee: employee,
-              openTables: openTablesByUserId[employee.userId] ?? 0,
-              currentSales: paidSalesByUserId[employee.userId] ?? 0,
-              pendingSales: pendingByUserId[employee.userId] ?? 0,
+              openTables: sumOwnerInt(openTablesByOwner, employee),
+              currentSales: sumOwner(paidSalesByOwner, employee),
+              pendingSales: sumOwner(pendingByOwner, employee),
             ),
           )
           .toList()

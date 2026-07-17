@@ -273,7 +273,81 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
           value: _printProductsByArea,
           onChanged: _saving ? null : _setPrintProductsByArea,
         ),
+        const SizedBox(height: 24),
+        const _SectionLabel('Plaza comercial'),
+        const SizedBox(height: 8),
+        const _MallExportLink(),
       ],
+    );
+  }
+}
+
+/// Acceso a la configuración del envío de ventas por SFTP a la plaza
+/// comercial (ej. Ágora Santiago Center).
+class _MallExportLink extends StatelessWidget {
+  const _MallExportLink();
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => context.go(AppRoutes.settingsMallSalesExport),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            border: Border.all(color: MangoColors.cardBorder),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF3F4F6),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.cloud_upload_outlined,
+                  color: MangoColors.muted,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'Reporte a plaza comercial (SFTP)',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Configura el envío del acumulado de ventas por hora al '
+                      'servidor de la plaza (ej. Ágora). Se sube al cerrar '
+                      'caja o manualmente.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.black54,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.chevron_right, color: Colors.black38),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

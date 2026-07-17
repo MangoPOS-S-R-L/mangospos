@@ -141,6 +141,8 @@ class ReportsExportService {
           pw.SizedBox(height: 16),
           ..._offersDetailTable(viewModel),
         ];
+      case ReportCategory.delivery:
+        return _deliveryDetailTable(viewModel);
       case ReportCategory.finances:
         return [
           _metricsTable(viewModel.getFinanceMetricCards()),
@@ -250,6 +252,44 @@ class ReportsExportService {
   }
 
   /// Listado detallado: una fila por cada vez que se aplicó una oferta.
+  static List<pw.Widget> _deliveryDetailTable(ReportsViewModel viewModel) {
+    final rows = viewModel.getDeliveryFeeRows();
+    if (rows.isEmpty) return [];
+    final moneyFormat = NumberFormat('#,##0.00', 'en_US');
+    final dateFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
+    return [
+      pw.Text(
+        'Fees de delivery cobrados',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: const [
+          'Fecha de cobro',
+          'Cliente',
+          'Total de la orden',
+          'Fee de delivery',
+        ],
+        data: [
+          ...rows.map(
+            (row) => [
+              row.paidAt != null ? dateFormat.format(row.paidAt!) : '',
+              row.customerName,
+              moneyFormat.format(row.orderTotal),
+              moneyFormat.format(row.deliveryFee),
+            ],
+          ),
+          [
+            'Total',
+            '${viewModel.deliveryOrdersCount} órdenes',
+            moneyFormat.format(viewModel.deliveryTotalOrdersAmount),
+            moneyFormat.format(viewModel.deliveryTotalFees),
+          ],
+        ],
+      ),
+    ];
+  }
+
   static List<pw.Widget> _offersDetailTable(ReportsViewModel viewModel) {
     final rows = viewModel.getOfferDetailRows();
     if (rows.isEmpty) return [];

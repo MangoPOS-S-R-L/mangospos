@@ -355,6 +355,9 @@ class ProductsViewModel extends ChangeNotifier {
     // 👇 inventario por producto
     bool isInventoryTracked = false,
     double initialStock = 0,
+    // Stock inicial repartido por bodega {warehouseId: cantidad}.
+    // Null/vacío = initialStock va a la bodega principal.
+    Map<String, double>? initialStockByWarehouse,
     bool allowNegativeSale = false,
     // Conversión del insumo ligado (solo al crear inventariable).
     String? baseUnit,
@@ -415,6 +418,7 @@ class ProductsViewModel extends ChangeNotifier {
         taxIds: taxIds,
         isInventoryTracked: isInventoryTracked,
         initialStock: initialStock,
+        initialStockByWarehouse: initialStockByWarehouse,
         allowNegativeSale: allowNegativeSale,
         baseUnit: baseUnit,
         purchaseUnit: purchaseUnit,
@@ -474,6 +478,8 @@ class ProductsViewModel extends ChangeNotifier {
     // se llama la RPC para sincronizar.
     bool? isInventoryTracked,
     double initialStock = 0,
+    // Stock inicial por bodega al activar tracking. Null/vacío = principal.
+    Map<String, double>? initialStockByWarehouse,
     bool? allowNegativeSale,
   }) async {
     try {
@@ -522,6 +528,7 @@ class ProductsViewModel extends ChangeNotifier {
         taxIds: taxIds,
         isInventoryTracked: isInventoryTracked,
         initialStock: initialStock,
+        initialStockByWarehouse: initialStockByWarehouse,
         allowNegativeSale: allowNegativeSale,
       );
 

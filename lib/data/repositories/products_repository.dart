@@ -165,6 +165,9 @@ class ProductsRepository {
     // 👇 inventario por producto
     bool isInventoryTracked = false,
     double initialStock = 0,
+    // Stock inicial repartido por bodega {warehouseId: cantidad}.
+    // Null/vacío = initialStock va a la bodega principal.
+    Map<String, double>? initialStockByWarehouse,
     bool allowNegativeSale = false,
     // Conversión del insumo ligado (solo al crear inventariable): unidad base
     // + unidad de compra + contenido por empaque.
@@ -218,10 +221,10 @@ class ProductsRepository {
     // Si se pide tracking, llamar la RPC que crea inventory_item + receta
     // 1:1 + opcionalmente registra stock inicial en la bodega principal.
     if (isInventoryTracked) {
-      await setInventoryTracked(
+      await _activateInventoryTracking(
         menuItemId: itemId,
-        tracked: true,
         initialStock: initialStock,
+        initialStockByWarehouse: initialStockByWarehouse,
       );
       // El RPC crea el insumo ligado en unidad por defecto; aquí le aplicamos
       // la unidad base + empaque elegidos en el form (1 botella = 700 ml).
@@ -270,6 +273,77 @@ class ProductsRepository {
         .from('inventory_items')
         .update(payload)
         .eq('id', invId);
+  }
+
+  /// Activa el tracking de un producto y registra el stock inicial,
+  /// opcionalmente repartido en VARIAS bodegas.
+  ///
+  /// La RPC `fn_menu_item_set_inventory_tracked` solo acepta UNA bodega,
+  /// así que la primera entrada del reparto va dentro de la RPC (mantiene
+  /// su nota/reference de siempre) y las demás se registran con
+  /// `fn_inventory_record_movement` — mismo `reference_type`
+  /// ('initial_stock') y misma nota, para que el Kardex se lea igual.
+  Future<void> _activateInventoryTracking({
+    required String menuItemId,
+    double initialStock = 0,
+    Map<String, double>? initialStockByWarehouse,
+  }) async {
+    final byWarehouse = <String, double>{
+      for (final entry in (initialStockByWarehouse ?? const {}).entries)
+        if (entry.value > 0) entry.key: entry.value,
+    };
+
+    if (byWarehouse.isEmpty) {
+      // Camino clásico: todo el stock inicial a la bodega principal.
+      await setInventoryTracked(
+        menuItemId: menuItemId,
+        tracked: true,
+        initialStock: initialStock,
+      );
+      return;
+    }
+
+    final first = byWarehouse.entries.first;
+    final result = await setInventoryTracked(
+      menuItemId: menuItemId,
+      tracked: true,
+      initialStock: first.value,
+      warehouseId: first.key,
+    );
+
+    final rest = byWarehouse.entries.skip(1).toList(growable: false);
+    if (rest.isEmpty) return;
+
+    final inventoryItemId = result['inventory_item_id']?.toString();
+    if (inventoryItemId == null || inventoryItemId.isEmpty) return;
+
+    final row = await _client
+        .from(ProductsQueries.tableMenuItems)
+        .select('business_id, cost, name')
+        .eq('id', menuItemId)
+        .maybeSingle();
+    final businessId = row?['business_id']?.toString();
+    if (businessId == null || businessId.isEmpty) return;
+    final cost = (row?['cost'] as num?)?.toDouble();
+    final name = row?['name']?.toString() ?? '';
+
+    for (final entry in rest) {
+      await _client.rpc(
+        'fn_inventory_record_movement',
+        params: {
+          'p_business_id': businessId,
+          'p_warehouse_id': entry.key,
+          'p_item_id': inventoryItemId,
+          'p_movement_type': 'purchase',
+          'p_quantity': entry.value,
+          if (cost != null && cost > 0) 'p_cost_per_unit': cost,
+          'p_reference_id': menuItemId,
+          'p_reference_type': 'initial_stock',
+          'p_notes':
+              'Stock inicial al activar tracking del producto "$name"',
+        },
+      );
+    }
   }
 
   /// Activa/desactiva el tracking de inventario de un producto. Llama la
@@ -321,6 +395,8 @@ class ProductsRepository {
     // update llama la RPC para sincronizar receta/inventory_item/stock.
     bool? isInventoryTracked,
     double initialStock = 0,
+    // Stock inicial por bodega al activar. Null/vacío = principal.
+    Map<String, double>? initialStockByWarehouse,
     bool? allowNegativeSale,
   }) async {
     final updates = <String, dynamic>{
@@ -390,11 +466,15 @@ class ProductsRepository {
     // la RPC crea receta/inventory_item y opcionalmente registra stock
     // inicial. Si se desactiva, baja el flag preservando histórico.
     if (isInventoryTracked != null) {
-      await setInventoryTracked(
-        menuItemId: id,
-        tracked: isInventoryTracked,
-        initialStock: isInventoryTracked ? initialStock : 0,
-      );
+      if (isInventoryTracked) {
+        await _activateInventoryTracking(
+          menuItemId: id,
+          initialStock: initialStock,
+          initialStockByWarehouse: initialStockByWarehouse,
+        );
+      } else {
+        await setInventoryTracked(menuItemId: id, tracked: false);
+      }
     }
   }
 

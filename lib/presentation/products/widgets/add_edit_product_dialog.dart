@@ -11,8 +11,11 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/data/models/printing_models.dart';
+import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/modifiers_repository.dart';
 import 'package:mangopos/data/repositories/printing_v2_repository.dart';
+import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
@@ -49,6 +52,10 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     List<String> taxIds,
     bool isInventoryTracked,
     double initialStock,
+    // Stock inicial repartido por bodega {warehouseId: cantidad}. Cuando el
+    // negocio tiene varias bodegas el dialog manda esto y initialStock=0;
+    // null/vacío = initialStock va a la bodega principal.
+    Map<String, double>? initialStockByWarehouse,
     bool allowNegativeSale,
     // Conversión del insumo ligado (solo al crear inventariable): unidad base
     // + unidad de compra + contenido por empaque (1 botella = 700 ml).
@@ -80,6 +87,9 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     List<String> taxIds,
     bool? isInventoryTracked,
     double initialStock,
+    // Stock inicial por bodega al activar tracking. Null/vacío =
+    // initialStock va a la bodega principal.
+    Map<String, double>? initialStockByWarehouse,
     bool? allowNegativeSale,
   })
   onUpdate;
@@ -143,6 +153,15 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   bool _isInventoryTracked = false;
   bool _wasInventoryTrackedInitially = false;
   late TextEditingController _initialStockController;
+
+  /// Bodegas activas del negocio para repartir el stock inicial. Se cargan
+  /// async en initState; si la carga falla, la lista queda vacía y el RPC
+  /// cae a su default (bodega principal).
+  List<InventoryWarehouse> _warehouses = const [];
+
+  /// Cantidad de stock inicial por bodega (solo cuando hay >1 bodega).
+  /// Cantidad > 0 = el producto queda disponible en esa bodega.
+  final Map<String, TextEditingController> _warehouseQtyControllers = {};
 
   /// Conversión del insumo ligado (solo al CREAR producto inventariable).
   /// `_invBaseUnit` = unidad base (consumo); compra/contenido definen el
@@ -214,6 +233,8 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _invPackSizeController = TextEditingController();
     _allowNegativeSale = p?['allow_negative_sale'] == true;
     _wasAllowNegativeSaleInitially = _allowNegativeSale;
+
+    _loadWarehouses();
 
     Future.microtask(() async {
       try {
@@ -306,6 +327,33 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     }
   }
 
+  /// Carga las bodegas activas para el selector de "Stock inicial".
+  /// Best-effort: si falla, el dropdown no se muestra y el RPC registra
+  /// el stock en la bodega principal (su default).
+  void _loadWarehouses() {
+    Future.microtask(() async {
+      try {
+        final client = Supabase.instance.client;
+        final businessId = await resolveBusinessIdOrNull(client, 'auto');
+        if (businessId == null) return;
+        final warehouses =
+            await InventoryRepository(client).getWarehouses(businessId);
+        if (!mounted) return;
+        setState(() {
+          _warehouses = warehouses;
+          for (final w in warehouses) {
+            _warehouseQtyControllers.putIfAbsent(
+              w.id,
+              () => TextEditingController(),
+            );
+          }
+        });
+      } catch (_) {
+        // Sin bodegas cargadas el flujo sigue igual que antes (principal).
+      }
+    });
+  }
+
   Future<void> _persistGroupOrder() async {
     final productId = widget.product?['id']?.toString();
     if (productId == null || productId.isEmpty) return;
@@ -340,6 +388,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _barcodeController.dispose();
     _presentationController.dispose();
     _initialStockController.dispose();
+    for (final controller in _warehouseQtyControllers.values) {
+      controller.dispose();
+    }
     _invPurchaseUnitController.dispose();
     _invPackSizeController.dispose();
     super.dispose();
@@ -779,25 +830,71 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Se registrará como entrada en la bodega principal. '
-                  'Puedes dejarlo en 0 y agregar stock luego desde Inventario.',
+                  _warehouses.length > 1
+                      ? 'Pon la cantidad en cada bodega donde estará '
+                            'disponible (deja en 0 las que no aplican). '
+                            'Puedes agregar stock luego desde Inventario.'
+                      : 'Se registrará como entrada en la bodega principal. '
+                            'Puedes dejarlo en 0 y agregar stock luego desde Inventario.',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppColors.mutedForeground,
                   ),
                 ),
-                const SizedBox(height: AppSpacing.sm),
-                TextFormField(
-                  controller: _initialStockController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
+                if (_warehouses.length > 1)
+                  // Una fila por bodega con su cantidad — cantidad > 0 =
+                  // disponible en esa bodega.
+                  ..._warehouses.map(
+                    (w) => Padding(
+                      padding: const EdgeInsets.only(top: AppSpacing.sm),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              w.isMain ? '${w.name} · Principal' : w.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppColors.foreground,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          SizedBox(
+                            width: 110,
+                            child: TextFormField(
+                              controller: _warehouseQtyControllers[w.id],
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              decoration: const InputDecoration(
+                                labelText: 'Cantidad',
+                                hintText: '0',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  TextFormField(
+                    controller: _initialStockController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Cantidad',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
                   ),
-                  decoration: const InputDecoration(
-                    labelText: 'Cantidad',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                ),
+                ],
               ],
             ),
           ),
@@ -1604,13 +1701,25 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         : _descController.text.trim();
 
     // Stock inicial: solo aplica cuando se activa tracking en esta sesión.
-    final initialStock =
-        _isInventoryTracked && !_wasInventoryTrackedInitially
-            ? (double.tryParse(
-                  _initialStockController.text.trim().replaceAll(',', '.'),
-                ) ??
-                0)
-            : 0.0;
+    // Con varias bodegas se manda el reparto por bodega y initialStock=0;
+    // con una sola (o si no cargaron), initialStock va a la principal.
+    final activatingTracking =
+        _isInventoryTracked && !_wasInventoryTrackedInitially;
+    final multiWarehouse = activatingTracking && _warehouses.length > 1;
+
+    double parseQty(String? raw) =>
+        double.tryParse((raw ?? '').trim().replaceAll(',', '.')) ?? 0;
+
+    final initialStock = activatingTracking && !multiWarehouse
+        ? parseQty(_initialStockController.text)
+        : 0.0;
+    final initialStockByWarehouse = multiWarehouse
+        ? <String, double>{
+            for (final w in _warehouses)
+              if (parseQty(_warehouseQtyControllers[w.id]?.text) > 0)
+                w.id: parseQty(_warehouseQtyControllers[w.id]?.text),
+          }
+        : null;
     // Solo enviar el flag en update si cambió respecto al valor original
     // (para no disparar la RPC innecesariamente en cada save).
     final inventoryFlagChanged =
@@ -1644,6 +1753,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         taxIds: _selectedTaxIds.toList(),
         isInventoryTracked: inventoryFlagChanged ? _isInventoryTracked : null,
         initialStock: initialStock,
+        initialStockByWarehouse: initialStockByWarehouse,
         allowNegativeSale: allowNegativeChanged ? _allowNegativeSale : null,
       );
     } else {
@@ -1668,6 +1778,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
         taxIds: _selectedTaxIds.toList(),
         isInventoryTracked: _isInventoryTracked,
         initialStock: initialStock,
+        initialStockByWarehouse: initialStockByWarehouse,
         allowNegativeSale: _allowNegativeSale,
         // Conversión del insumo ligado (solo si es inventariable).
         baseUnit: _isInventoryTracked ? _invBaseUnit : null,

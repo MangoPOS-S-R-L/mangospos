@@ -103,6 +103,10 @@ dependencies:
   cached_network_image: ^3.4.1
   multicast_dns: ^0.3.2
   excel: ^4.0.6
+  # Cliente SSH/SFTP puro Dart. Usado para subir el acumulado de ventas
+  # por hora al servidor de la plaza comercial (Ágora) al cierre de caja.
+  # No soporta web (necesita sockets crudos) — el envío se omite allí.
+  dartssh2: ^2.9.0
 
   # Compresión de imágenes client-side antes de subir a Supabase Storage
   # (PRD 7 Fase 2.2). Sin esto los uploads van raw — un iPhone foto de

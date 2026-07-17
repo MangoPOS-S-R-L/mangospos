@@ -10,7 +10,7 @@ import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, offers, purchases, finances, inventory, taxes, fiscal }
+enum ReportCategory { sales, offers, delivery, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
@@ -167,6 +167,25 @@ class OfferDetailLine {
   });
 }
 
+/// Línea del reporte de Delivery: una orden cobrada con fee de delivery
+/// propio. Fuente: `lines` de [ReportsRepository.getDeliveryFeesSummary].
+class DeliveryFeeLine {
+  /// Fecha del cobro (último pago completado de la orden), en hora local.
+  final DateTime? paidAt;
+  final String orderId;
+  final String customerName;
+  final double orderTotal;
+  final double deliveryFee;
+
+  const DeliveryFeeLine({
+    required this.paidAt,
+    required this.orderId,
+    required this.customerName,
+    required this.orderTotal,
+    required this.deliveryFee,
+  });
+}
+
 /// Cantidad total despachada de un producto en oferta (pivote del listado).
 class OfferProductTotal {
   final String productName;
@@ -184,6 +203,7 @@ class ReportsState {
   final String? error;
   final Map<String, dynamic>? salesSummary;
   final Map<String, dynamic>? offersSummary;
+  final Map<String, dynamic>? deliverySummary;
   final Map<String, dynamic>? cashSummary;
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
@@ -216,6 +236,7 @@ class ReportsState {
     this.error,
     this.salesSummary,
     this.offersSummary,
+    this.deliverySummary,
     this.cashSummary,
     this.purchasesSummary,
     this.inventorySummary,
@@ -255,6 +276,7 @@ class ReportsState {
     String? error,
     Map<String, dynamic>? salesSummary,
     Map<String, dynamic>? offersSummary,
+    Map<String, dynamic>? deliverySummary,
     Map<String, dynamic>? cashSummary,
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
@@ -289,6 +311,7 @@ class ReportsState {
       error: clearError ? null : (error ?? this.error),
       salesSummary: salesSummary ?? this.salesSummary,
       offersSummary: offersSummary ?? this.offersSummary,
+      deliverySummary: deliverySummary ?? this.deliverySummary,
       cashSummary: cashSummary ?? this.cashSummary,
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
@@ -463,6 +486,11 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
               businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
           state = state.copyWith(offersSummary: summary);
+        case ReportCategory.delivery:
+          final summary = await _repository.getDeliveryFeesSummary(
+              businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(deliverySummary: summary);
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
             businessId: businessId, from: from, to: to);
@@ -720,6 +748,20 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             title: 'Productos y descuentos',
             description:
                 'Productos despachados: ${numberFormat.format(totalQty)} | Descuento otorgado: ${currency.format(totalDiscounts)}',
+          ),
+        ];
+      case ReportCategory.delivery:
+        final deliveryCount =
+            (state.deliverySummary?['orders_count'] as num?)?.toInt() ?? 0;
+        final deliveryFees =
+            (state.deliverySummary?['total_fees'] as num?)?.toDouble() ?? 0;
+        final currency = state.currency.formatter;
+        final numberFormat = NumberFormat('#,##0', 'en_US');
+        return [
+          ReportItem(
+            title: 'Fees de delivery',
+            description:
+                'Órdenes con delivery: ${numberFormat.format(deliveryCount)} | Total en fees: ${currency.format(deliveryFees)}',
           ),
         ];
       case ReportCategory.purchases:
@@ -1244,6 +1286,37 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     return list;
   }
 
+  /// Líneas del reporte de Delivery (una orden cobrada con fee), más
+  /// reciente primero. Fuente: `lines` de
+  /// [ReportsRepository.getDeliveryFeesSummary].
+  List<DeliveryFeeLine> getDeliveryFeeRows() {
+    final rows = (state.deliverySummary?['lines'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => DeliveryFeeLine(
+            paidAt: AppTime.tryParseServerToAst(row['paid_at']),
+            orderId: row['order_id']?.toString() ?? '',
+            customerName: (row['customer_name']?.toString().trim().isNotEmpty ??
+                    false)
+                ? row['customer_name'].toString().trim()
+                : 'Sin nombre',
+            orderTotal: (row['order_total'] as num?)?.toDouble() ?? 0,
+            deliveryFee: (row['delivery_fee'] as num?)?.toDouble() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  double get deliveryTotalFees =>
+      (state.deliverySummary?['total_fees'] as num?)?.toDouble() ?? 0;
+
+  int get deliveryOrdersCount =>
+      (state.deliverySummary?['orders_count'] as num?)?.toInt() ?? 0;
+
+  double get deliveryTotalOrdersAmount =>
+      (state.deliverySummary?['total_orders_amount'] as num?)?.toDouble() ?? 0;
+
   /// Opciones para el selector "Por oferta" (todos los nombres del rango).
   List<String> offerNameOptions() {
     final set = <String>{for (final l in _allOfferLines()) l.offerName};
@@ -1636,26 +1709,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         ? 0
         : (summary['void_count'] as num?)?.toInt() ?? 0;
 
-    // Tasa efectiva derivada — NO hardcodeada al 18%. Si totalSubtotal=0 (sin
-    // ventas), cae a "Sin base gravable" en vez de mostrar 0% que confunde.
-    final effectiveRate = totalSubtotal > 0
-        ? (totalItbis / totalSubtotal) * 100
-        : 0;
-    final effectiveRateLabel = totalSubtotal > 0
-        ? '${effectiveRate.toStringAsFixed(2)}% sobre base gravable'
-        : 'Sin base gravable en el rango';
-
-    // Label del impuesto principal: derivado de tax_breakdown[0].label si hay
-    // una sola tasa configurada (ITBIS, IVA, IGV...). Si hay varias, fallback
-    // genérico. Antes hardcoded "ITBIS" → rompía multi-país y multi-impuesto.
     final taxBreakdown =
         (summary['tax_breakdown'] as List?)?.cast<Map>() ?? const <Map>[];
-    final primaryTaxName = taxBreakdown.length == 1
-        ? ((taxBreakdown.first['label']?.toString().trim() ?? '').isNotEmpty
-            ? taxBreakdown.first['label'].toString().trim()
-            : 'Impuestos')
-        : 'Impuestos';
-    final taxCardTitle = '$primaryTaxName cobrado${taxBreakdown.length > 1 ? 's' : ''}';
 
     // Label del cargo de servicio: viene de service_fee_label configurado por
     // el comercio. Fallback genérico "Cargo de servicio" si no hay nombre
@@ -1670,6 +1725,55 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         ? '${serviceFeeRate.toStringAsFixed(serviceFeeRate.truncateToDouble() == serviceFeeRate ? 0 : 2)}% sobre base'
         : 'Cargo legal aplicado en el ticket';
 
+    String fmtRate(double r) => r.truncateToDouble() == r
+        ? r.toInt().toString()
+        : r.toStringAsFixed(2);
+
+    // Una card por impuesto CONFIGURADO con cobro real en el rango (ITBIS 18%,
+    // IVA 16%, etc.). El monto sale de tax_breakdown = suma de order_items.tax
+    // por tasa (lo que de verdad se cobró, en precios inclusivos Y exclusivos)
+    // — nunca base × tasa. Se excluye el bucket del cargo de servicio/propina,
+    // que ya tiene su propia card abajo. Solo aplica sin filtro por tipo de
+    // NCF: el desglose por tasa es global del rango, no existe por tipo.
+    final declaredTaxRows = activeBucket == null
+        ? taxBreakdown.where((r) {
+            final label = r['label']?.toString().trim() ?? '';
+            final rate = (r['rate'] as num?)?.toDouble() ?? 0;
+            final isServiceFeeRow = label == serviceFeeTitle &&
+                (rate - serviceFeeRate).abs() < 0.001;
+            return !isServiceFeeRow;
+          }).toList(growable: false)
+        : const <Map>[];
+
+    final perTaxCards = <SalesMetricCardData>[];
+    for (final row in declaredTaxRows) {
+      final label = (row['label']?.toString().trim().isNotEmpty ?? false)
+          ? row['label'].toString().trim()
+          : 'Impuesto';
+      final rate = (row['rate'] as num?)?.toDouble() ?? 0;
+      perTaxCards.add(
+        SalesMetricCardData(
+          title: rate > 0 ? '$label (${fmtRate(rate)}%)' : label,
+          value: state.currency
+              .formatAmount((row['tax_amount'] as num?)?.toDouble() ?? 0),
+          subtitle: 'Cobrado real del período',
+          icon: Icons.account_balance_outlined,
+          color: const Color(0xFF2563EB),
+        ),
+      );
+    }
+
+    // Fallback: sin desglose por tasa (rango sin ventas con impuesto, o filtro
+    // por tipo de NCF activo) mantenemos la card agregada. El subtítulo ya no
+    // muestra la "tasa efectiva" derivada (confundía: parecía una tasa mal
+    // configurada cuando solo reflejaba exentos/inclusivos en la mezcla).
+    final primaryTaxName = taxBreakdown.length == 1
+        ? ((taxBreakdown.first['label']?.toString().trim() ?? '').isNotEmpty
+            ? taxBreakdown.first['label'].toString().trim()
+            : 'Impuestos')
+        : 'Impuestos';
+    final taxCardTitle = '$primaryTaxName cobrado${taxBreakdown.length > 1 ? 's' : ''}';
+
     // Excedente no gravable: la diferencia entre lo cobrado (totalAmount)
     // y los componentes facturables (subtotal + itbis + service_fee).
     // Cuando un cliente paga más que la cuenta (propina voluntaria o
@@ -1683,13 +1787,19 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final hayExcedente = excedenteNoGravable > 0.01;
 
     return [
-      SalesMetricCardData(
-        title: taxCardTitle,
-        value: state.currency.formatAmount(totalItbis),
-        subtitle: effectiveRateLabel,
-        icon: Icons.account_balance_outlined,
-        color: const Color(0xFF2563EB),
-      ),
+      // Una card por impuesto configurado con su monto REAL cobrado; si no
+      // hay desglose (rango sin impuestos o filtro por tipo NCF), la card
+      // agregada de siempre.
+      if (perTaxCards.isNotEmpty)
+        ...perTaxCards
+      else
+        SalesMetricCardData(
+          title: taxCardTitle,
+          value: state.currency.formatAmount(totalItbis),
+          subtitle: 'Total de impuestos del período',
+          icon: Icons.account_balance_outlined,
+          color: const Color(0xFF2563EB),
+        ),
       SalesMetricCardData(
         title: serviceFeeTitle,
         value: state.currency.formatAmount(totalServiceFee),
@@ -1899,6 +2009,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Informe de ventas';
       case ReportCategory.offers:
         return 'Ventas por oferta';
+      case ReportCategory.delivery:
+        return 'Reporte de delivery';
       case ReportCategory.purchases:
         return 'Informe de compras';
       case ReportCategory.finances:
@@ -1918,6 +2030,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return Icons.point_of_sale;
       case ReportCategory.offers:
         return Icons.local_offer;
+      case ReportCategory.delivery:
+        return Icons.delivery_dining;
       case ReportCategory.purchases:
         return Icons.shopping_cart;
       case ReportCategory.finances:

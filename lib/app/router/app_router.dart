@@ -72,6 +72,7 @@ import '../../presentation/branches/view/branch_management_view.dart';
 import '../../presentation/settings/cash_registers/view/cash_registers_view.dart';
 import '../../presentation/settings/business_features/business_features_view.dart';
 import '../../presentation/settings/cash_close_mode/cash_close_mode_view.dart';
+import '../../presentation/settings/cash_close_mode/mall_sales_export_view.dart';
 import '../../presentation/settings/cash_reasons/view/cash_reasons_view.dart';
 import '../../presentation/settings/comandas_config/comandas_config_view.dart';
 import '../../presentation/settings/header_personalize/view/header_personalize_view.dart';
@@ -93,6 +94,7 @@ import '../../presentation/reports/view/reports_view.dart';
 import '../../presentation/reports/view/sales_by_waiter_view.dart';
 import '../../presentation/reports/view/sales_report_view.dart';
 import '../../presentation/reports/view/finance_report_view.dart';
+import '../../presentation/reports/view/delivery_report_view.dart';
 import '../../presentation/reports/view/offers_report_view.dart';
 import '../../presentation/reports/view/inventory_report_view.dart';
 import '../../presentation/reports/view/purchases_report_view.dart';
@@ -584,6 +586,10 @@ class AppRouter {
             builder: (context, state) => const OffersReportView(),
           ),
           GoRoute(
+            path: AppRoutes.reportsDelivery,
+            builder: (context, state) => const DeliveryReportView(),
+          ),
+          GoRoute(
             path: AppRoutes.reportsSalesByWaiter,
             builder: (context, state) => const SalesByWaiterView(),
           ),
@@ -703,6 +709,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.settingsCashCloseMode,
             builder: (context, state) => const CashCloseModeView(),
+          ),
+          GoRoute(
+            path: AppRoutes.settingsMallSalesExport,
+            builder: (context, state) => const MallSalesExportView(),
           ),
           GoRoute(
             path: AppRoutes.settingsCashReasons,
@@ -998,6 +1008,8 @@ ReportCategory? _reportCategoryFromQuery(String? value) {
       return ReportCategory.sales;
     case 'offers':
       return ReportCategory.offers;
+    case 'delivery':
+      return ReportCategory.delivery;
     case 'purchases':
       return ReportCategory.purchases;
     case 'finances':

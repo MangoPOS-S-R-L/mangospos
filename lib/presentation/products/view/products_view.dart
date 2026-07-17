@@ -370,6 +370,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               taxIds = const [],
               isInventoryTracked = false,
               initialStock = 0,
+              initialStockByWarehouse,
               allowNegativeSale = false,
               baseUnit,
               purchaseUnit,
@@ -396,6 +397,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 taxIds: taxIds,
                 isInventoryTracked: isInventoryTracked,
                 initialStock: initialStock,
+                initialStockByWarehouse: initialStockByWarehouse,
                 allowNegativeSale: allowNegativeSale,
                 baseUnit: baseUnit,
                 purchaseUnit: purchaseUnit,
@@ -425,6 +427,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
               taxIds = const [],
               isInventoryTracked,
               initialStock = 0,
+              initialStockByWarehouse,
               allowNegativeSale,
             }) {
               viewModel.updateProduct(
@@ -449,6 +452,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 taxIds: taxIds,
                 isInventoryTracked: isInventoryTracked,
                 initialStock: initialStock,
+                initialStockByWarehouse: initialStockByWarehouse,
                 allowNegativeSale: allowNegativeSale,
               );
             },

@@ -186,6 +186,31 @@ class ReportsCsvExportService {
         addBreakdownSection('Ventas por zona', viewModel.getZoneRows());
         addBreakdownSection('Ventas por hora', viewModel.getHourlyRows());
         break;
+      case ReportCategory.delivery:
+        final deliveryDate = DateFormat('dd/MM/yyyy HH:mm:ss');
+        rows.add(['Fees de delivery cobrados']);
+        rows.add([
+          'Fecha de cobro',
+          'Cliente',
+          'Total de la orden',
+          'Fee de delivery',
+        ]);
+        for (final row in viewModel.getDeliveryFeeRows()) {
+          rows.add([
+            row.paidAt != null ? deliveryDate.format(row.paidAt!) : '',
+            row.customerName,
+            row.orderTotal.toStringAsFixed(2),
+            row.deliveryFee.toStringAsFixed(2),
+          ]);
+        }
+        rows.add([
+          'Total',
+          '${viewModel.deliveryOrdersCount} órdenes',
+          viewModel.deliveryTotalOrdersAmount.toStringAsFixed(2),
+          viewModel.deliveryTotalFees.toStringAsFixed(2),
+        ]);
+        rows.add([]);
+        break;
       case ReportCategory.offers:
         final offerDate = DateFormat('dd/MM/yyyy HH:mm:ss');
         // Pivote: cantidad por producto.

@@ -34,6 +34,7 @@ class AppRoutes {
   static const reports = '/reports';
   static const reportsSales = '$reports/sales';
   static const reportsOffers = '$reports/offers';
+  static const reportsDelivery = '$reports/delivery';
   static const reportsSalesByWaiter = '$reports/sales-by-waiter';
   static const reportsFinances = '$reports/finances';
   static const reportsInventory = '$reports/inventory';
@@ -81,6 +82,7 @@ class AppRoutes {
   static const settingsBranches = '$settings/branches';
   static const settingsCashRegisters = '$settings/cash-registers';
   static const settingsCashCloseMode = '$settings/cash-close-mode';
+  static const settingsMallSalesExport = '$settings/cash-close-mode/mall-export';
   static const settingsCashReasons = '$settings/cash-reasons';
   static const settingsBusinessFeatures = '$settings/business-features';
 

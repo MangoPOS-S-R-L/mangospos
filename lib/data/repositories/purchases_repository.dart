@@ -135,6 +135,10 @@ class PurchasesRepository {
     String? contactName,
     String? phone,
     String? email,
+    String? rnc,
+    String? address,
+    String? paymentTerms,
+    String? notes,
   }) async {
     final row = await _client
         .from(PurchasesQueries.tableSuppliers)
@@ -144,6 +148,10 @@ class PurchasesRepository {
           'contact_name': contactName,
           'phone': phone,
           'email': email,
+          'rnc': rnc,
+          'address': address,
+          'payment_terms': paymentTerms,
+          'notes': notes,
           'is_active': true,
         }..removeWhere((key, value) => value == null || value == ''))
         .select('id, name, contact_name, phone, email, is_active')

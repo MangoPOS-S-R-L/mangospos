@@ -18,6 +18,7 @@ import 'package:http/http.dart' show ClientException;
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/services/mall_sales_export_service.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 
@@ -269,6 +270,11 @@ Future<Map<String, dynamic>?> closeSessionWithVarianceCheck({
       repo.markSessionVarianceFlagged(sessionId).catchError((_) {}),
     );
   }
+
+  // Exportación de ventas a la plaza comercial (post-close, fire-and-forget).
+  // Solo actúa si el negocio la tiene habilitada; nunca lanza — cualquier
+  // error queda registrado en business_sales_export_config.last_error.
+  unawaited(MallSalesExportService().sendOnCashClose(businessId));
 
   return response;
 }

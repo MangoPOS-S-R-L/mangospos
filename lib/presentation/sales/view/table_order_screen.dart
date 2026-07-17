@@ -4570,10 +4570,79 @@ class _CartView extends ConsumerWidget {
                                       .read(currentOrderProvider.notifier)
                                       .reloadOrderNow();
                                   if (!context.mounted) return;
-                                  final freshState =
+                                  var freshState =
                                       ref.read(currentOrderProvider);
-                                  final freshOrder = freshState.order;
+                                  var freshOrder = freshState.order;
                                   if (freshOrder == null) return;
+                                  // ── Gate de FEE DE DELIVERY PROPIO ──
+                                  // Mismo prompt que al cobrar: en delivery
+                                  // propio la precuenta debe salir ya con la
+                                  // línea DELIVERY y el total final. Si el
+                                  // fee es obligatorio y el cajero cancela,
+                                  // no se imprime la precuenta.
+                                  if (freshState.origin == 'delivery' &&
+                                      freshState.deliveryType == 'own') {
+                                    final features =
+                                        ref
+                                            .read(businessFeaturesProvider)
+                                            .value ??
+                                        BusinessFeatures.defaults;
+                                    final oldFee = freshOrder.deliveryFee;
+                                    final feeCurrency =
+                                        currentBusinessCurrencyOrFallback(ref);
+                                    final chosenFee = await _promptDeliveryFee(
+                                      context,
+                                      presets: features.deliveryFeePresets,
+                                      min: features.deliveryFeeMin,
+                                      required: features.deliveryFeeRequired,
+                                      currentFee: oldFee,
+                                      formatAmount:
+                                          feeCurrency.formatter.format,
+                                    );
+                                    if (!context.mounted) return;
+                                    if (chosenFee == null) {
+                                      if (features.deliveryFeeRequired) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Debes indicar el monto del delivery para imprimir la precuenta.',
+                                            ),
+                                            backgroundColor: Colors.orange,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                    } else if (chosenFee != oldFee) {
+                                      try {
+                                        await ref
+                                            .read(currentOrderProvider.notifier)
+                                            .setDeliveryFee(chosenFee);
+                                      } catch (e) {
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'No se pudo fijar el fee de delivery: $e',
+                                            ),
+                                            backgroundColor: Colors.red,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      if (!context.mounted) return;
+                                      // Re-leer el estado con el fee aplicado
+                                      // para que items/totales de la precuenta
+                                      // ya lo incluyan.
+                                      freshState =
+                                          ref.read(currentOrderProvider);
+                                      freshOrder =
+                                          freshState.order ?? freshOrder;
+                                    }
+                                  }
                                   // Recomputamos items/totales desde el estado
                                   // recién recargado (mismo filtro que la vista
                                   // del carrito).

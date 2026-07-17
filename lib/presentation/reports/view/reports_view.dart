@@ -57,6 +57,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         context.go(AppRoutes.reportsSales);
       case ReportCategory.offers:
         context.go(AppRoutes.reportsOffers);
+      case ReportCategory.delivery:
+        context.go(AppRoutes.reportsDelivery);
       case ReportCategory.finances:
         context.go(AppRoutes.reportsFinances);
       case ReportCategory.inventory:
@@ -281,6 +283,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         quickStat: '—',
         quickStatLabel: 'Detalle por promoción',
         onTap: () => context.go(AppRoutes.reportsOffers),
+      ),
+      _ReportHubCardData(
+        title: 'Delivery',
+        description:
+            'Fees de delivery cobrados en órdenes de delivery propio: total '
+            'del período y detalle por orden.',
+        icon: Icons.delivery_dining_outlined,
+        color: const Color(0xFF16A34A),
+        quickStat: '—',
+        quickStatLabel: 'Fees cobrados',
+        onTap: () => context.go(AppRoutes.reportsDelivery),
       ),
       _ReportHubCardData(
         title: 'Ventas por mesero',

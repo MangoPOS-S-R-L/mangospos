@@ -376,6 +376,96 @@ class ReportsRepository {
     };
   }
 
+  Map<String, dynamic> _emptyDeliverySummary() => <String, dynamic>{
+        'orders_count': 0,
+        'total_fees': 0.0,
+        'total_orders_amount': 0.0,
+        'lines': const <Map<String, dynamic>>[],
+      };
+
+  /// Resumen de "Delivery": una fila por cada orden cobrada en el rango con
+  /// fee de delivery propio (`orders.delivery_fee > 0`, cargo EXENTO — ver
+  /// docs/PRD_DELIVERY_FEE_PROPIO.md), con fecha de cobro, cliente y totales.
+  /// Es lo que el negocio le paga/liquida al repartidor.
+  ///
+  /// Scoping consistente con ventas/ofertas: solo órdenes con pago COMPLETADO
+  /// en el rango (misma fuente que `get_sales_summary_v2`), así el total de
+  /// fees concilia con el revenue del período. Query directa PostgREST: el
+  /// subconjunto con `delivery_fee > 0` es pequeño.
+  Future<Map<String, dynamic>> getDeliveryFeesSummary({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    // 1. Órdenes con pago completado en el rango. Guardamos la fecha del
+    //    ÚLTIMO pago por orden = fecha de cobro que se muestra en el detalle.
+    final paymentRows = await _loadScopedPaymentsForRange(
+      businessId: businessId,
+      from: from,
+      to: to,
+      select: 'order_id,status,created_at',
+    );
+    final paidAtByOrder = <String, String>{};
+    for (final row in paymentRows) {
+      final status = row['status']?.toString();
+      // status null = legacy completado; void/cancelled se descartan.
+      if (status != null && status != 'completed') continue;
+      final orderId = row['order_id']?.toString();
+      if (orderId == null || orderId.isEmpty) continue;
+      final createdAt = row['created_at']?.toString() ?? '';
+      final prev = paidAtByOrder[orderId];
+      if (prev == null || createdAt.compareTo(prev) > 0) {
+        paidAtByOrder[orderId] = createdAt;
+      }
+    }
+    if (paidAtByOrder.isEmpty) return _emptyDeliverySummary();
+
+    // 2. De esas órdenes, las que tienen fee de delivery, con el tipo de
+    //    delivery y el cliente desde la sesión.
+    final orderRows = await _selectInBatches(
+      table: ReportsQueries.tableOrders,
+      select: 'id, total, delivery_fee, '
+          'table_sessions!inner(delivery_type, customer_name)',
+      column: 'id',
+      values: paidAtByOrder.keys.toList(growable: false),
+      transform: (query) => query.gt('delivery_fee', 0),
+    );
+
+    var totalFees = 0.0;
+    var totalOrdersAmount = 0.0;
+    final lines = <Map<String, dynamic>>[];
+    for (final row in orderRows) {
+      final orderId = row['id']?.toString();
+      if (orderId == null) continue;
+      final fee = _toDouble(row['delivery_fee']);
+      if (fee <= 0) continue;
+      final total = _toDouble(row['total']);
+      final session = row['table_sessions'] as Map?;
+      totalFees += fee;
+      totalOrdersAmount += total;
+      lines.add(<String, dynamic>{
+        'order_id': orderId,
+        'paid_at': paidAtByOrder[orderId],
+        'customer_name': session?['customer_name']?.toString(),
+        'delivery_type': session?['delivery_type']?.toString(),
+        'order_total': total,
+        'delivery_fee': fee,
+      });
+    }
+    if (lines.isEmpty) return _emptyDeliverySummary();
+
+    // Más reciente primero (ISO8601 UTC compara como texto).
+    lines.sort((a, b) => (b['paid_at']?.toString() ?? '')
+        .compareTo(a['paid_at']?.toString() ?? ''));
+
+    return <String, dynamic>{
+      'orders_count': lines.length,
+      'total_fees': totalFees,
+      'total_orders_amount': totalOrdersAmount,
+      'lines': lines,
+    };
+  }
+
   /// Resumen de ventas — usa RPC `get_sales_summary_v2` que agrega todo
   /// server-side en un solo round-trip. Antes hacía 8 queries
   /// secuenciales con LRM/voluntary-tip calculados en Dart; ahora

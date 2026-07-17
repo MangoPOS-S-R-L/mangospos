@@ -219,19 +219,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// Devuelve el `employee_id` que se debe asignar a un item recién creado
   /// como autor (`order_items.created_by_employee_id`).
   ///
-  /// Política del negocio: todos los items de una mesa pertenecen al
-  /// mesero que ABRIÓ esa mesa, no a quien clickeó "agregar producto".
-  /// Esto mantiene una sola identidad responsable a lo largo de toda la
-  /// cadena (comanda → precuenta → factura → tooltip de auditoría), aún
-  /// cuando un cajero o un mesero secundario agrega items a una mesa
-  /// abierta por otro mesero.
+  /// Política del negocio (decisión 2026-07-15): el item pertenece a QUIEN
+  /// LO AGREGA (el mesero con PIN activo en el device), aunque la mesa la
+  /// haya abierto otro mesero. La identidad de la MESA es aparte: el
+  /// "MESERO:" de comanda/precuenta/factura sale del opener inmutable
+  /// (`table_sessions.opened_by_employee_id` vía `fn_order_opener_name`)
+  /// y NO cambia porque otro PIN entre a agregar productos o a imprimir.
   ///
   /// Prioridad:
-  ///   1. Opener de la mesa actual vía `fn_order_opener_employee_id`.
-  ///      Esta es la fuente de verdad por la regla "siempre el que abrió".
-  ///   2. `activeWaiterProvider` — fallback si la orden todavía no existe
-  ///      (mesa nueva) o el opener no se pudo resolver. Mantiene la
-  ///      identidad del mesero con PIN activo en el device.
+  ///   1. `activeWaiterProvider` — el mesero con PIN validado en el device
+  ///      es quien está físicamente agregando el item.
+  ///   2. Opener de la mesa vía `fn_order_opener_employee_id` — fallback
+  ///      cuando no hay PIN activo (multimesero off / roles sin PIN).
   ///   3. Usuario autenticado en Supabase → su fila en `employees` para
   ///      el business activo, vía `fn_current_employee_id`. Cubre el
   ///      caso del cajero/admin sin PIN.

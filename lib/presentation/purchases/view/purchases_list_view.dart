@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../../../app/router/routes.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
+import '../widgets/create_supplier_dialog.dart';
 import 'purchase_receive_dialog.dart';
 
 class PurchasesListView extends ConsumerStatefulWidget {
@@ -362,65 +363,7 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
   }
 
   Future<void> _showCreateSupplierDialog(BuildContext context) async {
-    final nameCtrl = TextEditingController();
-    final contactCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final emailCtrl = TextEditingController();
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Nuevo proveedor'),
-          content: SizedBox(
-            width: 420,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Nombre'),
-                ),
-                TextField(
-                  controller: contactCtrl,
-                  decoration: const InputDecoration(labelText: 'Contacto'),
-                ),
-                TextField(
-                  controller: phoneCtrl,
-                  decoration: const InputDecoration(labelText: 'Teléfono'),
-                ),
-                TextField(
-                  controller: emailCtrl,
-                  decoration: const InputDecoration(labelText: 'Email'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final name = nameCtrl.text.trim();
-                if (name.isEmpty) return;
-
-                await ref.read(purchasesViewModelProvider).createSupplier(
-                  name: name,
-                  contactName: contactCtrl.text.trim(),
-                  phone: phoneCtrl.text.trim(),
-                  email: emailCtrl.text.trim(),
-                );
-                if (!dialogContext.mounted) return;
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Guardar'),
-            ),
-          ],
-        );
-      },
-    );
+    await showCreateSupplierDialog(context, ref);
   }
 
   String _statusLabel(String status) {
