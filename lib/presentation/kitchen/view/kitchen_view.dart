@@ -401,6 +401,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                                 );
                             }
                           },
+                          onReprint: () => _reprintComanda(order),
                         ),
                         SizedBox(height: gap),
                       ],
@@ -936,6 +937,24 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     );
   }
 
+  /// Reimprime la comanda de una tarjeta (viva o completada) y muestra el
+  /// resultado en un snackbar. No toca estados ni crea rondas nuevas.
+  Future<void> _reprintComanda(KitchenOrder order) async {
+    final notice = await ref.read(kitchenViewModelProvider).reprintComanda(
+          orderId: order.orderId,
+          itemIds: order.items.map((i) => i.id).toList(growable: false),
+        );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(notice ?? 'Comanda reimpresa.'),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+  }
+
   /// Tarjeta de una comanda en el diálogo "Completados hoy".
   Widget _completedOrderCard(KitchenOrder order, DateTime completedAt) {
     return Container(
@@ -1000,6 +1019,19 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                   ).copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
+              const SizedBox(width: 6),
+              // Pedido del cliente: recuperar una comanda perdida sin
+              // scrollear el historial — reimprimir directo desde aquí.
+              IconButton(
+                tooltip: 'Reimprimir comanda',
+                onPressed: () => _reprintComanda(order),
+                icon: const Icon(
+                  Icons.print_outlined,
+                  color: MangoTokens.primary,
+                  size: 22,
+                ),
+                visualDensity: VisualDensity.compact,
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -1059,6 +1091,17 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     for (final item in items) {
       map.putIfAbsent(item.orderId, () => []).add(item);
     }
+    // Momento en que la cocina TERMINÓ la comanda (último ready_at de sus
+    // ítems). Fallback a createdAt si ningún ítem trae sello.
+    DateTime finishedAt(KitchenOrder order) {
+      var latest = order.createdAt;
+      for (final item in order.items) {
+        final ready = item.readyAt;
+        if (ready != null && ready.isAfter(latest)) latest = ready;
+      }
+      return latest;
+    }
+
     return map.entries.map((entry) {
       final list = entry.value;
       list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -1071,7 +1114,9 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         createdAt: first.createdAt,
         items: list,
       );
-    }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      // La última comanda PREPARADA sale de primera (descendente por
+      // ready_at, no por hora de creación).
+    }).toList()..sort((a, b) => finishedAt(b).compareTo(finishedAt(a)));
   }
 }
 

@@ -486,6 +486,41 @@ class KitchenViewModel extends ChangeNotifier {
         'activado. Actívalo en Ajustes → Impresoras → Asignaciones de área.';
   }
 
+  /// Reimprime la comanda de una tarjeta (viva o de "Completados hoy") en
+  /// las impresoras normales de comanda, con marca de REIMPRESIÓN. No toca
+  /// estados ni crea rondas nuevas. Devuelve el mensaje para el snackbar
+  /// (null = imprimió todo sin novedades).
+  Future<String?> reprintComanda({
+    required String orderId,
+    required List<String> itemIds,
+  }) async {
+    final businessId = _businessId;
+    if (businessId == null || itemIds.isEmpty) {
+      return 'No se pudo reimprimir la comanda.';
+    }
+    try {
+      final report = await _printingService.reprintComandaTicket(
+        orderId: orderId,
+        businessId: businessId,
+        itemIds: itemIds,
+      );
+      if (report.nothingPrinted) {
+        return report.missingReadyPrinter
+            ? 'La comanda no salió: ${_areaNames(report.areasWithoutReadyPrinter)} '
+                'sin impresora asignada en Ajustes → Impresoras.'
+            : 'No se pudo reimprimir la comanda.';
+      }
+      if (report.missingReadyPrinter) {
+        return 'Comanda reimpresa, pero sin impresora en: '
+            '${_areaNames(report.areasWithoutReadyPrinter)}.';
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error reimprimiendo comanda: $e');
+      return 'No se pudo reimprimir la comanda.';
+    }
+  }
+
   void _subscribeRealtime(SupabaseClient client, String businessId) {
     _rtItems?.unsubscribe();
     // PRD 7 Fase 4.1 — `order_items` no tiene `business_id` directo

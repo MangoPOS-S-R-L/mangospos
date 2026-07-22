@@ -52,11 +52,16 @@ class KitchenTicketCard extends StatelessWidget {
   /// ticket LISTO y la saca del tablero.
   final void Function(String orderId) onCompleteOrder;
 
+  /// Reimprime la comanda tal cual (marca REIMPRESIÓN) sin tocar estados —
+  /// para cuando el papel se perdió o hay dudas de qué llevaba.
+  final VoidCallback? onReprint;
+
   const KitchenTicketCard({
     super.key,
     required this.order,
     required this.onBumpItem,
     required this.onCompleteOrder,
+    this.onReprint,
   });
 
   @override
@@ -90,7 +95,7 @@ class KitchenTicketCard extends StatelessWidget {
           Container(height: 5, color: accent),
 
           // Encabezado.
-          _Header(order: order, allTakeout: allTakeout),
+          _Header(order: order, allTakeout: allTakeout, onReprint: onReprint),
 
           Divider(height: 1, thickness: 1, color: AppColors.border),
 
@@ -127,8 +132,13 @@ class KitchenTicketCard extends StatelessWidget {
 class _Header extends StatelessWidget {
   final KitchenOrder order;
   final bool allTakeout;
+  final VoidCallback? onReprint;
 
-  const _Header({required this.order, required this.allTakeout});
+  const _Header({
+    required this.order,
+    required this.allTakeout,
+    this.onReprint,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -209,6 +219,19 @@ class _Header extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
+          if (onReprint != null)
+            IconButton(
+              onPressed: onReprint,
+              tooltip: 'Reimprimir comanda',
+              icon: const Icon(
+                Icons.print_outlined,
+                size: 20,
+                color: AppColors.mutedForeground,
+              ),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
           KitchenTimer(startTime: order.createdAt),
         ],
       ),

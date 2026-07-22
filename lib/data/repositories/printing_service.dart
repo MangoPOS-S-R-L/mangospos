@@ -1299,6 +1299,107 @@ class PrintingService {
     }
   }
 
+  /// Reimprime la COMANDA de una tarjeta del KDS (los ítems dados) en las
+  /// impresoras NORMALES de comanda de cada área, con la marca REIMPRESIÓN.
+  /// A diferencia de [printReadyOrderTicket] (ticket de "listo"), esto
+  /// re-saca la comanda de cocina tal cual — para cuando el papel se perdió
+  /// o hay dudas de qué llevaba, sin re-enviar la orden (que crearía otra
+  /// ronda). Funciona también con ítems ya despachados/pagados (reimpresión
+  /// desde "Completados hoy"). Devuelve el mismo reporte: áreas impresas +
+  /// áreas sin impresora asignada.
+  Future<ReadyPrintReport> reprintComandaTicket({
+    required String orderId,
+    required String businessId,
+    required List<String> itemIds,
+  }) async {
+    try {
+      final order = await _salesRepo.getOrder(orderId);
+      if (order == null) throw Exception('Orden no encontrada');
+
+      final items = await _salesRepo.getOrderItems(
+        orderId,
+        includeModifiers: true,
+      );
+      final targetItems = items
+          .where((item) => itemIds.contains(item.id))
+          .toList(growable: false);
+      if (targetItems.isEmpty) return ReadyPrintReport.empty;
+
+      final orderData = await _getOrderDisplayData(orderId);
+      final businessName = await _getBusinessName(businessId);
+      final receiptItemDisplayMode = await PosSettingsRepository(
+        _client,
+      ).getReceiptItemDisplayMode(businessId);
+      final kitchenBanners = await PosSettingsRepository(
+        _client,
+      ).getKitchenBanners(businessId);
+      final itemsByArea = await _groupItemsByPrintArea(
+        targetItems,
+        businessId: businessId,
+      );
+
+      var areasPrinted = 0;
+      final areasWithoutPrinter = <String>[];
+
+      for (final entry in itemsByArea.entries) {
+        final areaCode = entry.key;
+        final areaItems = entry.value;
+        final area = await _ensureAreaForCode(businessId, areaCode);
+        final printers = await _getOrderPrintersWithOfflineFallback(
+          businessId: businessId,
+          areaId: area.id,
+          areaCode: areaCode,
+        );
+        if (printers.isEmpty) {
+          areasWithoutPrinter.add(areaCode);
+          continue;
+        }
+
+        final ticket = PrintTicketService.generateKitchenTicket(
+          order: order,
+          items: areaItems,
+          tableName: orderData['tableName']?.toString() ?? 'N/A',
+          waiterName: orderData['waiterName']?.toString(),
+          cashierName: _resolveCashierName(),
+          customerName: orderData['customerName']?.toString(),
+          businessName: businessName,
+          areaCode: areaCode,
+          isReprint: true,
+          receiptItemDisplayMode: receiptItemDisplayMode,
+          showDineInBanner: kitchenBanners.dineIn,
+          showTakeoutBanner: kitchenBanners.takeout,
+        );
+
+        await _dispatchKitchenTicket(
+          printers: printers,
+          bytes: ticket.escPosCommands,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}',
+            'body':
+                'Orden ${orderData['orderNumber'] ?? ''}\n'
+                'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+                'REIMPRESION de comanda',
+          },
+          businessId: businessId,
+          orderId: orderId,
+        );
+        areasPrinted++;
+      }
+
+      return ReadyPrintReport(
+        areasPrinted: areasPrinted,
+        areasWithoutReadyPrinter: areasWithoutPrinter,
+      );
+    } on ItemsWithoutPrintAreaException {
+      rethrow;
+    } on UnknownPrintAreaCodeException {
+      rethrow;
+    } catch (e) {
+      throw Exception('Error al reimprimir la comanda: $e');
+    }
+  }
+
   /// Precarga el cache de impresoras de TODAS las print_areas del business.
   /// Pensado para llamarse al login/online-startup: garantiza que, si el
   /// cajero pierde la red después, [sendLocalOrderToKitchen] encuentre
