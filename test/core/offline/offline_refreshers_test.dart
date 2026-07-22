@@ -5,16 +5,19 @@ import 'package:mangopos/core/offline/offline_refreshers.dart';
 /// inventario y aplica el guard del negocio activo. Colaboradores inyectados
 /// (sin red/BD).
 void main() {
-  test('arma un refresher por módulo (catálogo, zonas, inventario, config)',
-      () {
+  test(
+      'arma un refresher por módulo '
+      '(catálogo, zonas, inventario, config, impresoras, secuencias NCF)', () {
     final refreshers = buildOfflineRefreshers(
       resolveBusinessId: () => 'biz-1',
       refreshCatalog: (_) async {},
       refreshZones: (_) async {},
       refreshInventory: (_) async {},
       refreshConfig: (_) async {},
+      refreshPrinters: (_) async {},
+      refreshFiscalSequences: (_) async {},
     );
-    expect(refreshers.length, 4);
+    expect(refreshers.length, 6);
   });
 
   test('con negocio activo → corre cada refresher con ese businessId',
@@ -26,6 +29,8 @@ void main() {
       refreshZones: (b) async => seen['zones'] = b,
       refreshInventory: (b) async => seen['inventory'] = b,
       refreshConfig: (b) async => seen['config'] = b,
+      refreshPrinters: (b) async => seen['printers'] = b,
+      refreshFiscalSequences: (b) async => seen['fiscal'] = b,
     );
     for (final r in refreshers) {
       await r();
@@ -35,6 +40,8 @@ void main() {
       'zones': 'biz-1',
       'inventory': 'biz-1',
       'config': 'biz-1',
+      'printers': 'biz-1',
+      'fiscal': 'biz-1',
     });
   });
 
@@ -46,6 +53,8 @@ void main() {
       refreshZones: (_) async => calls++,
       refreshInventory: (_) async => calls++,
       refreshConfig: (_) async => calls++,
+      refreshPrinters: (_) async => calls++,
+      refreshFiscalSequences: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();
@@ -61,6 +70,8 @@ void main() {
       refreshZones: (_) async => calls++,
       refreshInventory: (_) async => calls++,
       refreshConfig: (_) async => calls++,
+      refreshPrinters: (_) async => calls++,
+      refreshFiscalSequences: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();
@@ -77,6 +88,9 @@ void main() {
       refreshCatalog: (b) async => seen.add(b),
       refreshZones: (_) async {},
       refreshInventory: (_) async {},
+      refreshConfig: (_) async {},
+      refreshPrinters: (_) async {},
+      refreshFiscalSequences: (_) async {},
     );
     await refreshers[0](); // catálogo con biz-A
     current = 'biz-B';

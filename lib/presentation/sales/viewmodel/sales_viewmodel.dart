@@ -522,18 +522,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
+    // Offline con el valor ya cargado de ESTE negocio: conservarlo (la
+    // config fiscal es estable). Antes se intentaba el fetch en cada carga
+    // y sin internet el catch pisaba el tipo por defecto con ''.
+    if (!_connectivity.isConnected && _fiscalSettingsBusinessId == businessId) {
+      return;
+    }
+
     try {
       final row = await Supabase.instance.client
           .from('fiscal_settings')
           .select('default_ncf_type')
           .eq('business_id', businessId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
 
       _cachedDefaultFiscalType = _normalizeFiscalTypeValue(
         row?['default_ncf_type']?.toString(),
       );
     } catch (_) {
-      _cachedDefaultFiscalType = '';
+      // Conservar el último valor bueno si es del mismo negocio; solo
+      // resetear cuando nunca se ha cargado nada para este negocio.
+      if (_fiscalSettingsBusinessId != businessId) {
+        _cachedDefaultFiscalType = '';
+      }
     }
 
     _fiscalSettingsBusinessId = businessId;
@@ -552,6 +564,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
     if (_defaultTakeoutLoadedFor == businessId) return;
+    // Sin red no hay nada que consultar: defaults en false y se reintenta
+    // cuando vuelva la conexión (loadedFor no se marca). Evita un fetch
+    // colgado por cada carga de orden offline.
+    if (!_connectivity.isConnected) return;
     try {
       final row = await Supabase.instance.client
           .from('business_settings')
@@ -559,7 +575,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'default_takeout_quick,default_takeout_manual,default_takeout_delivery',
           )
           .eq('business_id', businessId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
       _defaultTakeoutQuick = row?['default_takeout_quick'] == true;
       _defaultTakeoutManual = row?['default_takeout_manual'] == true;
       _defaultTakeoutDelivery = row?['default_takeout_delivery'] == true;
@@ -609,6 +626,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
+    // Offline declarado con impuestos ya cargados de ESTE negocio: se
+    // conservan tal cual (la config fiscal es estable). Antes se intentaba
+    // el fetch en CADA apertura de mesa (el TTL es de 1s) y sin internet
+    // colgaba o pisaba los impuestos buenos con lista vacía + error.
+    if (!_connectivity.isConnected &&
+        _taxSettingsBusinessId == businessId &&
+        _cachedBusinessTaxes.isNotEmpty) {
+      return;
+    }
+
     try {
       // PRD 2 §G2: la tabla `taxes` es la única fuente de verdad para
       // impuestos. Eliminamos la lectura de `business_settings.service_fee_*`
@@ -620,7 +647,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
             )
             .eq('business_id', businessId)
-            .eq('is_active', true);
+            .eq('is_active', true)
+            // Cota para la ventana "conectado pero malo": sin esto un fetch
+            // colgado trababa la apertura de mesa (corre en el Future.wait
+            // previo al RPC de apertura).
+            .timeout(const Duration(seconds: 8));
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
       } catch (e) {
         // Si falla la carga de `taxes`, no asumimos nada: lista vacía + error.
@@ -1030,6 +1061,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           existing.copyWith(loading: false, origin: 'table', error: null),
         );
         _tableCache[tableId] = state;
+        unawaited(_hydrateFiscalSequencesOffline());
         return;
       }
       // 2. ¿El HUB ya tiene una orden abierta en esta mesa (la abrió OTRA
@@ -1050,6 +1082,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
         state = _normalizeHydratedState(hydrated);
         _tableCache[tableId] = state;
+        unawaited(_hydrateFiscalSequencesOffline());
         return;
       }
       // 3. Mesa nueva → borrador local + notificar al Hub.
@@ -1078,6 +1111,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ),
       );
       _tableCache[tableId] = state;
+      unawaited(_hydrateFiscalSequencesOffline());
     } catch (e) {
       state = state.copyWith(
         loading: false,
@@ -1230,17 +1264,35 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // original (es inmutable después del primer INSERT).
       final activeWaiter = _trustedActiveWaiter();
 
+      // Offline declarado: NI intentamos el RPC. Sin esto, con "wifi sin
+      // internet" (router sin WAN) la llamada colgaba sin timeout y la mesa
+      // nunca abría — el spinner se quedaba pegado. El TimeoutException cae
+      // al catch de abajo, que clasifica como transporte y abre el camino
+      // offline (snapshot previo o borrador local).
+      if (!_connectivity.isConnected) {
+        throw TimeoutException(
+          'Sin conexión: abriendo la mesa en modo offline.',
+        );
+      }
+
       // Single round-trip: abrir mesa + cargar bundle completo (order +
       // items + checks + customer + modifiers + tax_lines). Antes eran
       // 3-4 queries en serie (openTable + getTableLive + getOrderBundle
       // + modifiers + tax_lines) tardando ~700-900ms. El RPC consolida
       // todo en ~150ms.
-      final result = await ref.read(salesRepositoryProvider).openTableAndLoad(
+      //
+      // timeout(12s): cubre la ventana "conectado pero malo" (el probe de
+      // conectividad va 1-2 sondeos atrás). Sin él, un RPC colgado dejaba
+      // la mesa sin abrir indefinidamente; con él degrada al camino offline.
+      final result = await ref
+          .read(salesRepositoryProvider)
+          .openTableAndLoad(
             tableId: tableId,
             userId: userId,
             peopleCount: peopleCount,
             openedByEmployeeId: activeWaiter?.employeeId,
-          );
+          )
+          .timeout(const Duration(seconds: 12));
       final orderId = result.orderId;
 
       // Aplicar el bundle ya parseado — _loadOrderDetail acepta un
@@ -1278,6 +1330,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             ),
           );
           _tableCache[tableId] = state;
+          unawaited(_hydrateFiscalSequencesOffline());
           return;
         }
 
@@ -1303,10 +1356,39 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             ),
           );
           _tableCache[tableId] = state;
+          unawaited(_hydrateFiscalSequencesOffline());
           return;
         }
       }
       state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  /// Hidrata las secuencias NCF cuando la orden se cargó por el camino
+  /// OFFLINE (snapshot previo o borrador local): ahí `_loadOrderDetail` no
+  /// corre, `state.fiscalSequences` quedaba vacío y el modal de cobro
+  /// bloqueaba con "no hay secuencias fiscales activas" aunque el negocio
+  /// las tenga. `FiscalService.getSequences` cae al cache en disco sin red.
+  /// Best-effort y anti-stale: si el usuario cambió de orden mientras se
+  /// leía el cache, no escribe nada.
+  Future<void> _hydrateFiscalSequencesOffline() async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    if (state.fiscalSequences.isNotEmpty) return;
+    final orderIdAtStart = state.order?.id;
+    try {
+      final seqs =
+          await ref.read(fiscalServiceProvider).getSequences(businessId);
+      if (seqs.isEmpty) return;
+      if (state.order?.id != orderIdAtStart) return;
+      state = state.copyWith(
+        fiscalSequences: seqs,
+        fiscalType: _resolveFiscalTypeForState(state, seqs),
+        fiscalDefaultType: _cachedDefaultFiscalType,
+        clearFiscalSequencesLoadError: true,
+      );
+    } catch (e) {
+      debugPrint('[offline] no se pudieron hidratar secuencias NCF: $e');
     }
   }
 
@@ -1588,6 +1670,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           snap.copyWith(loading: false, origin: 'quick'),
         );
         await _persistRetailCartsIndex();
+        unawaited(_hydrateFiscalSequencesOffline());
         return;
       }
     }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -5,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 
 @immutable
 class PrintingAreasState {
@@ -249,6 +252,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         printsReceipts: enabled && printsReceipts,
         exclusive: exclusive,
       );
+      _reprewarmPrinterCache();
       return true;
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
@@ -269,6 +273,7 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         printsOrders: printsOrders,
         printsReceipts: printsReceipts,
       );
+      _reprewarmPrinterCache();
       return true;
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
@@ -291,11 +296,29 @@ class PrintingAreasViewModel extends Notifier<PrintingAreasState> {
         removePrebills: removePrebills,
         removeReceipts: removeReceipts,
       );
+      _reprewarmPrinterCache();
       return true;
     } catch (e) {
       state = state.copyWith(errorMessage: e.toString());
       return false;
     }
+  }
+
+  /// Refresca el cache offline de impresoras por área tras cambiar la
+  /// configuración. Sin esto, una asignación hecha DESPUÉS del login no
+  /// estaba disponible offline hasta el próximo login o el refresher
+  /// periódico (15 min), y "Enviar a cocina" sin red fallaba con
+  /// "No hay impresora asignada". Fire-and-forget: nunca rompe el guardado.
+  void _reprewarmPrinterCache() {
+    unawaited(() async {
+      try {
+        final b = await _ensureBusiness();
+        await PrintingService(Supabase.instance.client)
+            .prewarmPrinterCache(businessId: b);
+      } catch (e) {
+        debugPrint('print_areas: re-prewarm del cache falló: $e');
+      }
+    }());
   }
 
   Future<Map<String, String>> loadOrderPrinterSelections() async {

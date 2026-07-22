@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/business/country_profile.dart';
 import '../../core/currency/business_currency.dart';
 import '../../core/currency/usd_display_settings.dart';
+import '../../core/network/connectivity_service.dart';
 import '../../core/offline/business_settings_offline_cache.dart';
 
 export '../../core/currency/usd_display_settings.dart';
@@ -341,11 +342,19 @@ class PosSettingsRepository {
   /// (fire-and-forget) para que los getters tengan fallback offline. Los
   /// getters parsean su columna del row que esto devuelve.
   Future<Map<String, dynamic>?> _fetchAndCacheRow(String businessId) async {
+    // Offline declarado: directo al cache (misma forma de fila). Sin esto,
+    // cada getter de settings intentaba el fetch en pleno flujo de venta/
+    // comanda y sin internet podía colgar (Supabase no tiene timeout con
+    // router sin WAN). El timeout cubre la ventana "conectado pero malo".
+    if (!ConnectivityService().isConnected) {
+      return _cachedRow(businessId);
+    }
     final row = await _client
         .from('business_settings')
         .select()
         .eq('business_id', businessId)
-        .maybeSingle();
+        .maybeSingle()
+        .timeout(const Duration(seconds: 8));
     if (row == null) return null;
     final map = Map<String, dynamic>.from(row);
     unawaited(_settingsCache.saveRow(businessId: businessId, row: map));

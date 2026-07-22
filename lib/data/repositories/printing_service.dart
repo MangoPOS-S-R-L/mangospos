@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart'
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
 import '../models/sales_models.dart';
+import '../../core/network/connectivity_service.dart';
+import '../../core/offline/offline_catalog_service.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
@@ -203,7 +205,10 @@ class PrintingService {
       final kitchenBanners = await kitchenBannersFuture;
 
       // 4. Agrupar items por área de impresión
-      final itemsByArea = await _groupItemsByPrintArea(draftItems);
+      final itemsByArea = await _groupItemsByPrintArea(
+        draftItems,
+        businessId: businessId,
+      );
 
       // 5. Resolver áreas e impresoras antes de marcar la orden.
       final printersByAreaCode = <String, List<PrinterConfig>>{};
@@ -571,18 +576,18 @@ class PrintingService {
   /// hacer N queries.
   ///
   /// Estrategia de resolución por item:
-  ///   1. Si productId está poblado, mirar el mapa N:M:
-  ///       - 1+ áreas → repartir el item en cada una.
-  ///       - 0 áreas (entrada vacía o nada) → fallback al paso 2.
+  ///   1. Si productId está poblado, mirar el mapa N:M (solo online; sin
+  ///      red se salta para no colgar).
   ///   2. Fallback legacy: `item.printAreaCode` (1-de-1). Si está poblado,
   ///      usarlo como única área del item.
-  ///   3. Si ninguno aplica → orphan.
-  ///
-  /// Si algún item queda sin ninguna área asignada lanza
-  /// [ItemsWithoutPrintAreaException] con la lista de nombres afectados.
+  ///   3. Catálogo OFFLINE (ítems optimistas agregados sin red, que no
+  ///      traen área): N:M del snapshot o `print_area_code` del producto.
+  ///   4. Último recurso: 'kitchen_hot' — el mismo default que aplica
+  ///      `fn_add_item_from_menu` en el server al insertar el item.
   Future<Map<String, List<OrderItem>>> _groupItemsByPrintArea(
-    List<OrderItem> items,
-  ) async {
+    List<OrderItem> items, {
+    String? businessId,
+  }) async {
     final productIds = items
         .map((i) => i.productId)
         .whereType<String>()
@@ -591,14 +596,17 @@ class PrintingService {
         .toList(growable: false);
 
     // Lookup batch del N:M. Si la query falla o la tabla está vacía,
-    // el map queda vacío y todo cae al legacy print_area_code.
+    // el map queda vacío y todo cae al legacy print_area_code. Offline se
+    // salta directo (colgaría sin timeout); el fallback al catálogo local
+    // de abajo cubre el ruteo.
     final nmCodesByMenuItemId = <String, List<String>>{};
-    if (productIds.isNotEmpty) {
+    if (productIds.isNotEmpty && ConnectivityService().isConnected) {
       try {
         final rows = await _client
             .from('menu_item_print_areas')
             .select('menu_item_id, print_areas!inner(code, is_active)')
-            .inFilter('menu_item_id', productIds);
+            .inFilter('menu_item_id', productIds)
+            .timeout(const Duration(seconds: 8));
 
         for (final row in (rows as List<dynamic>)) {
           final r = Map<String, dynamic>.from(row as Map);
@@ -618,7 +626,7 @@ class PrintingService {
     }
 
     final itemsByArea = <String, List<OrderItem>>{};
-    final orphans = <String>[];
+    final unresolved = <OrderItem>[];
 
     for (final item in items) {
       List<String> codesForItem;
@@ -634,7 +642,10 @@ class PrintingService {
         if (legacyCode != null && legacyCode.isNotEmpty) {
           codesForItem = [legacyCode];
         } else {
-          orphans.add(item.productName);
+          // 3) Sin dato en el item (típico: ítem OPTIMISTA agregado
+          //    offline — nunca pasó por el server que le copia el área).
+          //    Se resuelve abajo contra el catálogo offline.
+          unresolved.add(item);
           continue;
         }
       }
@@ -644,11 +655,74 @@ class PrintingService {
       }
     }
 
-    if (orphans.isNotEmpty) {
-      throw ItemsWithoutPrintAreaException(orphans);
+    // Fallback catálogo offline: el snapshot guarda print_area_code y las
+    // áreas N:M de cada menu_item. Último recurso: 'kitchen_hot', el MISMO
+    // default que aplica fn_add_item_from_menu en el server al insertar —
+    // así el ruteo offline es fiel al online. Antes estos ítems lanzaban
+    // ItemsWithoutPrintAreaException y "Enviar a cocina" offline moría
+    // completo (sin comanda y sin marcar los ítems como enviados).
+    if (unresolved.isNotEmpty) {
+      final catalogCodes = await _printAreaCodesFromCatalog(
+        businessId: businessId,
+        productIds: unresolved
+            .map((i) => i.productId)
+            .whereType<String>()
+            .toSet(),
+      );
+      for (final item in unresolved) {
+        final codes = catalogCodes[item.productId] ?? const ['kitchen_hot'];
+        for (final code in codes) {
+          itemsByArea.putIfAbsent(code, () => <OrderItem>[]).add(item);
+        }
+      }
     }
 
     return itemsByArea;
+  }
+
+  /// Resuelve áreas de impresión por producto desde el snapshot del catálogo
+  /// offline: primero las N:M (`menu_item_print_areas`), si no el legacy
+  /// `print_area_code`. Best-effort: mapa vacío si no hay snapshot.
+  Future<Map<String, List<String>>> _printAreaCodesFromCatalog({
+    required String? businessId,
+    required Set<String> productIds,
+  }) async {
+    final result = <String, List<String>>{};
+    if (businessId == null || businessId.isEmpty || productIds.isEmpty) {
+      return result;
+    }
+    try {
+      final snapshot = await OfflineCatalogService().loadSnapshot(businessId);
+      if (snapshot == null) return result;
+      for (final product in snapshot.products) {
+        final pid = product['id']?.toString();
+        if (pid == null || !productIds.contains(pid)) continue;
+
+        final nmCodes = <String>[];
+        final nmRaw = product['menu_item_print_areas'];
+        if (nmRaw is List) {
+          for (final entry in nmRaw) {
+            if (entry is! Map) continue;
+            final areaMap = entry['print_areas'];
+            if (areaMap is! Map) continue;
+            if (areaMap['is_active'] == false) continue;
+            final code = areaMap['code']?.toString();
+            if (code != null && code.isNotEmpty) nmCodes.add(code);
+          }
+        }
+        if (nmCodes.isNotEmpty) {
+          result[pid] = nmCodes;
+          continue;
+        }
+        final legacy = product['print_area_code']?.toString().trim();
+        if (legacy != null && legacy.isNotEmpty) {
+          result[pid] = [legacy];
+        }
+      }
+    } catch (e) {
+      debugPrint('printAreaCodesFromCatalog: fallo leyendo snapshot: $e');
+    }
+    return result;
   }
 
   /// Obtener datos de la orden para mostrar en el ticket
@@ -785,25 +859,47 @@ class PrintingService {
     }
   }
 
+  /// Nombre del negocio para el encabezado del ticket, con cache en disco:
+  /// cada lectura online lo persiste y sin internet (o con la red colgada)
+  /// se usa el último valor. Antes devolvía null offline y el ticket salía
+  /// sin nombre — o peor, el fetch colgaba la comanda entera.
   Future<String?> _getBusinessName(String businessId) async {
+    final cacheKey = 'printing_business_name_$businessId';
+    Future<String?> cached() async {
+      try {
+        final storage = await StorageService.getInstance();
+        final value = await storage.read(cacheKey);
+        return (value == null || value.isEmpty) ? null : value;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    if (!ConnectivityService().isConnected) return cached();
     try {
       final data = await _client
           .from('businesses')
           .select('business_name, branch_name')
           .eq('id', businessId)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
 
       final businessName = data?['business_name']?.toString().trim();
-      if (businessName != null && businessName.isNotEmpty) {
-        return businessName;
-      }
       final branchName = data?['branch_name']?.toString().trim();
-      if (branchName != null && branchName.isNotEmpty) {
-        return branchName;
+      final resolved = (businessName != null && businessName.isNotEmpty)
+          ? businessName
+          : ((branchName != null && branchName.isNotEmpty)
+              ? branchName
+              : null);
+      if (resolved != null) {
+        try {
+          final storage = await StorageService.getInstance();
+          await storage.write(cacheKey, resolved);
+        } catch (_) {}
       }
-      return null;
+      return resolved;
     } catch (_) {
-      return null;
+      return cached();
     }
   }
 
@@ -842,7 +938,10 @@ class PrintingService {
       throw Exception('No hay items locales pendientes de imprimir');
     }
 
-    final itemsByArea = await _groupItemsByPrintArea(draftItems);
+    final itemsByArea = await _groupItemsByPrintArea(
+      draftItems,
+      businessId: businessId,
+    );
     final resolvedBusinessName =
         await _getBusinessName(businessId) ?? businessName;
     final receiptItemDisplayMode = await PosSettingsRepository(
@@ -1021,7 +1120,10 @@ class PrintingService {
         _client,
       ).getKitchenBanners(businessId);
       final orderData = await _getOrderDisplayData(orderId);
-      final itemsByArea = await _groupItemsByPrintArea(items);
+      final itemsByArea = await _groupItemsByPrintArea(
+        items,
+        businessId: businessId,
+      );
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
@@ -1121,7 +1223,10 @@ class PrintingService {
       final kitchenBanners = await PosSettingsRepository(
         _client,
       ).getKitchenBanners(businessId);
-      final itemsByArea = await _groupItemsByPrintArea(readyItems);
+      final itemsByArea = await _groupItemsByPrintArea(
+        readyItems,
+        businessId: businessId,
+      );
 
       var areasPrinted = 0;
       final areasWithoutReadyPrinter = <String>[];

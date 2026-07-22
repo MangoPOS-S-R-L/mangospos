@@ -1,22 +1,58 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/models/fiscal_models.dart';
 import '../../core/business/business_resolver.dart';
+import '../../core/storage/storage_service.dart';
 
 final fiscalServiceProvider = Provider((ref) => FiscalService());
 
 class FiscalService {
   final _db = Supabase.instance.client;
 
+  String _sequencesCacheKey(String bid) => 'fiscal_sequences_cache_$bid';
+
+  /// Secuencias NCF del negocio con cache offline: cada lectura online
+  /// exitosa se persiste en disco; sin internet (o con la red colgada) se
+  /// devuelve el último snapshot. Sin esto, al cobrar offline el gate del
+  /// modal decía "no hay secuencias fiscales activas" aunque el negocio
+  /// las tuviera — el NCF real igual lo asigna el server al sincronizar.
   Future<List<FiscalNcfSequence>> getSequences(String businessId) async {
     final bid = await BusinessResolver.ensure(businessId);
-    final res = await _db
-        .from('ncf_sequences')
-        .select()
-        .eq('business_id', bid)
-        .order('ncf_type');
+    try {
+      final res = await _db
+          .from('ncf_sequences')
+          .select()
+          .eq('business_id', bid)
+          .order('ncf_type')
+          .timeout(const Duration(seconds: 8));
 
-    return (res as List).map((it) => FiscalNcfSequence.fromJson(it)).toList();
+      final rows = List<Map<String, dynamic>>.from(res as List);
+      // Cache best-effort: nunca rompe la lectura online.
+      try {
+        final storage = await StorageService.getInstance();
+        await storage.writeList(_sequencesCacheKey(bid), rows);
+      } catch (_) {}
+      return rows.map(FiscalNcfSequence.fromJson).toList();
+    } catch (e) {
+      try {
+        final storage = await StorageService.getInstance();
+        final cached = await storage.readList(_sequencesCacheKey(bid));
+        if (cached != null && cached.isNotEmpty) {
+          debugPrint(
+            'FiscalService: usando secuencias NCF cacheadas offline ($e)',
+          );
+          return cached
+              .map((it) => FiscalNcfSequence.fromJson(
+                    Map<String, dynamic>.from(it as Map),
+                  ))
+              .toList(growable: false);
+        }
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   Future<void> initializeSequence({

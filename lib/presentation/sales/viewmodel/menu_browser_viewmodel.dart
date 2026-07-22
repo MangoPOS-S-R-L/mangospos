@@ -370,10 +370,14 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     });
   }
 
+  // `print_area_code` + `menu_item_print_areas`: el snapshot offline necesita
+  // las áreas de impresión para que "Enviar a cocina" sin internet pueda
+  // rutear los ítems agregados offline (los optimistas no traen área y el
+  // lookup N:M al server no está disponible).
   static const _menuItemsSelect =
-      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,barcode,sku,print_area_code,menu_item_print_areas(print_areas(code,is_active)),menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
   static const _menuListSelect =
-      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,effective_tax_rate,barcode,sku,menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
+      'id,name,price,image_url,category_id,menu_id,is_active,position,tax_mode,item_type,presentation,is_inventory_tracked,allow_negative_sale,effective_tax_rate,barcode,sku,print_area_code,menu_item_print_areas(print_areas(code,is_active)),menu_item_taxes(tax_id,taxes(name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery))';
 
   Future<String> _resolveBusinessId() async {
     final sessionBusinessId = ref.read(sessionProvider).activeBusinessId;

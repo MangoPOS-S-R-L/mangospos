@@ -4,7 +4,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/zones_repository.dart';
+import 'package:mangopos/services/fiscal/fiscal_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 import 'catalog_refresh_service.dart';
@@ -39,6 +41,8 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshZones,
   Future<void> Function(String businessId)? refreshInventory,
   Future<void> Function(String businessId)? refreshConfig,
+  Future<void> Function(String businessId)? refreshPrinters,
+  Future<void> Function(String businessId)? refreshFiscalSequences,
   Future<void> Function(String businessId)? refreshNcfSeed,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
@@ -55,6 +59,22 @@ List<Future<void> Function()> buildOfflineRefreshers({
   final config = refreshConfig ??
       (String b) =>
           PosSettingsRepository(resolveClient()).refreshBusinessSettings(b);
+  // Impresoras por área: sin este prewarm periódico, un área configurada
+  // DESPUÉS del login (típico: asignar la USB y probar) no tenía cache y
+  // "Enviar a cocina" offline fallaba con "No hay impresora asignada".
+  final printers = refreshPrinters ??
+      (String b) async {
+        await PrintingService(resolveClient()).prewarmPrinterCache(
+          businessId: b,
+        );
+      };
+  // Secuencias NCF: getSequences cachea en disco como efecto secundario;
+  // sin esto el modal de cobro offline decía "no hay secuencias fiscales
+  // activas" si nunca se había abierto una orden online en este device.
+  final fiscalSequences = refreshFiscalSequences ??
+      (String b) async {
+        await FiscalService().getSequences(b);
+      };
 
   Future<void> Function() guard(Future<void> Function(String) fn) {
     return () async {
@@ -69,6 +89,8 @@ List<Future<void> Function()> buildOfflineRefreshers({
     guard(zones),
     guard(inventory),
     guard(config),
+    guard(printers),
+    guard(fiscalSequences),
   ];
 
   // Semilla NCF (F4): cachea la serie central offline para que el Hub conozca

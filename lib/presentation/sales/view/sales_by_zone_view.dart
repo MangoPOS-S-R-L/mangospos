@@ -1076,9 +1076,12 @@ Future<void> _handleMergeTable(
     final isWaiterRole = session.activeRole == PosRole.mesero;
     if (isWaiterRole && businessIdForGate != null && businessIdForGate.isNotEmpty) {
       try {
+        // timeout: sin internet esta lectura podía colgar y dejar el tap de
+        // la mesa muerto (con `openingTables` marcado). 3s y default OFF.
         multimeseroEnabled = await ref
             .read(multimeseroRepositoryProvider)
-            .isEnabled(businessIdForGate);
+            .isEnabled(businessIdForGate)
+            .timeout(const Duration(seconds: 3));
       } catch (_) {
         // Si la lectura falla, asumimos OFF para no romper el flujo
         // operativo. El admin verá que el toggle no toma efecto y reabre
@@ -1199,9 +1202,16 @@ Future<void> _handleMergeTable(
           ref.read(byZoneVmProvider).businessId ??
           ref.read(sessionProvider).activeBusinessId;
       if (businessId != null && businessId.isNotEmpty) {
-        final promptEnabled = await ref
-            .read(posSettingsRepositoryProvider)
-            .getPromptPeopleCountOnTableOpen(businessId);
+        // timeout + catch: esta lectura tiene fallback a cache pero puede
+        // COLGAR sin internet (router sin WAN). Si no responde en 3s,
+        // seguimos sin prompt (1 persona) — nunca dejar la mesa sin abrir.
+        bool promptEnabled = false;
+        try {
+          promptEnabled = await ref
+              .read(posSettingsRepositoryProvider)
+              .getPromptPeopleCountOnTableOpen(businessId)
+              .timeout(const Duration(seconds: 3));
+        } catch (_) {}
         if (promptEnabled) {
           if (!context.mounted) {
             byZone.setOpening(ts.tableId, false);

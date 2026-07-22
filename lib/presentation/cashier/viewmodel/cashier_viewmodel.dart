@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
+import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -154,6 +155,50 @@ class CashierViewModel extends ChangeNotifier {
     return null;
   }
 
+  // Cache del cash_register resuelto (Fase 1.4a offline). En arranque frío
+  // sin internet `getCashRegisters` falla y sin registerId la clave del cache
+  // de sesión (`_cachedSessionKey`) no es resoluble → el cajero quedaba
+  // bloqueado aunque tuviera la caja abierta cacheada en este dispositivo.
+  String? _cachedRegisterKey() {
+    if (_businessId == null) return null;
+    return 'cashier_register_$_businessId';
+  }
+
+  Future<void> _persistRegister() async {
+    final key = _cachedRegisterKey();
+    if (key == null || _currentRegisterId == null) return;
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write(
+        key,
+        jsonEncode({'id': _currentRegisterId, 'name': _currentRegisterName}),
+      );
+    } catch (e) {
+      debugPrint('cashier: error persistiendo register: $e');
+    }
+  }
+
+  Future<void> _restoreRegisterFromCache() async {
+    final key = _cachedRegisterKey();
+    if (key == null) return;
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(key);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final id = decoded['id']?.toString();
+        if (id != null && id.isNotEmpty) {
+          _currentRegisterId = id;
+          _currentRegisterName = decoded['name']?.toString() ?? '';
+          debugPrint('cashier: register restaurado desde cache offline');
+        }
+      }
+    } catch (e) {
+      debugPrint('cashier: error leyendo register cacheado: $e');
+    }
+  }
+
   /// Setter helper que mantiene el cache local sincronizado con `_lastSession`.
   /// Reemplaza asignaciones directas para que toda actualización pase por aquí.
   void _setLastSession(Map<String, dynamic>? session) {
@@ -237,6 +282,9 @@ class CashierViewModel extends ChangeNotifier {
               created['name']?.toString() ?? 'Caja principal';
         }
         if (_currentRegisterId != null) {
+          // Cachear el register resuelto para que un arranque frío sin
+          // internet pueda reconstruir la clave del cache de sesión.
+          unawaited(_persistRegister());
           // Modelo: una caja por cash_register, visible para todos los empleados
           // del local (mesero/cajero/admin pueden vender si hay caja abierta).
           // El cierre sigue restringido al dueño (validado en cashier_view +
@@ -271,6 +319,13 @@ class CashierViewModel extends ChangeNotifier {
       // tenemos sesión en memoria, intentar restaurar de SharedPreferences.
       // Esto permite que un restart de la app sin internet no bloquee al
       // cajero cuando ya había caja abierta antes de perder la conexión.
+      //
+      // Primero el register cacheado: sin él `_cachedSessionKey()` devuelve
+      // null y el cache de sesión era inalcanzable justo en el arranque frío
+      // offline (el caso que este fallback quería cubrir).
+      if (_currentRegisterId == null) {
+        await _restoreRegisterFromCache();
+      }
       if (_lastSession == null) {
         final cached = await _readCachedLastSession();
         if (cached != null && cached['status'] == 'open') {
@@ -1094,6 +1149,37 @@ class CashierViewModel extends ChangeNotifier {
         now.difference(_lastCashOpenValidationAt!) < ttl;
 
     if (!force && hasRecentValidation) {
+      return _lastSession?['status'] == 'open';
+    }
+
+    // Offline declarado: no hay red que consultar. Resolver desde memoria o
+    // el cache de disco SIN intentar el fetch — antes esto colgaba (Supabase
+    // sin timeout con router sin WAN) o devolvía false y bloqueaba abrir
+    // mesas con el snackbar "Debes abrir la caja". Aplica también con
+    // force=true: forzar un fetch sin red no tiene sentido.
+    if (!ConnectivityService().isConnected) {
+      // Arranque frío: sin businessId/registerId no se puede armar la clave
+      // del cache de sesión. El business sale de memoria/disco
+      // (BusinessResolver antepone caches locales a la red; timeout por si
+      // cayera a las consultas remotas) y el register del cache del último
+      // init online.
+      if (_businessId == null) {
+        try {
+          _businessId = await resolveBusinessIdOrNull(
+            Supabase.instance.client,
+            'auto',
+          ).timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      }
+      if (_currentRegisterId == null) {
+        await _restoreRegisterFromCache();
+      }
+      if (_lastSession == null) {
+        final cached = await _readCachedLastSession();
+        if (cached != null && cached['status'] == 'open') {
+          _lastSession = cached;
+        }
+      }
       return _lastSession?['status'] == 'open';
     }
 
