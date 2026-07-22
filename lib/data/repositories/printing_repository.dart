@@ -2641,6 +2641,14 @@ if ($items.Count -eq 0) {
     String? portHint,
     Duration timeout = const Duration(seconds: 10),
   }) async {
+    // Piso de 15s SOLO para este camino: cada impresión paga Add-Type
+    // (compila el helper de winspool) + Get-CimInstance (WMI, lento en
+    // frío) antes de escribir un solo byte. En hardware viejo eso come
+    // 5-8s y el timeout de 10s que traen los callers cortaba impresiones
+    // que iban bien.
+    final effectiveTimeout = timeout < const Duration(seconds: 15)
+        ? const Duration(seconds: 15)
+        : timeout;
     final base64Data = base64Encode(data);
     final result = await _runPowerShell('''
 \$ErrorActionPreference = 'Stop'
@@ -2763,7 +2771,7 @@ finally {
   if (\$docStarted) { [void][RawPrinterHelper]::EndDocPrinter(\$handle) }
   if (\$handle -ne [IntPtr]::Zero) { [void][RawPrinterHelper]::ClosePrinter(\$handle) }
 }
-''', timeout: timeout);
+''', timeout: effectiveTimeout);
 
     if (result.exitCode != 0) {
       final stderr = result.stderr.toString().trim();
@@ -2801,26 +2809,92 @@ finally {
     String script, {
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final result = await Process.run(_powerShellExecutable(), [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      script,
-    ]).timeout(timeout);
+    // Script a archivo .ps1 temporal + `-File`, en vez de `-Command` inline.
+    // Crítico para la impresión USB: la línea de comandos de Windows tiene
+    // un tope de ~32K caracteres y el ticket viaja en base64 DENTRO del
+    // script — una factura/comanda con logo (raster ESC/POS) lo excede y
+    // el proceso ni arrancaba. Era el "la página de prueba imprime pero la
+    // factura no" en USB Windows (el test es corto, el ticket real no).
+    // El archivo no tiene ese límite y además elimina los problemas de
+    // quoting del script inline.
+    final tempDir = await Directory.systemTemp.createTemp('mangopos_ps_');
+    final scriptFile = File('${tempDir.path}${Platform.pathSeparator}run.ps1');
+    // BOM UTF-8 obligatorio: PowerShell 5.1 lee los .ps1 SIN BOM como ANSI
+    // y corrompería nombres de impresora con acentos/ñ dentro del script.
+    await scriptFile.writeAsBytes(
+      <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(script)],
+      flush: true,
+    );
 
-    if (result.exitCode != 0) {
-      final stderr = result.stderr.toString().trim();
-      final stdout = result.stdout.toString().trim();
-      throw Exception(
-        [
-          if (stderr.isNotEmpty) stderr,
-          if (stdout.isNotEmpty) stdout,
-        ].join('\n'),
+    Process? process;
+    Timer? killer;
+    var killedByTimeout = false;
+    try {
+      process = await Process.start(_powerShellExecutable(), [
+        '-NoProfile',
+        '-NonInteractive',
+        // Reduce el flash de ventana de consola al imprimir desde el .exe.
+        '-WindowStyle',
+        'Hidden',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptFile.path,
+      ]);
+
+      // Drenar stdout/stderr desde el arranque (un output grande con los
+      // pipes llenos bloquearía al hijo) con la misma decodificación que
+      // usaba Process.run (systemEncoding).
+      final stdoutFuture =
+          process.stdout.transform(systemEncoding.decoder).join();
+      final stderrFuture =
+          process.stderr.transform(systemEncoding.decoder).join();
+
+      // Timeout REAL: mata el proceso. Antes se usaba `.timeout()` sobre el
+      // future de Process.run — el future expiraba pero el powershell
+      // quedaba vivo en background (fuga de procesos colgados cuando
+      // WMI/spooler se trababa).
+      final child = process;
+      killer = Timer(timeout, () {
+        killedByTimeout = true;
+        try {
+          child.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+      });
+
+      final exitCode = await process.exitCode;
+      killer.cancel();
+      final stdout = await stdoutFuture;
+      final stderr = await stderrFuture;
+
+      if (exitCode != 0) {
+        final err = stderr.trim();
+        final out = stdout.trim();
+        throw Exception(
+          [
+            if (killedByTimeout)
+              'PowerShell excedió ${timeout.inSeconds}s y fue terminado '
+                  '(WMI/spooler trabado).',
+            if (err.isNotEmpty) err,
+            if (out.isNotEmpty) out,
+            if (!killedByTimeout && err.isEmpty && out.isEmpty)
+              'PowerShell terminó con código $exitCode sin salida.',
+          ].join('\n'),
+        );
+      }
+
+      return ProcessResult(process.pid, exitCode, stdout, stderr);
+    } finally {
+      killer?.cancel();
+      // Limpieza best-effort del script temporal (contiene el payload del
+      // ticket): si Windows lo tiene bloqueado, systemTemp lo recoge luego.
+      unawaited(
+        tempDir.delete(recursive: true).then<void>(
+              (_) {},
+              onError: (_) {},
+            ),
       );
     }
-
-    return result;
   }
 
   String _toPowerShellSingleQuoted(String value) {
