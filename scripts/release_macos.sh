@@ -14,7 +14,7 @@ echo "📦 Versión detectada: $VERSION"
 echo "🔨 Compilando Flutter app para macOS..."
 flutter build macos --release
 
-APP_PATH="build/macos/Build/Products/Release/mangospos.app"
+APP_PATH="build/macos/Build/Products/Release/mangopos.app"
 if [ ! -d "$APP_PATH" ]; then
     echo "❌ Error: No se encontró la aplicación compilada en $APP_PATH"
     exit 1

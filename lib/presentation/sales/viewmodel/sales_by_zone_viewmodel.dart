@@ -199,13 +199,21 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       final zones = _visibleZones(cached.zones);
       if (zones.isEmpty) return;
 
+      // Overlays también en el pintado cache-first: el snapshot de zona
+      // contiene SOLO datos del server, así que sin esto una mesa abierta
+      // offline aparecía libre tras reiniciar la app sin red (hasta que el
+      // timer de la zona visible corriera loadZoneStatus).
+      final drafts = await _fetchDraftsByTable(businessId: bizId);
+      final hubTables = await _fetchHubTablesByTableId(businessId: bizId);
+
       final statusByZone = <String, List<TableStatus>>{};
       await Future.wait(zones.map((zone) async {
         final snap = await repo.loadCachedZoneStatus(zone.id);
         if (snap == null) return;
         final rows = List.of(snap.rows)
           ..sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
-        statusByZone[zone.id] = rows;
+        statusByZone[zone.id] =
+            _applyHubOverlay(_applyDraftOverlay(rows, drafts), hubTables);
       }));
 
       // Si otra carga concurrente ya llenó el estado, no pisar lo fresco.
@@ -309,15 +317,21 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         name: 'ByZoneViewModel',
         error: e,
       );
+      // Conservar lo último pintado: antes se asignaba lista vacía y TODAS
+      // las mesas de la zona (incluidas las cuentas abiertas) desaparecían
+      // del grid justo al caerse la red. Solo si nunca hubo datos dejamos
+      // la lista vacía para que la zona salga del skeleton.
+      final previousRows =
+          state.statusByZone[zoneId] ?? const <TableStatus>[];
       if (emitError) {
         state = state.copyWith(
-          statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
+          statusByZone: {...state.statusByZone, zoneId: previousRows},
           error: '$e',
           errorByZone: {...state.errorByZone, zoneId: '$e'},
         );
       } else {
         state = state.copyWith(
-          statusByZone: {...state.statusByZone, zoneId: const <TableStatus>[]},
+          statusByZone: {...state.statusByZone, zoneId: previousRows},
           errorByZone: {...state.errorByZone, zoneId: '$e'},
         );
       }
@@ -338,13 +352,15 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   }
 
   /// Lee los borradores locales pendientes UNA vez, indexados por tableId.
-  /// Best-effort: ante fallo devuelve mapa vacío (sin overlay).
+  /// [businessId] permite usarlo antes de que `state.businessId` esté seteado
+  /// (pintado cache-first en arranque frío). Best-effort: ante fallo devuelve
+  /// mapa vacío (sin overlay).
   Future<Map<String, ({String tableId, int itemsCount, double total})>>
-      _fetchDraftsByTable() async {
-    final businessId = state.businessId;
-    if (businessId == null || businessId.isEmpty) return const {};
+      _fetchDraftsByTable({String? businessId}) async {
+    final bizId = businessId ?? state.businessId;
+    if (bizId == null || bizId.isEmpty) return const {};
     try {
-      final drafts = await _offlinePos.listPendingTableDrafts(businessId);
+      final drafts = await _offlinePos.listPendingTableDrafts(bizId);
       return {for (final d in drafts) d.tableId: d};
     } catch (_) {
       return const {};
@@ -358,13 +374,21 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     if (byTable.isEmpty) return rows;
     return rows.map((r) {
       final d = byTable[r.tableId];
-      // Solo overlay si hay borrador Y el server no la muestra ya ocupada.
-      if (d == null || r.sessionId != null) return r;
+      if (d == null) return r;
+      // Overlay si el server la muestra LIBRE o con una sesión VACÍA. El
+      // segundo caso es la ventana de sync parcial: el replay de open_table
+      // ya creó la sesión real pero los ítems siguen en cola → sin overlay
+      // la tarjeta contaría como "disponible" pese a tener cuenta en vuelo.
+      final serverShowsContent =
+          r.sessionId != null && (r.itemsCount > 0 || r.ordersCount > 0);
+      if (serverShowsContent) return r;
       return TableStatus(
         tableId: r.tableId,
         zoneId: r.zoneId,
         code: r.code,
-        sessionId: 'local-draft',
+        // Si el server ya tiene sesión (vacía), conservamos su id real para
+        // que la hidratación cache-first de la mesa siga casando por sesión.
+        sessionId: r.sessionId ?? 'local-draft',
         ordersCount: 1,
         minutesOpen: r.minutesOpen,
         itemsCount: d.itemsCount > 0 ? d.itemsCount : 1,
@@ -389,25 +413,28 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     return _applyHubOverlay(rows, await _fetchHubTablesByTableId());
   }
 
-  /// Lee el salón del Hub UNA vez, indexado por tableId. Devuelve mapa
-  /// vacío si este equipo no está en modo hub, el Hub no es alcanzable o
-  /// la lectura falla (sin overlay).
-  Future<Map<String, Map<String, dynamic>>> _fetchHubTablesByTableId() async {
+  /// Lee el salón del Hub UNA vez, indexado por tableId. [businessId] permite
+  /// usarlo antes de que `state.businessId` esté seteado (cache-first).
+  /// Devuelve mapa vacío si este equipo no está en modo hub, el Hub no es
+  /// alcanzable o la lectura falla (sin overlay).
+  Future<Map<String, Map<String, dynamic>>> _fetchHubTablesByTableId({
+    String? businessId,
+  }) async {
     final mode = ref.read(hubModeProvider);
     if (mode != TerminalMode.hubClient && mode != TerminalMode.hubHost) {
       return const {};
     }
-    final businessId = state.businessId;
-    if (businessId == null || businessId.isEmpty) return const {};
+    final bizId = businessId ?? state.businessId;
+    if (bizId == null || bizId.isEmpty) return const {};
     try {
       List<Map<String, dynamic>> hubTables;
       if (mode == TerminalMode.hubHost) {
-        hubTables = await _offlinePos.localHubSalon(businessId);
+        hubTables = await _offlinePos.localHubSalon(bizId);
       } else {
         final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
         if (url == null) return const {};
         hubTables =
-            await HubClient().getSalon(url, businessId: businessId) ?? const [];
+            await HubClient().getSalon(url, businessId: bizId) ?? const [];
       }
       return {
         for (final t in hubTables)

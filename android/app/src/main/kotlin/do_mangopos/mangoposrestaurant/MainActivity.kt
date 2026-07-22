@@ -99,12 +99,19 @@ class MainActivity : FlutterActivity() {
 
         // Transporte Classic/RFCOMM (registra mangopos/classic_bt + events).
         classicBt.register(flutterEngine.dartExecutor.binaryMessenger)
+
+        // Impresión USB OTG síncrona/verificada (registra mangopos/usb_raw_printer).
+        usbRawPrinter.register(flutterEngine.dartExecutor.binaryMessenger)
     }
 
     // Transporte Classic/RFCOMM (SPP) para impresoras térmicas. El lado Dart
     // (ClassicBluetooth) lo usa para Fase 0 (bondedDevices+SPP) y como backend
     // de impresión cuando el equipo expone Classic.
     private val classicBt by lazy { ClassicBtPlugin(applicationContext) }
+
+    // Impresión USB OTG con bulkTransfer troceado y verificado (arregla los
+    // tickets que salían por la mitad con flutter_usb_printer).
+    private val usbRawPrinter by lazy { UsbRawPrinterPlugin(applicationContext) }
 
     private fun printerServiceIntent() =
         Intent(this, PrinterForegroundService::class.java)

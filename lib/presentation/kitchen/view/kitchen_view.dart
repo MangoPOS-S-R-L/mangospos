@@ -144,6 +144,66 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     super.dispose();
   }
 
+  /// Mismo criterio de "hecho" que la tarjeta: listo/servido, o pagado que
+  /// ya se cocinó (`ready_at` sellado).
+  bool _itemDoneForCard(KitchenItem item) =>
+      item.status == 'ready' ||
+      item.status == 'served' ||
+      (item.status == 'paid' && item.readyAt != null);
+
+  /// Al completar la comanda marcando círculo por círculo, pregunta si se
+  /// quiere imprimir la comanda. Aceptar DESPACHA la tarjeta (igual que
+  /// "Marcar todo listo": sus ítems pasan a 'served' y sale del tablero) e
+  /// imprime el ticket de LISTO aunque la config "Imprimir al marcar listo"
+  /// esté apagada (el usuario ya lo pidió; fallback a las impresoras normales
+  /// del área). "No" deja la tarjeta tachada en el tablero, como hasta ahora.
+  Future<void> _offerPrintReadyTicket(KitchenOrder order) async {
+    final shouldPrint = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Comanda completa'),
+        content: const Text(
+          'Marcaste todos los productos como listos. '
+          '¿Deseas imprimir la comanda y completar el pedido?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('No'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: MangoTokens.primary,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.print_rounded, size: 18),
+            label: const Text('Sí, imprimir'),
+          ),
+        ],
+      ),
+    );
+    if (shouldPrint != true || !mounted) return;
+
+    final notice = await ref.read(kitchenViewModelProvider).markOrderReady(
+          order.orderId,
+          itemIds: order.items.map((i) => i.id).toList(growable: false),
+          forcePrint: true,
+        );
+    if (notice != null && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(notice),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+    }
+  }
+
   // ============================================================
   // TABLERO
   // ============================================================
@@ -266,10 +326,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
             const SizedBox(height: 4),
             Text(
               'Las nuevas órdenes aparecerán aquí automáticamente.',
-              style: TextStyle(
-                fontSize: 13,
-                color: AppColors.mutedForeground,
-              ),
+              style: TextStyle(fontSize: 13, color: AppColors.mutedForeground),
             ),
           ],
         ),
@@ -288,8 +345,8 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         final columnCount = isMobile
             ? 1
             : ((constraints.maxWidth + gap) / (targetWidth + gap))
-                .floor()
-                .clamp(1, 6);
+                  .floor()
+                  .clamp(1, 6);
 
         final columns = List.generate(columnCount, (_) => <KitchenOrder>[]);
         for (var i = 0; i < orders.length; i++) {
@@ -309,9 +366,20 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         KitchenTicketCard(
                           key: ValueKey(order.roundKey),
                           order: order,
-                          onBumpItem: (itemId) => ref
-                              .read(kitchenViewModelProvider)
-                              .markReady(itemId),
+                          onBumpItem: (itemId) {
+                            // ¿Este círculo completa la tarjeta? Se evalúa
+                            // con el snapshot PREVIO al bump: todos los demás
+                            // ítems ya estaban hechos.
+                            final completesCard = order.items.every(
+                              (i) => i.id == itemId || _itemDoneForCard(i),
+                            );
+                            ref
+                                .read(kitchenViewModelProvider)
+                                .markReady(itemId);
+                            if (completesCard) {
+                              _offerPrintReadyTicket(order);
+                            }
+                          },
                           onCompleteOrder: (orderId) async {
                             // Completa SOLO los ítems de esta ronda/tarjeta.
                             final notice = await ref
@@ -469,10 +537,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
               color: AppColors.mutedForeground,
             ),
             const SizedBox(width: 8),
-            const Text(
-              'Área',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
+            const Text('Área', style: TextStyle(fontWeight: FontWeight.w600)),
             const SizedBox(width: 10),
             DropdownButtonHideUnderline(
               child: DropdownButton<String?>(
@@ -576,11 +641,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                 color: color.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(AppRadius.card),
               ),
-              child: Icon(
-                icon,
-                color: color,
-                size: isMobile ? 18 : 24,
-              ),
+              child: Icon(icon, color: color, size: isMobile ? 18 : 24),
             ),
             SizedBox(width: isMobile ? 8 : 12),
             Expanded(
@@ -619,238 +680,376 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     List<KitchenItem> completedItems,
   ) {
     // `completedItems` ya viene acotado a "hoy" por la vista kds_completed_today
-    // (día local de RD), así que solo agrupamos por comanda.
-    final orders = _groupOrdersFromItems(completedItems);
+    // (día local de RD). Filtros y orden viven en el diálogo (snapshot local).
+    final areasByCode = <String, String>{};
+    for (final item in completedItems) {
+      final code = item.areaCode?.trim() ?? '';
+      if (code.isEmpty) continue;
+      final name = item.areaName?.trim();
+      areasByCode[code] = (name == null || name.isEmpty) ? code : name;
+    }
+    final areaEntries = areasByCode.entries.toList()
+      ..sort((a, b) => a.value.toLowerCase().compareTo(b.value.toLowerCase()));
+    final totalOrders = _groupOrdersFromItems(completedItems).length;
+
+    var search = '';
+    String? areaFilter; // null = todas las áreas
+    var takeoutOnly = false;
+
+    DateTime completedAtOf(KitchenOrder order) => order.items
+        .map((e) => e.readyAt ?? e.createdAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
 
     showDialog(
       context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760, maxHeight: 700),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          // Área y "Para llevar" filtran por ÍTEM (una orden puede mezclar
+          // áreas); el texto busca a nivel de comanda (orden, mesa, mesero o
+          // producto). Las más recientes van arriba.
+          var filteredItems = completedItems;
+          if (areaFilter != null) {
+            filteredItems = filteredItems
+                .where((i) => (i.areaCode?.trim() ?? '') == areaFilter)
+                .toList(growable: false);
+          }
+          if (takeoutOnly) {
+            filteredItems = filteredItems
+                .where((i) => i.isTakeout)
+                .toList(growable: false);
+          }
+          var orders = _groupOrdersFromItems(filteredItems);
+          final q = search.trim().toLowerCase();
+          if (q.isNotEmpty) {
+            orders = orders
+                .where((o) {
+                  return o.orderNumber.toLowerCase().contains(q) ||
+                      o.orderId.toLowerCase().startsWith(q) ||
+                      (o.tableName ?? '').toLowerCase().contains(q) ||
+                      (o.waiterName ?? '').toLowerCase().contains(q) ||
+                      o.items.any(
+                        (i) => i.productName.toLowerCase().contains(q),
+                      );
+                })
+                .toList(growable: false);
+          }
+          orders.sort((a, b) => completedAtOf(b).compareTo(completedAtOf(a)));
+
+          final hasFilters = q.isNotEmpty || areaFilter != null || takeoutOnly;
+
+          return Dialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760, maxHeight: 700),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: MangoTokens.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Icon(
+                            Icons.checklist_rounded,
+                            color: MangoTokens.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Completados hoy', style: MangoTokens.h1()),
+                              const SizedBox(height: 6),
+                              Text(
+                                hasFilters
+                                    ? '${orders.length} de $totalOrders comandas · recientes primero'
+                                    : '$totalOrders comandas completadas en el día · recientes primero',
+                                style: MangoTokens.subtitle(),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Búsqueda por texto.
+                    SizedBox(
+                      height: 44,
+                      child: TextField(
+                        onChanged: (v) => setDialogState(() => search = v),
+                        style: MangoTokens.body(),
+                        decoration: InputDecoration(
+                          hintText:
+                              'Buscar por orden, mesa, mesero o producto…',
+                          hintStyle: MangoTokens.body(
+                            color: MangoTokens.mutedForeground,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.search_rounded,
+                            size: 20,
+                            color: MangoTokens.mutedForeground,
+                          ),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: const BorderSide(
+                              color: MangoTokens.border,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: const BorderSide(
+                              color: MangoTokens.primary,
+                              width: 1.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Filtros por área + para llevar (solo si aportan algo).
+                    if (areaEntries.isNotEmpty ||
+                        completedItems.any((i) => i.isTakeout)) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (areaEntries.isNotEmpty) ...[
+                            _CompletedFilterPill(
+                              label: 'Todas',
+                              selected: areaFilter == null,
+                              onTap: () =>
+                                  setDialogState(() => areaFilter = null),
+                            ),
+                            for (final entry in areaEntries)
+                              _CompletedFilterPill(
+                                label: entry.value,
+                                selected: areaFilter == entry.key,
+                                onTap: () => setDialogState(
+                                  () => areaFilter = entry.key,
+                                ),
+                              ),
+                          ],
+                          if (completedItems.any((i) => i.isTakeout))
+                            _CompletedFilterPill(
+                              label: 'Para llevar',
+                              icon: Icons.shopping_bag_outlined,
+                              selected: takeoutOnly,
+                              onTap: () => setDialogState(
+                                () => takeoutOnly = !takeoutOnly,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: orders.isEmpty
+                          ? Center(
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(24),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: MangoTokens.border),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.inbox_outlined,
+                                      size: 28,
+                                      color: MangoTokens.mutedForeground,
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      hasFilters
+                                          ? 'Ninguna comanda coincide con los filtros.'
+                                          : 'No hay comandas completadas hoy.',
+                                      style: MangoTokens.body(
+                                        color: MangoTokens.mutedForeground,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              itemCount: orders.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 12),
+                              itemBuilder: (context, index) {
+                                final order = orders[index];
+                                final completedAt = completedAtOf(order);
+                                return _completedOrderCard(order, completedAt);
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: MangoTokens.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          icon: const Icon(Icons.check_rounded, size: 18),
+                          label: const Text('Cerrar'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Tarjeta de una comanda en el diálogo "Completados hoy".
+  Widget _completedOrderCard(KitchenOrder order, DateTime completedAt) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: MangoTokens.border),
+        boxShadow: MangoTokens.shadowCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: MangoTokens.secondary,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_outlined,
+                  color: MangoTokens.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Orden ${order.orderNumber.isNotEmpty ? order.orderNumber : order.orderId.substring(0, 8).toUpperCase()}',
+                      style: MangoTokens.body().copyWith(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
+                      style: MangoTokens.label(),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: MangoTokens.secondary,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
+                  style: MangoTokens.label(
+                    color: MangoTokens.foreground,
+                  ).copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: MangoTokens.secondary,
+              borderRadius: BorderRadius.circular(14),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: MangoTokens.primary.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(
-                        Icons.checklist_rounded,
-                        color: MangoTokens.primary,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Completados hoy', style: MangoTokens.h1()),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${orders.length} comandas completadas en el día.',
-                            style: MangoTokens.subtitle(),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ],
+                Text(
+                  'Items completados',
+                  style: MangoTokens.label(
+                    color: MangoTokens.foreground,
+                  ).copyWith(fontWeight: FontWeight.w700),
                 ),
-                const SizedBox(height: 20),
-                Expanded(
-                  child: orders.isEmpty
-                      ? Center(
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(24),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(color: MangoTokens.border),
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.inbox_outlined,
-                                  size: 28,
-                                  color: MangoTokens.mutedForeground,
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  'No hay comandas completadas hoy.',
-                                  style: MangoTokens.body(
-                                    color: MangoTokens.mutedForeground,
-                                  ),
-                                ),
-                              ],
+                const SizedBox(height: 10),
+                ...order.items.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${_formatQty(item.quantity)}x',
+                          style: MangoTokens.body().copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: MangoTokens.primary,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            item.productName,
+                            style: MangoTokens.body().copyWith(
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        )
-                      : ListView.separated(
-                          itemCount: orders.length,
-                          separatorBuilder: (_, _) => const SizedBox(height: 12),
-                          itemBuilder: (context, index) {
-                            final order = orders[index];
-                            final completedAt = order.items
-                                .map((e) => e.readyAt ?? e.createdAt)
-                                .reduce((a, b) => a.isAfter(b) ? a : b);
-                            return Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: MangoTokens.border),
-                                boxShadow: MangoTokens.shadowCard,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Container(
-                                        width: 42,
-                                        height: 42,
-                                        decoration: BoxDecoration(
-                                          color: MangoTokens.secondary,
-                                          borderRadius: BorderRadius.circular(14),
-                                        ),
-                                        child: const Icon(
-                                          Icons.receipt_long_outlined,
-                                          color: MangoTokens.primary,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Orden ${order.orderNumber.isNotEmpty ? order.orderNumber : order.orderId.substring(0, 8).toUpperCase()}',
-                                              style: MangoTokens.body().copyWith(
-                                                fontWeight: FontWeight.w800,
-                                                fontSize: 16,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
-                                              style: MangoTokens.label(),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: MangoTokens.secondary,
-                                          borderRadius: BorderRadius.circular(999),
-                                        ),
-                                        child: Text(
-                                          '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
-                                          style: MangoTokens.label(
-                                            color: MangoTokens.foreground,
-                                          ).copyWith(fontWeight: FontWeight.w700),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: MangoTokens.secondary,
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Items completados',
-                                          style: MangoTokens.label(
-                                            color: MangoTokens.foreground,
-                                          ).copyWith(fontWeight: FontWeight.w700),
-                                        ),
-                                        const SizedBox(height: 10),
-                                        ...order.items.map(
-                                          (item) => Padding(
-                                            padding: const EdgeInsets.only(bottom: 8),
-                                            child: Row(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  '${_formatQty(item.quantity)}x',
-                                                  style: MangoTokens.body().copyWith(
-                                                    fontWeight: FontWeight.w800,
-                                                    color: MangoTokens.primary,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Expanded(
-                                                  child: Text(
-                                                    item.productName,
-                                                    style: MangoTokens.body().copyWith(
-                                                      fontWeight: FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
                         ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: MangoTokens.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 14,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      icon: const Icon(Icons.check_rounded, size: 18),
-                      label: const Text('Cerrar'),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -873,6 +1072,58 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
         items: list,
       );
     }).toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  }
+}
+
+/// Pastilla de filtro del diálogo "Completados hoy" (área / Para llevar).
+/// Seleccionada = fondo de marca con texto blanco; normal = borde sutil.
+class _CompletedFilterPill extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _CompletedFilterPill({
+    required this.label,
+    this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? Colors.white : MangoTokens.foreground;
+    return Material(
+      color: selected ? MangoTokens.primary : Colors.white,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(
+          color: selected ? MangoTokens.primary : MangoTokens.border,
+        ),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 15, color: fg),
+                const SizedBox(width: 5),
+              ],
+              Text(
+                label,
+                style: MangoTokens.label(
+                  color: fg,
+                ).copyWith(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

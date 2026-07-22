@@ -515,11 +515,17 @@ class OfflinePosService {
     }
   }
 
-  /// Lista las mesas con un borrador LOCAL de ESTE dispositivo aún no
-  /// sincronizado con el servidor (su orden sigue siendo `local-order-…`, así
-  /// que `v_zone_table_status` no las conoce). El grid del salón las overlaya
-  /// como ocupadas/pendientes para que NO desaparezcan al recargar desde el
-  /// server (p.ej. tras "limpiar caché" o un refresh). La visibilidad ENTRE
+  /// Lista las mesas con una cuenta LOCAL de ESTE dispositivo aún no
+  /// sincronizada por completo. Cubre dos casos:
+  ///   1. Borrador puro: la orden sigue siendo `local-order-…`, así que
+  ///      `v_zone_table_status` no la conoce.
+  ///   2. Sync PARCIAL: el replay de `open_table` ya creó la orden real y
+  ///      remapeó el snapshot (uuid real), pero quedan acciones de CONTENIDO
+  ///      (add_item, send_to_kitchen, etc.) sin sincronizar → el server
+  ///      muestra la sesión VACÍA. Sin overlay, la mesa se pinta libre y
+  ///      `fn_release_empty_tables` puede cerrarla con ítems aún en cola.
+  /// El grid del salón las overlaya como ocupadas/pendientes para que NO
+  /// desaparezcan al recargar desde el server. La visibilidad ENTRE
   /// terminales es tarea del Hub Local (F3), no de esto. Best-effort: una
   /// entrada corrupta se ignora. Devuelve tableId + conteo de ítems + total
   /// del borrador para pintar la tarjeta.
@@ -528,22 +534,57 @@ class OfflinePosService {
     final storage = await _storage;
     final prefix = 'offline_snapshot_${businessId}_';
     final keys = await storage.getKeysByPrefix(prefix);
+
+    // Órdenes con CONTENIDO pendiente en la cola (caso 2). Pagos y
+    // anulaciones no cuentan como contenido: un void pendiente significa
+    // que la cuenta se descartó, y un pago solo no debe revivir la mesa.
+    // Se indexa por id crudo Y por id remoto mapeado, porque el snapshot
+    // puede estar remapeado mientras las acciones siguen con el id local.
+    final pendingContentOrderIds = <String>{};
+    final voidedOrderIds = <String>{};
+    try {
+      final queue = await _readQueue(businessId);
+      final orderMap = await _readOrderMap(businessId);
+      for (final action in queue) {
+        if (_isSettled(action)) continue;
+        final type = action['type']?.toString();
+        final orderId = action['order_id']?.toString();
+        if (type == null || orderId == null || orderId.isEmpty) continue;
+        final mapped = orderMap[orderId]?.toString();
+        if (type == 'void_order') {
+          voidedOrderIds.add(orderId);
+          if (mapped != null && mapped.isNotEmpty) voidedOrderIds.add(mapped);
+          continue;
+        }
+        if (type == 'process_payment') continue;
+        pendingContentOrderIds.add(orderId);
+        if (mapped != null && mapped.isNotEmpty) {
+          pendingContentOrderIds.add(mapped);
+        }
+      }
+      pendingContentOrderIds.removeAll(voidedOrderIds);
+    } catch (_) {
+      // best-effort: sin cola legible, caemos al criterio local-order- solo.
+    }
+
     final result = <({String tableId, int itemsCount, double total})>[];
     for (final key in keys) {
       try {
         final payload = await _readSnapshot(storage, key);
         if (payload == null) continue;
-        // Solo borradores de MESA (no venta rápida/retail).
+        // Solo cuentas de MESA (no venta rápida/retail).
         if (payload['origin'] != 'table') continue;
         final tableId = payload['table_id'] as String?;
         if (tableId == null || tableId.isEmpty) continue;
         final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
         final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
         final orderId = order['id'] as String?;
-        // Solo las que el server NO conoce (orden local sin sincronizar). Al
-        // sincronizar, remapSnapshotOrderId reescribe el id a un uuid real y
-        // el server ya la muestra ocupada → deja de ser "pendiente".
-        if (orderId == null || !orderId.startsWith('local-order-')) continue;
+        if (orderId == null || orderId.isEmpty) continue;
+        final isLocalDraft = orderId.startsWith('local-order-');
+        final hasPendingContent = pendingContentOrderIds.contains(orderId);
+        // Una cuenta anulada offline no debe seguir ocupando la mesa.
+        if (voidedOrderIds.contains(orderId)) continue;
+        if (!isLocalDraft && !hasPendingContent) continue;
         final items = (state['items'] as List?) ?? const [];
         final total = (order['total'] as num?)?.toDouble() ?? 0;
         result.add((
@@ -876,6 +917,77 @@ class OfflinePosService {
       await _writeQueue(businessId, survivors);
     }
     return removed;
+  }
+
+  /// Id remoto mapeado para una orden local (`local-order-…`), o null si la
+  /// orden nunca llegó al server. Lo usa el flujo de anulación para decidir
+  /// entre descartar la orden local (nunca sincronizó) o anular la real.
+  Future<String?> mappedRemoteOrderId({
+    required String businessId,
+    required String localOrderId,
+  }) async {
+    if (businessId.isEmpty || localOrderId.isEmpty) return null;
+    try {
+      final map = await _readOrderMap(businessId);
+      final remote = map[localOrderId]?.toString();
+      return (remote == null || remote.isEmpty) ? null : remote;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Descarta por completo una orden LOCAL que el cajero anuló antes de que
+  /// sincronizara: elimina sus acciones no-completadas de la cola (open_table,
+  /// add_item, …) y borra sus snapshots. Sin esto, la cola recreaba la mesa
+  /// en el server al reconectar (mesa fantasma) y el snapshot mantenía la
+  /// mesa "ocupada" en el overlay del salón para siempre.
+  ///
+  /// SOLO aplica a órdenes `local-order-…` SIN mapping a server (si ya
+  /// sincronizó, lo correcto es anular la orden real vía void_order). Las
+  /// acciones ya `completed` se conservan como histórico de idempotencia.
+  Future<void> discardLocalOrder({
+    required String businessId,
+    required String localOrderId,
+  }) async {
+    if (businessId.isEmpty || !localOrderId.startsWith('local-order-')) {
+      return;
+    }
+    // Cola: fuera todas las acciones pendientes/failed/dead de esa orden.
+    try {
+      final queue = await _readQueue(businessId);
+      final survivors = queue.where((a) {
+        if (_isCompleted(a)) return true;
+        return a['order_id']?.toString() != localOrderId;
+      }).toList(growable: false);
+      if (survivors.length != queue.length) {
+        await _writeQueue(businessId, survivors);
+      }
+    } catch (e) {
+      debugPrint('OfflinePosService.discardLocalOrder cola: $e');
+    }
+    // Snapshots: cualquier slot (tableId o legacy sessionId) cuya orden sea
+    // la descartada. Con esto el overlay del salón libera la mesa.
+    try {
+      final storage = await _storage;
+      final prefix = 'offline_snapshot_${businessId}_';
+      final keys = await storage.getKeysByPrefix(prefix);
+      for (final key in keys) {
+        try {
+          final payload = await _readSnapshot(storage, key);
+          if (payload == null) continue;
+          final state =
+              Map<String, dynamic>.from(payload['state'] as Map? ?? {});
+          final order =
+              Map<String, dynamic>.from(state['order'] as Map? ?? {});
+          if (order['id']?.toString() != localOrderId) continue;
+          await storage.delete(key);
+        } catch (_) {
+          // snapshot corrupto → seguimos con el siguiente.
+        }
+      }
+    } catch (e) {
+      debugPrint('OfflinePosService.discardLocalOrder snapshots: $e');
+    }
   }
 
   /// Descarta todas las acciones de la cola para este business. Pensado

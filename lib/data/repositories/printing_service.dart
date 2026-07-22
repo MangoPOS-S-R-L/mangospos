@@ -1093,6 +1093,12 @@ class PrintingService {
     required String orderId,
     required String businessId,
     required List<String> itemIds,
+    // Impresión a petición explícita del usuario (modal del KDS al completar
+    // la comanda círculo a círculo): si el área no tiene impresora con
+    // "Imprimir al marcar listo" activo, cae a sus impresoras normales de
+    // comanda en vez de saltarse el área. El despacho automático ("Marcar
+    // todo listo") NO usa este fallback — ahí manda la configuración.
+    bool fallbackToAreaPrinters = false,
   }) async {
     try {
       final order = await _salesRepo.getOrder(orderId);
@@ -1124,13 +1130,21 @@ class PrintingService {
         final areaCode = entry.key;
         final areaItems = entry.value;
         final area = await _ensureAreaForCode(businessId, areaCode);
-        final printers = await _getReadyPrintersWithOfflineFallback(
+        var printers = await _getReadyPrintersWithOfflineFallback(
           businessId: businessId,
           areaId: area.id,
           areaCode: areaCode,
         );
+        if (printers.isEmpty && fallbackToAreaPrinters) {
+          try {
+            printers = await _printingRepo.getPrintersForArea(area.id);
+          } catch (_) {
+            // Se reporta abajo como área sin impresora.
+          }
+        }
         if (printers.isEmpty) {
-          // El área no tiene impresora con "Imprimir al marcar listo" activo.
+          // El área no tiene impresora con "Imprimir al marcar listo" activo
+          // (ni impresora normal, si se pidió el fallback).
           areasWithoutReadyPrinter.add(areaCode);
           continue;
         }

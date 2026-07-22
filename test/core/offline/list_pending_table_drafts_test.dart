@@ -1,6 +1,9 @@
+import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// §11.1 (Hub híbrido / anti-pérdida): `listPendingTableDrafts` devuelve las
@@ -41,6 +44,10 @@ void main() {
       }
       return null;
     });
+    // La conexión drift real necesita path_provider (no existe en tests);
+    // inyectamos una DB en memoria ANTES de que el service toque la cola.
+    OfflineQueueDb.debugInstance =
+        OfflineQueueDb.inMemory(NativeDatabase.memory());
   });
 
   setUp(() {
@@ -100,5 +107,104 @@ void main() {
       remoteOrderId: 'real-uuid-123',
     );
     expect(await svc.listPendingTableDrafts('biz-remap'), isEmpty);
+  });
+
+  test('mesa remapeada con contenido pendiente sigue en overlay (sync parcial)',
+      () async {
+    const biz = 'biz-partial';
+    final draft = await svc.createLocalDraft(
+      businessId: biz,
+      origin: 'table',
+      tableId: 'table-A',
+    );
+    final localId = draft.order!.id;
+    // add_item aún en cola con el id LOCAL (así quedan tras un sync parcial:
+    // open_table replayó, los ítems no).
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'origin': 'table',
+        'order_id': localId,
+        'item_id': 'tmp_1',
+        'qty': 1,
+      },
+    );
+    // Simula el replay de open_table: mapping local→remoto + remap snapshot.
+    final storage = await StorageService.getInstance();
+    await storage.writeJson(
+      'offline_order_map_$biz',
+      {localId: 'real-uuid-456'},
+    );
+    await svc.remapSnapshotOrderId(
+      businessId: biz,
+      localOrderId: localId,
+      remoteOrderId: 'real-uuid-456',
+    );
+    // Sin el criterio de contenido pendiente, la mesa desaparecería del
+    // overlay con la sesión del server aún vacía.
+    final drafts = await svc.listPendingTableDrafts(biz);
+    expect(drafts.length, 1);
+    expect(drafts.first.tableId, 'table-A');
+  });
+
+  test('void_order pendiente libera la mesa del overlay', () async {
+    const biz = 'biz-void';
+    final draft = await svc.createLocalDraft(
+      businessId: biz,
+      origin: 'table',
+      tableId: 'table-A',
+    );
+    final localId = draft.order!.id;
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'void_order',
+        'origin': 'table',
+        'order_id': localId,
+      },
+    );
+    expect(await svc.listPendingTableDrafts(biz), isEmpty);
+  });
+
+  test('discardLocalOrder purga cola y snapshot de la orden local', () async {
+    const biz = 'biz-discard';
+    final draft = await svc.createLocalDraft(
+      businessId: biz,
+      origin: 'table',
+      tableId: 'table-A',
+    );
+    final localId = draft.order!.id;
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'open_table',
+        'origin': 'table',
+        'order_id': localId,
+        'table_id': 'table-A',
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'origin': 'table',
+        'order_id': localId,
+        'item_id': 'tmp_1',
+        'qty': 2,
+      },
+    );
+    expect(await svc.pendingActionsCount(biz), 2);
+
+    await svc.discardLocalOrder(businessId: biz, localOrderId: localId);
+
+    // Ni acciones pendientes (no se recrea la mesa al reconectar) ni
+    // snapshot (el overlay suelta la mesa).
+    expect(await svc.pendingActionsCount(biz), 0);
+    expect(await svc.listPendingTableDrafts(biz), isEmpty);
+    expect(
+      await svc.loadSnapshot(businessId: biz, slotId: 'table-A'),
+      isNull,
+    );
   });
 }

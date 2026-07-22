@@ -359,7 +359,14 @@ class KitchenViewModel extends ChangeNotifier {
   /// Devuelve un aviso para el usuario cuando el ticket LISTO no pudo salir
   /// porque el área no tiene impresora con "Imprimir al marcar listo" activa.
   /// `null` = todo bien (imprimió o no había nada que imprimir).
-  Future<String?> markOrderReady(String orderId, {List<String>? itemIds}) async {
+  Future<String?> markOrderReady(
+    String orderId, {
+    List<String>? itemIds,
+    // Impresión pedida explícitamente por el usuario (modal al completar la
+    // comanda círculo a círculo): imprime aunque el área no tenga "Imprimir
+    // al marcar listo" activo, cayendo a sus impresoras normales de comanda.
+    bool forcePrint = false,
+  }) async {
     final scope = itemIds?.toSet();
     bool inScope(KitchenItem i) =>
         i.orderId == orderId && (scope == null || scope.contains(i.id));
@@ -428,6 +435,7 @@ class KitchenViewModel extends ChangeNotifier {
             orderId: orderId,
             businessId: _businessId!,
             itemIds: allActiveIds,
+            fallbackToAreaPrinters: forcePrint,
           );
           // Avisar SIEMPRE que un área se haya saltado por falta de impresora
           // de "listo" — incluso si OTRA área sí imprimió (caso parcial: p. ej.
@@ -435,7 +443,14 @@ class KitchenViewModel extends ChangeNotifier {
           // que el salto parcial quedaba mudo y el usuario no sabía por qué su
           // segunda área nunca imprimía el ticket de LISTO.
           if (report.missingReadyPrinter) {
-            notice = _readyPrinterNotice(report.areasWithoutReadyPrinter);
+            // Con forcePrint el fallback ya intentó las impresoras normales:
+            // llegar aquí = el área no tiene NINGUNA impresora asignada.
+            notice = forcePrint
+                ? 'La comanda no salió en: '
+                    '${_areaNames(report.areasWithoutReadyPrinter)}. Esa área '
+                    'no tiene ninguna impresora asignada en Ajustes → '
+                    'Impresoras.'
+                : _readyPrinterNotice(report.areasWithoutReadyPrinter);
           }
         } catch (e) {
           debugPrint('Error printing ready ticket: $e');
@@ -452,20 +467,23 @@ class KitchenViewModel extends ChangeNotifier {
     }
   }
 
-  /// Mensaje amigable cuando ninguna área imprimió el ticket LISTO por falta
-  /// de una impresora con "Imprimir al marcar listo" activa. Traduce los
-  /// códigos de área a nombres legibles usando las áreas cargadas.
-  String _readyPrinterNotice(List<String> areaCodes) {
+  /// Traduce códigos de área a nombres legibles usando las áreas cargadas.
+  String _areaNames(List<String> areaCodes) {
     final names = areaCodes.map((code) {
       for (final a in _availableAreas) {
         if (a.code == code) return a.name;
       }
       return code;
     }).toList(growable: false);
-    final areas = names.isEmpty ? 'un área' : names.join(', ');
-    return 'El ticket de LISTO no salió en: $areas. Esa área no tiene una '
-        'impresora con "Imprimir al marcar listo" activado. Actívalo en '
-        'Ajustes → Impresoras → Asignaciones de área.';
+    return names.isEmpty ? 'un área' : names.join(', ');
+  }
+
+  /// Mensaje amigable cuando ninguna área imprimió el ticket LISTO por falta
+  /// de una impresora con "Imprimir al marcar listo" activa.
+  String _readyPrinterNotice(List<String> areaCodes) {
+    return 'El ticket de LISTO no salió en: ${_areaNames(areaCodes)}. Esa '
+        'área no tiene una impresora con "Imprimir al marcar listo" '
+        'activado. Actívalo en Ajustes → Impresoras → Asignaciones de área.';
   }
 
   void _subscribeRealtime(SupabaseClient client, String businessId) {

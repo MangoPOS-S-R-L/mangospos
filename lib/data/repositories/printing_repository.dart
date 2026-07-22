@@ -6,8 +6,11 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/services.dart'
+    show MissingPluginException, PlatformException;
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 
+import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
@@ -2142,7 +2145,98 @@ class PrintingRepository {
       );
     }
     final (vendorId, productId) = ids;
+    final bytes = Uint8List.fromList(data);
 
+    // Camino principal: canal nativo propio (mangopos/usb_raw_printer) con
+    // escritura síncrona, troceada y verificada byte a byte. Es el arreglo de
+    // "imprime la mitad": el write de flutter_usb_printer devolvía antes de
+    // transferir y el close() cortaba la impresión en curso.
+    try {
+      await _printUsbAndroidNative(
+        printerName: printer.name,
+        vendorId: vendorId,
+        productId: productId,
+        bytes: bytes,
+      );
+      return;
+    } on MissingPluginException {
+      // Build sin el canal nativo (p.ej. hot-reload sobre APK viejo):
+      // caemos al plugin legado para no dejar de imprimir.
+      debugPrint('[USB-Android] canal usb_raw_printer ausente, usando legado');
+    }
+
+    await _printUsbAndroidLegacy(
+      printerName: printer.name,
+      vendorId: vendorId,
+      productId: productId,
+      bytes: bytes,
+    );
+  }
+
+  /// Escritura por el canal nativo. Si el vid/pid guardado ya no está
+  /// presente (reconexión con otro puerto/cable), cae a la primera impresora
+  /// USB conectada — cubre el caso típico de una sola térmica por OTG.
+  Future<void> _printUsbAndroidNative({
+    required String printerName,
+    required int vendorId,
+    required int productId,
+    required Uint8List bytes,
+  }) async {
+    try {
+      await AndroidUsbRawPrinter.write(
+        vendorId: vendorId,
+        productId: productId,
+        data: bytes,
+      );
+      return;
+    } on PlatformException catch (e) {
+      if (e.code != 'usb_device_not_found') {
+        throw Exception(_humanizeUsbError(printerName, e));
+      }
+    }
+
+    // vid/pid guardado no coincide con lo conectado: probar la primera.
+    final devices = await AndroidUsbRawPrinter.listDevices();
+    final d = devices.isEmpty ? null : devices.first;
+    final vid = int.tryParse(d?['vendorId']?.toString() ?? '');
+    final pid = int.tryParse(d?['productId']?.toString() ?? '');
+    if (vid == null || pid == null) {
+      throw Exception(
+        'No se encontró la impresora USB "$printerName". '
+        'Verifica el cable OTG y que la impresora esté encendida.',
+      );
+    }
+    try {
+      await AndroidUsbRawPrinter.write(vendorId: vid, productId: pid, data: bytes);
+    } on PlatformException catch (e) {
+      throw Exception(_humanizeUsbError(printerName, e));
+    }
+  }
+
+  String _humanizeUsbError(String printerName, PlatformException e) {
+    switch (e.code) {
+      case 'usb_permission_denied':
+        return 'Android no concedió el permiso USB para "$printerName". '
+            'Acepta el diálogo de permiso cuando aparezca.';
+      case 'usb_transfer_failed':
+        return 'La impresora "$printerName" dejó de aceptar datos a mitad del '
+            'ticket (${e.message}). Revisa cable OTG y papel.';
+      default:
+        return 'Error imprimiendo por USB en "$printerName": '
+            '${e.message ?? e.code}';
+    }
+  }
+
+  /// Camino legado vía flutter_usb_printer. OJO: su write() nativo dispara el
+  /// bulkTransfer en un hilo suelto y responde de inmediato, así que aquí
+  /// espaciamos los bloques y damos margen antes de close() para no cortar la
+  /// transferencia en curso (la causa de los tickets a la mitad).
+  Future<void> _printUsbAndroidLegacy({
+    required String printerName,
+    required int vendorId,
+    required int productId,
+    required Uint8List bytes,
+  }) async {
     final usb = FlutterUsbPrinter();
     bool connected = false;
 
@@ -2174,20 +2268,25 @@ class PrintingRepository {
 
     if (!connected) {
       throw Exception(
-        'No se pudo conectar a la impresora USB "${printer.name}". '
+        'No se pudo conectar a la impresora USB "$printerName". '
         'Verifica el cable OTG y acepta el permiso USB cuando Android lo pida.',
       );
     }
 
     try {
-      // El bulkTransfer de USB puede quedarse corto con tickets grandes
-      // (logos), así que troceamos en bloques de 16 KB.
-      final bytes = Uint8List.fromList(data);
-      const chunk = 16 * 1024;
+      // Bloques de 4 KB (< límite de 16 KB de bulkTransfer en Android viejo)
+      // con pausa entre bloques: cada write nativo es fire-and-forget, así
+      // que la pausa da tiempo a que el hilo anterior termine de transferir
+      // antes de encolar el siguiente (mantiene el orden en la práctica).
+      const chunk = 4 * 1024;
       for (var i = 0; i < bytes.length; i += chunk) {
         final end = (i + chunk < bytes.length) ? i + chunk : bytes.length;
         await usb.write(Uint8List.sublistView(bytes, i, end));
+        await Future.delayed(const Duration(milliseconds: 120));
       }
+      // Margen extra antes de cerrar: close() sobre una transferencia en
+      // curso es exactamente lo que cortaba los tickets a la mitad.
+      await Future.delayed(const Duration(milliseconds: 700));
     } finally {
       try {
         await usb.close();

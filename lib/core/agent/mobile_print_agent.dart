@@ -15,6 +15,8 @@ import 'package:flutter/foundation.dart';
 // flutter_blue_plus_windows: wrapper cross-platform. Re-exporta APIs de
 // flutter_blue_plus en no-Windows y usa win_ble_plus en Windows.
 import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart';
+import 'package:flutter/services.dart'
+    show MissingPluginException, PlatformException;
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -23,6 +25,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../printing/android_usb_raw_printer.dart';
 import '../offline/hub/hub_config.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
@@ -740,7 +743,43 @@ class MobilePrintAgent {
     final vendorId = int.tryParse(printer['vendorId']?.toString() ?? '');
     final productId = int.tryParse(printer['productId']?.toString() ?? '');
 
-    // Try connecting by vendorId/productId first
+    // Camino principal: canal nativo propio con bulkTransfer troceado y
+    // verificado (arregla tickets a la mitad). Fallback por vid/pid ausente
+    // o build sin el canal → plugin legado abajo.
+    if (vendorId != null && productId != null) {
+      try {
+        await AndroidUsbRawPrinter.write(
+          vendorId: vendorId,
+          productId: productId,
+          data: data,
+        );
+        return;
+      } on MissingPluginException {
+        debugPrint('[MobileAgent] usb_raw_printer ausente, usando legado');
+      } on PlatformException catch (e) {
+        if (e.code == 'usb_device_not_found') {
+          // vid/pid guardado ya no coincide: probar la primera conectada.
+          final devices = await AndroidUsbRawPrinter.listDevices();
+          if (devices.isNotEmpty) {
+            final vid =
+                int.tryParse(devices.first['vendorId']?.toString() ?? '');
+            final pid =
+                int.tryParse(devices.first['productId']?.toString() ?? '');
+            if (vid != null && pid != null) {
+              await AndroidUsbRawPrinter.write(
+                  vendorId: vid, productId: pid, data: data);
+              return;
+            }
+          }
+          throw Exception('No USB printers found');
+        }
+        throw Exception('USB print failed: ${e.message ?? e.code}');
+      }
+    }
+
+    // Camino legado (flutter_usb_printer). Su write() nativo es
+    // fire-and-forget: espaciamos bloques y damos margen antes de close()
+    // para no cortar la transferencia en curso.
     bool connected = false;
     if (vendorId != null && productId != null) {
       connected = await _usbPrinter.connect(vendorId, productId) ?? false;
@@ -766,7 +805,13 @@ class MobilePrintAgent {
     }
 
     try {
-      await _usbPrinter.write(data);
+      const chunk = 4 * 1024;
+      for (var i = 0; i < data.length; i += chunk) {
+        final end = (i + chunk < data.length) ? i + chunk : data.length;
+        await _usbPrinter.write(Uint8List.sublistView(data, i, end));
+        await Future.delayed(const Duration(milliseconds: 120));
+      }
+      await Future.delayed(const Duration(milliseconds: 700));
     } finally {
       await _usbPrinter.close();
     }

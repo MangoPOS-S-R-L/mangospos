@@ -25,11 +25,14 @@ bool _isDone(KitchenItem item) =>
     item.status == 'served' ||
     (item.status == 'paid' && item.readyAt != null);
 
-/// Solo se puede marcar a mano (bump) un ítem que la cocina aún está
-/// trabajando. Un ítem ya pagado sin cocinar se completa con "Marcar todo
-/// listo" (no se puede cambiar su status sin afectar el cobro).
+/// Se puede marcar a mano (bump) un ítem que la cocina aún está trabajando.
+/// Incluye los ya pagados sin cocinar (modo "esperar al cocinero" / venta
+/// rápida): el viewmodel los sella solo con `ready_at`, sin tocar su status
+/// de cobro (ver `KitchenViewModel.markReady`).
 bool _canBump(KitchenItem item) =>
-    item.status == 'pending' || item.status == 'preparing';
+    item.status == 'pending' ||
+    item.status == 'preparing' ||
+    (item.status == 'paid' && item.readyAt == null);
 
 /// 🧾 Comanda del tablero de cocina (tema claro, colores MangoPOS).
 ///
@@ -129,10 +132,12 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // La mesa manda SIEMPRE en el título (aunque todo sea para llevar, el
+    // corredor necesita saber a qué mesa entregar la funda); "Para llevar"
+    // se comunica con el badge, no reemplazando la mesa.
     final table = order.tableName?.trim();
-    final title = allTakeout
-        ? 'Para llevar'
-        : (table == null || table.isEmpty ? 'Mostrador' : table);
+    final hasTable = table != null && table.isNotEmpty;
+    final title = hasTable ? table : (allTakeout ? 'Para llevar' : 'Mostrador');
 
     // Área de producción de la tarjeta. Todos los ítems de una tarjeta comparten
     // área (la vista agrupa por área), así que basta el primero. Vacío = ítems
@@ -183,7 +188,8 @@ class _Header extends StatelessWidget {
                       const SizedBox(width: 8),
                       const _AreaBadge(name: 'Sin área', warning: true),
                     ],
-                    if (allTakeout) ...[
+                    // Solo si el título no dice ya "Para llevar".
+                    if (allTakeout && hasTable) ...[
                       const SizedBox(width: 8),
                       const _TakeoutBadge(),
                     ],

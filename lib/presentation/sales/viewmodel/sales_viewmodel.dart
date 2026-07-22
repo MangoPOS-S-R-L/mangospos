@@ -89,6 +89,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // disco (async) solo aplica si su token sigue siendo el actual — abrir la
   // mesa A y saltar rápido a la B no debe pintar el snapshot de A.
   int _openTableToken = 0;
+  // Mesa actualmente cargada en el state (origin == 'table'). Es la clave
+  // canónica del snapshot offline de la mesa: TODAS las lecturas
+  // (fallback de openTable, hidratación cache-first, overlay del salón)
+  // buscan el snapshot por tableId, así que las escrituras de
+  // _persistCurrentState deben usar la MISMA clave. Antes, las mutaciones
+  // offline persistían bajo sessionId → un slot que nadie leía, y al
+  // reentrar a la mesa sin red la cuenta aparecía como al abrirla
+  // (vacía si todo se agregó en esa sesión).
+  String? _activeTableId;
   // Retail: slotId del carrito de venta rápida actualmente activo. null en
   // restaurante o cuando no hay carritos retail. Es la clave del snapshot
   // offline del carrito activo (persistencia por carrito). Ver
@@ -882,24 +891,40 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
+    // Para mesas, la clave del snapshot es SIEMPRE el tableId (es la que
+    // leen el fallback offline de openTable, la hidratación cache-first y
+    // el overlay del salón). Si el caller no lo pasó (mutaciones de ítem),
+    // usamos la mesa activa del viewmodel.
+    final effectiveTableId =
+        tableId ?? (origin == 'table' ? _activeTableId : null);
+
     await _offlinePos.saveSnapshot(
       businessId: businessId,
-      slotId: _resolvePersistSlotId(origin, tableId),
+      slotId: _resolvePersistSlotId(origin, effectiveTableId),
       origin: origin,
-      tableId: tableId,
+      tableId: effectiveTableId,
       state: state,
       localOnly: localOnly,
     );
+
+    // Mantener fresco también el cache en memoria de la mesa: antes solo se
+    // actualizaba al abrir/cargar, así que salir y volver a la mesa tras una
+    // mutación offline pintaba el estado viejo.
+    if (origin == 'table' && effectiveTableId != null) {
+      _tableCache[effectiveTableId] = state;
+    }
   }
 
   /// Clave de snapshot para persistir el state actual. Retail quick usa el
-  /// slotId del carrito activo (un snapshot por carrito); el resto conserva el
-  /// comportamiento legacy (sessionId para mesas, origin para quick/manual).
+  /// slotId del carrito activo (un snapshot por carrito); mesas usan el
+  /// tableId; quick/manual usan el origin.
   String _resolvePersistSlotId(String origin, String? tableId) {
     if (tableId != null) return tableId;
     if (origin == 'quick' && _activeRetailSlotId != null) {
       return _activeRetailSlotId!;
     }
+    // Mesa sin tableId resoluble (no debería pasar): conservamos el
+    // comportamiento legacy para no tirar el snapshot.
     if (origin == 'table') return state.order?.sessionId ?? origin;
     return origin;
   }
@@ -1146,6 +1171,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // que abrir una mesa ya visitada se sienta instantáneo). Si no,
     // limpiamos completo. La data autoritativa llega en _loadOrderDetail.
     final myOpenToken = ++_openTableToken;
+    _activeTableId = tableId;
     final cached = _tableCache[tableId];
     if (cached != null) {
       state = _normalizeHydratedState(
@@ -1947,6 +1973,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String origin, {
     bool forceReset = false,
   }) async {
+    // Al pasar a quick/manual ya no hay mesa activa; sin esto una mutación
+    // posterior con origin 'table' residual persistiría al slot equivocado.
+    _activeTableId = null;
     await _ensureBusinessTaxSettingsLoaded();
     if (!await ensureCashSessionOpen()) return;
 
@@ -3594,11 +3623,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     Future<void> enqueueVoidOffline() async {
       if (businessId == null || businessId.isEmpty) return;
-      // Si la orden aún es local (nunca llegó al server) no tiene sentido
-      // encolar — al cajero ya no le importa esa orden, simplemente
-      // descartamos. El espejo local del void se aplica abajo con el
-      // reset del state.
-      if (orderId.startsWith('local-order-')) return;
+      if (orderId.startsWith('local-order-')) {
+        final mappedRemoteId = await _offlinePos.mappedRemoteOrderId(
+          businessId: businessId,
+          localOrderId: orderId,
+        );
+        if (mappedRemoteId == null) {
+          // La orden nunca llegó al server: purgamos sus acciones encoladas
+          // y snapshots. Antes solo se reseteaba la UI y la cola recreaba la
+          // mesa al reconectar (mesa fantasma) mientras el overlay del salón
+          // la seguía mostrando ocupada.
+          await _offlinePos.discardLocalOrder(
+            businessId: businessId,
+            localOrderId: orderId,
+          );
+          _tableCache.removeWhere((_, s) => s.order?.id == orderId);
+          return;
+        }
+        // Ya sincronizó en background: la orden real existe en el server,
+        // hay que anularla de verdad. void_order con el id local resuelve
+        // al remoto vía el mapping en el replay.
+      }
       await _offlinePos.enqueueAction(
         businessId: businessId,
         action: <String, dynamic>{
@@ -4003,6 +4048,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
 
+      // Refrescar el salón cuando el sync aplicó cambios: las mesas recién
+      // creadas en server ya no dependen del overlay local y las anuladas
+      // deben soltarse. Antes el grid quedaba stale hasta que Realtime o el
+      // timer de 10s de la zona visible lo refrescara.
+      if (result.completed > 0) {
+        try {
+          unawaited(ref.read(byZoneVmProvider.notifier).load(businessId));
+        } catch (_) {
+          // best-effort: el refresh del salón nunca rompe el sync.
+        }
+      }
+
       final syncMessage = !result.didWork
           ? (result.pending > 0
                 ? 'Sync pendiente. Operaciones en espera.'
@@ -4136,6 +4193,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previousOrderId = state.order?.id;
     final previousOrigin = state.origin;
     final tableCacheHit = tableId != null && _tableCache.containsKey(tableId);
+    // Cargas de mesa con tableId explícito fijan la mesa activa (clave del
+    // snapshot offline). Las recargas sin tableId (realtime/refresh) heredan
+    // la mesa activa vigente vía _persistCurrentState.
+    if (tableId != null && origin == 'table') {
+      _activeTableId = tableId;
+    }
     if (state.order?.id != orderId) {
       _hasManualFiscalTypeSelection = false;
     }
