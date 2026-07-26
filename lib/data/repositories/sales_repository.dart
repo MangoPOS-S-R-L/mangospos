@@ -210,6 +210,49 @@ class SalesRepository {
   /// múltiples métodos — sólo anula ESE pago y deja a la orden en
   /// partially_paid. Si es el único pago, mantiene la anulación total
   /// (annulOrder).
+  /// Pre-validación para anular ventas a CRÉDITO: si alguna cuenta por
+  /// cobrar abierta de la orden ya tiene abonos, bloquea con mensaje claro —
+  /// hay dinero del cliente recibido que habría que devolver, y eso se
+  /// resuelve manualmente antes de anular. El trigger server-side
+  /// `trg_payment_cancel_customer_credit` (mig 20260725_0003) es el backstop
+  /// y además cancela la CxC automáticamente al anular el pago.
+  Future<void> _ensureCreditAnnullable(String orderId) async {
+    try {
+      final rows = await _client
+          .from('customer_credits')
+          .select('id, balance, original_amount, status')
+          .eq('order_id', orderId)
+          .inFilter('status', ['pending', 'partial', 'overdue']);
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final balance = ((row['balance'] as num?) ?? 0).toDouble();
+        final original = ((row['original_amount'] as num?) ?? 0).toDouble();
+        if (row['status'] == 'partial' || balance < original - 0.01) {
+          throw Exception(
+            'La venta a crédito ya tiene abonos registrados. Resuelve o '
+            'devuelve los abonos antes de anularla.',
+          );
+        }
+      }
+    } on PostgrestException {
+      // Sin acceso/tabla: no bloqueamos por el pre-check; el trigger
+      // server-side sigue siendo el backstop.
+    }
+  }
+
+  /// Best-effort tras anular pago(s) credit: cancela las CxC abiertas de la
+  /// orden. Redundante cuando la mig 20260725_0003 está aplicada (el trigger
+  /// ya lo hizo y no quedan filas abiertas); cubre BD sin la mig cuando el
+  /// usuario es owner/admin (RLS cc_admin_update). Silencioso a propósito.
+  Future<void> _cancelOpenCreditsForOrder(String orderId) async {
+    try {
+      await _client
+          .from('customer_credits')
+          .update({'status': 'cancelled'})
+          .eq('order_id', orderId)
+          .inFilter('status', ['pending', 'partial', 'overdue']);
+    } catch (_) {}
+  }
+
   Future<void> annulPayment({
     required String paymentId,
     required String orderId,
@@ -292,6 +335,13 @@ class SalesRepository {
         paymentMethodCode = methodRaw?['code']?.toString();
       }
 
+      // Venta a crédito: si su CxC ya tiene abonos, bloquear ANTES de tocar
+      // nada (el trigger server-side también lo bloquea, pero aquí damos el
+      // mensaje amigable sin dejar estado a medias).
+      if (paymentMethodCode == 'credit') {
+        await _ensureCreditAnnullable(trimmedOrderId);
+      }
+
       await _client
           .from('payments')
           .update({'status': 'cancelled'})
@@ -358,6 +408,10 @@ class SalesRepository {
           });
         }
       }
+
+      if (paymentMethodCode == 'credit') {
+        await _cancelOpenCreditsForOrder(trimmedOrderId);
+      }
     } catch (e) {
       throw Exception('Error al anular pago: $e');
     }
@@ -423,6 +477,17 @@ class SalesRepository {
       }
       final oldCode = oldMethodId == null ? '' : (codeById[oldMethodId] ?? '');
       final newCode = codeById[trimmedNewMethodId] ?? '';
+
+      // Crédito no se puede corregir aquí: cambiar el método dejaría la
+      // cuenta por cobrar huérfana (o no la crearía — el trigger corre solo
+      // en INSERT). Anular el pago y cobrar de nuevo es el camino seguro.
+      if (oldCode == 'credit' || newCode == 'credit') {
+        throw Exception(
+          'Los pagos a crédito no se pueden corregir desde aquí. Anula el '
+          'pago (la cuenta por cobrar se cancela sola) y cobra de nuevo con '
+          'el método correcto.',
+        );
+      }
 
       // Cambia el método del pago.
       await _client
@@ -2520,6 +2585,11 @@ class SalesRepository {
   /// Anular orden y sus pagos
   Future<void> annulOrder({required String orderId, String? reason}) async {
     try {
+      // 0. Venta a crédito con abonos: bloquear ANTES de cerrar/anular nada
+      // (el trigger de payments también bloquearía, pero ya con la orden
+      // cerrada como void — estado a medias).
+      await _ensureCreditAnnullable(orderId);
+
       // 1. Obtener pagos asociados
       final paymentsRaw = await _client
           .from('payments')
@@ -2557,6 +2627,9 @@ class SalesRepository {
           .from('fiscal_documents')
           .update({'status': 'cancelled'})
           .eq('order_id', orderId);
+
+      // 6. Cancelar CxC abiertas de la orden (venta a crédito anulada).
+      await _cancelOpenCreditsForOrder(orderId);
     } catch (e) {
       throw Exception('Error al anular orden: $e');
     }

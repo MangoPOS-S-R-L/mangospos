@@ -3822,6 +3822,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
 
       if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+        // sendLocalOrderToKitchen ya encola su propio 'confirm_local_order'
+        // (con printed_areas para que el replay marque sin reimprimir). Antes
+        // aquí se encolaba ADEMÁS un 'send_to_kitchen' → dos replays por
+        // envío: el primero reimprimía la comanda entera online y el segundo
+        // moría con "No hay items nuevos" (op veneno, caso 2026-07-25).
         await ref
             .read(printingServiceProvider)
             .sendLocalOrderToKitchen(
@@ -3832,14 +3837,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               waiterName: waiterName ?? session.userName,
               businessName: session.activeBusinessName,
             );
-        await _offlinePos.enqueueAction(
-          businessId: businessId,
-          action: {
-            'type': 'send_to_kitchen',
-            'origin': state.origin,
-            'order_id': orderId,
-          },
-        );
 
         // Espejo local del RPC fn_confirm_order_to_kitchen: marca los
         // items en estado draft/open como pending para que la UI los
@@ -3867,6 +3864,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return null;
       }
 
+      // Ítems que ESTE device ya sabe enviados (p.ej. impresos por el camino
+      // local/offline con replay aún pendiente): el server puede tenerlos
+      // todavía en draft — sin excluirlos, la comanda saldría ENTERA
+      // (rondas viejas + nuevas). Caso real Android 2026-07-25.
+      final locallySentIds = state.items
+          .where((i) => i.status != 'draft' && i.status != 'open')
+          .map((i) => i.id)
+          .toSet();
+
       final result = await ref
           .read(printingServiceProvider)
           .sendOrderToKitchen(
@@ -3874,6 +3880,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             fallbackTableName: tableName,
             fallbackWaiterName: waiterName ?? session.userName,
+            excludeItemIds: locallySentIds,
           );
       refreshOrder();
       return result;

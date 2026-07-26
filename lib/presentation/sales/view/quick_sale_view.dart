@@ -94,17 +94,27 @@ class QuickSaleView extends ConsumerWidget {
                               order: paidOrder,
                               // F4/venta rápida: imprime el comprobante con su
                               // NCF (del server online, o el del Hub offline).
-                              onComprobante: (payment, fiscalDoc) =>
-                                  _printQuickSaleComprobante(
-                                    ref,
-                                    order: paidOrder,
-                                    items: printItems,
-                                    payment: payment,
-                                    fiscalNcf: fiscalDoc?.ncfNumber,
-                                    fiscalType: fiscalDoc?.ncfType,
-                                    customerName: fiscalDoc?.customerName,
-                                    customerTaxId: fiscalDoc?.customerRnc,
-                                  ),
+                              // El nombre del cliente sale del modal de cobro
+                              // (tecleado o picker): el fiscal_document cae a
+                              // "Consumidor Final" en venta rápida porque el
+                              // RPC no recibe el nombre y la sesión virtual no
+                              // tiene customer_name.
+                              onComprobante:
+                                  (payment, fiscalDoc, modalCustomerName) =>
+                                      _printQuickSaleComprobante(
+                                        ref,
+                                        order: paidOrder,
+                                        items: printItems,
+                                        payment: payment,
+                                        fiscalNcf: fiscalDoc?.ncfNumber,
+                                        fiscalType: fiscalDoc?.ncfType,
+                                        customerName:
+                                            (modalCustomerName?.trim().isNotEmpty ??
+                                                    false)
+                                                ? modalCustomerName!.trim()
+                                                : fiscalDoc?.customerName,
+                                        customerTaxId: fiscalDoc?.customerRnc,
+                                      ),
                               onPaymentSuccess: () {
                                 ref
                                     .read(currentOrderProvider.notifier)

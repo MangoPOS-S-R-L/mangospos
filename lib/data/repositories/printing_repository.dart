@@ -13,6 +13,7 @@ import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
@@ -83,6 +84,12 @@ class PrintingRepository {
     _assignedPrinterCache.clear();
     _orderPrintersCache.clear();
   }
+
+  /// Vacía las caches estáticas en memoria de lookups de impresión (áreas,
+  /// impresora asignada, impresoras de la orden). Para "Limpiar caché del
+  /// sistema": borrar solo el disco no basta porque estas viven hasta 5 min
+  /// (TTL) y seguirían sirviendo la configuración vieja recién limpiada.
+  static void clearInMemoryLookupCaches() => _clearLookupCaches();
 
   String _assignedPrinterLookupKey({
     required String businessId,
@@ -3387,6 +3394,18 @@ finally {
     return _tryRecoverPrinterIpByMac(printer, currentIp);
   }
 
+  /// Última vez que se intentó un escaneo LAN nativo por impresora, para no
+  /// barrer la subred en cada ticket cuando una impresora está apagada.
+  /// Static: sobrevive a instancias nuevas del repositorio.
+  static final Map<String, DateTime> _lanScanLastAttempt = {};
+  static const Duration _lanScanCooldown = Duration(seconds: 60);
+
+  static bool _lanScanCooldownExpired(String printerId) {
+    final last = _lanScanLastAttempt[printerId];
+    if (last == null) return true;
+    return DateTime.now().difference(last) >= _lanScanCooldown;
+  }
+
   Future<String?> _tryRecoverPrinterIpByMac(
     PrinterConfig printer,
     String currentIp,
@@ -3403,11 +3422,24 @@ finally {
       // un resolve anterior, sin skip nos devolvería de nuevo lo mismo
       // y caeríamos en loop. Forzar re-resolución fresca evita el loop
       // y triggera el scan del /24 para encontrar la IP actual real.
-      final newIp = await _localService.resolveIpByMac(
+      var newIp = await _localService.resolveIpByMac(
         mac: mac,
         printerId: printer.id,
         skipCache: true,
       );
+      // Sin agente (Android): escaneo nativo desde la app. Cooldown por
+      // impresora para que una impresora apagada no dispare un barrido de
+      // la subred (~3s) en cada ticket.
+      if (newIp == null &&
+          LanMacRecovery.isSupported &&
+          _lanScanCooldownExpired(printer.id)) {
+        _lanScanLastAttempt[printer.id] = DateTime.now();
+        newIp = await LanMacRecovery.resolveIpByMac(
+          mac: mac,
+          tcpPort: printer.port ?? 9100,
+          excludeIp: currentIp,
+        );
+      }
       if (newIp == null) return null;
       if (newIp == currentIp) return null; // sigue siendo la misma, no actualizar
 
@@ -3455,7 +3487,10 @@ finally {
 
     Future.microtask(() async {
       try {
-        final mac = await _localService.captureMacForIp(ip);
+        // Agente local primero (escritorio); en Android no hay agente, así
+        // que cae al capturador nativo (ip neigh → SNMP) de la app.
+        var mac = await _localService.captureMacForIp(ip);
+        mac ??= await LanMacRecovery.captureMacForIp(ip);
         if (mac == null) return;
         await updatePrinter(printerId: printerId, mac: mac);
         debugPrint('[PrinterRecovery] MAC capturado para $printerId: $mac');

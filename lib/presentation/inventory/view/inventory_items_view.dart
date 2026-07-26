@@ -146,6 +146,61 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     }
   }
 
+  Future<void> _confirmDelete(InventoryItemSummary item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar insumo'),
+        content: Text(
+          '¿Seguro que quieres eliminar "${item.name}"?\n\n'
+          'Si el insumo tiene historial (kardex, recetas o compras) se '
+          'marcará como Inactivo para no perder esos registros.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.destructive,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _loading = true);
+    try {
+      final hardDeleted = await _repo.deleteItem(itemId: item.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            hardDeleted
+                ? 'Insumo "${item.name}" eliminado.'
+                : 'El insumo "${item.name}" tiene historial: '
+                    'se marcó como Inactivo.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error eliminando insumo: $e'),
+          backgroundColor: AppColors.destructive,
+        ),
+      );
+      return;
+    }
+    await _loadItems();
+  }
+
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(
@@ -205,6 +260,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                         currency: currency,
                         loading: _loading,
                         onEdit: (i) => _openForm(edit: i),
+                        onDelete: _confirmDelete,
                       ),
                     ],
                   ),
@@ -339,12 +395,14 @@ class _ItemsTable extends StatelessWidget {
   final NumberFormat currency;
   final bool loading;
   final void Function(InventoryItemSummary) onEdit;
+  final void Function(InventoryItemSummary) onDelete;
 
   const _ItemsTable({
     required this.items,
     required this.currency,
     required this.loading,
     required this.onEdit,
+    required this.onDelete,
   });
 
   @override
@@ -387,6 +445,7 @@ class _ItemsTable extends StatelessWidget {
                 item: i,
                 currency: currency,
                 onEdit: onEdit,
+                onDelete: onDelete,
               ),
             ),
         ],
@@ -411,7 +470,7 @@ class _ItemsTable extends StatelessWidget {
                 Expanded(flex: 2, child: _h('Costo')),
                 Expanded(flex: 2, child: _h('Stock')),
                 Expanded(flex: 1, child: _h('Estado')),
-                const SizedBox(width: 60),
+                const SizedBox(width: 96),
               ],
             ),
           ),
@@ -423,6 +482,7 @@ class _ItemsTable extends StatelessWidget {
               item: i,
               currency: currency,
               onEdit: onEdit,
+              onDelete: onDelete,
               isLast: last,
             );
           }),
@@ -445,12 +505,14 @@ class _ItemRow extends StatelessWidget {
   final InventoryItemSummary item;
   final NumberFormat currency;
   final void Function(InventoryItemSummary) onEdit;
+  final void Function(InventoryItemSummary) onDelete;
   final bool isLast;
 
   const _ItemRow({
     required this.item,
     required this.currency,
     required this.onEdit,
+    required this.onDelete,
     required this.isLast,
   });
 
@@ -552,14 +614,25 @@ class _ItemRow extends StatelessWidget {
                 : _Pill(text: 'Inactivo', color: AppColors.mutedForeground),
           ),
           SizedBox(
-            width: 60,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                tooltip: 'Editar',
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                onPressed: () => onEdit(item),
-              ),
+            width: 96,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                IconButton(
+                  tooltip: 'Editar',
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  onPressed: () => onEdit(item),
+                ),
+                IconButton(
+                  tooltip: 'Eliminar',
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: AppColors.destructive,
+                  ),
+                  onPressed: () => onDelete(item),
+                ),
+              ],
             ),
           ),
         ],
@@ -575,11 +648,13 @@ class _InventoryItemCardMobile extends StatelessWidget {
   final InventoryItemSummary item;
   final NumberFormat currency;
   final void Function(InventoryItemSummary) onEdit;
+  final void Function(InventoryItemSummary) onDelete;
 
   const _InventoryItemCardMobile({
     required this.item,
     required this.currency,
     required this.onEdit,
+    required this.onDelete,
   });
 
   @override
@@ -641,6 +716,20 @@ class _InventoryItemCardMobile extends StatelessWidget {
                   IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 18),
                     onPressed: () => onEdit(item),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 28,
+                      minHeight: 28,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: AppColors.destructive,
+                    ),
+                    onPressed: () => onDelete(item),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(
                       minWidth: 28,

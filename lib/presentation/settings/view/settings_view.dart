@@ -8,6 +8,7 @@ import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/cache/cache_manager.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/core/offline/hub/hub_mode.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/presentation/settings/hub/hub_network_settings_view.dart';
@@ -102,8 +103,11 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Se borrarán datos temporales locales para forzar una recarga fresca del sistema. '
-                'No se cerrará tu sesión ni se eliminarán operaciones offline pendientes.',
+                'Se borrarán datos temporales locales, incluida la configuración '
+                'cacheada (impresoras, ajustes del negocio, secuencias fiscales), '
+                'para forzar una recarga fresca del sistema. '
+                'No se cerrará tu sesión ni se eliminarán operaciones offline pendientes. '
+                'Hazlo con conexión a internet para que la configuración se recargue al momento.',
               ),
               if (pendingOffline > 0) ...[
                 const SizedBox(height: 12),
@@ -188,6 +192,10 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
 
     try {
       final result = await CacheManager().clearSystemCache();
+      // Las caches en memoria de impresión (áreas/impresora asignada) son
+      // estáticas con TTL de 5 min: sin esto seguirían sirviendo la config
+      // vieja aunque el disco ya quedó limpio.
+      PrintingRepository.clearInMemoryLookupCaches();
       if (!context.mounted) return;
 
       Navigator.of(context, rootNavigator: true).pop();

@@ -890,9 +890,10 @@ final rolePresets = <String, RolePresetDefinition>{
       'pagos.cobrar_transferencia',
       'pagos.asignar_referencia',
       'pagos.reimprimir_recibo',
-      // Créditos — vender fiao y recibir abonos en caja
+      // Créditos — recibir abonos en caja. Vender a crédito NO: esa
+      // decisión es de supervisor/gerente en adelante ('creditos.vender'
+      // vive en el preset manager; owner/admin por wildcard).
       'creditos.acceso',
-      'creditos.vender',
       'creditos.abonar',
       // Caja
       'caja.apertura',

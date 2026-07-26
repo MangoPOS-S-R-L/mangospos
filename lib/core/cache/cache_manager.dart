@@ -61,6 +61,15 @@ class CacheManager {
       'offline_catalog_',
       'printing_cached_printers_',
       'printing_cached_ready_printers_',
+      // Configuración cacheada (copias de datos del servidor, se recargan
+      // en la próxima lectura online). Sin esto, "Limpiar caché" no servía
+      // para el caso típico: cambiaste impresoras/impuestos/ajustes en el
+      // dashboard y la app seguía usando la copia vieja.
+      'printing_assigned_printer_', // impresora asignada por área
+      'printing_business_name_', // nombre del negocio en tickets
+      'fiscal_sequences_cache_', // secuencias NCF
+      'offline_business_settings_', // ajustes del negocio (impuestos, fees)
+      'cashier_register_', // caja resuelta por negocio
     ];
 
     const exactKeys = [

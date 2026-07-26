@@ -58,15 +58,34 @@ class CreditsRepository {
     return Map<String, dynamic>.from(response as Map);
   }
 
+  /// Cancela (condona) una cuenta por cobrar. NO revierte la venta ni el
+  /// NCF — es un write-off: la deuda se perdona y libera el cupo del
+  /// cliente. Graba quién/cuándo (mig 20260725_0003); si la BD aún no tiene
+  /// esas columnas (42703), cae al update legacy de status+notes.
   Future<void> cancelReceivable(String creditId, {String? reason}) async {
-    await _client
-        .from(CreditsQueries.tableCustomerCredits)
-        .update({
-          'status': 'cancelled',
-          if (reason != null && reason.trim().isNotEmpty)
-            'notes': reason.trim(),
-        })
-        .eq('id', creditId);
+    final base = <String, dynamic>{
+      'status': 'cancelled',
+      if (reason != null && reason.trim().isNotEmpty) 'notes': reason.trim(),
+    };
+    try {
+      await _client
+          .from(CreditsQueries.tableCustomerCredits)
+          .update({
+            ...base,
+            'cancelled_by': _client.auth.currentUser?.id,
+            'cancelled_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', creditId);
+    } on PostgrestException catch (e) {
+      if (e.code == '42703') {
+        await _client
+            .from(CreditsQueries.tableCustomerCredits)
+            .update(base)
+            .eq('id', creditId);
+      } else {
+        rethrow;
+      }
+    }
   }
 
   /// Situación crediticia del cliente para validar ANTES de cobrar a crédito:
@@ -99,6 +118,7 @@ class CreditsRepository {
       creditLimit: (customer?['credit_limit'] as num?)?.toDouble(),
       creditDays: (customer?['credit_days'] as num?)?.toInt(),
       openBalance: openBalance,
+      customerFound: customer != null,
     );
   }
 
@@ -209,11 +229,17 @@ class CustomerCreditStanding {
   final int? creditDays;
   final double openBalance;
 
+  /// false = la consulta de `customers` no devolvió fila para ese id +
+  /// business (cliente de otra sucursal, o RLS). Distinto de "crédito
+  /// deshabilitado" — la UI debe explicar el caso, no decir "sin crédito".
+  final bool customerFound;
+
   const CustomerCreditStanding({
     required this.creditEnabled,
     required this.creditLimit,
     required this.creditDays,
     required this.openBalance,
+    this.customerFound = true,
   });
 
   /// null = sin límite configurado.

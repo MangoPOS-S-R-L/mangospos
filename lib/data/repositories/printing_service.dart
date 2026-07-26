@@ -158,6 +158,15 @@ class PrintingService {
     required String businessId,
     String? fallbackTableName,
     String? fallbackWaiterName,
+    // Ítems que el DEVICE ya sabe enviados aunque el server aún los tenga
+    // en draft (se imprimieron por el camino local/offline y su replay no
+    // ha corrido). Sin esto, el envío online reimprimía la comanda ENTERA
+    // (rondas viejas + nuevas) cuando el server iba atrasado — caso real
+    // Android 2026-07-25.
+    Set<String> excludeItemIds = const {},
+    // Áreas ya impresas localmente (replay offline): se marcan en server
+    // pero NO se vuelven a imprimir.
+    Set<String> excludeAreaCodes = const {},
   }) async {
     try {
       // 1. Obtener información de la orden
@@ -188,6 +197,7 @@ class PrintingService {
 
       final draftItems = items
           .where((item) => item.status == 'draft' || item.status == 'open')
+          .where((item) => !excludeItemIds.contains(item.id))
           .toList(growable: false);
 
       if (draftItems.isEmpty) {
@@ -243,6 +253,12 @@ class PrintingService {
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
+
+        // Área ya impresa localmente (replay): marcada arriba vía
+        // sendToKitchen, sin reimpresión.
+        if (excludeAreaCodes.contains(areaCode)) {
+          continue;
+        }
 
         areasByCode[areaCode] ??= await _ensureAreaForCode(
           businessId,
@@ -1078,6 +1094,10 @@ class PrintingService {
             'order_id': order.id,
             'origin': localState.origin,
             'item_count': draftItems.length,
+            // El replay reimprime SOLO las áreas que quedaron sin impresora;
+            // las ya impresas localmente solo se marcan (sin duplicar papel).
+            'printed_areas': createdJobs.keys.toList(growable: false),
+            'missing_areas': stillMissing,
           },
         );
         throw Exception(
@@ -1095,6 +1115,10 @@ class PrintingService {
         'order_id': order.id,
         'origin': localState.origin,
         'item_count': draftItems.length,
+        // Todo salió impreso local: el replay solo debe MARCAR los items en
+        // server (sin reimprimir la comanda — antes re-despachaba todas las
+        // áreas = comanda duplicada al sincronizar).
+        'printed_areas': createdJobs.keys.toList(growable: false),
       },
     );
 

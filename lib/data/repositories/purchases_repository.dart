@@ -203,6 +203,11 @@ class PurchasesRepository {
     // maestro del insumo (inventory_items.cost). El costo ya viene en unidad
     // base (la vista convirtió desde la unidad de compra).
     bool updateItemCost = false,
+    // Descuento GLOBAL de la orden en RD$ (pronto pago, acuerdo comercial).
+    // Es financiero: no se prorratea a las líneas ni toca costos/kardex.
+    // Los descuentos POR LÍNEA no viajan aquí: ya vienen dentro del unitCost
+    // (descontado) + discountAmount informativo de cada PurchaseDraftItem.
+    double discount = 0,
   }) async {
     if (items.isEmpty) {
       throw Exception('Debes agregar al menos una linea a la orden.');
@@ -211,7 +216,8 @@ class PurchasesRepository {
     final subtotal = items.fold<double>(0, (sum, item) => sum + item.total);
     // ITBIS absoluto por línea (o derivado del % en el modo heredado).
     final tax = items.fold<double>(0, (sum, item) => sum + item.taxValue);
-    final total = subtotal + tax;
+    final orderDiscount = discount.clamp(0, subtotal + tax).toDouble();
+    final total = subtotal + tax - orderDiscount;
 
     // Cuando el usuario registra la compra ya "Recibida", NO insertamos la
     // orden directamente en ese estado: la creamos como 'sent' (pendiente) y
@@ -233,6 +239,10 @@ class PurchasesRepository {
           'status': insertStatus,
           'subtotal': subtotal,
           'tax': tax,
+          // Solo se manda la columna cuando hay descuento: así las compras
+          // sin descuento siguen funcionando aunque la migración
+          // 20260725_0001 (columna discount) no esté aplicada todavía.
+          if (orderDiscount > 0) 'discount': orderDiscount,
           'total': total,
           'expected_date': expectedDate.toIso8601String().split('T').first,
           'notes': notes,
@@ -256,9 +266,13 @@ class PurchasesRepository {
               // ya convirtió desde la unidad de compra). El snapshot de
               // empaque permite mostrar/recibir en la unidad de compra.
               'quantity_ordered': item.quantity,
+              // unit_cost va YA descontado (costo real): kardex y costo
+              // maestro correctos sin tocar la RPC de recepción. El
+              // descuento de la línea queda aparte como dato de auditoría.
               'unit_cost': item.unitCost,
               'tax_rate': item.taxRate,
               'total': item.total,
+              if (item.discountAmount > 0) 'discount': item.discountAmount,
               'purchase_unit':
                   item.purchaseUnit.trim().isEmpty ? null : item.purchaseUnit.trim(),
               'pack_size': item.packSize,

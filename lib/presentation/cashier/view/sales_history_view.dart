@@ -1417,11 +1417,29 @@ mixin _PaymentActionsMixin {
 
       if (!context.mounted) return;
 
-      // 2) Elegir el nuevo método.
+      // 2) Elegir el nuevo método. Crédito queda fuera en ambas direcciones:
+      // cambiar de/hacia crédito dejaría la cuenta por cobrar huérfana (o no
+      // la crearía). El repo también lo bloquea como backstop.
+      final codeById = {
+        for (final m in methods)
+          m['id']?.toString() ?? '': m['code']?.toString() ?? '',
+      };
       final currentMethodId = target['payment_method_id']?.toString();
+      if (codeById[currentMethodId ?? ''] == 'credit') {
+        AppToast.info(
+          context,
+          'Los pagos a crédito no se pueden corregir aquí. Anula el pago '
+          '(la cuenta por cobrar se cancela sola) y cobra de nuevo con el '
+          'método correcto.',
+        );
+        return;
+      }
+      final selectableMethods = methods
+          .where((m) => (m['code']?.toString() ?? '') != 'credit')
+          .toList();
       final newMethodId = await _pickPaymentMethodDialog(
         context,
-        methods,
+        selectableMethods,
         currentMethodId,
       );
       if (newMethodId == null || newMethodId == currentMethodId) return;

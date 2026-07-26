@@ -902,6 +902,41 @@ class InventoryRepository {
         .eq('id', itemId);
   }
 
+  /// Elimina un insumo. Si nunca tuvo movimientos en el kardex intenta el
+  /// borrado real (limpiando antes sus filas de stock, que sin movimientos
+  /// están en 0); si tiene historial o lo referencian recetas/compras/
+  /// producción (FK restrict), cae a soft-delete via [setItemActive].
+  /// Devuelve `true` si el borrado fue real, `false` si quedó desactivado.
+  Future<bool> deleteItem({required String itemId}) async {
+    final movements = await _client
+        .from(InventoryQueries.tableInventoryMovements)
+        .select('id')
+        .eq('item_id', itemId)
+        .limit(1);
+    final hasHistory = (movements as List).isNotEmpty;
+
+    if (!hasHistory) {
+      try {
+        await _client
+            .from(InventoryQueries.tableInventoryStock)
+            .delete()
+            .eq('item_id', itemId);
+        await _client
+            .from(InventoryQueries.tableInventoryItems)
+            .delete()
+            .eq('id', itemId);
+        return true;
+      } on PostgrestException catch (e) {
+        // 23503 = foreign_key_violation: lo referencia una receta, compra,
+        // producción, etc. → conservamos el registro y lo desactivamos.
+        if (e.code != '23503') rethrow;
+      }
+    }
+
+    await setItemActive(itemId: itemId, isActive: false);
+    return false;
+  }
+
   Future<void> recordMovement({
     required String businessId,
     required String warehouseId,

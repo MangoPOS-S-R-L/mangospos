@@ -39,11 +39,32 @@ class PaymentModal extends ConsumerStatefulWidget {
 
   /// Hook que imprime el COMPROBANTE con el resultado del pago, ANTES de que
   /// el modal haga pop (cuando el estado aún tiene el payment + el
-  /// fiscal_document). Recibe el pago procesado y el fiscal_document — que
+  /// fiscal_document). Recibe el pago procesado, el fiscal_document — que
   /// trae el NCF del server (online) o el NCF asignado offline por el Hub
-  /// (F4). Si es null, no se imprime. Usado por venta rápida.
-  final Future<void> Function(Payment payment, FiscalDocument? fiscalDoc)?
-      onComprobante;
+  /// (F4) — y el nombre de cliente capturado en el modal (tecleado o del
+  /// picker). El nombre viaja aparte porque el RPC fiscal no recibe
+  /// p_customer_name: el fiscal_document cae a "Consumidor Final" y el
+  /// nombre tecleado solo existe en el estado del modal. Si es null, no se
+  /// imprime. Usado por venta rápida.
+  final Future<void> Function(
+    Payment payment,
+    FiscalDocument? fiscalDoc,
+    String? customerName,
+  )? onComprobante;
+
+  /// Código de método de pago a preseleccionar al abrir (ej. 'credit' para
+  /// el flujo "Cobrar a crédito" del riel de mesa). Si el método no está
+  /// disponible (offline, sin permiso), el modal abre sin selección.
+  final String? initialMethodCode;
+
+  /// Modo SOLO crédito ("Cobrar a crédito" desde la mesa): oculta los demás
+  /// métodos de pago, las tabs de división, el banner de impresora y la
+  /// sección de efectivo — queda comprobante + cliente + resumen.
+  final bool creditOnly;
+
+  /// Cliente para pre-llenar el panel de crédito (el asignado a la mesa).
+  final String? initialCustomerId;
+  final String? initialCustomerName;
 
   const PaymentModal({
     super.key,
@@ -52,6 +73,10 @@ class PaymentModal extends ConsumerStatefulWidget {
     required this.onPaymentSuccess,
     this.onOfflineQueued,
     this.onComprobante,
+    this.initialMethodCode,
+    this.creditOnly = false,
+    this.initialCustomerId,
+    this.initialCustomerName,
   });
 
   @override
@@ -94,7 +119,12 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       } else {
         ref
             .read(paymentViewModelProvider.notifier)
-            .initializeForOrder(widget.order);
+            .initializeForOrder(
+              widget.order,
+              initialMethodCode: widget.initialMethodCode,
+              initialCustomerId: widget.initialCustomerId,
+              initialCustomerName: widget.initialCustomerName,
+            );
       }
       // Pre-validación: sondea la impresora fiscal/cashier asignada
       // mientras el cajero ve el modal. Si está caída, mostramos un
@@ -150,7 +180,11 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         // modal. Un fallo de impresión no traba el cierre.
         final printCb = widget.onComprobante;
         if (printCb != null && state.processedPayment != null) {
-          unawaited(printCb(state.processedPayment!, state.fiscalDocument));
+          unawaited(printCb(
+            state.processedPayment!,
+            state.fiscalDocument,
+            state.customerName,
+          ));
         }
         // Si el pago se encoló offline, disparamos el hook ANTES del pop
         // para que el caller imprima la precuenta con el modal todavía
@@ -204,33 +238,35 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                   // ANTES de cobrar. El pago sí procede normal — el
                   // ticket se podrá reimprimir desde el historial
                   // cuando la impresora vuelva.
-                  if (_printerOnline == false) ...[
+                  if (_printerOnline == false && !widget.creditOnly) ...[
                     _PrinterOfflineBanner(printerName: _probedPrinterName),
                     const SizedBox(height: AppSpacing.sm),
                   ],
                   const SizedBox(height: AppSpacing.sm),
 
-                  // Tabs de Divisi\u00f3n
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _TabButton(
-                          label: 'Pago Completo',
-                          active: widget.check == null,
-                          onTap: () {},
+                  // Tabs de Divisi\u00f3n (sin sentido en modo solo-cr\u00e9dito)
+                  if (!widget.creditOnly) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _TabButton(
+                            label: 'Pago Completo',
+                            active: widget.check == null,
+                            onTap: () {},
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: AppSpacing.lg),
-                      Expanded(
-                        child: _TabButton(
-                          label: 'Dividir Cuenta',
-                          active: widget.check != null,
-                          onTap: () {},
+                        const SizedBox(width: AppSpacing.lg),
+                        Expanded(
+                          child: _TabButton(
+                            label: 'Dividir Cuenta',
+                            active: widget.check != null,
+                            onTap: () {},
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.xxl),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xxl),
+                  ],
 
                   // Mensajes de Error
                   if (state.offlineQueued)
@@ -314,7 +350,8 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                                 _buildFiscalSelector(state, viewModel),
                               if (state.availableNcfTypes.length > 1)
                                 const SizedBox(height: AppSpacing.xl),
-                              _buildPaymentMethods(state, viewModel),
+                              if (!widget.creditOnly)
+                                _buildPaymentMethods(state, viewModel),
                               const Spacer(),
                               _buildTotalsSummary(state),
                             ],
@@ -374,9 +411,11 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                                     BorderRadius.circular(AppRadius.lg),
                               ),
                             ),
-                            child: const Text(
-                              'COMPLETAR PAGO',
-                              style: TextStyle(
+                            child: Text(
+                              widget.creditOnly
+                                  ? 'REGISTRAR CRÉDITO'
+                                  : 'COMPLETAR PAGO',
+                              style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1,
@@ -440,7 +479,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                 borderRadius: BorderRadius.circular(AppRadius.lg),
               ),
               child: Icon(
-                Icons.wallet,
+                widget.creditOnly ? Icons.request_quote_outlined : Icons.wallet,
                 color: AppColors.primary,
                 size: 28,
               ),
@@ -450,7 +489,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Procesar Pago',
+                  widget.creditOnly ? 'Venta a Crédito' : 'Procesar Pago',
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -735,24 +774,28 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               );
             },
           ),
-          const Divider(height: 24),
-          _SummaryRow(
-              label: 'Recibido', value: paid, color: AppColors.success),
-          const SizedBox(height: AppSpacing.sm),
-          if (pending > 0)
+          // Modo solo-crédito: no hay "Recibido/Pendiente/Cambio" — nada
+          // entra a caja; el total completo queda como cuenta por cobrar.
+          if (!widget.creditOnly) ...[
+            const Divider(height: 24),
             _SummaryRow(
-              label: 'Pendiente',
-              value: pending,
-              color: AppColors.destructive,
-              isBold: true,
-            ),
-          if (change > 0)
-            _SummaryRow(
-              label: 'Cambio',
-              value: change,
-              color: AppColors.primary,
-              isBold: true,
-            ),
+                label: 'Recibido', value: paid, color: AppColors.success),
+            const SizedBox(height: AppSpacing.sm),
+            if (pending > 0)
+              _SummaryRow(
+                label: 'Pendiente',
+                value: pending,
+                color: AppColors.destructive,
+                isBold: true,
+              ),
+            if (change > 0)
+              _SummaryRow(
+                label: 'Cambio',
+                value: change,
+                color: AppColors.primary,
+                isBold: true,
+              ),
+          ],
         ],
       ),
     );
@@ -760,6 +803,29 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
 
   Widget _buildRightSide(PaymentState state, PaymentViewModel viewModel) {
     if (state.selectedMethod == null) {
+      // Modo solo-cr\u00e9dito sin m\u00e9todo disponible: no hay nada que el cajero
+      // pueda "seleccionar" \u2014 explicamos por qu\u00e9 (offline o el m\u00e9todo
+      // credit no existe todav\u00eda en este negocio).
+      if (widget.creditOnly) {
+        return Center(
+          child: Container(
+            padding: const EdgeInsets.all(AppSpacing.xl),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              border: Border.all(color: const Color(0xFFFDBA74)),
+            ),
+            child: const Text(
+              'La venta a cr\u00e9dito no est\u00e1 disponible en este momento. '
+              'Requiere conexi\u00f3n a internet.',
+              style: TextStyle(
+                color: Color(0xFF7C2D12),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        );
+      }
       return Center(
         child: Text(
           'Selecciona un m\u00e9todo',
@@ -1725,6 +1791,13 @@ class _CreditStandingInfoState extends State<_CreditStandingInfo> {
           );
         }
         final standing = snapshot.data!;
+        if (!standing.customerFound) {
+          return _warnBox(
+            'No encontramos la ficha de este cliente en el negocio activo '
+            '(puede ser de otra sucursal). Elige otro cliente o créalo en '
+            'la sección Clientes.',
+          );
+        }
         if (!standing.creditEnabled) {
           return _warnBox(
             'Este cliente NO tiene crédito habilitado. Actívalo en su '
@@ -1846,6 +1919,13 @@ class _CreditCustomerPickerDialogState
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(customersViewModelProvider);
+    // Con crédito primero (partición, no sort: conserva el orden interno).
+    bool hasCredit(Map<String, dynamic> c) =>
+        (c['credit_enabled'] as bool?) ?? false;
+    final customers = [
+      ...vm.customers.where(hasCredit),
+      ...vm.customers.where((c) => !hasCredit(c)),
+    ];
     return AlertDialog(
       title: const Text('Cliente de la venta a crédito'),
       content: SizedBox(
@@ -1868,7 +1948,7 @@ class _CreditCustomerPickerDialogState
             Expanded(
               child: vm.isLoading
                   ? const Center(child: CircularProgressIndicator())
-                  : vm.customers.isEmpty
+                  : customers.isEmpty
                       ? const Center(
                           child: Text(
                             'Sin clientes. Créalos en la sección Clientes.',
@@ -1877,9 +1957,9 @@ class _CreditCustomerPickerDialogState
                           ),
                         )
                       : ListView.builder(
-                          itemCount: vm.customers.length,
+                          itemCount: customers.length,
                           itemBuilder: (context, index) {
-                            final c = vm.customers[index];
+                            final c = customers[index];
                             final creditEnabled =
                                 (c['credit_enabled'] as bool?) ?? false;
                             return ListTile(

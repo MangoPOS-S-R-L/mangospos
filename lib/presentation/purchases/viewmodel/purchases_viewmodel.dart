@@ -226,6 +226,7 @@ class PurchasesViewModel extends ChangeNotifier {
     String? invoiceNumber,
     required List<PurchaseDraftItem> items,
     bool updateItemCost = false,
+    double discount = 0,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -247,6 +248,7 @@ class PurchasesViewModel extends ChangeNotifier {
         invoiceNumber: invoiceNumber,
         items: items,
         updateItemCost: updateItemCost,
+        discount: discount,
       );
       _state = _state.copyWith(saving: false);
       await refresh();

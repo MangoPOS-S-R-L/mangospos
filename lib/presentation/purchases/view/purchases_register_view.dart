@@ -10,6 +10,7 @@ import '../../../app/theme/mango_styles.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../data/repositories/credits_repository.dart';
 import '../state/purchases_state.dart';
+import '../utils/discount_input.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
 
@@ -67,10 +68,16 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   /// se llena con el flujo rápido de teclado o con el buscador multi-selección.
   final List<_DraftItemControllers> _lines = [];
 
+  // Descuento GLOBAL de la orden (Resumen): monto RD$ o "%" (ej. "500" ó
+  // "5%"). Es financiero: rebaja el total pero no toca costos ni kardex.
+  final _orderDiscountCtrl = TextEditingController();
+
   // ── Estado del renglón de captura rápida (producto → cant → costo → Enter).
   final _entryQtyCtrl = TextEditingController(text: '1');
   final _entryCostCtrl = TextEditingController(text: '0');
   final _entryPaidCtrl = TextEditingController();
+  // Descuento de la LÍNEA en captura: monto RD$ por línea o "%" del valor.
+  final _entryDiscountCtrl = TextEditingController();
   // % de ITBIS para el modo "Aparte". Se conserva entre líneas porque una
   // misma factura suele traer la misma tasa en todos sus renglones.
   final _entryTaxPctCtrl = TextEditingController(text: '18');
@@ -123,9 +130,11 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     _notesCtrl.dispose();
     _orderNumberCtrl.dispose();
     _invoiceNumberCtrl.dispose();
+    _orderDiscountCtrl.dispose();
     _entryQtyCtrl.dispose();
     _entryCostCtrl.dispose();
     _entryPaidCtrl.dispose();
+    _entryDiscountCtrl.dispose();
     _entryTaxPctCtrl.dispose();
     _qtyFocus.dispose();
     _costFocus.dispose();
@@ -388,6 +397,12 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     );
     final subtotal = _lines.fold<double>(0, (sum, l) => sum + l.baseSubtotal);
     final estimatedTax = _lines.fold<double>(0, (sum, l) => sum + l.taxAmount);
+    // Descuentos por línea ya aplicados (informativo: el subtotal ya los trae
+    // rebajados) y descuento global de la orden sobre subtotal + ITBIS.
+    final lineDiscounts =
+        _lines.fold<double>(0, (sum, l) => sum + l.lineDiscountNet);
+    final orderDiscount = DiscountInput.parse(_orderDiscountCtrl.text)
+        .amountOn(subtotal + estimatedTax);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -464,15 +479,47 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     label: 'Subtotal (neto)',
                     value: currency.format(subtotal),
                   ),
+                  if (lineDiscounts > 0) ...[
+                    const SizedBox(height: 8),
+                    _SummaryRow(
+                      label: 'Desc. en líneas (aplicado)',
+                      value: '−${currency.format(lineDiscounts)}',
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   _SummaryRow(
                     label: 'ITBIS',
                     value: currency.format(estimatedTax),
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Desc. a la orden',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF64748B),
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 110,
+                        child: _MiniField(
+                          controller: _orderDiscountCtrl,
+                          hint: '0 ó 5%',
+                          allowPercent: true,
+                          onChanged: () => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
                   const Divider(height: 20),
                   _SummaryRow(
                     label: 'Total',
-                    value: currency.format(subtotal + estimatedTax),
+                    value: currency.format(
+                      subtotal + estimatedTax - orderDiscount,
+                    ),
                     bold: true,
                   ),
                 ],
@@ -643,10 +690,41 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       filled: true,
                       fillColor: Colors.white,
                     ),
+                    // Pagado y descuento son alternativas (el pagado ya
+                    // debería venir con el descuento aplicado).
+                    onChanged: (_) => setState(() => _entryDiscountCtrl.clear()),
                     onSubmitted: (_) => _commitEntry(),
                   ),
                 ),
               ],
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 120,
+                child: TextField(
+                  controller: _entryDiscountCtrl,
+                  enabled: selected != null,
+                  textInputAction: TextInputAction.done,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.%]')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Descuento',
+                    hintText: '150 ó 10%',
+                    helperText: 'RD\$ por línea o %',
+                    isDense: true,
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  // Descuento y pagado son alternativas: digitar el descuento
+                  // descarta el pagado (evita que el ITBIS se infle al bajar
+                  // el neto con un pagado viejo).
+                  onChanged: (_) => setState(() => _entryPaidCtrl.clear()),
+                  onSubmitted: (_) => _commitEntry(),
+                ),
+              ),
               const Spacer(),
               if (_entryHasPack && selected != null)
                 Builder(
@@ -832,6 +910,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           taxMode: _entryTaxMode,
           paid: paid,
           taxPct: taxPct,
+          discountText: _entryDiscountCtrl.text.trim(),
         ),
       );
     });
@@ -847,6 +926,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       _entryQtyCtrl.text = '1';
       _entryCostCtrl.text = '0';
       _entryPaidCtrl.clear();
+      // El descuento no persiste entre líneas: suele ser puntual por renglón.
+      _entryDiscountCtrl.clear();
     });
     _productFieldCtrl?.clear();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -904,6 +985,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               Expanded(flex: 2, child: _HeaderCell('Cantidad', alignCenter: true)),
               SizedBox(width: 8),
               Expanded(flex: 2, child: _HeaderCell('Costo', alignCenter: true)),
+              SizedBox(width: 8),
+              Expanded(flex: 2, child: _HeaderCell('Desc.', alignCenter: true)),
               SizedBox(width: 8),
               SizedBox(width: 176, child: _HeaderCell('ITBIS', alignCenter: true)),
               SizedBox(width: 8),
@@ -1150,6 +1233,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       return;
     }
 
+    // Descuento global de la orden (monto o %) sobre subtotal + ITBIS.
+    final grossTotal = items.fold<double>(
+      0,
+      (sum, item) => sum + item.total + item.taxValue,
+    );
+    final orderDiscount =
+        DiscountInput.parse(_orderDiscountCtrl.text).amountOn(grossTotal);
+
     final orderId = await ref
         .read(purchasesViewModelProvider)
         .createPurchaseOrder(
@@ -1162,6 +1253,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           invoiceNumber: _invoiceNumberCtrl.text.trim(),
           items: items,
           updateItemCost: true,
+          discount: orderDiscount,
         );
 
     if (!mounted) return;
@@ -1171,10 +1263,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     // quedó registrada; si la CxP falla, avisamos para registrarla manual en
     // Créditos → Cuentas por Pagar (no se revierte la compra).
     if (_isCredit) {
-      final total = items.fold<double>(
-        0,
-        (sum, item) => sum + item.total + item.taxValue,
-      );
+      // La CxP nace por lo realmente adeudado: total menos descuento global.
+      final total = grossTotal - orderDiscount;
       try {
         final businessId =
             ref.read(purchasesViewModelProvider).state.businessId;
@@ -1372,6 +1462,21 @@ class _LineRow extends StatelessWidget {
             child: _MiniField(controller: line.unitCost, onChanged: onChanged),
           ),
           const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: _MiniField(
+              controller: line.discount,
+              hint: '0 ó %',
+              allowPercent: true,
+              onChanged: () {
+                // Descuento y pagado son alternativas (el pagado real ya
+                // debería traer el descuento aplicado).
+                line.paid.clear();
+                onChanged();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
           SizedBox(
             width: 176,
             child: Row(
@@ -1409,7 +1514,12 @@ class _LineRow extends StatelessWidget {
                 ? _MiniField(
                     controller: line.paid,
                     hint: 'Pagado/und.',
-                    onChanged: onChanged,
+                    onChanged: () {
+                      // El pagado real ya trae el descuento: digitarlo
+                      // descarta el descuento de la línea.
+                      line.discount.clear();
+                      onChanged();
+                    },
                   )
                 // En "incluido"/"exento" lo pagado por unidad ES el costo
                 // digitado; se muestra como referencia (no editable).
@@ -1457,6 +1567,8 @@ class _MiniField extends StatelessWidget {
   final TextEditingController controller;
   final String? suffix;
   final String? hint;
+  // Permite el carácter '%' (campos de descuento: monto RD$ o porcentaje).
+  final bool allowPercent;
   final VoidCallback onChanged;
 
   const _MiniField({
@@ -1464,6 +1576,7 @@ class _MiniField extends StatelessWidget {
     required this.onChanged,
     this.suffix,
     this.hint,
+    this.allowPercent = false,
   });
 
   @override
@@ -1471,7 +1584,11 @@ class _MiniField extends StatelessWidget {
     return TextField(
       controller: controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+      inputFormatters: [
+        FilteringTextInputFormatter.allow(
+          allowPercent ? RegExp(r'[0-9.%]') : RegExp(r'[0-9.]'),
+        ),
+      ],
       textAlign: TextAlign.center,
       style: const TextStyle(fontSize: 14),
       decoration: InputDecoration(
@@ -1569,6 +1686,12 @@ class _DraftItemControllers {
   final TextEditingController paid;
   // % de ITBIS para el modo "aparte" (editable; el pagado tiene prioridad).
   final TextEditingController taxPct;
+  // Descuento del proveedor en la línea: monto RD$ por LÍNEA o "%" (ej.
+  // "150" ó "10%"). Se aplica sobre el costo digitado (con ITBIS en
+  // "incluido", neto en "aparte"/"exento") ANTES de desglosar el ITBIS, así
+  // neto, ITBIS, costo maestro y kardex salen del costo real pagado.
+  // Descuento y pagado son alternativas: la UI limpia uno al digitar el otro.
+  final TextEditingController discount;
   String? inventoryItemId;
   _TaxMode taxMode;
   // Snapshot del empaque del insumo seleccionado. La cantidad/costo se
@@ -1583,6 +1706,7 @@ class _DraftItemControllers {
     double unitCost = 0,
     double paid = 0,
     double taxPct = 18,
+    String discountText = '',
     this.inventoryItemId,
     this.taxMode = _TaxMode.included,
     this.purchaseUnit = '',
@@ -1592,7 +1716,8 @@ class _DraftItemControllers {
        quantity = TextEditingController(text: _fmt(quantity)),
        unitCost = TextEditingController(text: _fmt(unitCost)),
        paid = TextEditingController(text: paid <= 0 ? '' : _fmt(paid)),
-       taxPct = TextEditingController(text: _fmt(taxPct));
+       taxPct = TextEditingController(text: _fmt(taxPct)),
+       discount = TextEditingController(text: discountText);
 
   factory _DraftItemControllers.fromItem(
     PurchaseInventoryItem item, {
@@ -1601,6 +1726,7 @@ class _DraftItemControllers {
     required _TaxMode taxMode,
     required double paid,
     double taxPct = 18,
+    String discountText = '',
   }) {
     final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
     return _DraftItemControllers(
@@ -1609,6 +1735,7 @@ class _DraftItemControllers {
       unitCost: cost,
       paid: paid,
       taxPct: taxPct,
+      discountText: discountText,
       inventoryItemId: item.id,
       taxMode: taxMode,
       purchaseUnit: hasPack ? item.purchaseUnit : '',
@@ -1630,16 +1757,42 @@ class _DraftItemControllers {
   // % digitado; vacío o ilegible cae al 18% estándar.
   double get _enteredTaxPct => double.tryParse(taxPct.text.trim()) ?? 18;
 
-  /// Costo NETO (sin ITBIS) por unidad de compra. En "incluido" el desglose
-  /// usa el % digitado (16, 18, lo que traiga la factura), no un 18% fijo.
+  /// Costo por unidad DIGITADO tras aplicar el descuento de la línea, en el
+  /// mismo dinero del costo digitado. Un "%" rebaja el costo ese porcentaje;
+  /// un monto RD$ rebaja el valor de la LÍNEA completa (se reparte entre las
+  /// unidades). Clampado: el descuento nunca deja la línea negativa.
+  double get _effectiveEnteredCost {
+    final qty = _enteredQty;
+    if (qty <= 0) return _enteredCost;
+    final lineValue = _enteredCost * qty;
+    final off = DiscountInput.parse(discount.text).amountOn(lineValue);
+    if (off <= 0) return _enteredCost;
+    return (lineValue - off) / qty;
+  }
+
+  /// Costo NETO (sin ITBIS) por unidad de compra, YA descontado. En
+  /// "incluido" el desglose usa el % digitado (16, 18, lo que traiga la
+  /// factura), no un 18% fijo.
   double get _netUnitEntered => taxMode == _TaxMode.included
-      ? _enteredCost / (1 + _enteredTaxPct / 100)
-      : _enteredCost;
+      ? _effectiveEnteredCost / (1 + _enteredTaxPct / 100)
+      : _effectiveEnteredCost;
+
+  /// Descuento NETO (sin ITBIS) de la línea completa, para guardarlo como
+  /// dato de auditoría (el neto/costo/kardex ya lo traen aplicado).
+  double get lineDiscountNet {
+    final qty = _enteredQty;
+    if (qty <= 0) return 0;
+    final undiscountedNetUnit = taxMode == _TaxMode.included
+        ? _enteredCost / (1 + _enteredTaxPct / 100)
+        : _enteredCost;
+    final net = (undiscountedNetUnit * qty) - baseSubtotal;
+    return net > 0 ? net : 0;
+  }
 
   /// Pagado por unidad (con ITBIS) que muestra la tabla en modos sin campo
-  /// editable: en "incluido" es el costo digitado tal cual (ya trae ITBIS)
-  /// y en "exento" también (no lleva ITBIS).
-  double get paidPerUnitDisplay => _enteredCost;
+  /// editable: el costo digitado con el descuento de la línea ya aplicado
+  /// ("incluido" trae ITBIS; "exento" no lleva).
+  double get paidPerUnitDisplay => _effectiveEnteredCost;
 
   /// Base NETA de la línea (cantidad × costo neto). Consistente en unidad de
   /// compra o base porque packToBase(q)·packCostToBase(c) = q·c.
@@ -1651,7 +1804,9 @@ class _DraftItemControllers {
       case _TaxMode.exempt:
         return 0;
       case _TaxMode.included:
-        return (_enteredCost * _enteredQty) - baseSubtotal;
+        // Bruto descontado − neto descontado (el descuento ya viene aplicado
+        // en ambos, así el ITBIS también baja con el descuento).
+        return (_effectiveEnteredCost * _enteredQty) - baseSubtotal;
       case _TaxMode.separate:
         // Con "Pagado por unidad" digitado, el ITBIS unitario es
         // pagado − costo neto y escala con la cantidad (antes se restaba
@@ -1681,11 +1836,13 @@ class _DraftItemControllers {
       inventoryItemId: inventoryItemId,
       description: description.text.trim(),
       quantity: qtyBase,
-      // Costo NETO por unidad base → costo maestro y movimiento de stock.
+      // Costo NETO por unidad base, YA descontado → costo maestro y
+      // movimiento de stock reflejan el costo real pagado.
       unitCost: netUnitBase,
       // Tasa efectiva (por si el ITBIS no es 18% exacto en modo "aparte").
       taxRate: base > 0 ? (tax / base * 100) : 0,
       taxAmount: tax,
+      discountAmount: lineDiscountNet,
       purchaseUnit: hasPack ? purchaseUnit.trim() : '',
       packSize: hasPack ? packSize : 1,
     );
@@ -1697,5 +1854,6 @@ class _DraftItemControllers {
     unitCost.dispose();
     paid.dispose();
     taxPct.dispose();
+    discount.dispose();
   }
 }

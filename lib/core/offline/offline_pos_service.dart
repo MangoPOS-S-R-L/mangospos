@@ -2150,10 +2150,60 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
-        await printingService.sendOrderToKitchen(
-          orderId: resolvedOrderId,
-          businessId: businessId,
-        );
+        final printedAreas = ((action['printed_areas'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toSet();
+        final missingAreas = ((action['missing_areas'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .where((s) => s.isNotEmpty)
+            .toSet();
+
+        // Comanda YA impresa localmente en todas sus áreas: el replay solo
+        // debe confirmar los items en server (draft → pending), NO volver a
+        // imprimir. Antes re-despachaba todas las áreas = comanda duplicada
+        // (o entera, con rondas viejas) al sincronizar.
+        if (printedAreas.isNotEmpty && missingAreas.isEmpty) {
+          try {
+            await salesRepository.sendToKitchen(resolvedOrderId);
+          } catch (e) {
+            // Idempotente: si ya no hay drafts (otro replay/otra caja la
+            // confirmó), el estado deseado ya existe.
+            final msg = e.toString().toLowerCase();
+            if (!msg.contains('no hay items') && !_isItemMissingError(e)) {
+              rethrow;
+            }
+          }
+          return resolvedOrderId;
+        }
+
+        try {
+          await printingService.sendOrderToKitchen(
+            orderId: resolvedOrderId,
+            businessId: businessId,
+            // Acciones nuevas traen las áreas ya impresas localmente: esas
+            // solo se marcan, se reimprimen únicamente las que quedaron sin
+            // impresora. Acciones legacy (sin el campo) re-despachan todo,
+            // como antes.
+            excludeAreaCodes: printedAreas,
+          );
+        } catch (e) {
+          // Replay idempotente: si un intento previo (o otra caja) ya marcó
+          // los ítems enviados a cocina, la orden no tiene drafts y
+          // sendOrderToKitchen truena con un error PERMANENTE — reintentar
+          // jamás lo arregla y la operación se vuelve veneno en la cola
+          // (caso real 2026-07-25: "Crear orden · 7 intentos · No hay items
+          // nuevos pendientes de enviar a cocina"). El estado deseado ya
+          // existe en el server → resolvemos la operación como completada.
+          final msg = e.toString().toLowerCase();
+          if (msg.contains('no hay items nuevos pendientes') ||
+              msg.contains('la orden no tiene items')) {
+            throw _OfflineSyncSkip(
+              'Orden $resolvedOrderId ya estaba enviada a cocina en server.',
+            );
+          }
+          rethrow;
+        }
         return resolvedOrderId;
       case 'set_delivery_fee':
         // Fee de delivery propio fijado offline. FIFO garantiza que esto se

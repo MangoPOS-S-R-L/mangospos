@@ -57,6 +57,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'payment_split_screen.dart';
+import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
 
 const Color _salesSurface = Color(0xFFFFFFFF);
 const Color _salesDivider = Color(0xFFE9E6E2);
@@ -548,6 +549,73 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       confirmLabel: 'Liberar',
       goToZonesOnSuccess: true,
       bypassPermission: 'ventas.mesas.liberar',
+    );
+  }
+
+  /// Visibilidad de "Cobrar a crédito": solo owner/admin (wildcard) o quien
+  /// tenga `creditos.vender` (preset de gerente/supervisor). Sin PIN de
+  /// respaldo a propósito: el modal de cobro filtra el método Crédito por el
+  /// permiso del usuario LOGUEADO, así que autorizar con PIN ajeno dejaría
+  /// al cajero en un modal sin la opción.
+  bool get _canSellCredit {
+    if (ref.read(sessionProvider).isOwner) return true;
+    return ref.read(sessionProvider.notifier).hasPermission('creditos.vender');
+  }
+
+  /// "Cobrar a crédito" (riel/menú de opciones de la mesa): abre el cobro de
+  /// todo lo pendiente de la cuenta con el método Crédito preseleccionado.
+  /// Reusa el flujo completo de `_openPaymentModal` (reload fresco, gate
+  /// fiscal, guard de cobertura, impresión y cierre de mesa).
+  void _handleChargeToCredit(BuildContext context) {
+    final orderState = ref.read(currentOrderProvider);
+    final order = orderState.order;
+    if (order == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay una orden activa.')),
+      );
+      return;
+    }
+    // Mismo criterio que "Pagar todo lo pendiente": ítems abiertos que no
+    // pertenezcan a una sub-cuenta ya cerrada.
+    final pendingItems = orderState.items.where((i) {
+      if (i.status == 'paid' || i.status == 'void') return false;
+      final inClosedCheck = orderState.checks.any(
+        (c) => c.id == i.checkId && c.isClosed,
+      );
+      return !inClosedCheck;
+    }).toList();
+    if (pendingItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay productos pendientes de cobrar.'),
+        ),
+      );
+      return;
+    }
+    final total = summarizeOrderPricing(order, pendingItems).total;
+    if (total <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La cuenta no tiene monto a cobrar.')),
+      );
+      return;
+    }
+    // `_openPaymentModal` vive en _CartView (usa origin/tableCode/
+    // onAssignClient de la instancia); construimos uno equivalente al del
+    // build para reusar el flujo sin duplicarlo.
+    final cart = _CartView(
+      origin: widget.origin,
+      tableCode: _currentTableCode ?? '',
+      onAssignClient: () => _handleAssignClient(context),
+    );
+    cart._openPaymentModal(
+      context,
+      ref,
+      order,
+      total,
+      checkId: null,
+      customerId: orderState.customerId,
+      customerName: orderState.customerName,
+      creditMode: true,
     );
   }
 
@@ -1130,6 +1198,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ),
                     onApplyDiscount: () => _handleApplyDiscount(context),
                     onApplyCourtesy: () => _handleCourtesyByProduct(context),
+                    onChargeCredit: _canSellCredit
+                        ? () => _handleChargeToCredit(context)
+                        : null,
                   ),
                   Container(height: 1, color: _salesDivider),
                   if (isRetail) const _RetailCartTabs(),
@@ -1174,6 +1245,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     onApplyCourtesy: () => _handleCourtesyByProduct(context),
                     onTransferSession: () => _handleTransferSession(context),
                     onMarkAllTakeout: () => _handleMarkAllTakeout(context),
+                    onChargeCredit: _canSellCredit
+                        ? () => _handleChargeToCredit(context)
+                        : null,
                   ),
                 // Usamos ancho fijo según especificación (400px o 320px)
                 SizedBox(
@@ -1263,6 +1337,10 @@ class _MobileSalesHeader extends StatelessWidget {
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
 
+  /// Cobrar la cuenta completa a crédito. Null = usuario sin permiso
+  /// `creditos.vender` (mínimo supervisor) → la opción no se muestra.
+  final VoidCallback? onChargeCredit;
+
   const _MobileSalesHeader({
     required this.title,
     required this.showTableActions,
@@ -1272,6 +1350,7 @@ class _MobileSalesHeader extends StatelessWidget {
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
+    this.onChargeCredit,
   });
 
   @override
@@ -1324,9 +1403,12 @@ class _MobileSalesHeader extends StatelessWidget {
                   case _MobileSalesAction.applyCourtesy:
                     onApplyCourtesy();
                     break;
+                  case _MobileSalesAction.chargeCredit:
+                    onChargeCredit?.call();
+                    break;
                 }
               },
-              itemBuilder: (_) => const [
+              itemBuilder: (_) => [
                 PopupMenuItem(
                   value: _MobileSalesAction.transferSession,
                   child: ListTile(
@@ -1368,6 +1450,15 @@ class _MobileSalesHeader extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
+                if (onChargeCredit != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.chargeCredit,
+                    child: ListTile(
+                      leading: Icon(Icons.request_quote_outlined),
+                      title: Text('Cobrar a crédito'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
               ],
             ),
         ],
@@ -1382,6 +1473,7 @@ enum _MobileSalesAction {
   voidOrder,
   applyDiscount,
   applyCourtesy,
+  chargeCredit,
 }
 
 /// Barra inferior persistente en el layout móvil. Lee `currentOrderProvider`
@@ -2007,6 +2099,12 @@ class _CartView extends ConsumerWidget {
     String? checkId,
     String? customerId,
     String? customerName,
+    // "Cobrar a crédito" (riel de opciones): en vez del PaymentSplitDialog
+    // abre el PaymentModal con el método Crédito preseleccionado — es el
+    // único modal con el panel de cliente + situación crediticia. Toda la
+    // pre-validación (reload fresco, gate fiscal, guard de cobertura) y el
+    // cierre (onFinish) son los mismos del cobro normal.
+    bool creditMode = false,
   }) async {
     // Feature flag `kitchen_enabled`: si la cocina está apagada y hay
     // items draft/pending, los marcamos `ready` antes de abrir el pago
@@ -2386,24 +2484,14 @@ class _CartView extends ConsumerWidget {
       }
     }
 
-    _showSmoothDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => PaymentSplitDialog(
-        orderId: order.id,
-        totalAmount: total,
-        tableName: tableName,
-        checkId: checkId,
-        customerId: finalCustomerId,
-        customerName: finalCustomerName,
-        customerRnc: finalCustomerTaxId,
-        fiscalType: finalFiscalType,
-        // onConfirmed corre con el modal de pago AÚN MONTADO. Aquí
-        // hacemos la impresión y mostramos el popup de "Imprimir copia"
-        // encima — así el cajero ve el modal de pago detrás, en lugar
-        // de un fondo vacío. Cuando este Future resuelve, el modal de
-        // pago hace pop y el .then() de abajo dispara onFinish.
-        onConfirmed: (payments, {offlineNcf}) async {
+    // Impresión post-pago (factura/precuenta + popup "Imprimir copia").
+    // La usan AMBOS flujos: el PaymentSplitDialog vía onConfirmed (corre con
+    // el modal de pago AÚN MONTADO — el cajero ve el modal detrás, no un
+    // fondo vacío) y el PaymentModal en modo crédito vía onComprobante.
+    Future<void> handleConfirmed(
+      List<Payment> payments, {
+      String? offlineNcf,
+    }) async {
           if (!context.mounted) return;
 
           final items = List<OrderItem>.from(prePaymentItems);
@@ -2673,7 +2761,49 @@ class _CartView extends ConsumerWidget {
               );
             }
           }
-        },
+    }
+
+    if (creditMode) {
+      // Cobro a crédito (riel de opciones, mínimo supervisor): PaymentModal
+      // con el método Crédito preseleccionado — es el único modal con panel
+      // de cliente + situación crediticia (límite/disponible). onComprobante
+      // imprime la factura y RECIÉN después corre onFinish: si navegáramos
+      // antes (onPaymentSuccess), el context se desmonta y la factura no
+      // llega a imprimirse.
+      _showSmoothDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PaymentModal(
+          order: prePaymentOrder.copyWith(total: total),
+          initialMethodCode: 'credit',
+          creditOnly: true,
+          initialCustomerId: finalCustomerId,
+          initialCustomerName: finalCustomerName,
+          onComprobante: (payment, fiscalDoc, modalCustomerName) async {
+            await handleConfirmed([payment]);
+            onFinish();
+          },
+          onPaymentSuccess: () {},
+        ),
+      );
+      return;
+    }
+
+    _showSmoothDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PaymentSplitDialog(
+        orderId: order.id,
+        totalAmount: total,
+        tableName: tableName,
+        checkId: checkId,
+        customerId: finalCustomerId,
+        customerName: finalCustomerName,
+        customerRnc: finalCustomerTaxId,
+        fiscalType: finalFiscalType,
+        // Cuando el Future de onConfirmed resuelve, el modal de pago hace
+        // pop y el .then() de abajo dispara onFinish.
+        onConfirmed: handleConfirmed,
       ),
     ).then((result) {
       if (result is List<Payment>) {
@@ -6282,6 +6412,10 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onTransferSession;
   final VoidCallback onMarkAllTakeout;
 
+  /// Cobrar la cuenta completa a crédito. Null = usuario sin permiso
+  /// `creditos.vender` (mínimo supervisor) → el botón no se muestra.
+  final VoidCallback? onChargeCredit;
+
   const _SalesToolsRail({
     required this.onBack,
     required this.showTableActions,
@@ -6291,6 +6425,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onApplyCourtesy,
     required this.onTransferSession,
     required this.onMarkAllTakeout,
+    this.onChargeCredit,
   });
 
   @override
@@ -6357,6 +6492,12 @@ class _SalesToolsRail extends StatelessWidget {
                     label: 'Todo\npara llevar',
                     onTap: onMarkAllTakeout,
                   ),
+                  if (onChargeCredit != null)
+                    _RailButton(
+                      icon: Icons.request_quote_outlined,
+                      label: 'Cobrar a\ncrédito',
+                      onTap: onChargeCredit!,
+                    ),
                 ],
                 const Spacer(),
                 const SizedBox(height: 16),

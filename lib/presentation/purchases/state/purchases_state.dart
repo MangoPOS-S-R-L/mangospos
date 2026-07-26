@@ -261,6 +261,11 @@ class PurchaseDraftItem {
   /// deriva del porcentaje (`total * taxRate / 100`), modo heredado usado por
   /// las OC generadas desde sugerencias de reorden.
   final double? taxAmount;
+  /// Descuento del proveedor en la LÍNEA, en RD$ NETO (sin ITBIS),
+  /// informativo: `unitCost` ya viene descontado (costo real pagado), así el
+  /// costo maestro y el kardex quedan correctos sin cambios de servidor. El
+  /// precio original se reconstruye: (quantity*unitCost + discountAmount)/quantity.
+  final double discountAmount;
   // Snapshot de empaque para guardar en la línea (display/recepción).
   final String purchaseUnit;
   final double packSize;
@@ -272,6 +277,7 @@ class PurchaseDraftItem {
     required this.unitCost,
     this.taxRate = 18,
     this.taxAmount,
+    this.discountAmount = 0,
     this.purchaseUnit = '',
     this.packSize = 1,
   });

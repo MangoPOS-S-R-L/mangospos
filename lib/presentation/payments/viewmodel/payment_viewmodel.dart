@@ -106,8 +106,19 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   // ============================================================
 
   /// Inicializar pago para una orden completa
-  Future<void> initializeForOrder(Order order) async {
-    await _initializePayment(order: order, totalToPay: order.total);
+  Future<void> initializeForOrder(
+    Order order, {
+    String? initialMethodCode,
+    String? initialCustomerId,
+    String? initialCustomerName,
+  }) async {
+    await _initializePayment(
+      order: order,
+      totalToPay: order.total,
+      initialMethodCode: initialMethodCode,
+      initialCustomerId: initialCustomerId,
+      initialCustomerName: initialCustomerName,
+    );
   }
 
   /// Inicializar pago para un check específico (split bill)
@@ -123,6 +134,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     required Order order,
     OrderCheck? check,
     required double totalToPay,
+    String? initialMethodCode,
+    String? initialCustomerId,
+    String? initialCustomerName,
   }) async {
     state = state.copyWith(
       loading: true,
@@ -218,6 +232,16 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         }
       }
 
+      // Cliente inicial del caller (ej. el asignado a la mesa en el flujo
+      // "Cobrar a crédito"): solo si el check no aportó uno propio.
+      String? prefilledCustomerName;
+      if (prefilledCustomerId == null &&
+          initialCustomerId != null &&
+          initialCustomerId.isNotEmpty) {
+        prefilledCustomerId = initialCustomerId;
+        prefilledCustomerName = initialCustomerName;
+      }
+
       state = state.copyWith(
         loading: false,
         order: order,
@@ -228,12 +252,25 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         availableNcfTypes: availableNcfTypes,
         selectedNcfType: prefilledNcfType,
         customerId: prefilledCustomerId,
+        customerName: prefilledCustomerName,
         customerRnc: prefilledCustomerRnc,
         ecfEnabled: ecfEnabled,
         error: _connectivity.isConnected
             ? null
             : 'Modo offline: el pago se guardará para sincronizar luego.',
       );
+
+      // Preselección de método (ej. "Cobrar a crédito" desde el riel de
+      // opciones de la mesa). Solo si el método existe en la lista final —
+      // offline o sin permiso el código no matchea y el modal queda normal.
+      if (initialMethodCode != null) {
+        for (final m in methods) {
+          if (m.code == initialMethodCode) {
+            selectPaymentMethod(m);
+            break;
+          }
+        }
+      }
     } catch (e) {
       state = state.copyWith(loading: false, error: _cleanError(e));
     }

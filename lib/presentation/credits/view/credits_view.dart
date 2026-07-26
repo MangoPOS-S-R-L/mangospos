@@ -321,33 +321,58 @@ class _CreditsViewState extends ConsumerState<CreditsView>
     Map<String, dynamic> credit, {
     required bool isPayable,
   }) async {
-    final confirmed = await showDialog<bool>(
+    final reasonCtrl = TextEditingController();
+    final reason = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cancelar crédito'),
-        content: const Text(
-          'El saldo pendiente dejará de contarse en cuentas '
-          'abiertas. Esta acción no revierte la venta ni la compra.',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Cancelar crédito'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'El saldo pendiente se condona: dejará de contarse como '
+                'deuda y libera el cupo. Esta acción NO revierte la venta '
+                'ni la compra, ni los abonos ya recibidos.',
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              TextField(
+                controller: reasonCtrl,
+                autofocus: true,
+                maxLines: 2,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Razón (obligatoria)',
+                  hintText: 'Ej.: cliente no va a pagar, acuerdo comercial…',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Volver'),
+            ),
+            FilledButton(
+              onPressed: reasonCtrl.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(ctx, reasonCtrl.text.trim()),
+              child: const Text('Cancelar crédito'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Volver'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cancelar crédito'),
-          ),
-        ],
       ),
     );
-    if (confirmed != true || !mounted) return;
+    reasonCtrl.dispose();
+    if (reason == null || reason.isEmpty || !mounted) return;
     final vm = ref.read(creditsViewModelProvider);
     try {
       if (isPayable) {
-        await vm.cancelPayable(credit['id'] as String);
+        await vm.cancelPayable(credit['id'] as String, reason: reason);
       } else {
-        await vm.cancelReceivable(credit['id'] as String);
+        await vm.cancelReceivable(credit['id'] as String, reason: reason);
       }
       if (mounted) AppToast.success(context, 'Crédito cancelado.');
     } catch (e) {
@@ -507,6 +532,19 @@ class _CreditCard extends ConsumerWidget {
     required this.onCancel,
   });
 
+  /// Cancelar (condonar) solo para quien el RLS deja escribir:
+  /// CxC = owner/admin (`cc_admin_update`); CxP = también supervisor
+  /// (write owner/admin/manager). Ocultarlo evita mostrar una opción que
+  /// el guardado igual rechazaría.
+  bool _canCancel(WidgetRef ref) {
+    // read (no watch): se evalúa al abrir el menú, fuera del build.
+    final session = ref.read(sessionProvider);
+    if (session.isOwner) return true;
+    final role = session.activeRole;
+    if (role == PosRole.administrador) return true;
+    return isPayable && role == PosRole.supervisor;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final currency = currentBusinessCurrencyOrFallback(ref);
@@ -626,7 +664,9 @@ class _CreditCard extends ConsumerWidget {
                 value: 'history',
                 child: Text('Ver historial de abonos'),
               ),
-              if (isOpen)
+              // Cancelar (condonar) solo para quien el RLS deja escribir:
+              // CxC = owner/admin; CxP = también supervisor (manager).
+              if (isOpen && _canCancel(ref))
                 const PopupMenuItem(
                   value: 'cancel',
                   child: Text('Cancelar crédito'),
