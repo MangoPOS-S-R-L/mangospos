@@ -18,6 +18,8 @@ import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/models/bank_account.dart';
+import 'package:mangopos/data/models/business_profile.dart';
 import 'package:mangopos/data/repositories/bank_accounts_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -2523,7 +2525,13 @@ class _CartView extends ConsumerWidget {
               payments.isNotEmpty &&
               payments.every((p) => p.status == 'pending');
 
-          final businessProfile = await _loadBusinessReceiptProfile(ref);
+          // PERF: perfil, fiscal doc y mesero no dependen entre sí — los
+          // tres futures arrancan JUNTOS y se awaitean después (el tiempo
+          // pasa de la suma de 3 viajes de red al del más lento). Los tres
+          // helpers capturan sus errores adentro y devuelven fallback
+          // (nunca lanzan), así que awaitear futures ya arrancados no deja
+          // errores sin manejar.
+          final businessProfileFuture = _loadBusinessReceiptProfile(ref);
           // Pasar el fd_id del payment recién cobrado para obtener EL fd
           // correcto. Una orden con split bill o multi-method tiene N fds
           // y getOrderFiscalDocument no puede elegir el correcto solo por
@@ -2532,14 +2540,16 @@ class _CartView extends ConsumerWidget {
           final fdIdFromPayment = payments.isNotEmpty
               ? payments.last.fiscalDocumentId
               : null;
-          final fiscalDoc = await _loadFiscalDocument(
+          final fiscalDocFuture = _loadFiscalDocument(
             ref,
             order.id,
             fiscalDocumentId: fdIdFromPayment,
           );
+          final waiterNameFuture = _loadWaiterName(ref, order.id);
+          final businessProfile = await businessProfileFuture;
+          final fiscalDoc = await fiscalDocFuture;
           final waiterName =
-              await _loadWaiterName(ref, order.id) ??
-              ref.read(sessionProvider).userName;
+              await waiterNameFuture ?? ref.read(sessionProvider).userName;
           final issuedAt =
               fiscalDoc?.issuedAt ??
               (payments.isNotEmpty
@@ -2615,6 +2625,7 @@ class _CartView extends ConsumerWidget {
                     tableName: tableName,
                     waiterName: waiterName,
                     showSnackBar: false,
+                    preloadedFiscalDoc: fiscalDoc,
                   );
                 });
                 if (context.mounted) {
@@ -2712,6 +2723,7 @@ class _CartView extends ConsumerWidget {
                 tableName: tableName,
                 waiterName: waiterName,
                 showSnackBar: true,
+                preloadedFiscalDoc: fiscalDoc,
               );
             });
             if (context.mounted) {
@@ -2734,6 +2746,7 @@ class _CartView extends ConsumerWidget {
                     tableName: tableName,
                     waiterName: waiterName,
                     showSnackBar: true,
+                    preloadedFiscalDoc: fiscalDoc,
                   );
                 },
               );
@@ -5309,6 +5322,10 @@ class _CartView extends ConsumerWidget {
     String? waiterName,
     bool showSnackBar = true,
     PrinterConfig? forcedPrinter,
+    // PERF: fiscal document ya cargado por el caller (handleConfirmed lo
+    // trae para armar invoiceData). Si viene, el bloque e-CF se ahorra
+    // re-consultarlo al server. Null → fetch propio (callers legacy).
+    FiscalDocument? preloadedFiscalDoc,
   }) async {
     try {
       final printRepo = ref.read(printingPrintersRepositoryProvider);
@@ -5433,6 +5450,76 @@ class _CartView extends ConsumerWidget {
           configuredBreakdown: configuredBreakdown,
         );
 
+        // PERF: perfil/logo, settings USD, plantilla y cuentas bancarias
+        // no dependen entre sí ni del bloque e-CF de abajo — sus futures
+        // arrancan TODOS aquí y se cobran después del e-CF, así el tiempo
+        // total es el del viaje más lento y no la suma de 5+ viajes en
+        // serie (con internet de local lento eso eran varios segundos de
+        // "factura trabada"). Cada closure captura sus errores adentro y
+        // devuelve fallback: los awaits posteriores nunca encuentran un
+        // future fallido sin listener.
+        final businessProfileRepo = BusinessProfileRepository(
+          Supabase.instance.client,
+        );
+        // BusinessProfile + logo pre-rasterizado para el header. Si
+        // printLogoOnInvoice=false o no hay logo, logoEscPosBytes=null y
+        // el ticket sale sin logo. Fail-soft: si la carga FALLA, el ticket
+        // sale sin branding (nombre/RNC/dirección vienen de invoiceData
+        // igual) en vez de tumbar el cobro por el logo.
+        final Future<({BusinessProfile? profile, List<int>? logoEscPosBytes})>
+            profileForPrintFuture = () async {
+          try {
+            return await businessProfileRepo.prepareForInvoicePrinting(
+              businessId,
+            );
+          } catch (e) {
+            debugPrint('print: perfil/logo no cargó, ticket sin branding: $e');
+            return (profile: null, logoEscPosBytes: null);
+          }
+        }();
+        // PRD 6: settings de USD para el bloque "≈ US$X" debajo del TOTAL.
+        // Si toggle off / tasa null, el helper salta sin imprimir nada.
+        // try/catch + timeout para que un fallo NUNCA bloquee la impresión
+        // — el ticket en el peor caso sale sin el bloque USD.
+        final Future<UsdDisplaySettings?> usdSettingsFuture = () async {
+          try {
+            return await ref
+                .read(posSettingsRepositoryProvider)
+                .getUsdDisplaySettings(businessId)
+                .timeout(const Duration(seconds: 2));
+          } catch (e) {
+            debugPrint('PRD 6: no se cargaron settings USD para print: $e');
+            return null;
+          }
+        }();
+        // Modelo de factura (estándar vs compacto) elegido en ajustes.
+        final Future<String> invoiceTplFuture = () async {
+          try {
+            return await ref
+                .read(posSettingsRepositoryProvider)
+                .getInvoiceTemplate(businessId);
+          } catch (_) {
+            return PosSettingsRepository.invoiceTemplateStandard;
+          }
+        }();
+        // PRD F2: si algún payment fue por transferencia con cuenta
+        // bancaria asignada, cargar el mapa para que el ticket muestre
+        // banco/titular debajo de la línea de pago. Sin transferencias
+        // devuelve mapa vacío sin pegar la red. Fail-soft: si falla, el
+        // ticket sale sin bloque banco en vez de abortar el cobro.
+        final bankAccountsRepo = BankAccountsRepository();
+        final Future<Map<String, BankAccount>> bankAccountsFuture =
+            () async {
+          try {
+            return await bankAccountsRepo.fetchByPaymentIds(
+              payments ?? const [],
+            );
+          } catch (e) {
+            debugPrint('print: cuentas bancarias no cargaron: $e');
+            return const <String, BankAccount>{};
+          }
+        }();
+
         // e-CF: pre-fetch del fiscal_document para resolver QR/estado.
         // Solo aplica al tipo 'invoice' (precheck no lleva NCF). El
         // fiscalDoc se resuelve por order_id; el trigger SQL lo crea
@@ -5453,13 +5540,16 @@ class _CartView extends ConsumerWidget {
             final fdIdFromPayments = (payments != null && payments.isNotEmpty)
                 ? payments.last.fiscalDocumentId
                 : null;
-            final fiscalDoc = fdIdFromPayments != null
-                ? await ref
-                      .read(salesRepositoryProvider)
-                      .getFiscalDocumentById(fdIdFromPayments)
-                : await ref
-                      .read(salesRepositoryProvider)
-                      .getOrderFiscalDocument(orderObj.id);
+            // PERF: si el caller ya trae el fd cargado (handleConfirmed lo
+            // buscó para invoiceData), no lo re-consultamos al server.
+            final fiscalDoc = preloadedFiscalDoc ??
+                (fdIdFromPayments != null
+                    ? await ref
+                          .read(salesRepositoryProvider)
+                          .getFiscalDocumentById(fdIdFromPayments)
+                    : await ref
+                          .read(salesRepositoryProvider)
+                          .getOrderFiscalDocument(orderObj.id));
             if (fiscalDoc != null && fiscalDoc.isElectronic) {
               isElectronicCf = true;
               ecfSecurityCode = fiscalDoc.ecfSecurityCode;
@@ -5512,46 +5602,13 @@ class _CartView extends ConsumerWidget {
           }
         }
 
-        // BusinessProfile + logo pre-rasterizado para el header.
-        // Si printLogoOnInvoice=false o no hay logo, logoEscPosBytes=null
-        // y el ticket sale sin logo (preserva el behavior anterior).
-        final businessProfileRepo = BusinessProfileRepository(
-          Supabase.instance.client,
-        );
-        final profileForPrint = await businessProfileRepo
-            .prepareForInvoicePrinting(businessId);
-
-        // PRD 6: cargar settings de USD para el bloque "≈ US$X" debajo
-        // del TOTAL. Si toggle off / tasa null, el helper salta sin
-        // imprimir nada. Wrapping en try/catch + timeout para que un
-        // fallo cargando las settings NUNCA bloquee la impresión —
-        // el ticket en el peor caso sale sin el bloque USD.
-        UsdDisplaySettings? usdSettings;
-        try {
-          usdSettings = await ref
-              .read(posSettingsRepositoryProvider)
-              .getUsdDisplaySettings(businessId)
-              .timeout(const Duration(seconds: 2));
-        } catch (e) {
-          debugPrint('PRD 6: no se cargaron settings USD para print: $e');
-          usdSettings = null;
-        }
-
-        // Modelo de factura (estándar vs compacto) elegido en ajustes.
-        String invoiceTpl = PosSettingsRepository.invoiceTemplateStandard;
-        try {
-          invoiceTpl = await ref
-              .read(posSettingsRepositoryProvider)
-              .getInvoiceTemplate(businessId);
-        } catch (_) {}
-
-        // PRD F2: si algún payment fue por transferencia con cuenta
-        // bancaria asignada, cargar el mapa para que el ticket muestre
-        // banco/titular debajo de la línea de pago. Si no hay
-        // transferencias, el helper devuelve mapa vacío sin pegar la red.
-        final bankAccountsRepo = BankAccountsRepository();
-        final bankAccountsByPaymentId = await bankAccountsRepo
-            .fetchByPaymentIds(payments ?? const []);
+        // Cobro de los futures que arrancaron ANTES del bloque e-CF: a
+        // esta altura normalmente ya resolvieron (corrieron en paralelo
+        // con las consultas del e-CF). Ninguno lanza — todos fail-soft.
+        final profileForPrint = await profileForPrintFuture;
+        final usdSettings = await usdSettingsFuture;
+        final invoiceTpl = await invoiceTplFuture;
+        final bankAccountsByPaymentId = await bankAccountsFuture;
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
@@ -5630,13 +5687,19 @@ class _CartView extends ConsumerWidget {
       final tcpTimeout = isUsbPrinter
           ? const Duration(seconds: 15)
           : const Duration(seconds: 2);
-      // Outer guard generoso: cubre directo + agent local + escalada a
-      // cloud queue. ~5s alcanza para que printEscPos resuelva en todos
-      // los escenarios sanos (no quiero que el outer mate la escalada
-      // como pasaba con el 3s anterior).
+      // Outer guard: debe CUBRIR el pipeline interno del path directo de
+      // red (sonda preflight ~1.2s + hasta 3 intentos TCP de 2s con
+      // backoff 1s/2s ≈ 10s peor caso). Con el 5s anterior, un primer
+      // connect lento (impresora en power-save / ARP frío) hacía vencer
+      // el outer ANTES de que el retry interno imprimiera: el cajero veía
+      // "no respondió en 5s" + diálogo de reimpresión mientras el ticket
+      // salía solo en background → "la factura se traba pero la
+      // reimpresión sí sale" y facturas dobles (caso real 2026-07-26).
+      // 12s deja terminar los retries; si aun así no salió, la escalada
+      // al cloud queue ya corrió y el diálogo aparece con la verdad.
       final outerTimeout = isUsbPrinter
           ? const Duration(seconds: 18)
-          : const Duration(seconds: 5);
+          : const Duration(seconds: 12);
 
       // Sprint 1.3.b: armar idempotencyKey para que `printEscPos` pueda
       // escalar al cloud queue si todos los intentos directos fallan.
@@ -5771,6 +5834,7 @@ class _CartView extends ConsumerWidget {
             tableName: tableName,
             waiterName: waiterName,
             extras: extraReceiptPrinters,
+            preloadedFiscalDoc: preloadedFiscalDoc,
           ),
         );
       }
@@ -5794,6 +5858,7 @@ class _CartView extends ConsumerWidget {
     String? tableName,
     String? waiterName,
     required List<PrinterConfig> extras,
+    FiscalDocument? preloadedFiscalDoc,
   }) async {
     final futures = extras.map((p) async {
       try {
@@ -5809,6 +5874,7 @@ class _CartView extends ConsumerWidget {
           waiterName: waiterName,
           showSnackBar: false,
           forcedPrinter: p,
+          preloadedFiscalDoc: preloadedFiscalDoc,
         );
         return null;
       } catch (e) {

@@ -26,6 +26,13 @@ Future<PrintDestination?> showPrintDestinationPicker(
 }) {
   return showModalBottomSheet<PrintDestination>(
     context: context,
+    // Root navigator SIEMPRE: el picker de recibo se dispara con el modal
+    // de pago todavía abierto (dialog en el ROOT navigator). Sin esto, el
+    // sheet se monta en el navigator anidado del shell y queda DETRÁS del
+    // modal: el cajero ve "Imprimiendo..." eterno sin saber que hay un
+    // selector invisible esperándolo (caso real 2026-07-26 — la factura
+    // "se trababa" hasta que alguien daba ESC).
+    useRootNavigator: true,
     isScrollControlled: true,
     backgroundColor: Colors.white,
     shape: const RoundedRectangleBorder(
