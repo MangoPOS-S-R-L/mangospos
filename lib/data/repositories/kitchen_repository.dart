@@ -133,26 +133,83 @@ class KitchenRepository {
     }
   }
 
-  /// Ítems que la cocina TERMINÓ HOY (`order_items.ready_at` de hoy), vía la
-  /// vista `kds_completed_today`. Independiente del estado vivo del tablero:
+  /// Ítems que la cocina TERMINÓ HOY (ready_at de hoy, o cobrados/cerrados hoy
+  /// sin marcar), vía la RPC `fn_kds_completed_today` con fallback a la vista
+  /// `kds_completed_today`. Independiente del estado vivo del tablero:
   /// sobrevive al pago y al despacho, así que alimenta el stat/diálogo
   /// "Completados Hoy" de forma confiable en ambos modos. Devuelve `[]` ante
   /// cualquier error (el stat es opcional, no debe romper la pantalla).
   Future<List<KitchenItem>> getCompletedTodayItems({String? businessId}) async {
     try {
-      const selectColumns =
-          'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
-      var query = _client.from('kds_completed_today').select(selectColumns);
-      if (businessId != null && businessId.isNotEmpty) {
-        query = query.eq('business_id', businessId);
+      // Camino principal: RPC SECURITY DEFINER (mig 20260729_0002). La vista
+      // corre con security_invoker y el RLS de order_items exige business_id
+      // IN current_user_business_ids() — filas con business_id NULL (venta
+      // rápida/manual) se volvían invisibles y el historial salía en 0. La
+      // RPC valida acceso al negocio y resuelve por orders.business_id.
+      List<Map<String, dynamic>> rows;
+      try {
+        if (businessId == null || businessId.isEmpty) {
+          throw StateError('sin business — usar la vista');
+        }
+        final data = await _client.rpc(
+          'fn_kds_completed_today',
+          params: {'p_business_id': businessId},
+        );
+        rows = List<Map<String, dynamic>>.from(data as List);
+        debugPrint('KDS completados hoy: RPC devolvió ${rows.length} filas');
+      } catch (e) {
+        // RPC aún no aplicada en este entorno (o sin business): caemos a la
+        // vista de siempre para no dejar el stat en blanco donde SÍ funciona.
+        debugPrint('KDS completados hoy: RPC falló ($e) → fallback a vista');
+        rows = await _completedTodayFromView(businessId);
+        debugPrint('KDS completados hoy: vista devolvió ${rows.length} filas');
       }
-      final data = await query;
-      return List<Map<String, dynamic>>.from(data)
+      final items = rows
           .map(KitchenItem.fromMap)
           .toList(growable: false);
+      if (items.isEmpty) return items;
+      // El historial debe mostrar cada plato con sus modificadores, igual que
+      // la comanda viva. Best-effort: si la query de modifiers falla, el
+      // historial sale sin ellos en vez de perderse completo.
+      try {
+        return await _attachModifiers(items);
+      } catch (_) {
+        return items;
+      }
     } catch (e) {
       return const [];
     }
+  }
+
+  /// Fallback del historial: la vista `kds_completed_today` de siempre.
+  /// Sujeta al RLS de order_items (security_invoker) — puede no ver filas con
+  /// business_id NULL; se usa solo si la RPC no está disponible.
+  Future<List<Map<String, dynamic>>> _completedTodayFromView(
+    String? businessId,
+  ) async {
+    const selectColumns =
+        'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
+    var query = _client.from('kds_completed_today').select(selectColumns);
+    if (businessId != null && businessId.isNotEmpty) {
+      query = query.eq('business_id', businessId);
+    }
+    final data = await query;
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// ¿La orden aún tiene ítems por cocinar (pending/preparing/ready) EN EL
+  /// SERVER? Se consulta justo antes de sellar `kitchen_done_at`: el tablero
+  /// local puede no contener todavía una ronda recién enviada (Realtime/poll
+  /// con retraso), y sellar en ese momento la haría desaparecer del KDS en
+  /// modo "esperar al cocinero" además de estamparle `ready_at` sin cocinar.
+  Future<bool> orderHasActiveKitchenItems(String orderId) async {
+    final rows = await _client
+        .from('order_items')
+        .select('id')
+        .eq('order_id', orderId)
+        .inFilter('status', ['pending', 'preparing', 'ready'])
+        .limit(1);
+    return List<Map<String, dynamic>>.from(rows).isNotEmpty;
   }
 
   /// Sella la cocina de una orden como terminada: la saca del KDS en modo
@@ -172,7 +229,7 @@ class KitchenRepository {
   /// cobro/anulación.
   Future<void> markCardItemsServed(List<String> itemIds) async {
     if (itemIds.isEmpty) return;
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     try {
       await _client
           .from('order_items')
@@ -190,7 +247,7 @@ class KitchenRepository {
   }
 
   Future<void> markOrderKitchenDone(String orderId) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     try {
       await _client
           .from('order_items')
@@ -219,7 +276,7 @@ class KitchenRepository {
     required String itemId,
     required bool ready,
   }) async {
-    final now = DateTime.now().toIso8601String();
+    final now = DateTime.now().toUtc().toIso8601String();
     final updates = ready ? {'ready_at': now} : {'started_at': now};
     await _client.from('order_items').update(updates).eq('id', itemId);
   }
@@ -279,9 +336,9 @@ class KitchenRepository {
 
       // Agregar timestamps según el estado
       if (status == 'preparing') {
-        updates['started_at'] = DateTime.now().toIso8601String();
+        updates['started_at'] = DateTime.now().toUtc().toIso8601String();
       } else if (status == 'ready') {
-        updates['ready_at'] = DateTime.now().toIso8601String();
+        updates['ready_at'] = DateTime.now().toUtc().toIso8601String();
       }
 
       await _client.from('order_items').update(updates).eq('id', itemId);

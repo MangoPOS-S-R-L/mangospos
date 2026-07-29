@@ -940,9 +940,15 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   /// Reimprime la comanda de una tarjeta (viva o completada) y muestra el
   /// resultado en un snackbar. No toca estados ni crea rondas nuevas.
   Future<void> _reprintComanda(KitchenOrder order) async {
+    // Tarjeta viva del tablero (roundKey seteado) = una sola estación: la
+    // reimpresión debe salir SOLO por el área de esa tarjeta. Las comandas de
+    // "Completados hoy" agrupan la orden completa (roundKey vacío) → todas.
+    final cardAreaCode =
+        order.roundKey.isEmpty ? null : order.items.first.areaCode;
     final notice = await ref.read(kitchenViewModelProvider).reprintComanda(
           orderId: order.orderId,
           itemIds: order.items.map((i) => i.id).toList(growable: false),
+          areaCode: cardAreaCode,
         );
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -1067,11 +1073,38 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: Text(
-                            item.productName,
-                            style: MangoTokens.body().copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.productName,
+                                style: MangoTokens.body().copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              // El plato se muestra CON sus modificadores
+                              // (igual que en la comanda viva del tablero).
+                              if (item.modifiers.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    item.modifiers
+                                        .map((m) => m.name)
+                                        .join(', '),
+                                    style: MangoTokens.label(),
+                                  ),
+                                ),
+                              if ((item.notes ?? '').trim().isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    'Nota: ${item.notes!.trim()}',
+                                    style: MangoTokens.label(
+                                      color: MangoTokens.warning,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ],

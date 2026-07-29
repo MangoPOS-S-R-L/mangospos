@@ -1335,6 +1335,12 @@ class PrintingService {
     required String orderId,
     required String businessId,
     required List<String> itemIds,
+    // Área de la TARJETA que se está reimprimiendo (el KDS separa una tarjeta
+    // por estación). Si viene y el agrupado la contiene, la reimpresión sale
+    // SOLO por esa área — reimprimir la comanda del Bar no debe re-sacar el
+    // papel de Cocina. Null (p. ej. desde "Completados hoy", que agrupa la
+    // orden completa) = todas las áreas de los ítems.
+    String? onlyAreaCode,
   }) async {
     try {
       final order = await _salesRepo.getOrder(orderId);
@@ -1357,10 +1363,16 @@ class PrintingService {
       final kitchenBanners = await PosSettingsRepository(
         _client,
       ).getKitchenBanners(businessId);
-      final itemsByArea = await _groupItemsByPrintArea(
+      var itemsByArea = await _groupItemsByPrintArea(
         targetItems,
         businessId: businessId,
       );
+      // Fail-open: si el área pedida no aparece en el agrupado (resolución
+      // N:M distinta a la del tablero), se reimprime en todas antes que en
+      // ninguna.
+      if (onlyAreaCode != null && itemsByArea.containsKey(onlyAreaCode)) {
+        itemsByArea = {onlyAreaCode: itemsByArea[onlyAreaCode]!};
+      }
 
       var areasPrinted = 0;
       final areasWithoutPrinter = <String>[];
@@ -1368,47 +1380,55 @@ class PrintingService {
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
-        final area = await _ensureAreaForCode(businessId, areaCode);
-        final printers = await _getOrderPrintersWithOfflineFallback(
-          businessId: businessId,
-          areaId: area.id,
-          areaCode: areaCode,
-        );
-        if (printers.isEmpty) {
+        // Un área con problema (código sin fila en print_areas, impresora
+        // inalcanzable) NO debe tumbar la reimpresión de las demás áreas:
+        // se reporta y se sigue con la siguiente.
+        try {
+          final area = await _ensureAreaForCode(businessId, areaCode);
+          final printers = await _getOrderPrintersWithOfflineFallback(
+            businessId: businessId,
+            areaId: area.id,
+            areaCode: areaCode,
+          );
+          if (printers.isEmpty) {
+            areasWithoutPrinter.add(areaCode);
+            continue;
+          }
+
+          final ticket = PrintTicketService.generateKitchenTicket(
+            order: order,
+            items: areaItems,
+            tableName: orderData['tableName']?.toString() ?? 'N/A',
+            waiterName: orderData['waiterName']?.toString(),
+            cashierName: _resolveCashierName(),
+            customerName: orderData['customerName']?.toString(),
+            businessName: businessName,
+            areaCode: areaCode,
+            isReprint: true,
+            receiptItemDisplayMode: receiptItemDisplayMode,
+            showDineInBanner: kitchenBanners.dineIn,
+            showTakeoutBanner: kitchenBanners.takeout,
+          );
+
+          await _dispatchKitchenTicket(
+            printers: printers,
+            bytes: ticket.escPosCommands,
+            areaCode: areaCode,
+            fallbackData: {
+              'title': 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}',
+              'body':
+                  'Orden ${orderData['orderNumber'] ?? ''}\n'
+                  'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+                  'REIMPRESION de comanda',
+            },
+            businessId: businessId,
+            orderId: orderId,
+          );
+          areasPrinted++;
+        } catch (e) {
+          debugPrint('⚠️ Reimpresión de comanda falló en área $areaCode: $e');
           areasWithoutPrinter.add(areaCode);
-          continue;
         }
-
-        final ticket = PrintTicketService.generateKitchenTicket(
-          order: order,
-          items: areaItems,
-          tableName: orderData['tableName']?.toString() ?? 'N/A',
-          waiterName: orderData['waiterName']?.toString(),
-          cashierName: _resolveCashierName(),
-          customerName: orderData['customerName']?.toString(),
-          businessName: businessName,
-          areaCode: areaCode,
-          isReprint: true,
-          receiptItemDisplayMode: receiptItemDisplayMode,
-          showDineInBanner: kitchenBanners.dineIn,
-          showTakeoutBanner: kitchenBanners.takeout,
-        );
-
-        await _dispatchKitchenTicket(
-          printers: printers,
-          bytes: ticket.escPosCommands,
-          areaCode: areaCode,
-          fallbackData: {
-            'title': 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}',
-            'body':
-                'Orden ${orderData['orderNumber'] ?? ''}\n'
-                'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
-                'REIMPRESION de comanda',
-          },
-          businessId: businessId,
-          orderId: orderId,
-        );
-        areasPrinted++;
       }
 
       return ReadyPrintReport(

@@ -1863,10 +1863,13 @@ class OfflinePosService {
           final rawStatus = action['status']?.toString() ?? 'preparing';
           final status = rawStatus == 'served' ? 'ready' : rawStatus;
           final updates = <String, dynamic>{'status': status};
+          // toUtc: sin él, Dart manda hora local SIN offset y Postgres la
+          // interpreta como UTC → el timestamp queda 4h en el pasado (RD) y
+          // "Completados hoy" (día local de ready_at) pierde el ítem.
           if (status == 'preparing') {
-            updates['started_at'] = DateTime.now().toIso8601String();
+            updates['started_at'] = DateTime.now().toUtc().toIso8601String();
           } else if (status == 'ready') {
-            updates['ready_at'] = DateTime.now().toIso8601String();
+            updates['ready_at'] = DateTime.now().toUtc().toIso8601String();
           }
           await Supabase.instance.client
               .from('order_items')

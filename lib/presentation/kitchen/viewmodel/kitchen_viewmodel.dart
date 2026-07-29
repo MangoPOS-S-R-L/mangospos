@@ -415,7 +415,7 @@ class KitchenViewModel extends ChangeNotifier {
       // pendiente en NINGUNA ronda (todo está listo/servido). Así, en modo
       // "esperar al cocinero", una ronda aún por cocinar no saca del tablero
       // toda la orden.
-      final orderHasPendingWork = _items.any(
+      var orderHasPendingWork = _items.any(
         (item) =>
             item.orderId == orderId &&
             (item.status == 'pending' ||
@@ -425,6 +425,20 @@ class KitchenViewModel extends ChangeNotifier {
       // En modo hub el "sello" de cocina terminada (kitchen_done_at) se
       // reconcilia al subir; el tablero del Hub ya saca la comanda por el
       // estado 'ready' de sus ítems. Evitamos el RPC a Supabase aquí.
+      if (!orderHasPendingWork && !_isHubMode) {
+        // El tablero local puede NO contener aún una ronda que la mesa acaba
+        // de enviar (Realtime/poll con retraso). Sellar con ese snapshot
+        // borraría la comanda nueva del KDS (kds_open_orders filtra
+        // kitchen_done_at) y le estamparía ready_at sin cocinar. Confirmamos
+        // contra el server; si la consulta falla, NO sellamos (el sello sale
+        // en el próximo despacho de la orden).
+        try {
+          orderHasPendingWork =
+              await _repository.orderHasActiveKitchenItems(orderId);
+        } catch (_) {
+          orderHasPendingWork = true;
+        }
+      }
       if (!orderHasPendingWork && !_isHubMode) {
         await _repository.markOrderKitchenDone(orderId);
       }
@@ -493,6 +507,10 @@ class KitchenViewModel extends ChangeNotifier {
   Future<String?> reprintComanda({
     required String orderId,
     required List<String> itemIds,
+    // Área de la tarjeta reimpresa (el tablero separa una tarjeta por
+    // estación): la reimpresión sale solo por esa área. Null = todas las
+    // áreas de los ítems (reimpresión desde "Completados hoy").
+    String? areaCode,
   }) async {
     final businessId = _businessId;
     if (businessId == null || itemIds.isEmpty) {
@@ -503,16 +521,19 @@ class KitchenViewModel extends ChangeNotifier {
         orderId: orderId,
         businessId: businessId,
         itemIds: itemIds,
+        onlyAreaCode: areaCode,
       );
       if (report.nothingPrinted) {
         return report.missingReadyPrinter
-            ? 'La comanda no salió: ${_areaNames(report.areasWithoutReadyPrinter)} '
-                'sin impresora asignada en Ajustes → Impresoras.'
+            ? 'La comanda no salió en: '
+                '${_areaNames(report.areasWithoutReadyPrinter)}. Revisa que el '
+                'área tenga impresora asignada y que esté accesible.'
             : 'No se pudo reimprimir la comanda.';
       }
       if (report.missingReadyPrinter) {
-        return 'Comanda reimpresa, pero sin impresora en: '
-            '${_areaNames(report.areasWithoutReadyPrinter)}.';
+        return 'Comanda reimpresa, pero no salió en: '
+            '${_areaNames(report.areasWithoutReadyPrinter)} (sin impresora '
+            'asignada o inaccesible).';
       }
       return null;
     } catch (e) {
