@@ -6,6 +6,12 @@
 -- idéntico al anterior. Los totales (órdenes, items, bruto, neto) pasan a
 -- reflejar SOLO los items que matchean el término.
 --
+-- FIX anulaciones: excluye órdenes con status_ext = 'void'. La anulación
+-- desde la pantalla de mesa (fn_close_order_and_table) marca la ORDEN como
+-- void pero NO los items, así que esos items (y sus descuentos) entraban
+-- al reporte. El filtro item-level `status <> 'void'` se mantiene para el
+-- flujo de historial de ventas, que sí anula item por item.
+--
 -- IMPORTANTE: se hace DROP de la firma vieja (uuid, date, date) antes de
 -- crear la nueva (uuid, date, date, text default null). Si quedaran ambas,
 -- PostgREST no puede resolver la llamada por nombre (PGRST203 ambiguous).
@@ -67,6 +73,7 @@ begin
     join public.table_sessions ts on ts.id = o.session_id
     where ts.business_id = p_business_id
       and oi.status <> 'void'
+      and o.status_ext is distinct from 'void'
       and oi.created_at::date between p_from_date and p_to_date
       and coalesce(oi.created_by_employee_id, ts.opened_by_employee_id) is not null
       and (

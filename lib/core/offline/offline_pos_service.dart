@@ -2168,7 +2168,13 @@ class OfflinePosService {
         // (o entera, con rondas viejas) al sincronizar.
         if (printedAreas.isNotEmpty && missingAreas.isEmpty) {
           try {
-            await salesRepository.sendToKitchen(resolvedOrderId);
+            // Sin fusión: el replay reproduce envíos encolados uno detrás de
+            // otro y todos caerían dentro de la ventana, uniendo en una sola
+            // comanda rondas que en el salón fueron distintas.
+            await salesRepository.sendToKitchen(
+              resolvedOrderId,
+              allowMerge: false,
+            );
           } catch (e) {
             // Idempotente: si ya no hay drafts (otro replay/otra caja la
             // confirmó), el estado deseado ya existe.
@@ -2184,6 +2190,8 @@ class OfflinePosService {
           await printingService.sendOrderToKitchen(
             orderId: resolvedOrderId,
             businessId: businessId,
+            // Ver nota arriba: el replay nunca fusiona comandas.
+            allowKitchenMerge: false,
             // Acciones nuevas traen las áreas ya impresas localmente: esas
             // solo se marcan, se reimprimen únicamente las que quedaron sin
             // impresora. Acciones legacy (sin el campo) re-despachan todo,

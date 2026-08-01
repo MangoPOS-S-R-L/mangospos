@@ -1952,7 +1952,26 @@ class SalesRepository {
   // ============================================================
 
   /// Confirmar pedido y enviar a cocina
-  Future<void> sendToKitchen(String orderId) async {
+  /// Ventana de fusión de comandas: un envío a cocina que ocurre dentro de
+  /// este lapso del envío anterior se agrega a la MISMA comanda del KDS en
+  /// vez de abrir una tarjeta nueva. Cubre el caso real de "se me olvidó
+  /// agregar algo" sin fusionar rondas genuinamente distintas.
+  static const kitchenMergeWindow = Duration(minutes: 2);
+
+  /// Envía la orden a cocina.
+  ///
+  /// Devuelve `merged: true` cuando los ítems se agregaron a la comanda
+  /// anterior en lugar de abrir una ronda nueva; el llamador lo usa para
+  /// encabezar el ticket impreso como "AGREGADO A COMANDA".
+  ///
+  /// [allowMerge] en false fuerza ronda nueva. Lo usa el replay offline: al
+  /// sincronizar, varios envíos encolados se reproducen uno detrás de otro y
+  /// caerían todos dentro de la ventana, colapsando en una sola comanda
+  /// rondas que en el salón sí fueron distintas.
+  Future<({bool merged, DateTime roundStamp})> sendToKitchen(
+    String orderId, {
+    bool allowMerge = true,
+  }) async {
     try {
       await _client.rpc(
         SalesQueries.rpcConfirmOrderToKitchen,
@@ -1962,12 +1981,13 @@ class SalesRepository {
       // (los que aún no lo tienen). Los de rondas previas conservan su marca,
       // así el KDS separa cada comanda en su propia tarjeta. Best-effort: un
       // fallo aquí no debe tumbar el envío a cocina.
+      final round = allowMerge
+          ? await _resolveRoundStamp(orderId)
+          : (merged: false, stamp: DateTime.now().toUtc());
       try {
         await _client
             .from('order_items')
-            .update({
-              'kitchen_sent_at': DateTime.now().toUtc().toIso8601String(),
-            })
+            .update({'kitchen_sent_at': round.stamp.toIso8601String()})
             .eq('order_id', orderId)
             .isFilter('kitchen_sent_at', null)
             .inFilter('status', ['pending', 'preparing']);
@@ -1990,8 +2010,74 @@ class SalesRepository {
       } catch (_) {
         // El des-sellado es best-effort; el pedido ya entró a cocina.
       }
+      return (merged: round.merged, roundStamp: round.stamp);
     } catch (e) {
       throw Exception('Error al enviar a cocina: $e');
+    }
+  }
+
+  /// Decide la marca de ronda (`kitchen_sent_at`) que llevará este envío.
+  ///
+  /// El KDS agrupa cada tarjeta por `orderId::kitchen_sent_at::area`
+  /// (`kitchenCardKey`), así que reutilizar la marca del envío anterior hace
+  /// que los ítems nuevos caigan solos en la MISMA comanda del tablero, sin
+  /// tocar el KDS. Se reutiliza cuando se cumplen las DOS condiciones:
+  ///
+  ///   1. el envío anterior ocurrió hace menos de [kitchenMergeWindow], y
+  ///   2. la cocina todavía no lo tocó (todos sus ítems siguen en 'pending').
+  ///
+  /// La segunda es la importante: si el cocinero ya bumpeó algo de esa ronda,
+  /// se abre tarjeta nueva. Meter platos en una comanda a medio preparar haría
+  /// que "Marcar todo listo" despache algo que nadie cocinó.
+  ///
+  /// Best-effort: ante cualquier fallo devuelve ronda nueva (el comportamiento
+  /// histórico), nunca bloquea el envío a cocina.
+  Future<({bool merged, DateTime stamp})> _resolveRoundStamp(
+    String orderId,
+  ) async {
+    final now = DateTime.now().toUtc();
+    try {
+      final data = await _client
+          .from('order_items')
+          .select('kitchen_sent_at, status')
+          .eq('order_id', orderId)
+          .not('kitchen_sent_at', 'is', null)
+          .neq('status', 'void')
+          .order('kitchen_sent_at', ascending: false)
+          .limit(200);
+      final rows = List<Map<String, dynamic>>.from(data);
+
+      DateTime? parseStamp(Map<String, dynamic> row) {
+        final raw = row['kitchen_sent_at'];
+        if (raw == null) return null;
+        return DateTime.tryParse(raw.toString())?.toUtc();
+      }
+
+      DateTime? last;
+      for (final row in rows) {
+        final ts = parseStamp(row);
+        if (ts == null) continue;
+        if (last == null || ts.isAfter(last)) last = ts;
+      }
+      if (last == null) return (merged: false, stamp: now);
+
+      // Diferencia en valor absoluto: entre dispositivos hay desfase de reloj
+      // y una marca ligeramente en el futuro no debe romper la fusión.
+      final anchor = last;
+      if (now.difference(anchor).abs() > kitchenMergeWindow) {
+        return (merged: false, stamp: now);
+      }
+
+      final kitchenStarted = rows.any((row) {
+        final ts = parseStamp(row);
+        if (ts == null || !ts.isAtSameMomentAs(anchor)) return false;
+        return (row['status'] as String?) != 'pending';
+      });
+      if (kitchenStarted) return (merged: false, stamp: now);
+
+      return (merged: true, stamp: anchor);
+    } catch (_) {
+      return (merged: false, stamp: now);
     }
   }
 

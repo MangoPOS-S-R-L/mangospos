@@ -196,6 +196,13 @@ class PrintTicketService {
     /// (comportamiento histórico).
     bool showDineInBanner = true,
     bool showTakeoutBanner = true,
+
+    /// Este envío se fusionó con la comanda anterior de la misma orden (ver
+    /// `SalesRepository.sendToKitchen`): en el KDS los platos aparecen en la
+    /// tarjeta que ya estaba, pero en papel sale un segundo ticket. La franja
+    /// "AGREGADO A COMANDA" le avisa al cocinero que esto va JUNTO con lo que
+    /// ya tiene en la barra, no que es un pedido nuevo.
+    bool isAddition = false,
   }) {
     final gen = EscPosGenerator(paperWidth: 80);
     final printableItems = _buildPrintableItems(
@@ -229,6 +236,21 @@ class PrintTicketService {
     gen.textCentered(titleSingle);
     gen.setBold(false);
     gen.setTextSize();
+
+    // Franja inversa de agregado, justo bajo el titulo: es lo primero que
+    // el cocinero ve al arrancar el papel. Misma banda 2x2 con padding a
+    // 24ch que usan "PARA LLEVAR"/"PARA COMER AQUI" (ver _renderItemsList).
+    // La reimpresión ya se anuncia sola en el titulo, no se duplica.
+    if (isAddition && !isReprint) {
+      gen.setInverse(true);
+      gen.setTextSize(width: 2, height: 2);
+      gen.setBold(true);
+      gen.text(_centerInWidth('AGREGADO A', 24));
+      gen.text(_centerInWidth('COMANDA', 24));
+      gen.setBold(false);
+      gen.setTextSize();
+      gen.setInverse(false);
+    }
     gen.doubleSeparator();
 
     // ─── INFO DE ORDEN ──────────────────────────────────────────────
@@ -299,15 +321,37 @@ class PrintTicketService {
     // ─── FOOTER ─────────────────────────────────────────────────────
     // Sin separador propio: el `doubleSeparator` que cierra el último
     // bloque de items ya provee la división visual con el footer.
+    //
+    // HORA + MESA en grande (width:2 height:2 bold): es la linea que
+    // cocina/despacho mira de reojo para saber cuándo entró el pedido y
+    // a qué mesa va. El CAJERO baja a su propia linea en tamaño normal
+    // para no robarle espacio a la mesa.
     gen.lineFeed();
-    final now = DateTime.now();
-    final hms =
-        '${_formatTime(now)}:${now.second.toString().padLeft(2, '0')}';
-    gen.textCentered(
-      resolvedCashier != null && resolvedCashier.isNotEmpty
-          ? '$hms · $resolvedCashier'
-          : hms,
-    );
+    final hms = _formatTime(DateTime.now());
+    final mesaFooter = tableName.trim().isNotEmpty
+        ? 'MESA ${tableName.trim().toUpperCase()}'
+        : '';
+    gen.setTextSize(width: 2, height: 2);
+    gen.setBold(true);
+    if (mesaFooter.isEmpty) {
+      gen.textCentered(hms);
+    } else {
+      // A width:2 el line max es 24ch. Si hora + mesa no entran juntas
+      // (nombres de mesa largos tipo "TERRAZA 12"), se parten en dos
+      // lineas grandes en vez de truncar la mesa.
+      final joined = '$hms  $mesaFooter';
+      if (joined.length <= 24) {
+        gen.textCentered(joined);
+      } else {
+        gen.textCentered(hms);
+        gen.textCentered(mesaFooter);
+      }
+    }
+    gen.setBold(false);
+    gen.setTextSize();
+    if (resolvedCashier != null && resolvedCashier.isNotEmpty) {
+      gen.textCentered(resolvedCashier);
+    }
 
     // 1 linefeed antes del cut: suficiente margen para que el cutter
     // no toque el footer pero sin desperdiciar papel.

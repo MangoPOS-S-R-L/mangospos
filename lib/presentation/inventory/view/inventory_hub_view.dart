@@ -204,7 +204,8 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   icon: Icons.checklist_outlined,
                   title: 'Conteo físico',
                   subtitle:
-                      'Congela el stock, registra el conteo real y aplica ajustes',
+                      'Conteo a ciegas de cierre de mes: cuadra el físico '
+                      'contra el sistema y aplica los ajustes',
                   route: AppRoutes.inventoryPhysicalCount,
                   available: true,
                 ),

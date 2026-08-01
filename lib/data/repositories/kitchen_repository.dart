@@ -171,11 +171,31 @@ class KitchenRepository {
       // El historial debe mostrar cada plato con sus modificadores, igual que
       // la comanda viva. Best-effort: si la query de modifiers falla, el
       // historial sale sin ellos en vez de perderse completo.
+      // Solo lo que YA SALIÓ del KDS. `fn_kds_completed_today` devuelve todo
+      // ítem con `ready_at` de hoy, y bumpear un círculo estampa `ready_at`
+      // sin despachar nada: sin este filtro, marcar un plato lo mandaba al
+      // historial mientras su comanda seguía cocinándose en el tablero.
+      //
+      // El corte es por ÍTEM a propósito. Hacerlo por ORDEN sacaba del
+      // historial una comanda ya despachada en cuanto llegaba una ronda
+      // nueva de esa misma mesa (la orden volvía a tener trabajo abierto),
+      // que es justo lo que no debe pasar: lo que salió, salió.
+      var enriched = items
+          .where((i) => i.status == 'served' || i.status == 'paid')
+          .toList(growable: false);
+      if (enriched.isEmpty) return enriched;
       try {
-        return await _attachModifiers(items);
+        enriched = await _attachModifiers(enriched);
       } catch (_) {
-        return items;
+        // Sin modificadores, pero el historial se muestra igual.
       }
+      try {
+        enriched = await _attachKitchenDoneAt(enriched);
+      } catch (_) {
+        // Sin sello de despacho el historial cae a ready_at (orden por
+        // último plato marcado), que es el comportamiento anterior.
+      }
+      return enriched;
     } catch (e) {
       return const [];
     }
@@ -187,6 +207,10 @@ class KitchenRepository {
   Future<List<Map<String, dynamic>>> _completedTodayFromView(
     String? businessId,
   ) async {
+    // Sin `kitchen_sent_at`: la vista no lo expone (solo lo hace la RPC, ver
+    // 20260801_0001) y pedirlo tumbaría el fallback con 42703. Por este
+    // camino el historial degrada al agrupado por orden, que era el
+    // comportamiento anterior.
     const selectColumns =
         'id,order_id,order_number,product_name,quantity,notes,status,created_at,started_at,ready_at,table_name,waiter_name,business_id,area_code,area_name,is_takeout';
     var query = _client.from('kds_completed_today').select(selectColumns);
@@ -671,6 +695,53 @@ class KitchenRepository {
       }
     }
     return result;
+  }
+
+  /// Adjunta `orders.kitchen_done_at` (sello de despacho, por ORDEN) a los
+  /// ítems del historial.
+  ///
+  /// Es el dato que hace que "Completados hoy" ordene por cuándo SALIÓ la
+  /// comanda del KDS y no por el último plato marcado: en una comanda grande
+  /// el cocinero va bumpeando platos mientras cocina, así que su último
+  /// `ready_at` puede ser muy anterior al despacho y la comanda se hundía
+  /// debajo de otras más chicas despachadas después.
+  ///
+  /// La RPC/vista del historial no expone la columna, por eso se resuelve
+  /// aparte. Best-effort: quien llama captura el fallo y se queda con el
+  /// orden por `ready_at`.
+  Future<List<KitchenItem>> _attachKitchenDoneAt(
+    List<KitchenItem> items,
+  ) async {
+    final orderIds = items
+        .map((i) => i.orderId)
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (orderIds.isEmpty) return items;
+
+    final doneByOrder = <String, DateTime>{};
+    const chunkSize = 100;
+    for (var i = 0; i < orderIds.length; i += chunkSize) {
+      final end = (i + chunkSize > orderIds.length)
+          ? orderIds.length
+          : i + chunkSize;
+      final rows = await _client
+          .from('orders')
+          .select('id,kitchen_done_at')
+          .inFilter('id', orderIds.sublist(i, end));
+
+      for (final row in List<Map<String, dynamic>>.from(rows)) {
+        final id = row['id']?.toString();
+        final raw = row['kitchen_done_at'];
+        if (id == null || id.isEmpty || raw == null) continue;
+        final ts = DateTime.tryParse(raw.toString());
+        if (ts != null) doneByOrder[id] = ts;
+      }
+    }
+
+    return items
+        .map((item) => item.copyWith(kitchenDoneAt: doneByOrder[item.orderId]))
+        .toList(growable: false);
   }
 
   Future<List<KitchenItem>> _attachModifiers(List<KitchenItem> items) async {

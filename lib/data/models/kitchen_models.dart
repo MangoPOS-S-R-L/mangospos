@@ -31,6 +31,15 @@ class KitchenItem extends Equatable {
   /// ítem legacy sin marca (cae en la ronda "legacy" de su orden).
   final DateTime? kitchenSentAt;
 
+  /// Momento en que la comanda SALIÓ del KDS (`orders.kitchen_done_at`, sello
+  /// por ORDEN). Es distinto del último `ready_at`: si el cocinero fue
+  /// marcando los platos uno por uno mientras cocinaba, el último bump puede
+  /// ser mucho más temprano que el despacho. "Completados hoy" ordena por
+  /// este valor para que la comanda que salió de última quede arriba, aunque
+  /// sus platos se hayan marcado antes que los de otras. Null en ítems que
+  /// aún no tienen la orden sellada.
+  final DateTime? kitchenDoneAt;
+
   const KitchenItem({
     required this.id,
     required this.orderId,
@@ -49,6 +58,7 @@ class KitchenItem extends Equatable {
     this.areaCode,
     this.areaName,
     this.kitchenSentAt,
+    this.kitchenDoneAt,
   });
 
   factory KitchenItem.fromMap(Map<String, dynamic> map) {
@@ -81,6 +91,9 @@ class KitchenItem extends Equatable {
       kitchenSentAt: map['kitchen_sent_at'] != null
           ? DateTime.tryParse(map['kitchen_sent_at'].toString())
           : null,
+      kitchenDoneAt: map['kitchen_done_at'] != null
+          ? DateTime.tryParse(map['kitchen_done_at'].toString())
+          : null,
     );
   }
 
@@ -102,6 +115,7 @@ class KitchenItem extends Equatable {
     String? areaCode,
     String? areaName,
     DateTime? kitchenSentAt,
+    DateTime? kitchenDoneAt,
   }) {
     return KitchenItem(
       id: id ?? this.id,
@@ -121,6 +135,7 @@ class KitchenItem extends Equatable {
       areaCode: areaCode ?? this.areaCode,
       areaName: areaName ?? this.areaName,
       kitchenSentAt: kitchenSentAt ?? this.kitchenSentAt,
+      kitchenDoneAt: kitchenDoneAt ?? this.kitchenDoneAt,
     );
   }
 
@@ -158,6 +173,7 @@ class KitchenItem extends Equatable {
     areaCode,
     areaName,
     kitchenSentAt,
+    kitchenDoneAt,
   ];
 }
 

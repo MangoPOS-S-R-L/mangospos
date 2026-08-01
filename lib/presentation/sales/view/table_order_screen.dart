@@ -1187,15 +1187,26 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     title: widget.tableCode?.isNotEmpty == true
                         ? widget.tableCode!
                         : 'Venta libre',
-                    showTableActions: widget.origin == OrderOrigin.table,
+                    // Delivery también tiene menú de opciones (anular,
+                    // descuento, cortesía, crédito); transferir/liberar
+                    // quedan solo para mesa (van null → ocultos).
+                    showTableActions:
+                        widget.origin == OrderOrigin.table ||
+                        widget.origin == OrderOrigin.delivery,
                     onBack: () => _handleBack(context),
-                    onTransferSession: () => _handleTransferSession(context),
-                    onReleaseTable: () => _handleReleaseTable(context),
+                    onTransferSession: widget.origin == OrderOrigin.table
+                        ? () => _handleTransferSession(context)
+                        : null,
+                    onReleaseTable: widget.origin == OrderOrigin.table
+                        ? () => _handleReleaseTable(context)
+                        : null,
                     onVoidOrder: () => _handleVoidCurrentOrder(
                       context,
                       title: 'Anular orden',
-                      content:
-                          'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
+                      content: widget.origin == OrderOrigin.delivery
+                          ? 'Esta acción anulará la orden de delivery actual. '
+                                '¿Deseas continuar?'
+                          : 'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
                       confirmLabel: 'Anular',
                     ),
                     onApplyDiscount: () => _handleApplyDiscount(context),
@@ -1234,18 +1245,29 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                 if (!isRetail)
                   _SalesToolsRail(
                     onBack: () => _handleBack(context),
-                    showTableActions: widget.origin == OrderOrigin.table,
-                    onReleaseTable: () => _handleReleaseTable(context),
+                    // Delivery también tiene OPCIONES (anular, descuento,
+                    // cortesía, takeout, crédito); transferir/liberar
+                    // quedan solo para mesa (van null → ocultos).
+                    showTableActions:
+                        widget.origin == OrderOrigin.table ||
+                        widget.origin == OrderOrigin.delivery,
+                    onReleaseTable: widget.origin == OrderOrigin.table
+                        ? () => _handleReleaseTable(context)
+                        : null,
                     onVoidOrder: () => _handleVoidCurrentOrder(
                       context,
                       title: 'Anular orden',
-                      content:
-                          'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
+                      content: widget.origin == OrderOrigin.delivery
+                          ? 'Esta acción anulará la orden de delivery actual. '
+                                '¿Deseas continuar?'
+                          : 'Esta acción anulará la orden actual. Si la mesa no tiene más órdenes activas, también quedará liberada. ¿Deseas continuar?',
                       confirmLabel: 'Anular',
                     ),
                     onApplyDiscount: () => _handleApplyDiscount(context),
                     onApplyCourtesy: () => _handleCourtesyByProduct(context),
-                    onTransferSession: () => _handleTransferSession(context),
+                    onTransferSession: widget.origin == OrderOrigin.table
+                        ? () => _handleTransferSession(context)
+                        : null,
                     onMarkAllTakeout: () => _handleMarkAllTakeout(context),
                     onChargeCredit: _canSellCredit
                         ? () => _handleChargeToCredit(context)
@@ -1331,10 +1353,18 @@ extension _MobileSalesShell on _OrderScreenState {
 
 class _MobileSalesHeader extends StatelessWidget {
   final String title;
+
+  /// Muestra el menú de opciones. True para cuentas de mesa Y delivery;
+  /// las acciones específicas de mesa (transferir/liberar) se controlan
+  /// aparte con sus callbacks nullables.
   final bool showTableActions;
   final VoidCallback onBack;
-  final VoidCallback onTransferSession;
-  final VoidCallback onReleaseTable;
+
+  /// Solo cuentas de mesa. Null = opción oculta (delivery no tiene mesa).
+  final VoidCallback? onTransferSession;
+
+  /// Solo cuentas de mesa. Null = opción oculta (delivery no tiene mesa).
+  final VoidCallback? onReleaseTable;
   final VoidCallback onVoidOrder;
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
@@ -1347,8 +1377,8 @@ class _MobileSalesHeader extends StatelessWidget {
     required this.title,
     required this.showTableActions,
     required this.onBack,
-    required this.onTransferSession,
-    required this.onReleaseTable,
+    this.onTransferSession,
+    this.onReleaseTable,
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
@@ -1391,10 +1421,10 @@ class _MobileSalesHeader extends StatelessWidget {
               onSelected: (action) {
                 switch (action) {
                   case _MobileSalesAction.transferSession:
-                    onTransferSession();
+                    onTransferSession?.call();
                     break;
                   case _MobileSalesAction.releaseTable:
-                    onReleaseTable();
+                    onReleaseTable?.call();
                     break;
                   case _MobileSalesAction.voidOrder:
                     onVoidOrder();
@@ -1411,22 +1441,24 @@ class _MobileSalesHeader extends StatelessWidget {
                 }
               },
               itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: _MobileSalesAction.transferSession,
-                  child: ListTile(
-                    leading: Icon(Icons.swap_horiz_rounded),
-                    title: Text('Transferir cuenta'),
-                    contentPadding: EdgeInsets.zero,
+                if (onTransferSession != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.transferSession,
+                    child: ListTile(
+                      leading: Icon(Icons.swap_horiz_rounded),
+                      title: Text('Transferir cuenta'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                PopupMenuItem(
-                  value: _MobileSalesAction.releaseTable,
-                  child: ListTile(
-                    leading: Icon(Icons.logout_rounded),
-                    title: Text('Liberar mesa'),
-                    contentPadding: EdgeInsets.zero,
+                if (onReleaseTable != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.releaseTable,
+                    child: ListTile(
+                      leading: Icon(Icons.logout_rounded),
+                      title: Text('Liberar mesa'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
                 PopupMenuItem(
                   value: _MobileSalesAction.voidOrder,
                   child: ListTile(
@@ -6470,12 +6502,21 @@ class _RetailCartChip extends StatelessWidget {
 
 class _SalesToolsRail extends StatelessWidget {
   final VoidCallback onBack;
+
+  /// Muestra el bloque OPCIONES. True para cuentas de mesa Y delivery;
+  /// las acciones específicas de mesa (transferir/liberar) se controlan
+  /// aparte con sus callbacks nullables.
   final bool showTableActions;
-  final VoidCallback onReleaseTable;
+
+  /// Solo cuentas de mesa. Null = botón oculto (delivery no tiene mesa).
+  final VoidCallback? onReleaseTable;
   final VoidCallback onVoidOrder;
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
-  final VoidCallback onTransferSession;
+
+  /// Solo cuentas de mesa. Null = botón oculto (el RPC de transferencia
+  /// requiere mesa origen).
+  final VoidCallback? onTransferSession;
   final VoidCallback onMarkAllTakeout;
 
   /// Cobrar la cuenta completa a crédito. Null = usuario sin permiso
@@ -6485,11 +6526,11 @@ class _SalesToolsRail extends StatelessWidget {
   const _SalesToolsRail({
     required this.onBack,
     required this.showTableActions,
-    required this.onReleaseTable,
+    this.onReleaseTable,
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
-    required this.onTransferSession,
+    this.onTransferSession,
     required this.onMarkAllTakeout,
     this.onChargeCredit,
   });
@@ -6528,16 +6569,18 @@ class _SalesToolsRail extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _RailButton(
-                    icon: Icons.swap_horiz_rounded,
-                    label: 'Transferir\ncuenta',
-                    onTap: onTransferSession,
-                  ),
-                  _RailButton(
-                    icon: Icons.logout_rounded,
-                    label: 'Liberar\nmesa',
-                    onTap: onReleaseTable,
-                  ),
+                  if (onTransferSession != null)
+                    _RailButton(
+                      icon: Icons.swap_horiz_rounded,
+                      label: 'Transferir\ncuenta',
+                      onTap: onTransferSession!,
+                    ),
+                  if (onReleaseTable != null)
+                    _RailButton(
+                      icon: Icons.logout_rounded,
+                      label: 'Liberar\nmesa',
+                      onTap: onReleaseTable!,
+                    ),
                   _RailButton(
                     icon: Icons.block_rounded,
                     label: 'Anular\norden',

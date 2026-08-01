@@ -167,6 +167,10 @@ class PrintingService {
     // Áreas ya impresas localmente (replay offline): se marcan en server
     // pero NO se vuelven a imprimir.
     Set<String> excludeAreaCodes = const {},
+    // En false fuerza ronda nueva en el KDS (sin fusionar con la comanda
+    // anterior). El replay offline lo apaga: reproduce envíos encolados
+    // seguidos y fusionaría rondas que en el salón fueron distintas.
+    bool allowKitchenMerge = true,
   }) async {
     try {
       // 1. Obtener información de la orden
@@ -243,8 +247,13 @@ class PrintingService {
       // Si no hay impresoras configuradas para "enviar a cocina",
       // la orden igual debe pasar a cocina; simplemente se omite la impresión.
 
-      // 6. Marcar orden como enviada a cocina.
-      await _salesRepo.sendToKitchen(orderId);
+      // 6. Marcar orden como enviada a cocina. `merged` indica que estos
+      // ítems se sumaron a la comanda anterior (misma tarjeta del KDS), no
+      // que abrieron una ronda nueva → el ticket sale marcado "AGREGADO".
+      final sendResult = await _salesRepo.sendToKitchen(
+        orderId,
+        allowMerge: allowKitchenMerge,
+      );
 
       final createdJobs = <String, String>{}; // areaCode -> local dispatch id
       final directAreas = <String>[];
@@ -285,6 +294,7 @@ class PrintingService {
           receiptItemDisplayMode: receiptItemDisplayMode,
           showDineInBanner: kitchenBanners.dineIn,
           showTakeoutBanner: kitchenBanners.takeout,
+          isAddition: sendResult.merged,
         );
 
         final outcome = await _dispatchKitchenTicket(

@@ -47,6 +47,35 @@ String kitchenCardKey(KitchenItem item) {
   return '${item.orderId}::$round::$area';
 }
 
+/// Momento en que una comanda SALIÓ del KDS, para ordenar "Completados hoy".
+///
+/// Prioridad:
+///   1. `kitchen_done_at` — el sello de despacho de la orden. Es el correcto:
+///      una comanda de 10 platos que el cocinero fue marcando de a uno tiene
+///      su último `ready_at` mucho antes del despacho, y sin este sello se
+///      hundía debajo de comandas más chicas despachadas después.
+///   2. el último `ready_at` de sus ítems — órdenes aún sin sellar.
+///   3. `created_at` — ítems sin ningún sello (legacy/importados).
+DateTime kitchenDispatchedAt(List<KitchenItem> items) {
+  DateTime? dispatched;
+  DateTime? lastReady;
+  DateTime? created;
+  for (final item in items) {
+    final done = item.kitchenDoneAt;
+    if (done != null && (dispatched == null || done.isAfter(dispatched))) {
+      dispatched = done;
+    }
+    final ready = item.readyAt;
+    if (ready != null && (lastReady == null || ready.isAfter(lastReady))) {
+      lastReady = ready;
+    }
+    if (created == null || item.createdAt.isAfter(created)) {
+      created = item.createdAt;
+    }
+  }
+  return dispatched ?? lastReady ?? created ?? DateTime.now();
+}
+
 class KitchenViewModel extends ChangeNotifier {
   final KitchenRepository _repository;
   final PrintingService _printingService;

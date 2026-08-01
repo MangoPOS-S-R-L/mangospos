@@ -12,6 +12,9 @@
 -- guarda el nombre al momento de la venta; items viejos sin product_name
 -- salen como 'Sin nombre'.
 --
+-- Igual que fn_sales_by_waiter: excluye órdenes anuladas (status_ext =
+-- 'void'), porque la anulación desde la mesa no marca los items como void.
+--
 -- IDEMPOTENTE: CREATE OR REPLACE (función nueva, sin firma previa).
 -- =============================================================================
 
@@ -68,6 +71,7 @@ begin
     join public.table_sessions ts on ts.id = o.session_id
     where ts.business_id = p_business_id
       and oi.status <> 'void'
+      and o.status_ext is distinct from 'void'
       and oi.created_at::date between p_from_date and p_to_date
       and coalesce(oi.created_by_employee_id, ts.opened_by_employee_id) is not null
       and (

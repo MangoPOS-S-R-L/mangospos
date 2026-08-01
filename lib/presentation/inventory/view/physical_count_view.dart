@@ -144,8 +144,8 @@ class _PhysicalCountViewState extends ConsumerState<PhysicalCountView> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Congela el stock actual, registra el conteo real y el '
-                'sistema genera los ajustes automáticamente.',
+                'Cierre de inventario: congela el stock, cuenta a ciegas y '
+                'el sistema aplica los ajustes por cada diferencia.',
                 style: TextStyle(fontSize: 13, color: MangoColors.muted),
               ),
               const SizedBox(height: 16),
@@ -254,14 +254,32 @@ class _SessionRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    session.code,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13,
-                      letterSpacing: 0.3,
-                      color: MangoColors.darkGray,
-                    ),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          session.code,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                            letterSpacing: 0.3,
+                            color: MangoColors.darkGray,
+                          ),
+                        ),
+                      ),
+                      if (session.isBlind) ...[
+                        const SizedBox(width: 6),
+                        const Tooltip(
+                          message: 'Conteo a ciegas',
+                          child: Icon(
+                            Icons.visibility_off_outlined,
+                            size: 14,
+                            color: MangoColors.muted,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   Text(
                     date,
@@ -287,12 +305,35 @@ class _SessionRow extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${session.countedLines} / ${session.linesCount} items contados',
+                    session.status == PhysicalCountStatus.completed
+                        ? '${session.linesCount} items · '
+                            '${session.adjustmentsCount} ajustes'
+                        : '${session.countedLines} / ${session.linesCount} '
+                            'items contados',
                     style: const TextStyle(
                       fontSize: 11,
                       color: MangoColors.muted,
                     ),
                   ),
+                  if (session.pendingRecount > 0)
+                    Text(
+                      '${session.pendingRecount} por recontar',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFD97706),
+                      ),
+                    ),
+                  if (session.status == PhysicalCountStatus.completed &&
+                      session.shrinkageValue.abs() >= 0.01)
+                    Text(
+                      'Merma ${_fmtMoney(session.shrinkageValue)}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFDC2626),
+                      ),
+                    ),
                   if (session.status == PhysicalCountStatus.inProgress) ...[
                     const SizedBox(height: 4),
                     SizedBox(
@@ -333,6 +374,16 @@ class _SessionRow extends StatelessWidget {
   }
 }
 
+// Igual que el resto del módulo de inventario (ver
+// `consolidated_inventory_view.dart`), la moneda va fija en RD$.
+final _currency = NumberFormat.currency(
+  locale: 'en_US',
+  symbol: 'RD\$ ',
+  decimalDigits: 2,
+);
+
+String _fmtMoney(double v) => _currency.format(v);
+
 Color _statusColor(PhysicalCountStatus s) {
   switch (s) {
     case PhysicalCountStatus.draft:
@@ -366,6 +417,8 @@ class _CreatePhysicalCountDialogState
   String? _error;
   List<InventoryWarehouse> _warehouses = const [];
   String? _warehouseId;
+  // Un cierre de mes normalmente se cuenta a ciegas.
+  bool _isBlind = true;
   final TextEditingController _notesCtrl = TextEditingController();
 
   @override
@@ -424,6 +477,7 @@ class _CreatePhysicalCountDialogState
             notes: _notesCtrl.text.trim().isEmpty
                 ? null
                 : _notesCtrl.text.trim(),
+            isBlind: _isBlind,
           );
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -488,6 +542,46 @@ class _CreatePhysicalCountDialogState
                               ))
                           .toList(growable: false),
                       onChanged: (v) => setState(() => _warehouseId = v),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: _isBlind
+                            ? const Color(0xFFFFF7ED)
+                            : const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: _isBlind
+                              ? const Color(0xFFFED7AA)
+                              : const Color(0xFFE5E7EB),
+                        ),
+                      ),
+                      child: SwitchListTile(
+                        value: _isBlind,
+                        onChanged: (v) => setState(() => _isBlind = v),
+                        activeThumbColor: MangoColors.primaryOrange,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                        ),
+                        title: const Text(
+                          'Conteo a ciegas',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        subtitle: Text(
+                          _isBlind
+                              ? 'Quien cuenta no verá el stock del sistema ni '
+                                  'la diferencia. Se revelan al completar.'
+                              : 'Se mostrará el stock del sistema mientras se '
+                                  'cuenta.',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: MangoColors.muted,
+                          ),
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 12),
                     TextField(

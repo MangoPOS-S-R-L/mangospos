@@ -12,6 +12,11 @@ import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
 
+/// Hora corta HH:mm para las tarjetas del KDS. Recibe la fecha ya en la zona
+/// que se quiera mostrar (los timestamps vienen en UTC del server).
+String _formatClock(DateTime at) =>
+    '${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
+
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
     return qty.toStringAsFixed(0);
@@ -697,9 +702,10 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     String? areaFilter; // null = todas las áreas
     var takeoutOnly = false;
 
-    DateTime completedAtOf(KitchenOrder order) => order.items
-        .map((e) => e.readyAt ?? e.createdAt)
-        .reduce((a, b) => a.isAfter(b) ? a : b);
+    // Hora que se muestra y por la que ordena el historial: el DESPACHO de la
+    // comanda (ver `kitchenDispatchedAt`), no el último plato bumpeado.
+    DateTime completedAtOf(KitchenOrder order) =>
+        kitchenDispatchedAt(order.items);
 
     showDialog(
       context: context,
@@ -1006,6 +1012,20 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                       'Mesa: ${order.tableName ?? 'N/A'} · Mesero: ${order.waiterName ?? 'N/A'}',
                       style: MangoTokens.label(),
                     ),
+                    // Hora de ENVÍO de la comanda. La píldora de la derecha
+                    // muestra el despacho; sin esta línea, dos comandas
+                    // distintas de la misma mesa (mismos productos, minutos
+                    // de diferencia) se ven idénticas y parecen una sola
+                    // comanda partida en dos. Se omite en ítems sin marca de
+                    // ronda (legacy / RPC sin `kitchen_sent_at`).
+                    if (order.items.first.kitchenSentAt != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Enviada ${_formatClock(order.items.first.kitchenSentAt!.toLocal())}'
+                        ' · Despachada ${_formatClock(completedAt.toLocal())}',
+                        style: MangoTokens.label(),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1019,7 +1039,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  '${completedAt.hour.toString().padLeft(2, '0')}:${completedAt.minute.toString().padLeft(2, '0')}',
+                  _formatClock(completedAt.toLocal()),
                   style: MangoTokens.label(
                     color: MangoTokens.foreground,
                   ).copyWith(fontWeight: FontWeight.w700),
@@ -1120,35 +1140,40 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
   }
 
   List<KitchenOrder> _groupOrdersFromItems(List<KitchenItem> items) {
+    // Una fila por COMANDA, no por orden: si a la mesa le mandaron 4 platos y
+    // luego 2 más, el historial muestra las dos comandas por separado igual
+    // que el tablero. La clave es orden + ronda (`kitchen_sent_at`), SIN el
+    // área: una comanda que se repartió entre cocina y bar sigue siendo una
+    // sola comanda para el mesero, aunque el tablero la haya partido en dos
+    // tarjetas. Ítems sin marca de ronda (legacy, o entrados por el camino
+    // offline) caen juntos en la ronda 'legacy' de su orden — que es el
+    // comportamiento anterior, agrupado por orden.
     final map = <String, List<KitchenItem>>{};
     for (final item in items) {
-      map.putIfAbsent(item.orderId, () => []).add(item);
+      final round = item.kitchenSentAt?.toIso8601String() ?? 'legacy';
+      map.putIfAbsent('${item.orderId}::$round', () => []).add(item);
     }
-    // Momento en que la cocina TERMINÓ la comanda (último ready_at de sus
-    // ítems). Fallback a createdAt si ningún ítem trae sello.
-    DateTime finishedAt(KitchenOrder order) {
-      var latest = order.createdAt;
-      for (final item in order.items) {
-        final ready = item.readyAt;
-        if (ready != null && ready.isAfter(latest)) latest = ready;
-      }
-      return latest;
-    }
+    DateTime finishedAt(KitchenOrder order) => kitchenDispatchedAt(order.items);
 
     return map.entries.map((entry) {
       final list = entry.value;
       list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       final first = list.first;
       return KitchenOrder(
-        orderId: entry.key,
+        // El id real del ítem, NO `entry.key`: la clave del mapa ahora lleva
+        // la ronda pegada y `orderId` lo usa la reimpresión para buscar la
+        // orden. `roundKey` se deja vacío a propósito — en el historial la
+        // reimpresión debe sacar TODAS las áreas de la comanda (ver
+        // `_reprintOrder`), no solo la del primer ítem.
+        orderId: first.orderId,
         orderNumber: first.orderNumber,
         tableName: first.tableName,
         waiterName: first.waiterName,
         createdAt: first.createdAt,
         items: list,
       );
-      // La última comanda PREPARADA sale de primera (descendente por
-      // ready_at, no por hora de creación).
+      // La última comanda DESPACHADA sale de primera (descendente por hora de
+      // salida del KDS, no por hora de creación).
     }).toList()..sort((a, b) => finishedAt(b).compareTo(finishedAt(a)));
   }
 }
