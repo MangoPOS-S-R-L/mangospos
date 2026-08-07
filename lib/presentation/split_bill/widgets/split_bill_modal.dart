@@ -6,8 +6,11 @@ import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart'
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
+import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/sales_models.dart';
@@ -88,14 +91,21 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         throw Exception('No se pudo resolver el negocio activo.');
       }
 
+      // Modo sin impresora: se arma la misma precuenta y se muestra en
+      // pantalla (con compartir PDF) en vez de mandarla al papel.
+      final printerless = await PrinterlessMode.isEnabled(businessId);
+
       final printRepo = ref.read(printingPrintersRepositoryProvider);
-      final assignedPrinter = await printRepo.getAssignedPrinterForType(
-        businessId: businessId,
-        preferredAreaCodes: const ['cashier', 'fiscal'],
-        printsPrebills: true,
-      );
-      if (assignedPrinter == null) {
-        throw Exception('No hay impresora configurada para precuentas.');
+      PrinterConfig? assignedPrinter;
+      if (!printerless) {
+        assignedPrinter = await printRepo.getAssignedPrinterForType(
+          businessId: businessId,
+          preferredAreaCodes: const ['cashier', 'fiscal'],
+          printsPrebills: true,
+        );
+        if (assignedPrinter == null) {
+          throw Exception('No hay impresora configurada para precuentas.');
+        }
       }
 
       // Build check-level order for pricing
@@ -146,8 +156,20 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         currency: currentBusinessCurrencyOrFallback(ref),
       );
 
+      if (printerless) {
+        if (context.mounted) {
+          await showPrintTicketOnScreen(
+            context,
+            ticket: ticket,
+            title: 'Pre-cuenta ${check.label}',
+            fileNamePrefix: 'precuenta',
+          );
+        }
+        return;
+      }
+
       await printRepo.printEscPos(
-        printer: assignedPrinter,
+        printer: assignedPrinter!,
         data: ticket.escPosCommands,
       );
 

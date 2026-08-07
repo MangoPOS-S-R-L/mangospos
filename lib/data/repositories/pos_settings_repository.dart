@@ -540,6 +540,37 @@ class PosSettingsRepository {
     }, onConflict: 'business_id');
   }
 
+  /// Modo sin impresora (por NEGOCIO). Si TRUE, la POS deja de exigir
+  /// impresoras: facturas, precuentas, cierres de caja y recibos de
+  /// movimiento se muestran en pantalla (con opción de compartir PDF) en vez
+  /// de mandarse al papel, y nada se bloquea con "Impresora no configurada".
+  ///
+  /// Cada dispositivo puede sobrescribir este valor localmente — ver
+  /// [PrinterlessMode] en `lib/core/printing/printerless_mode.dart`. Este
+  /// getter devuelve SOLO la preferencia del negocio; la decisión efectiva
+  /// (negocio + override del device) la resuelve esa clase.
+  ///
+  /// Tolerante a que la columna aún no exista (migración 20260806_0001 sin
+  /// aplicar) → cae a `false`, o sea comportamiento histórico.
+  Future<bool> getPrinterlessMode(String businessId) async {
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      return row?['printerless_mode'] == true;
+    } catch (_) {
+      return (await _cachedRow(businessId))?['printerless_mode'] == true;
+    }
+  }
+
+  Future<void> setPrinterlessMode({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'printerless_mode': enabled,
+    }, onConflict: 'business_id');
+  }
+
   /// KDS — qué saca una comanda del tablero de cocina:
   /// TRUE (default): al pagar, la comanda sale del KDS automáticamente.
   /// FALSE: la comanda se queda aunque esté pagada, hasta que un cocinero la

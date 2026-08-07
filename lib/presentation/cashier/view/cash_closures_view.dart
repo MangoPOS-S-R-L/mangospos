@@ -9,6 +9,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CashClosuresView extends ConsumerStatefulWidget {
@@ -455,12 +456,25 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     setState(() => _reprintingId = session.id);
     try {
       final service = CashClosePrintService(Supabase.instance.client);
+      var shownOnScreen = false;
       await service.reprintForSession(
         sessionId: session.id,
         cashierName: _resolveCashierName(session),
         businessName: ref.read(cashierViewModelProvider).businessName,
+        // Modo sin impresora: el cierre se muestra en pantalla con opción
+        // de compartir PDF en vez de exigir una térmica.
+        presentOnScreen: (plainText) async {
+          if (!mounted) return;
+          shownOnScreen = true;
+          await showTicketPreviewDialog(
+            context,
+            title: 'Cierre de caja',
+            plainText: plainText,
+            fileNamePrefix: 'cierre_caja',
+          );
+        },
       );
-      if (!mounted) return;
+      if (!mounted || shownOnScreen) return;
       AppToast.success(context, 'Cierre reimpreso correctamente');
     } catch (e) {
       if (!mounted) return;

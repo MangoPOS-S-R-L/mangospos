@@ -15,6 +15,15 @@ class EscPosGenerator {
   final List<int> _buffer = [];
   int _textWidthFactor = 1; // Factor de ampliación horizontal actual
 
+  // ── Espejo en texto plano ────────────────────────────────────────────
+  // Se llena en paralelo al buffer de bytes y NUNCA lo altera. Lo consume
+  // el "modo sin impresora" (ver core/printing/printerless_mode.dart) para
+  // mostrar el ticket en pantalla y exportarlo a PDF con el mismo layout
+  // que saldría en papel.
+  final List<String> _plainLines = [];
+  final StringBuffer _plainLine = StringBuffer();
+  Alignment _alignment = Alignment.left;
+
   /// [codeTable] envía comando ESC t con la tabla de caracteres del firmware.
   /// 16 = CP1252 (recomendado para español/acentos), valor por defecto.
   EscPosGenerator({
@@ -26,15 +35,44 @@ class EscPosGenerator {
   /// Obtener comandos generados
   List<int> getCommands() => List.from(_buffer);
 
+  /// Espejo del ticket en texto plano, con el mismo ancho de columnas y la
+  /// misma alineación que saldría en papel. Lo usa el modo sin impresora
+  /// para pintar el ticket en pantalla y exportarlo a PDF.
+  ///
+  /// No incluye gráficos (logo, QR): esos aparecen como el marcador que el
+  /// caller pase en [appendRaw].
+  String getPlainText() {
+    final lines = [..._plainLines];
+    final pending = _plainLine.toString();
+    if (pending.isNotEmpty) lines.add(_alignPlain(pending));
+    // Los feeds finales previos al corte no aportan nada en pantalla.
+    while (lines.isNotEmpty && lines.last.trim().isEmpty) {
+      lines.removeLast();
+    }
+    return lines.join('\n');
+  }
+
   /// Limpiar buffer
-  void clear() => _buffer.clear();
+  void clear() {
+    _buffer.clear();
+    _plainLines.clear();
+    _plainLine.clear();
+  }
 
   /// Append crudo al buffer. Se usa para inyectar bytes ESC/POS pre-generados
   /// (ej. una imagen raster del QR producida por QrEscPosBuilder). El caller
   /// es responsable de incluir los comandos de alineación si los necesita.
-  void appendRaw(List<int> bytes) {
+  ///
+  /// [plainPlaceholder] es lo que el espejo de texto plano muestra en lugar
+  /// del gráfico (ej. `[ QR de verificación DGII ]`). Null = el gráfico
+  /// simplemente no aparece en pantalla.
+  void appendRaw(List<int> bytes, {String? plainPlaceholder}) {
     if (bytes.isEmpty) return;
     _buffer.addAll(bytes);
+    if (plainPlaceholder != null && plainPlaceholder.isNotEmpty) {
+      _plainLine.write(plainPlaceholder);
+      _flushPlainLine();
+    }
   }
 
   // ============================================================
@@ -52,11 +90,27 @@ class EscPosGenerator {
   void lineFeed([int lines = 1]) {
     for (int i = 0; i < lines; i++) {
       _buffer.add(LF);
+      _flushPlainLine();
     }
   }
 
-  /// Cortar papel
-  void cut({bool partial = false}) {
+  /// Margen de avance (en lineas) que hay que dar ANTES de cortar.
+  ///
+  /// El cabezal y la cuchilla NO estan en el mismo punto del recorrido del
+  /// papel: la cuchilla queda por delante del cabezal, entre ~10mm y ~25mm
+  /// segun el modelo. `GS V` corta en la posicion actual, asi que si no se
+  /// avanza papel la cuchilla parte POR ENCIMA de lo ultimo impreso y ese
+  /// contenido se pierde. Esa distancia varia por impresora — por eso el
+  /// mismo ticket sale completo en unas y cortado en otras.
+  ///
+  /// 5 lineas (~17mm a 24 dots/linea) cubren el gap del grueso de las
+  /// termicas de 80mm sin desperdiciar papel de mas.
+  static const int safeCutFeedLines = 5;
+
+  /// Cortar papel. [feedLines] avanza papel antes del corte para que lo
+  /// ultimo impreso pase la cuchilla (ver [safeCutFeedLines]).
+  void cut({bool partial = false, int feedLines = 0}) {
+    if (feedLines > 0) lineFeed(feedLines);
     _buffer.addAll([GS, 0x56, partial ? 1 : 0]); // GS V
   }
 
@@ -72,6 +126,7 @@ class EscPosGenerator {
   /// Agregar texto
   void text(String text, {bool newLine = true}) {
     _buffer.addAll(_encodeText(text));
+    _plainLine.write(text);
     if (newLine) lineFeed();
   }
 
@@ -181,6 +236,7 @@ class EscPosGenerator {
         break;
     }
     _buffer.addAll([ESC, 0x61, value]); // ESC a
+    _alignment = alignment;
   }
 
   /// Establecer tamaño de texto
@@ -465,6 +521,30 @@ class EscPosGenerator {
     // así caracteres exóticos no normalizados arriba salen como '?' en
     // lugar de tirar FormatException y matar la impresión.
     return const Latin1Codec(allowInvalid: true).encode(normalized);
+  }
+
+  /// Cierra la línea en curso del espejo plano y la empuja a [_plainLines]
+  /// aplicando la alineación vigente. Se llama desde [lineFeed], que es por
+  /// donde pasan TODOS los saltos de línea del generador.
+  void _flushPlainLine() {
+    final content = _plainLine.toString();
+    _plainLine.clear();
+    _plainLines.add(content.isEmpty ? '' : _alignPlain(content));
+  }
+
+  /// Rellena con espacios para emular la alineación que hace el firmware.
+  /// El ancho es el mismo `_getMaxChars()` que usa `textRow`, así que las
+  /// líneas de doble tamaño quedan en su ancho real de columnas.
+  String _alignPlain(String content) {
+    if (_alignment == Alignment.left) return content;
+    final width = _getMaxChars();
+    final trimmed = content.trimRight();
+    if (trimmed.length >= width) return trimmed;
+    if (_alignment == Alignment.right) {
+      return trimmed.padLeft(width);
+    }
+    final left = ((width - trimmed.length) / 2).floor();
+    return (' ' * left) + trimmed;
   }
 
   int _getMaxChars() {

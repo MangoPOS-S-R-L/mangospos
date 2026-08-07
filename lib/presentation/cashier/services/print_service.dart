@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
+import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
@@ -8,6 +9,11 @@ import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 import 'package:mangopos/services/printing/esc_pos_generator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+/// Cómo mostrar el cierre en pantalla cuando el modo sin impresora está
+/// activo. Lo provee la vista que dispara el cierre (necesita BuildContext);
+/// si no se pasa, el cierre simplemente no saca papel ni modal.
+typedef CashCloseScreenPresenter = Future<void> Function(String plainText);
 
 class CashClosePrintService {
   final SupabaseClient _client;
@@ -26,6 +32,7 @@ class CashClosePrintService {
     int recountCount = 0,
     String? sessionId,
     bool reprint = false,
+    CashCloseScreenPresenter? presentOnScreen,
   }) async {
     // Desglose por área de producción: solo si el negocio activó el toggle
     // y tenemos la sesión para acotar el periodo. Best-effort — si falla,
@@ -40,7 +47,7 @@ class CashClosePrintService {
         ? await _loadProductsByAreaIfEnabled(sessionId)
         : const <Map<String, dynamic>>[];
 
-    final bytes = _buildEscPos(
+    final ticket = _buildEscPos(
       input: input,
       result: result,
       denominations: denominations,
@@ -51,7 +58,12 @@ class CashClosePrintService {
       reprint: reprint,
     );
 
-    await _printThermalOrThrow(bytes, cashRegisterId: cashRegisterId);
+    await _printThermalOrThrow(
+      ticket.bytes,
+      cashRegisterId: cashRegisterId,
+      plainText: ticket.plainText,
+      presentOnScreen: presentOnScreen,
+    );
   }
 
   /// Reimprime el ticket de cierre de una sesión YA cerrada, reconstruyendo
@@ -75,6 +87,7 @@ class CashClosePrintService {
     required String sessionId,
     String? businessName,
     String? cashierName,
+    CashCloseScreenPresenter? presentOnScreen,
   }) async {
     // 1. Fila de la sesión. Debe estar cerrada para tener un cierre que reimprimir.
     final session = await _client
@@ -236,6 +249,7 @@ class CashClosePrintService {
       recountCount: recountCount,
       sessionId: sessionId,
       reprint: true,
+      presentOnScreen: presentOnScreen,
     );
   }
 
@@ -399,7 +413,7 @@ class CashClosePrintService {
     }
   }
 
-  List<int> _buildEscPos({
+  ({List<int> bytes, String plainText}) _buildEscPos({
     required CashCloseInput input,
     required CashCloseResult result,
     required List<DenominationCount> denominations,
@@ -541,18 +555,30 @@ class CashClosePrintService {
     gen.textCentered('www.mangopos.do');
     gen.lineFeed(2);
     gen.cut();
-    return gen.getCommands();
+    return (bytes: gen.getCommands(), plainText: gen.getPlainText());
   }
 
   Future<void> _printThermalOrThrow(
     List<int> bytes, {
     String? cashRegisterId,
+    String? plainText,
+    CashCloseScreenPresenter? presentOnScreen,
   }) async {
     final businessId = await resolveBusinessIdOrNull(_client, 'auto');
     if (businessId == null) {
       throw Exception(
         'No se pudo resolver el negocio activo para imprimir el cierre.',
       );
+    }
+
+    // Modo sin impresora: el cierre se muestra en pantalla (con compartir
+    // PDF) en vez de exigir una térmica. El cierre en sí ya quedó guardado
+    // — esto es solo el comprobante.
+    if (await PrinterlessMode.isEnabled(businessId)) {
+      if (presentOnScreen != null && plainText != null) {
+        await presentOnScreen(plainText);
+      }
+      return;
     }
 
     // 1. Try register-specific printer first

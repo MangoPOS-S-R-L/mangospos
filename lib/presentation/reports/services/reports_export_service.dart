@@ -83,9 +83,11 @@ class ReportsExportService {
             ),
             pw.SizedBox(height: 16),
             // Cada comprobante listado individualmente con su estado
-            // (Activo/Anulado), igual que el reporte fiscal.
+            // (Activo/Anulado), igual que el reporte fiscal. Respeta el
+            // toggle "Ver anulados": por defecto el PDF sale solo con los
+            // válidos, que son los que suman a los totales de arriba.
             ..._fiscalDocumentsTable(
-              viewModel.getFiscalDocuments(),
+              viewModel.getVisibleFiscalDocuments(),
               _serviceFeeLabelOf(state),
             ),
           ];
@@ -212,8 +214,10 @@ class ReportsExportService {
             showQuantity: true,
           ),
           pw.SizedBox(height: 16),
+          // Respeta el toggle "Ver anulados" (el filtro de tipo se deja fuera
+          // a propósito: el PDF fiscal siempre exportó el rango completo).
           ..._fiscalDocumentsTable(
-              viewModel.getFiscalDocuments(),
+              viewModel.getVisibleFiscalDocuments(),
               _serviceFeeLabelOf(state),
             ),
         ];

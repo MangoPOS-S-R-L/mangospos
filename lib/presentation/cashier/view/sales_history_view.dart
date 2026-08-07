@@ -9,7 +9,9 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/printing/print_error_humanizer.dart';
+import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/core/utils/app_time.dart';
@@ -965,17 +967,23 @@ mixin _PaymentActionsMixin {
 
       final waiterName = _waiterNameFromPayment ?? 'Servicio';
 
-      final printRepo = ref.read(printingPrintersRepositoryProvider);
-      // Asigna la variable outer (declarada antes del try) para que el
-      // catch pueda referenciarla en el mensaje de error humano.
-      assignedPrinter = await printRepo.getAssignedPrinterForType(
-        businessId: businessId,
-        preferredAreaCodes: const ['fiscal', 'cashier'],
-        printsReceipts: true,
-      );
+      // Modo sin impresora: la reimpresion se muestra en pantalla (con
+      // compartir PDF) en vez de salir por papel.
+      final printerless = await PrinterlessMode.isEnabled(businessId);
 
-      if (assignedPrinter == null) {
-        throw Exception('No hay impresora configurada para recibos.');
+      final printRepo = ref.read(printingPrintersRepositoryProvider);
+      if (!printerless) {
+        // Asigna la variable outer (declarada antes del try) para que el
+        // catch pueda referenciarla en el mensaje de error humano.
+        assignedPrinter = await printRepo.getAssignedPrinterForType(
+          businessId: businessId,
+          preferredAreaCodes: const ['fiscal', 'cashier'],
+          printsReceipts: true,
+        );
+
+        if (assignedPrinter == null) {
+          throw Exception('No hay impresora configurada para recibos.');
+        }
       }
 
       final receiptItemDisplayMode = await ref
@@ -1159,8 +1167,20 @@ mixin _PaymentActionsMixin {
         template: invoiceTpl,
       );
 
+      if (printerless) {
+        if (context.mounted) {
+          await showPrintTicketOnScreen(
+            context,
+            ticket: ticket,
+            title: 'Reimpresión de factura',
+            fileNamePrefix: 'factura',
+          );
+        }
+        return;
+      }
+
       await printRepo.printEscPos(
-        printer: assignedPrinter,
+        printer: assignedPrinter!,
         data: ticket.escPosCommands,
       );
 

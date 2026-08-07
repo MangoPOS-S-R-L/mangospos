@@ -157,7 +157,8 @@ class ReportsCsvExportService {
             'Ventas por recibo / comprobante',
             viewModel.getReceiptRows(),
           );
-          addFiscalDocumentsDetail(viewModel.getFiscalDocuments());
+          // Sin anulados salvo que el usuario los haya mostrado en la vista.
+          addFiscalDocumentsDetail(viewModel.getVisibleFiscalDocuments());
           break;
         }
         addBreakdownSection(
@@ -299,7 +300,7 @@ class ReportsCsvExportService {
           'Desglose por tipo de impuesto',
           viewModel.getFiscalTaxBreakdownRows(),
         );
-        addFiscalDocumentsDetail(viewModel.getFiscalDocuments());
+        addFiscalDocumentsDetail(viewModel.getVisibleFiscalDocuments());
         break;
     }
 

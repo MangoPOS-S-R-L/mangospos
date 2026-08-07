@@ -12,6 +12,7 @@ import 'package:mangopos/presentation/cashier/widgets/close_summary_table.dart';
 import 'package:mangopos/presentation/cashier/widgets/denomination_counter_row.dart';
 import 'package:mangopos/presentation/cashier/detailed_wizard/widgets/zoom_control.dart';
 import 'package:mangopos/presentation/cashier/widgets/numpad_widget.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
@@ -942,6 +943,7 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
       final recountCount = await PosSettingsRepository(client)
           .getCashRecountCount(widget.sessionId);
       final service = CashClosePrintService(client);
+      var shownOnScreen = false;
       await service.printCloseTicket(
         input: state.input,
         result: state.result,
@@ -949,8 +951,20 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
         printedAt: DateTime.now(),
         recountCount: recountCount,
         sessionId: widget.sessionId,
+        // Modo sin impresora: el cierre se muestra en pantalla con opción
+        // de compartir PDF en vez de exigir una térmica.
+        presentOnScreen: (plainText) async {
+          if (!mounted) return;
+          shownOnScreen = true;
+          await showTicketPreviewDialog(
+            context,
+            title: 'Cierre de caja',
+            plainText: plainText,
+            fileNamePrefix: 'cierre_caja',
+          );
+        },
       );
-      if (!silent && mounted) {
+      if (!silent && !shownOnScreen && mounted) {
         AppToast.success(context, 'Cierre reimpreso correctamente');
       }
     } catch (e) {

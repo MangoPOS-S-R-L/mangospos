@@ -188,6 +188,11 @@ class _FiscalReportBody extends StatelessWidget {
               'Tabla lista para auditoría diaria y exportación; respeta el filtro de tipo seleccionado.',
           emptyMessage:
               'No hay comprobantes fiscales en el rango seleccionado.',
+          showVoided: state.showVoidedFiscalDocuments,
+          voidedCount: viewModel.getVoidedFiscalDocumentsCount(
+            applyTypeFilter: true,
+          ),
+          onToggleVoided: viewModel.setShowVoidedFiscalDocuments,
         ),
       ],
     );

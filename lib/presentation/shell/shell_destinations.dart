@@ -190,6 +190,8 @@ int shellBranchIndexForDestination(String route) {
       return 12;
     case AppRoutes.credits:
       return 14;
+    case AppRoutes.accounting:
+      return 15;
     default:
       return -1;
   }

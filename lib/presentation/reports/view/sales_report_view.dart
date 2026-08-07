@@ -422,8 +422,11 @@ class _SalesReportBody extends StatelessWidget {
           // impuestos por tipo y tag de estado (Activo / Anulado).
           // Mismo widget que usa el reporte de Comprobantes Fiscales.
           FiscalDocumentsDetailCard(
-            documents: viewModel.getFiscalDocuments(),
+            documents: viewModel.getVisibleFiscalDocuments(),
             currency: currency,
+            showVoided: state.showVoidedFiscalDocuments,
+            voidedCount: viewModel.getVoidedFiscalDocumentsCount(),
+            onToggleVoided: viewModel.setShowVoidedFiscalDocuments,
             serviceFeeLabel:
                 (state.fiscalSummary?['service_fee_label'] as String?)
                             ?.trim()

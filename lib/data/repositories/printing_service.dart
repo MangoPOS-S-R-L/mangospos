@@ -10,6 +10,7 @@ import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
 import '../../core/printing/ble_printer_connection_manager.dart';
+import '../../core/printing/printerless_mode.dart';
 import '../../services/printing/print_ticket_service.dart';
 import '../../presentation/sales/state/sales_state.dart';
 import 'pos_settings_repository.dart';
@@ -259,6 +260,17 @@ class PrintingService {
       final directAreas = <String>[];
       final escalatedAreas = <String>[];
 
+      // Modo sin impresora: la orden entra al KDS igual, pero no se manda
+      // papel a ninguna área. No abrimos modales aquí a propósito — el
+      // mesero envía muchas rondas seguidas y la cocina ya ve todo en el
+      // KDS. Ver core/printing/printerless_mode.dart.
+      //
+      // OJO: acá manda el flag del NEGOCIO, no el override del device. La
+      // impresora de cocina es compartida — que esta tablet no tenga
+      // impresora propia no significa que la cocina no deba recibir su
+      // comanda.
+      final printerless = await PrinterlessMode.businessEnabled(businessId);
+
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
@@ -266,6 +278,13 @@ class PrintingService {
         // Área ya impresa localmente (replay): marcada arriba vía
         // sendToKitchen, sin reimpresión.
         if (excludeAreaCodes.contains(areaCode)) {
+          continue;
+        }
+
+        if (printerless) {
+          // Se reporta como "directa" para que la UI no muestre alarma de
+          // escalado: no hay nada pendiente, simplemente no hubo papel.
+          directAreas.add(areaCode);
           continue;
         }
 
@@ -984,8 +1003,18 @@ class PrintingService {
     // como print jobs offline para que el worker los despache al sync.
     final areasSinImpresora = <String>[];
 
+    // Modo sin impresora: ninguna área necesita impresora cacheada. Se
+    // marcan todas como despachadas para que el replay online solo marque
+    // los ítems en el server y no intente reimprimir. Igual que en el
+    // camino online, decide el flag del NEGOCIO (impresora compartida).
+    final printerless = await PrinterlessMode.businessEnabled(businessId);
+
     for (final entry in itemsByArea.entries) {
       final areaCode = entry.key;
+      if (printerless) {
+        createdJobs[areaCode] = _createLocalDispatchId(areaCode);
+        continue;
+      }
       final printers = await _readCachedOrderPrinters(
         businessId: businessId,
         areaCode: areaCode,

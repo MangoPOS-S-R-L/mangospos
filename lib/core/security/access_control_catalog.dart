@@ -308,6 +308,62 @@ const accessPermissions = <AccessPermission>[
     description:
         'Registra abonos a cuentas por cobrar y pagos a cuentas por pagar.',
   ),
+  // --- Contabilidad (PRD_CONTABILIDAD.md) ---
+  // El PDF del cliente exige permisos separados para crear, contabilizar,
+  // anular y cerrar períodos: no alcanza con un solo "acceso a contabilidad".
+  AccessPermission(
+    code: 'contabilidad.acceso',
+    label: 'Acceso a contabilidad',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Abre el módulo contable y consulta libro diario, mayor, balanza y '
+        'estados financieros.',
+  ),
+  AccessPermission(
+    code: 'contabilidad.asientos.crear',
+    label: 'Crear asientos contables',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Registra asientos manuales y ejecuta la generación automática desde '
+        'ventas, compras, caja y créditos.',
+  ),
+  AccessPermission(
+    code: 'contabilidad.asientos.anular',
+    label: 'Revertir asientos contables',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Emite el asiento de reversión. El original nunca se borra: queda '
+        'enlazado con su espejo.',
+  ),
+  AccessPermission(
+    code: 'contabilidad.catalogo.gestionar',
+    label: 'Gestionar catálogo contable',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Crea y edita cuentas, centros de costo y el mapeo de eventos del POS '
+        'a cuentas contables.',
+  ),
+  AccessPermission(
+    code: 'contabilidad.periodos.cerrar',
+    label: 'Cerrar y reabrir períodos',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Cierra el mes contable (bloquea nuevos asientos con esa fecha) y lo '
+        'vuelve a abrir.',
+  ),
+  AccessPermission(
+    code: 'contabilidad.reportes',
+    label: 'Reportes contables',
+    categoryId: 'finance',
+    categoryLabel: 'Finanzas',
+    description:
+        'Exporta balanza, estados financieros y libros a CSV, Excel o PDF.',
+  ),
   AccessPermission(
     code: 'kds.acceso',
     label: 'Acceso a cocina',
@@ -842,6 +898,11 @@ final rolePresets = <String, RolePresetDefinition>{
       'reportes.productos',
       'reportes.caja',
       'reportes.fiscales',
+      // Contabilidad: el supervisor consulta y exporta. Crear, revertir y
+      // cerrar períodos queda para owner/admin o un rol "Contador" armado a
+      // mano — es la separación de funciones que pide el PDF.
+      'contabilidad.acceso',
+      'contabilidad.reportes',
       'settings.usuarios.acceso',
       'settings.usuarios.ver',
       'settings.usuarios.crear',

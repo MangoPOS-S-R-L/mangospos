@@ -187,6 +187,19 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           ),
         ),
       );
+    } on InventoryWriteDeniedException {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se eliminó "${item.name}": tu usuario no tiene permiso para '
+            'modificar insumos. Pídelo a un administrador.',
+          ),
+          backgroundColor: AppColors.destructive,
+        ),
+      );
+      return;
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);

@@ -8,6 +8,7 @@ import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 import 'package:mangopos/presentation/cashier/widgets/close_summary_table.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 
 /// Paso de resultado post-firma. Aparece sólo después de que
 /// `onCloseConfirmed` retorna OK.
@@ -83,6 +84,7 @@ class _StepResultState extends State<StepResult> {
             .getCashRecountCount(sessionId);
       }
       final service = CashClosePrintService(client);
+      var shownOnScreen = false;
       await service.printCloseTicket(
         input: widget.input,
         result: widget.result,
@@ -90,9 +92,21 @@ class _StepResultState extends State<StepResult> {
         printedAt: DateTime.now(),
         recountCount: recountCount,
         sessionId: sessionId,
+        // Modo sin impresora: el cierre se muestra en pantalla con opción
+        // de compartir PDF en vez de exigir una térmica.
+        presentOnScreen: (plainText) async {
+          if (!mounted) return;
+          shownOnScreen = true;
+          await showTicketPreviewDialog(
+            context,
+            title: 'Cierre de caja',
+            plainText: plainText,
+            fileNamePrefix: 'cierre_caja',
+          );
+        },
       );
       if (!mounted) return;
-      if (!silent) {
+      if (!silent && !shownOnScreen) {
         AppToast.success(context, 'Cierre reimpreso correctamente');
       }
     } catch (e) {

@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
+import 'package:mangopos/core/printing/printerless_mode.dart';
+import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
@@ -88,6 +91,10 @@ class QuickSaleView extends ConsumerWidget {
                           // Capturamos los items ANTES de cobrar (el éxito
                           // refresca/limpia la orden).
                           final printItems = List<OrderItem>.from(items);
+                          // El context de la vista (no el del modal, que se
+                          // cierra al cobrar): lo necesita el modo sin
+                          // impresora para mostrar la factura en pantalla.
+                          final viewContext = context;
                           showDialog(
                             context: context,
                             builder: (context) => PaymentModal(
@@ -103,6 +110,7 @@ class QuickSaleView extends ConsumerWidget {
                                   (payment, fiscalDoc, modalCustomerName) =>
                                       _printQuickSaleComprobante(
                                         ref,
+                                        viewContext: viewContext,
                                         order: paidOrder,
                                         items: printItems,
                                         payment: payment,
@@ -167,6 +175,7 @@ Future<void> _printQuickSaleComprobante(
   required Order order,
   required List<OrderItem> items,
   required Payment payment,
+  BuildContext? viewContext,
   String? fiscalNcf,
   String? fiscalType,
   String? customerName,
@@ -176,13 +185,20 @@ Future<void> _printQuickSaleComprobante(
   final businessId = session.activeBusinessId;
   if (businessId == null || businessId.isEmpty) return;
 
+  // Modo sin impresora: se arma la misma factura y se muestra en pantalla
+  // (con compartir PDF) en vez de mandarla al papel.
+  final printerless = await PrinterlessMode.isEnabled(businessId);
+
   final printRepo = ref.read(printingPrintersRepositoryProvider);
-  final printer = await printRepo.getAssignedPrinterForType(
-    businessId: businessId,
-    preferredAreaCodes: const ['fiscal', 'cashier'],
-    printsReceipts: true,
-  );
-  if (printer == null) return;
+  PrinterConfig? printer;
+  if (!printerless) {
+    printer = await printRepo.getAssignedPrinterForType(
+      businessId: businessId,
+      preferredAreaCodes: const ['fiscal', 'cashier'],
+      printsReceipts: true,
+    );
+    if (printer == null) return;
+  }
 
   // Header del negocio (mismo origen que el flujo de mesas).
   var name = (session.activeBusinessName?.trim().isNotEmpty ?? false)
@@ -248,7 +264,18 @@ Future<void> _printQuickSaleComprobante(
       template: invoiceTpl,
       currency: currentBusinessCurrencyOrFallback(ref),
     );
-    await printRepo.printEscPos(printer: printer, data: ticket.escPosCommands);
+    if (printerless) {
+      if (viewContext != null && viewContext.mounted) {
+        await showPrintTicketOnScreen(
+          viewContext,
+          ticket: ticket,
+          title: 'Factura',
+          fileNamePrefix: 'factura',
+        );
+      }
+      return;
+    }
+    await printRepo.printEscPos(printer: printer!, data: ticket.escPosCommands);
   } catch (e) {
     // Fire-and-forget: nunca lanzar. El comprobante se puede reimprimir
     // desde el historial (con su NCF) una vez sincronizado.

@@ -11,6 +11,19 @@ import '../../presentation/inventory/state/inventory_state.dart';
 import '../../presentation/inventory/state/transfers_state.dart';
 import '../datasources/queries/inventory_queries.dart';
 
+/// La escritura no falló: RLS filtró la fila y afectó 0 registros.
+///
+/// Postgres no lanza error cuando una policy excluye la fila de un
+/// UPDATE/DELETE — la sentencia "tiene éxito" sin tocar nada. Sin esto la
+/// pantalla reportaría un borrado que nunca ocurrió.
+class InventoryWriteDeniedException implements Exception {
+  const InventoryWriteDeniedException();
+
+  @override
+  String toString() =>
+      'No tienes permiso para modificar insumos en este negocio.';
+}
+
 class InventoryRepository {
   final SupabaseClient _client;
   final InventoryOfflineCache _cache = InventoryOfflineCache();
@@ -896,10 +909,16 @@ class InventoryRepository {
     required String itemId,
     required bool isActive,
   }) async {
-    await _client
+    // `.select()` devuelve las filas afectadas: si RLS filtra la fila, el
+    // update no falla, simplemente no toca nada. Sin esto el error es mudo.
+    final rows = await _client
         .from(InventoryQueries.tableInventoryItems)
         .update({'is_active': isActive})
-        .eq('id', itemId);
+        .eq('id', itemId)
+        .select('id');
+    if ((rows as List).isEmpty) {
+      throw const InventoryWriteDeniedException();
+    }
   }
 
   /// Elimina un insumo. Si nunca tuvo movimientos en el kardex intenta el
@@ -921,11 +940,16 @@ class InventoryRepository {
             .from(InventoryQueries.tableInventoryStock)
             .delete()
             .eq('item_id', itemId);
-        await _client
+        // Igual que en setItemActive: un DELETE bloqueado por RLS no lanza
+        // excepción, borra 0 filas. Pedimos las filas borradas para saber si
+        // de verdad pasó algo y no reportar un éxito falso.
+        final deleted = await _client
             .from(InventoryQueries.tableInventoryItems)
             .delete()
-            .eq('id', itemId);
-        return true;
+            .eq('id', itemId)
+            .select('id');
+        if ((deleted as List).isNotEmpty) return true;
+        throw const InventoryWriteDeniedException();
       } on PostgrestException catch (e) {
         // 23503 = foreign_key_violation: lo referencia una receta, compra,
         // producción, etc. → conservamos el registro y lo desactivamos.

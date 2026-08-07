@@ -5,7 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
+import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
@@ -440,8 +442,14 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       final registerId = cashierVm.currentRegisterId;
       final repo = ref.read(printingPrintersRepositoryProvider);
 
+      // Modo sin impresora: el recibo se muestra en pantalla (con
+      // compartir PDF) en vez de salir por papel.
+      final printerless = await PrinterlessMode.isEnabled(
+        ref.read(sessionProvider).activeBusinessId,
+      );
+
       // 1. Impresora asignada al cash_register.
-      var printer = registerId == null
+      var printer = printerless || registerId == null
           ? null
           : await ref.read(cashierRepositoryProvider).getRegisterPrinterId(registerId)
               .then((pid) async => pid == null
@@ -449,7 +457,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
                   : await repo.getPrinter(pid));
 
       // 2. Fallback: impresora de área cashier/fiscal.
-      if (printer == null) {
+      if (printer == null && !printerless) {
         final session = ref.read(sessionProvider);
         final businessId = session.activeBusinessId;
         if (businessId == null || businessId.isEmpty) return;
@@ -460,7 +468,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
           printsReceipts: true,
         );
       }
-      if (printer == null) return;
+      if (printer == null && !printerless) return;
 
       // 3. Generar y mandar.
       final session = ref.read(sessionProvider);
@@ -479,8 +487,20 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         currency: currentBusinessCurrencyOrFallback(ref),
       );
 
+      if (printerless) {
+        if (mounted) {
+          await showPrintTicketOnScreen(
+            context,
+            ticket: ticket,
+            title: 'Recibo de caja',
+            fileNamePrefix: 'movimiento_caja',
+          );
+        }
+        return;
+      }
+
       await repo.printEscPos(
-        printer: printer,
+        printer: printer!,
         data: ticket.escPosCommands,
         kind: 'cash_movement',
         areaCode: 'cashier',

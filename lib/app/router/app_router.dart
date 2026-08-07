@@ -35,6 +35,7 @@ import '../../presentation/auth/register/register_step2_view.dart';
 import '../../presentation/auth/register/register_step3_view.dart';
 import '../../presentation/auth/register/register_step4_view.dart';
 import '../../presentation/auth/cross_auth/cross_auth_view.dart';
+import '../../presentation/accounting/view/accounting_view.dart';
 import '../../presentation/credits/view/credits_view.dart';
 import '../../presentation/dashboard/dashboard_view.dart';
 import '../../presentation/shell/main_shell.dart';
@@ -970,6 +971,21 @@ class AppRouter {
             GoRoute(
               path: AppRoutes.credits,
               builder: (context, state) => const CreditsView(),
+            ),
+          ]),
+
+          // ── Rama 15: Contabilidad (PRD_CONTABILIDAD.md) ──
+          // `?tab=catalog|trial|income|balance|periods` entra directo a una
+          // pestaña; sin query param abre en Asientos.
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: AppRoutes.accounting,
+              builder: (context, state) => AccountingView(
+                key: ValueKey(state.uri.queryParameters['tab'] ?? 'entries'),
+                initialTab: accountingTabFromQuery(
+                  state.uri.queryParameters['tab'],
+                ),
+              ),
             ),
           ]),
         ],

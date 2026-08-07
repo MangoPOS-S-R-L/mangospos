@@ -353,14 +353,18 @@ class PrintTicketService {
       gen.textCentered(resolvedCashier);
     }
 
-    // 1 linefeed antes del cut: suficiente margen para que el cutter
-    // no toque el footer pero sin desperdiciar papel.
-    gen.lineFeed();
-    gen.cut();
+    // Avance antes del corte. Con 1 solo linefeed la comanda salia bien en
+    // unas impresoras y CORTADA en otras: la cuchilla va por delante del
+    // cabezal y esa distancia cambia por modelo, asi que en las de gap
+    // grande el corte se comia la linea de MESA (justo el dato que cocina
+    // necesita). Se avanza el margen seguro para que la mesa salga completa
+    // en todos los modelos.
+    gen.cut(feedLines: EscPosGenerator.safeCutFeedLines);
 
     return PrintTicket(
       type: 'kitchen_order',
       escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
     );
   }
 
@@ -925,7 +929,11 @@ class PrintTicketService {
     gen.lineFeed(compact ? 2 : 4);
     gen.cut();
 
-    return PrintTicket(type: 'precheck', escPosCommands: gen.getCommands());
+    return PrintTicket(
+      type: 'precheck',
+      escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
+    );
   }
 
   /// ============================================================
@@ -1486,7 +1494,10 @@ class PrintTicketService {
     // Para NCF físico (B0x), todo es no-op.
     if (qrBytes != null && qrBytes.isNotEmpty) {
       gen.lineFeed();
-      gen.appendRaw(qrBytes);
+      gen.appendRaw(
+        qrBytes,
+        plainPlaceholder: '[ Código QR de verificación DGII ]',
+      );
 
       // Codigo de Seguridad + Fecha de Firma Digital, centrados, en negrita.
       // Solo si tenemos los datos (e-CF aceptado vía webhook).
@@ -1538,7 +1549,11 @@ class PrintTicketService {
       gen.openCashDrawer();
     }
 
-    return PrintTicket(type: 'invoice', escPosCommands: gen.getCommands());
+    return PrintTicket(
+      type: 'invoice',
+      escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
+    );
   }
 
   static List<OrderItem> _buildPrintableItems(
@@ -1868,6 +1883,7 @@ class PrintTicketService {
     return PrintTicket(
       type: 'fiscal_invoice',
       escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
     );
   }
 
@@ -1948,7 +1964,11 @@ class PrintTicketService {
     gen.lineFeed(3);
     gen.cut();
 
-    return PrintTicket(type: 'cash_close', escPosCommands: gen.getCommands());
+    return PrintTicket(
+      type: 'cash_close',
+      escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
+    );
   }
 
   // ============================================================
@@ -2083,6 +2103,7 @@ class PrintTicketService {
     return PrintTicket(
       type: 'cash_movement',
       escPosCommands: gen.getCommands(),
+      rawText: gen.getPlainText(),
     );
   }
 
@@ -2215,7 +2236,7 @@ class PrintTicketService {
       switch (block.key) {
         case 'logo':
           if (logoBytes != null && logoBytes.isNotEmpty) {
-            gen.appendRaw(logoBytes);
+            gen.appendRaw(logoBytes, plainPlaceholder: '[ logo ]');
             gen.lineFeed();
           }
           break;

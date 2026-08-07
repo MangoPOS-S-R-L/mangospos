@@ -23,8 +23,13 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
     this.subtitle =
         'Cada comprobante por separado, con su estado (Activo o Anulado).',
     this.emptyMessage = 'No hay comprobantes en el rango seleccionado.',
+    this.showVoided = false,
+    this.voidedCount = 0,
+    this.onToggleVoided,
   });
 
+  /// Documentos YA filtrados por el caller (tipo de NCF + anulados según
+  /// [showVoided]). El widget no filtra: solo pinta y ofrece el toggle.
   final List<Map<String, dynamic>> documents;
 
   /// Inyectado por el caller (típico: `state.currency.formatter` desde una
@@ -39,6 +44,20 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final String emptyMessage;
+
+  /// Si los anulados están incluidos en [documents]. Por defecto NO: las
+  /// ventas anuladas quedaban mezcladas al final de la tabla y no se
+  /// distinguían de las válidas (y los totales del reporte nunca las
+  /// contaron).
+  final bool showVoided;
+
+  /// Cuántos anulados hay en el rango (ocultos o no). Se muestra en el botón
+  /// para que quede claro que existen aunque no se listen.
+  final int voidedCount;
+
+  /// Callback del toggle. Si es null no se dibuja el botón (el caller no
+  /// maneja el estado).
+  final ValueChanged<bool>? onToggleVoided;
 
   // ncfTypeName eliminado: ahora se usa el global de core/fiscal/ncf_types.dart
   // (catálogo único, evita drift entre archivos).
@@ -118,7 +137,45 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ReportSectionLabel(title: title, subtitle: subtitle),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final label = ReportSectionLabel(
+                title: title,
+                subtitle: showVoided || voidedCount == 0
+                    ? subtitle
+                    : voidedCount == 1
+                        ? '$subtitle Hay 1 anulado oculto en el rango '
+                            '(no suma a los totales).'
+                        : '$subtitle Hay $voidedCount anulados ocultos en el '
+                            'rango (no suman a los totales).',
+              );
+              if (onToggleVoided == null || voidedCount == 0) return label;
+              final toggle = _VoidedToggleButton(
+                showVoided: showVoided,
+                voidedCount: voidedCount,
+                onToggleVoided: onToggleVoided,
+              );
+              // En pantallas angostas el botón baja debajo del título.
+              if (constraints.maxWidth < 520) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    label,
+                    const SizedBox(height: AppSpacing.tightGap),
+                    toggle,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: label),
+                  const SizedBox(width: AppSpacing.itemGap),
+                  toggle,
+                ],
+              );
+            },
+          ),
           const SizedBox(height: AppSpacing.lg),
           if (documents.isEmpty)
             ReportEmptyPlaceholder(
@@ -183,17 +240,24 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
                       final isVoid = status != 'active';
 
                       return DataRow(
+                        // Anulado bien marcado: fondo rojo tenue + NCF y total
+                        // tachados. Con el tinte al 4% las filas anuladas se
+                        // confundían con las válidas al final de la tabla.
                         color: isVoid
                             ? WidgetStateProperty.all(
-                                AppColors.destructive.withValues(alpha: 0.04),
+                                AppColors.destructive.withValues(alpha: 0.10),
                               )
                             : null,
                         cells: [
                           DataCell(
                             Text(
                               ncfNumber,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
+                                decoration: isVoid
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: isVoid ? AppColors.destructive : null,
                               ),
                             ),
                           ),
@@ -224,8 +288,12 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
                           DataCell(
                             Text(
                               currency.format(total),
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontWeight: FontWeight.w700,
+                                decoration: isVoid
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: isVoid ? AppColors.destructive : null,
                               ),
                             ),
                           ),
@@ -246,6 +314,43 @@ class FiscalDocumentsDetailCard extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Botón "Ver / Ocultar anulados (N)". Solo aparece cuando el rango tiene
+/// comprobantes anulados y el caller maneja el estado.
+class _VoidedToggleButton extends StatelessWidget {
+  const _VoidedToggleButton({
+    required this.showVoided,
+    required this.voidedCount,
+    required this.onToggleVoided,
+  });
+
+  final bool showVoided;
+  final int voidedCount;
+  final ValueChanged<bool>? onToggleVoided;
+
+  @override
+  Widget build(BuildContext context) {
+    final toggle = onToggleVoided;
+    if (toggle == null || voidedCount == 0) return const SizedBox.shrink();
+    return OutlinedButton.icon(
+      onPressed: () => toggle(!showVoided),
+      icon: Icon(
+        showVoided ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+        size: 18,
+      ),
+      label: Text(
+        showVoided
+            ? 'Ocultar anulados ($voidedCount)'
+            : 'Ver anulados ($voidedCount)',
+      ),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.destructive,
+        side: BorderSide(color: AppColors.destructive.withValues(alpha: 0.35)),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       ),
     );
   }

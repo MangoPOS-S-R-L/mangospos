@@ -216,6 +216,13 @@ class ReportsState {
   final DateTime salesFrom;
   final DateTime salesTo;
   final String? fiscalTypeFilter;
+
+  /// Si es false (default) el detalle de comprobantes NO lista los anulados.
+  /// Salían mezclados al final de la tabla y no se distinguían de los válidos;
+  /// los totales del reporte SIEMPRE fueron solo de activos, así que ocultarlos
+  /// alinea la tabla con las métricas. El usuario puede volver a mostrarlos
+  /// desde el botón "Ver anulados" de la tarjeta de detalle.
+  final bool showVoidedFiscalDocuments;
   final String productSalesQuery;
   final String? productSalesCategoryFilter;
 
@@ -249,6 +256,7 @@ class ReportsState {
     required this.salesFrom,
     required this.salesTo,
     this.fiscalTypeFilter,
+    this.showVoidedFiscalDocuments = false,
     this.productSalesQuery = '',
     this.productSalesCategoryFilter,
     this.offerOfferFilter,
@@ -289,6 +297,7 @@ class ReportsState {
     DateTime? salesFrom,
     DateTime? salesTo,
     String? fiscalTypeFilter,
+    bool? showVoidedFiscalDocuments,
     String? productSalesQuery,
     String? productSalesCategoryFilter,
     String? offerOfferFilter,
@@ -326,6 +335,8 @@ class ReportsState {
       fiscalTypeFilter: clearFiscalTypeFilter
           ? null
           : (fiscalTypeFilter ?? this.fiscalTypeFilter),
+      showVoidedFiscalDocuments:
+          showVoidedFiscalDocuments ?? this.showVoidedFiscalDocuments,
       productSalesQuery: productSalesQuery ?? this.productSalesQuery,
       productSalesCategoryFilter: clearProductSalesCategoryFilter
           ? null
@@ -1969,6 +1980,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
+  /// Comprobante anulado: cualquier estado distinto de `active`
+  /// (`void`, `cancelled`, ...). Misma regla que usa la tabla de detalle.
+  static bool isVoidedFiscalDocument(Map<String, dynamic> doc) =>
+      (doc['status']?.toString() ?? 'active') != 'active';
+
+  /// TODOS los comprobantes del rango, anulados incluidos. Es la fuente cruda:
+  /// para pintar/exportar usa [getVisibleFiscalDocuments] o
+  /// [getFilteredFiscalDocuments], que respetan el toggle de anulados.
   List<Map<String, dynamic>> getFiscalDocuments() {
     final docs = (state.fiscalSummary?['documents'] as List?) ?? const [];
     return docs
@@ -1976,7 +1995,21 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
-  List<Map<String, dynamic>> getFilteredFiscalDocuments() {
+  List<Map<String, dynamic>> _applyVoidedFilter(
+    List<Map<String, dynamic>> documents,
+  ) {
+    if (state.showVoidedFiscalDocuments) return documents;
+    return documents
+        .where((doc) => !isVoidedFiscalDocument(doc))
+        .toList(growable: false);
+  }
+
+  /// Comprobantes a mostrar sin filtro de tipo (sub-reporte "Por comprobante"
+  /// del informe de ventas). Oculta los anulados salvo que el usuario los pida.
+  List<Map<String, dynamic>> getVisibleFiscalDocuments() =>
+      _applyVoidedFilter(getFiscalDocuments());
+
+  List<Map<String, dynamic>> _fiscalDocumentsByType() {
     final selectedType = state.fiscalTypeFilter;
     final documents = getFiscalDocuments();
     if (selectedType == null || selectedType.isEmpty) return documents;
@@ -1985,10 +2018,28 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         .toList(growable: false);
   }
 
+  List<Map<String, dynamic>> getFilteredFiscalDocuments() =>
+      _applyVoidedFilter(_fiscalDocumentsByType());
+
+  /// Cuántos anulados hay en el conjunto que se está mirando. Alimenta el
+  /// botón "Ver anulados (N)" de la tarjeta de detalle.
+  int getVoidedFiscalDocumentsCount({bool applyTypeFilter = false}) {
+    final documents =
+        applyTypeFilter ? _fiscalDocumentsByType() : getFiscalDocuments();
+    return documents.where(isVoidedFiscalDocument).length;
+  }
+
+  void setShowVoidedFiscalDocuments(bool value) {
+    if (state.showVoidedFiscalDocuments == value) return;
+    state = state.copyWith(showVoidedFiscalDocuments: value);
+  }
+
   List<String> getAvailableFiscalTypes() {
     final seen = <String>{};
     final ordered = <String>[];
-    for (final doc in getFiscalDocuments()) {
+    // Sobre los VISIBLES: si los anulados están ocultos, un tipo que solo
+    // tiene anulados no debe ofrecer un chip que deja la tabla vacía.
+    for (final doc in getVisibleFiscalDocuments()) {
       final type = doc['ncf_type']?.toString().trim();
       if (type == null || type.isEmpty || !seen.add(type)) continue;
       ordered.add(type);

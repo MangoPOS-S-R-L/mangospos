@@ -848,6 +848,109 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
           ),
         ],
       ),
+      // Todo lo contable en un solo lugar: el módulo de partida doble
+      // (PRD_CONTABILIDAD.md) más las pantallas que ya existían y alimentan la
+      // contabilidad (créditos, impuestos, NCF, informes fiscales). Las
+      // entradas siguen viviendo también en sus secciones originales — acá se
+      // agrupan por conveniencia del contador, no se mudan.
+      _SettingsSection(
+        title: 'Contabilidad',
+        items: const [
+          _SettingsOption(
+            title: 'Contabilidad general',
+            subtitle:
+                'Catálogo de cuentas, asientos, libros, balanza y estados '
+                'financieros',
+            icon: Icons.account_balance_rounded,
+            color: Color(0xFFEAF0FF),
+            route: AppRoutes.accounting,
+          ),
+          _SettingsOption(
+            title: 'Asientos Contables',
+            subtitle: 'Libro diario, asientos manuales y generación automática',
+            icon: Icons.post_add_rounded,
+            color: Color(0xFFFFE6D5),
+            route: '${AppRoutes.accounting}?tab=entries',
+          ),
+          _SettingsOption(
+            title: 'Catálogo de Cuentas',
+            subtitle: 'Plan de cuentas, centros de costo y mapeo contable',
+            icon: Icons.account_tree_rounded,
+            color: Color(0xFFE6F7EE),
+            route: '${AppRoutes.accounting}?tab=catalog',
+          ),
+          _SettingsOption(
+            title: 'Balanza de Comprobación',
+            subtitle: 'Saldos por cuenta con débitos y créditos del período',
+            icon: Icons.balance_rounded,
+            color: Color(0xFFFFF0D9),
+            route: '${AppRoutes.accounting}?tab=trial',
+          ),
+          _SettingsOption(
+            title: 'Estado de Resultados',
+            subtitle: 'Ingresos, gastos y utilidad del período',
+            icon: Icons.trending_up_rounded,
+            color: Color(0xFFEAF0FF),
+            route: '${AppRoutes.accounting}?tab=income',
+          ),
+          _SettingsOption(
+            title: 'Balance General',
+            subtitle: 'Activo, pasivo y patrimonio a la fecha de corte',
+            icon: Icons.pie_chart_rounded,
+            color: Color(0xFFF1F1F1),
+            route: '${AppRoutes.accounting}?tab=balance',
+          ),
+          _SettingsOption(
+            title: 'Períodos Contables',
+            subtitle: 'Apertura, cierre y bloqueo de meses',
+            icon: Icons.event_available_rounded,
+            color: Color(0xFFFFEDED),
+            route: '${AppRoutes.accounting}?tab=periods',
+          ),
+          _SettingsOption(
+            title: 'Cuentas por Cobrar y por Pagar',
+            subtitle: 'Créditos a clientes, deudas a proveedores y abonos',
+            icon: Icons.account_balance_wallet_rounded,
+            color: Color(0xFFE6F7EE),
+            route: AppRoutes.credits,
+          ),
+          _SettingsOption(
+            title: 'Impuestos',
+            subtitle: 'ITBIS y configuración fiscal del negocio',
+            icon: Icons.percent_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsTaxes,
+          ),
+          _SettingsOption(
+            title: 'Comprobantes Fiscales (NCF)',
+            subtitle: 'Secuencias NCF y comprobantes DGII',
+            icon: Icons.receipt_long_rounded,
+            color: Color(0xFFFFF0D9),
+            route: AppRoutes.settingsFiscalReceipts,
+          ),
+          _SettingsOption(
+            title: 'Informe de Impuestos',
+            subtitle: 'ITBIS facturado y cobrado por período',
+            icon: Icons.summarize_rounded,
+            color: Color(0xFFEAF0FF),
+            route: '${AppRoutes.reports}?tab=taxes',
+          ),
+          _SettingsOption(
+            title: 'Informe Fiscal',
+            subtitle: 'NCF emitidos, anulados y consumo de secuencias',
+            icon: Icons.fact_check_rounded,
+            color: Color(0xFFE6F7EE),
+            route: '${AppRoutes.reports}?tab=fiscal',
+          ),
+          _SettingsOption(
+            title: 'Informe de Finanzas',
+            subtitle: 'Flujo de caja, ingresos y egresos del negocio',
+            icon: Icons.query_stats_rounded,
+            color: Color(0xFFF1F1F1),
+            route: '${AppRoutes.reports}?tab=finances',
+          ),
+        ],
+      ),
       _SettingsSection(
         title: 'Finanzas',
         items: const [

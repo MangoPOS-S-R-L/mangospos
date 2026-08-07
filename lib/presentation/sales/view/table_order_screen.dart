@@ -47,6 +47,8 @@ import 'package:mangopos/app/widgets/skeleton_loading.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/print_destination_picker.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/printing/printerless_mode.dart';
+import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
@@ -5126,6 +5128,23 @@ class _CartView extends ConsumerWidget {
     final tableName = preCheckData['tableName'] as String?;
     final waiterName = preCheckData['waiterName'] as String?;
 
+    // Modo sin impresora: ni resolver de destinos ni selector — la
+    // pre-cuenta se arma y se muestra en pantalla desde _handlePrintFlow.
+    if (await PrinterlessMode.isEnabled(businessId)) {
+      if (!context.mounted) return;
+      await _handlePrintFlow(
+        context,
+        ref,
+        'precheck',
+        preCheckData,
+        orderObj: orderObj,
+        orderItems: orderItems,
+        tableName: tableName,
+        waiterName: waiterName,
+      );
+      return;
+    }
+
     // 1. Resolver destinos disponibles. Failure aquí cae al legacy.
     List<PrintDestination> destinations = const [];
     try {
@@ -5372,6 +5391,12 @@ class _CartView extends ConsumerWidget {
       // precuenta-impresa que ocurre tras outcome exitoso.
       final zonesRepo = ref.read(zonesRepoProvider);
 
+      // Modo sin impresora: no se resuelve ninguna impresora ni se pide
+      // elegir destino. El ticket se genera igual (mismo layout, mismos
+      // totales, mismo NCF/QR) y al final se muestra en pantalla con
+      // opción de compartir PDF. Ver core/printing/printerless_mode.dart.
+      final printerless = await PrinterlessMode.isEnabled(businessId);
+
       // Si el usuario ya eligió impresora en el selector v2 (Printing v2),
       // usar esa y saltar la auto-resolución legacy.
       PrinterConfig? assignedPrinter = forcedPrinter;
@@ -5380,7 +5405,7 @@ class _CartView extends ConsumerWidget {
       // impresora receipt-capable. Se imprime al final, después del primary.
       List<PrinterConfig> extraReceiptPrinters = const [];
 
-      if (assignedPrinter == null) {
+      if (assignedPrinter == null && !printerless) {
         // 1. Try register-specific printer first (each cash register can have its own)
         final registerId = ref.read(cashierViewModelProvider).currentRegisterId;
         if (registerId != null) {
@@ -5427,10 +5452,9 @@ class _CartView extends ConsumerWidget {
           .read(posSettingsRepositoryProvider)
           .getOpenDrawerOnCash(businessId);
 
-      if (assignedPrinter == null) {
+      if (assignedPrinter == null && !printerless) {
         throw Exception('Impresora no configurada para esta caja.');
       }
-      final printer = assignedPrinter;
 
       final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
       final discountDisplayMode = await discountDisplayModeFuture;
@@ -5708,6 +5732,31 @@ class _CartView extends ConsumerWidget {
                 template: invoiceTpl,
               );
       }
+
+      // ── Modo sin impresora ───────────────────────────────────────────
+      // El documento se muestra en pantalla (con compartir PDF) en vez de
+      // salir por papel. La precuenta sigue marcando la mesa como
+      // "precuenta pedida" igual que cuando imprime, porque para el salón
+      // el hecho relevante es que el cliente ya pidió la cuenta.
+      if (printerless) {
+        if (context.mounted && ticket is PrintTicket) {
+          await showPrintTicketOnScreen(
+            context,
+            ticket: ticket,
+            title: type == 'invoice' ? 'Factura' : 'Pre-cuenta',
+            fileNamePrefix: type == 'invoice' ? 'factura' : 'precuenta',
+          );
+        }
+        if (type == 'precheck') {
+          final sessionId = orderObj?.sessionId ?? '';
+          if (sessionId.isNotEmpty) {
+            unawaited(zonesRepo.markPrecheckPrinted(sessionId));
+          }
+        }
+        return;
+      }
+
+      final printer = assignedPrinter!;
 
       // USB tipicamente confirma en <2s, pero algunos drivers (Star /
       // Bixolon viejas via USB-serial) tardan mas — damos 15s. Network
