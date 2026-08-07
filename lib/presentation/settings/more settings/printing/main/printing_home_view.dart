@@ -70,6 +70,14 @@ class PrintingHomeView extends ConsumerWidget {
         color: const Color(0xFFEFFDF4),
         route: AppRoutes.printingHealth,
       ),
+      _PrintingCardData(
+        title: 'Modo sin impresora',
+        subtitle: 'Tickets en pantalla y PDF, sin hardware térmico',
+        icon: Icons.desktop_windows_outlined,
+        iconColor: const Color(0xFF2563EB),
+        color: const Color(0xFFEFF6FF),
+        route: AppRoutes.printingPrinterless,
+      ),
     ];
 
     return Container(

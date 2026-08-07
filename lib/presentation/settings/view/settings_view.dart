@@ -811,6 +811,13 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             color: const Color(0xFFE6F7EE),
             route: AppRoutes.printingHealth,
           ),
+          _SettingsOption(
+            title: 'Modo sin impresora',
+            subtitle: 'Operar sin impresoras: tickets en pantalla y PDF',
+            icon: Icons.desktop_windows_outlined,
+            color: const Color(0xFFEAF0FF),
+            route: AppRoutes.printingPrinterless,
+          ),
         ],
       ),
       _SettingsSection(

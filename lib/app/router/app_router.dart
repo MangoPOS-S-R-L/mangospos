@@ -18,6 +18,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/receipts
 import 'package:mangopos/presentation/settings/more%20settings/printing/orders/view/printing_orders_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/view/printing_diagnostics_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/health/view/printing_health_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/printing/printerless/view/printerless_mode_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/view/taxes_view.dart';
 import 'package:mangopos/presentation/settings/business_profile/business_profile_screen.dart';
 import 'package:mangopos/presentation/settings/my_account/my_account_screen.dart';
@@ -958,6 +959,12 @@ class AppRouter {
                 path: AppRoutes.printingHealth,
                 builder: (context, state) =>
                     const PrintingHealthView(businessId: 'auto'),
+              ),
+              // /settings/printing/printerless — operar sin impresoras
+              GoRoute(
+                path: AppRoutes.printingPrinterless,
+                builder: (context, state) =>
+                    const PrinterlessModeView(businessId: 'auto'),
               ),
             ],
           ),
