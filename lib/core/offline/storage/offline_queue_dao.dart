@@ -26,6 +26,12 @@ class OfflineQueueDao {
   /// productos, notas) a nivel de columna con AES-GCM (G9b). Las columnas
   /// estructuradas (id, tipo, estado, timestamps) quedan en claro para poder
   /// consultarlas. La BD sigue siendo sqlite plano — sin SQLCipher.
+  ///
+  /// Se sella con `sealDurable` (no `seal`): el cuerpo de la op tiene que
+  /// sobrevivir al reinicio para que el replay pueda reproducir la venta. Si
+  /// el Keychain no está disponible y la clave de sesión es efímera, el
+  /// cipher guarda en claro antes que dejar la operación ilegible para
+  /// siempre — ver [SecureBlobCipher.sealDurable].
   final SecureBlobCipher _cipher;
 
   /// Lee toda la cola de un business en orden cronológico (FIFO).
@@ -229,7 +235,7 @@ class OfflineQueueDao {
       id: action['id']?.toString() ?? '',
       businessId: businessId,
       type: action['type']?.toString() ?? 'unknown',
-      payloadJson: await _cipher.seal(jsonEncode(payloadExtras)),
+      payloadJson: await _cipher.sealDurable(jsonEncode(payloadExtras)),
       status: Value(action['status']?.toString() ?? 'pending'),
       attempts:
           Value((action['attempts'] as num?)?.toInt() ?? 0),

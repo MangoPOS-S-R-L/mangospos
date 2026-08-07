@@ -265,11 +265,12 @@ class PrintingService {
       // mesero envía muchas rondas seguidas y la cocina ya ve todo en el
       // KDS. Ver core/printing/printerless_mode.dart.
       //
-      // OJO: acá manda el flag del NEGOCIO, no el override del device. La
-      // impresora de cocina es compartida — que esta tablet no tenga
-      // impresora propia no significa que la cocina no deba recibir su
-      // comanda.
-      final printerless = await PrinterlessMode.businessEnabled(businessId);
+      // OJO: acá manda el flag de COCINA del negocio, no el de caja ni el
+      // override del device. Son ámbitos aparte: lo normal es tener
+      // impresora en caja y cocina solo con KDS. Y la impresora de cocina
+      // es compartida — que esta tablet no tenga impresora propia no
+      // significa que la cocina no deba recibir su comanda.
+      final printerless = await PrinterlessMode.kitchenEnabled(businessId);
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
@@ -1065,8 +1066,8 @@ class PrintingService {
     // Modo sin impresora: ninguna área necesita impresora cacheada. Se
     // marcan todas como despachadas para que el replay online solo marque
     // los ítems en el server y no intente reimprimir. Igual que en el
-    // camino online, decide el flag del NEGOCIO (impresora compartida).
-    final printerless = await PrinterlessMode.businessEnabled(businessId);
+    // camino online, decide el flag de COCINA del negocio.
+    final printerless = await PrinterlessMode.kitchenEnabled(businessId);
 
     for (final entry in itemsByArea.entries) {
       final areaCode = entry.key;

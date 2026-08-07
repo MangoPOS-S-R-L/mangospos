@@ -76,6 +76,18 @@ void main() {
 
     test('sin negocio resuelto no se activa solo', () async {
       expect(await PrinterlessMode.businessEnabled(''), isFalse);
+      expect(await PrinterlessMode.kitchenEnabled(''), isFalse);
+    });
+
+    test('el override del device NO toca las comandas', () async {
+      // La impresora de cocina es compartida: que esta tablet no tenga
+      // impresora propia no puede dejar a la cocina sin comanda.
+      await PrinterlessMode.setDeviceOverride(
+        PrinterlessDeviceOverride.neverPrint,
+      );
+
+      expect(await PrinterlessMode.isEnabled('negocio-que-no-existe'), isTrue);
+      expect(await PrinterlessMode.kitchenEnabled(''), isFalse);
     });
   });
 }

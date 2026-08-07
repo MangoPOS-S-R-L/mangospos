@@ -66,9 +66,9 @@ void main() {
     expect(back.single['customer_rnc'], '101000001');
     expect(back.single['type'], 'process_payment'); // columna estructurada
 
-    // En disco, el payloadJson está cifrado (sobre enc:v1:), no en claro.
+    // En disco, el payloadJson está cifrado (sobre enc:v2:<kid>:), no en claro.
     final row = await db.select(db.queueActions).getSingle();
-    expect(row.payloadJson.startsWith('enc:v1:'), isTrue);
+    expect(row.payloadJson.startsWith('enc:v2:'), isTrue);
     expect(row.payloadJson.contains('101000001'), isFalse);
     expect(row.type, 'process_payment'); // estructurada en claro
   });

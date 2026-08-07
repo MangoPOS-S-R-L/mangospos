@@ -540,10 +540,14 @@ class PosSettingsRepository {
     }, onConflict: 'business_id');
   }
 
-  /// Modo sin impresora (por NEGOCIO). Si TRUE, la POS deja de exigir
-  /// impresoras: facturas, precuentas, cierres de caja y recibos de
+  /// Modo sin impresora para DOCUMENTOS DE CAJA (por NEGOCIO). Si TRUE,
+  /// facturas, precuentas, reimpresiones, cierres de caja y recibos de
   /// movimiento se muestran en pantalla (con opción de compartir PDF) en vez
   /// de mandarse al papel, y nada se bloquea con "Impresora no configurada".
+  ///
+  /// NO afecta las comandas de cocina — esas van por
+  /// [getPrinterlessKitchen], que es un flag aparte a propósito: el caso
+  /// común es caja con impresora y cocina solo con KDS.
   ///
   /// Cada dispositivo puede sobrescribir este valor localmente — ver
   /// [PrinterlessMode] en `lib/core/printing/printerless_mode.dart`. Este
@@ -568,6 +572,34 @@ class PosSettingsRepository {
     await _client.from('business_settings').upsert({
       'business_id': businessId,
       'printerless_mode': enabled,
+    }, onConflict: 'business_id');
+  }
+
+  /// Modo sin impresora para COMANDAS (por NEGOCIO). Si TRUE, los envíos a
+  /// cocina no imprimen papel ni exigen impresora asignada: los pedidos
+  /// llegan al KDS y punto. No abre ventana en pantalla en cada envío — el
+  /// mesero manda muchas rondas seguidas y eso lo trabaría en pleno salón.
+  ///
+  /// Sin override por dispositivo (a diferencia de [getPrinterlessMode]): la
+  /// impresora de cocina es compartida, así que la decide el negocio.
+  ///
+  /// Tolerante a que la columna aún no exista → `false`.
+  Future<bool> getPrinterlessKitchen(String businessId) async {
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      return row?['printerless_kitchen'] == true;
+    } catch (_) {
+      return (await _cachedRow(businessId))?['printerless_kitchen'] == true;
+    }
+  }
+
+  Future<void> setPrinterlessKitchen({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'printerless_kitchen': enabled,
     }, onConflict: 'business_id');
   }
 

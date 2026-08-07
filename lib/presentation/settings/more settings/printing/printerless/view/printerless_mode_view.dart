@@ -1,9 +1,11 @@
 // Ajustes → Gestión de Impresión → Modo sin impresora.
 //
-// Enciende/apaga el modo en dos niveles: el interruptor del NEGOCIO (que
-// viaja a `business_settings.printerless_mode` y aplica a todas las cajas)
-// y el override de ESTE DISPOSITIVO (SharedPreferences, para la caja que sí
-// tiene impresora dentro de un negocio sin ellas, o al revés).
+// Tres controles, porque el caso comun no es todo-o-nada:
+//   1. Documentos de CAJA por negocio (`business_settings.printerless_mode`).
+//   2. COMANDAS por negocio (`business_settings.printerless_kitchen`) — para
+//      el restaurante con impresora en caja y cocina solo con KDS.
+//   3. Override de ESTE DISPOSITIVO (SharedPreferences), que solo pisa el
+//      punto 1: la impresora de cocina es compartida.
 //
 // La lógica de resolución vive en core/printing/printerless_mode.dart.
 
@@ -31,6 +33,7 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
   bool _loading = true;
   bool _saving = false;
   bool _businessEnabled = false;
+  bool _kitchenEnabled = false;
   PrinterlessDeviceOverride _override = PrinterlessDeviceOverride.inherit;
 
   String get _businessId {
@@ -50,11 +53,12 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
     final businessId = _businessId;
     final override = await PrinterlessMode.deviceOverride();
     var enabled = false;
+    var kitchen = false;
     if (businessId.isNotEmpty) {
+      final repo = ref.read(posSettingsRepositoryProvider);
       try {
-        enabled = await ref
-            .read(posSettingsRepositoryProvider)
-            .getPrinterlessMode(businessId);
+        enabled = await repo.getPrinterlessMode(businessId);
+        kitchen = await repo.getPrinterlessKitchen(businessId);
       } catch (_) {
         // Sin red o sin la migración aplicada: se muestra apagado, que es
         // el comportamiento efectivo.
@@ -63,6 +67,7 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
     if (!mounted) return;
     setState(() {
       _businessEnabled = enabled;
+      _kitchenEnabled = kitchen;
       _override = override;
       _loading = false;
     });
@@ -97,6 +102,40 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _businessEnabled = !value);
+      AppToast.error(context, 'No se pudo guardar: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveKitchen(bool value) async {
+    final businessId = _businessId;
+    if (businessId.isEmpty) {
+      AppToast.error(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _kitchenEnabled = value;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setPrinterlessKitchen(businessId: businessId, enabled: value);
+      PrinterlessMode.invalidate();
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .refreshBusinessSettings(businessId);
+      if (!mounted) return;
+      AppToast.success(
+        context,
+        value
+            ? 'Las comandas dejan de imprimirse: van solo al KDS.'
+            : 'Las comandas vuelven a imprimirse en cocina.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _kitchenEnabled = !value);
       AppToast.error(context, 'No se pudo guardar: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -156,11 +195,11 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Con este modo encendido el sistema deja de necesitar '
-              'impresoras. Facturas, pre-cuentas, reimpresiones, cierres de '
-              'caja y recibos de movimiento se muestran en pantalla, con la '
-              'opción de compartirlos en PDF o mandarlos a una impresora '
-              'normal del sistema operativo.',
+              'Con este modo el sistema deja de necesitar impresoras: los '
+              'documentos se muestran en pantalla, con opción de compartirlos '
+              'en PDF o mandarlos a una impresora normal del sistema '
+              'operativo. Caja y cocina se controlan por separado, así puedes '
+              'seguir imprimiendo facturas y apagar solo las comandas.',
               style: TextStyle(fontSize: 13, color: Colors.black54),
             ),
             const SizedBox(height: 20),
@@ -178,6 +217,8 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
               const SizedBox(height: 18),
               _businessCard(),
               const SizedBox(height: 16),
+              _kitchenCard(),
+              const SizedBox(height: 16),
               _deviceCard(),
               const SizedBox(height: 16),
               _notesCard(),
@@ -190,6 +231,9 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
 
   Widget _statusBanner() {
     final on = _effective;
+    final kitchenLine = _kitchenEnabled
+        ? 'Las comandas no se imprimen: la cocina las ve en el KDS.'
+        : 'Las comandas siguen saliendo por la impresora de cocina.';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -208,17 +252,28 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              on
-                  ? 'En esta caja los documentos salen POR PANTALLA. No se '
-                        'necesita ninguna impresora conectada.'
-                  : 'En esta caja los documentos salen POR PAPEL, como '
-                        'siempre.',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: MangoColors.darkGray,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  on
+                      ? 'En esta caja los documentos salen POR PANTALLA. No '
+                            'se necesita impresora conectada.'
+                      : 'En esta caja los documentos salen POR PAPEL, como '
+                            'siempre.',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  kitchenLine,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
             ),
           ),
         ],
@@ -228,29 +283,72 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
 
   Widget _businessCard() {
     return _card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            value: _businessEnabled,
-            onChanged: _saving ? null : _saveBusiness,
-            title: const Text(
-              'Operar sin impresoras en todo el negocio',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: MangoColors.darkGray,
-              ),
-            ),
-            subtitle: const Text(
-              'Aplica a todas las cajas del negocio. Las comandas de cocina '
-              'también dejan de imprimirse: los pedidos llegan al KDS.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
+      child: SwitchListTile.adaptive(
+        contentPadding: EdgeInsets.zero,
+        value: _businessEnabled,
+        onChanged: _saving ? null : _saveBusiness,
+        secondary: _cardIcon(
+          Icons.receipt_long_rounded,
+          const Color(0xFFEAF0FF),
+          const Color(0xFF2563EB),
+        ),
+        title: const Text(
+          'Facturas y pre-cuentas sin impresora',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: MangoColors.darkGray,
           ),
-        ],
+        ),
+        subtitle: const Text(
+          'Aplica a todas las cajas del negocio. Cubre factura, pre-cuenta, '
+          'reimpresión, cierre de caja y recibos de ingresos/gastos: salen '
+          'en pantalla con opción de compartir PDF. No toca las comandas.',
+          style: TextStyle(fontSize: 12, color: Colors.black54),
+        ),
       ),
+    );
+  }
+
+  Widget _kitchenCard() {
+    return _card(
+      child: SwitchListTile.adaptive(
+        contentPadding: EdgeInsets.zero,
+        value: _kitchenEnabled,
+        onChanged: _saving ? null : _saveKitchen,
+        secondary: _cardIcon(
+          Icons.soup_kitchen_outlined,
+          const Color(0xFFFFF0D9),
+          const Color(0xFFF97316),
+        ),
+        title: const Text(
+          'Comandas sin impresora (solo KDS)',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        subtitle: const Text(
+          'Los envíos a cocina dejan de imprimir papel y de exigir impresora '
+          'por área: el pedido llega al KDS. No abre ventana en cada envío. '
+          'Es un ajuste del negocio — la impresora de cocina es compartida, '
+          'así que el override de abajo no lo cambia.',
+          style: TextStyle(fontSize: 12, color: Colors.black54),
+        ),
+      ),
+    );
+  }
+
+  Widget _cardIcon(IconData icon, Color background, Color foreground) {
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, size: 20, color: foreground),
     );
   }
 
@@ -270,7 +368,9 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
           const SizedBox(height: 4),
           const Text(
             'Sirve cuando la caja principal tiene impresora y las tablets de '
-            'los meseros no (o al revés). Se guarda solo en este equipo.',
+            'los meseros no (o al revés). Se guarda solo en este equipo y '
+            'afecta únicamente facturas, pre-cuentas, cierres y recibos — '
+            'nunca las comandas.',
             style: TextStyle(fontSize: 12, color: Colors.black54),
           ),
           const SizedBox(height: 8),
@@ -326,6 +426,10 @@ class _PrinterlessModeViewState extends ConsumerState<PrinterlessModeView> {
           _Bullet(
             'El cierre de caja y los recibos de ingresos/gastos hacen lo '
             'mismo. El cierre se guarda igual que siempre.',
+          ),
+          _Bullet(
+            'Caja y cocina son independientes: puedes imprimir facturas en '
+            'papel y mandar solo las comandas al KDS, o al revés.',
           ),
           _Bullet(
             'Las comandas NO abren ventana en cada envío: la cocina las ve '
