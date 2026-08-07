@@ -478,6 +478,18 @@ class PrintingService {
               data: bytes,
               attempts: 4,
             );
+            // Print OK: capturar el MAC si falta. CRÍTICO para que el
+            // recovery de abajo pueda funcionar — una impresora de cocina
+            // normalmente NO imprime facturas, así que sin esto su `mac`
+            // quedaba null para siempre (solo lo llenaba `printEscPos` o el
+            // "Probar impresión" de Settings) y el auto-update por MAC era
+            // código muerto justo en las impresoras que más lo necesitan.
+            // Usa targetIp, no ip: es la que de verdad respondió.
+            _printingRepo.captureMacForPrinterIfMissing(
+              printerId: printer.id,
+              ipAddress: targetIp,
+              existingMac: printer.effectiveMac,
+            );
           } on PrintLikelyDeliveredException catch (e) {
             // Los bytes se enviaron (RST post-flush, normal en térmicas): la
             // comanda muy probablemente ya imprimió. NO usar el agente como
@@ -486,15 +498,62 @@ class PrintingService {
               'ℹ️ ${printer.name}: conexión cerrada tras enviar (post-flush); '
               'no se reintenta para evitar comanda duplicada: $e',
             );
+            // La impresora respondió (aceptó conexión y bytes), así que la
+            // IP es buena para capturar MAC aunque cerrara al final.
+            _printingRepo.captureMacForPrinterIfMissing(
+              printerId: printer.id,
+              ipAddress: targetIp,
+              existingMac: printer.effectiveMac,
+            );
           } catch (e) {
             debugPrint(
               '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
             );
-            await _printingRepo.printRawViaAgent(
-              ip: targetIp,
-              port: printer.port ?? 9100,
-              data: bytes,
-            );
+            try {
+              await _printingRepo.printRawViaAgent(
+                ip: targetIp,
+                port: printer.port ?? 9100,
+                data: bytes,
+              );
+            } catch (agentError) {
+              // Último recurso antes del cloud queue: la impresora pudo
+              // haber cambiado de IP por DHCP. A esta altura ya fallaron
+              // los 4 intentos directos Y el agente, así que NO es
+              // contención del puerto 9100 (el motivo por el que el
+              // preflight de arriba va con includeMacRecovery:false) —
+              // acá sí vale pagar el escaneo LAN. El repo trae cooldown
+              // de 60s por impresora para no barrer la subred en cada
+              // comanda con una impresora apagada, y si la encuentra
+              // persiste la IP nueva en Supabase: las comandas
+              // siguientes ya salen directo sin pagar nada de esto.
+              //
+              // Sin riesgo de comanda doble: solo se llega acá desde el
+              // catch general, donde los bytes NO se enviaron. Los casos
+              // de "probablemente entregado" salen por
+              // PrintLikelyDeliveredException arriba y nunca entran.
+              final recoveredIp = await _printingRepo.recoverNetworkIpByMac(
+                printer: printer,
+                currentIp: targetIp,
+              );
+              if (recoveredIp == null) rethrow;
+              debugPrint(
+                '🔁 ${printer.name}: IP recuperada por MAC '
+                '$targetIp → $recoveredIp; reintentando comanda.',
+              );
+              try {
+                await _printingRepo.printRawDirectTcp(
+                  ip: recoveredIp,
+                  port: printer.port ?? 9100,
+                  data: bytes,
+                  attempts: 2,
+                );
+              } on PrintLikelyDeliveredException catch (postFlush) {
+                debugPrint(
+                  'ℹ️ ${printer.name}: comanda enviada a $recoveredIp '
+                  '(cierre post-flush): $postFlush',
+                );
+              }
+            }
           }
           return KitchenPrintOutcome.directSuccess;
         case 'usb':

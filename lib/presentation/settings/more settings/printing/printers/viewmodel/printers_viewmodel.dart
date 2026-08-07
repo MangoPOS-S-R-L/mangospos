@@ -388,10 +388,13 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         await socket.close();
         // Captura oportunista del MAC para auto-recovery futuro si la IP
         // cambia por DHCP. No bloquea — corre en background.
+        // force: acción manual del instalador — debe intentar YA, sin
+        // esperar el cooldown que protege al camino de comandas.
         _repo.captureMacForPrinterIfMissing(
           printerId: printer.id,
           ipAddress: printer.ip,
           existingMac: printer.mac,
+          force: true,
         );
         return true;
       }

@@ -3406,6 +3406,23 @@ finally {
     return DateTime.now().difference(last) >= _lanScanCooldown;
   }
 
+  /// Recovery por MAC expuesto para callers fuera de este archivo — en
+  /// concreto el dispatcher de comandas ([PrintingService]), que tiene su
+  /// propio pipeline de retries y NO pasa por [printEscPos].
+  ///
+  /// Llamar SOLO tras agotar los intentos directos: a esa altura ya
+  /// sabemos que el fallo no es contención pasajera del puerto 9100, que
+  /// es el caso que hace caro el escaneo LAN en cocinas compartidas.
+  ///
+  /// Si encuentra la impresora en otra IP la persiste en Supabase, limpia
+  /// los caches de lookup y devuelve la IP nueva. Null si no hay MAC
+  /// guardado, si nadie respondió con ese MAC, o si el cooldown de
+  /// escaneo por impresora sigue activo.
+  Future<String?> recoverNetworkIpByMac({
+    required PrinterConfig printer,
+    required String currentIp,
+  }) => _tryRecoverPrinterIpByMac(printer, currentIp);
+
   Future<String?> _tryRecoverPrinterIpByMac(
     PrinterConfig printer,
     String currentIp,
@@ -3446,13 +3463,28 @@ finally {
       debugPrint(
         '[PrinterRecovery] MAC $mac: IP actualizada $currentIp → $newIp',
       );
-      // Persistir en Supabase para que próximas impresiones empiecen por la IP correcta.
-      await updatePrinter(printerId: printer.id, ipAddress: newIp);
-      // Invalidar caches in-memory de lookup de impresoras — si no
-      // hacemos esto, la próxima impresión dentro del TTL (5 min) sigue
-      // recibiendo la PrinterConfig vieja con la IP antigua y volvería
-      // a pasar por todo el flow de recovery innecesariamente.
-      _clearLookupCaches();
+      // Persistir es BEST-EFFORT y va en su propio try: ya encontramos la
+      // impresora y el caller la necesita AHORA. Si el write falla (sin
+      // internet — muy común en este POS —, RLS, blip de red) igual
+      // devolvemos la IP buena; lo único que se pierde es el atajo para las
+      // próximas impresiones, que volverán a pagar el escaneo con su
+      // cooldown. Antes este `await` vivía dentro del try general: cualquier
+      // fallo de Supabase caía al catch y devolvía null, DESCARTANDO una IP
+      // recién verificada y dejando la comanda sin imprimir.
+      try {
+        await updatePrinter(printerId: printer.id, ipAddress: newIp);
+        // Invalidar caches in-memory de lookup de impresoras — si no
+        // hacemos esto, la próxima impresión dentro del TTL (5 min) sigue
+        // recibiendo la PrinterConfig vieja con la IP antigua y volvería
+        // a pasar por todo el flow de recovery innecesariamente. Solo si el
+        // write entró: si falló, refetchear solo traería la IP vieja.
+        _clearLookupCaches();
+      } catch (persistError) {
+        debugPrint(
+          '[PrinterRecovery] no se pudo persistir $newIp para ${printer.id}; '
+          'se usa igual en este print: $persistError',
+        );
+      }
       return newIp;
     } catch (e) {
       debugPrint('[PrinterRecovery] resolveIpByMac falló para ${printer.id}: $e');
@@ -3471,19 +3503,39 @@ finally {
     );
   }
 
+  /// Última vez que se intentó capturar el MAC por impresora. Evita que una
+  /// impresora que nunca resuelve MAC (no contesta SNMP y no deja entrada de
+  /// vecino) dispare un `ip neigh` + SNMP en CADA comanda — el dispatcher de
+  /// cocina imprime muchas veces por mesa, a diferencia de la factura.
+  static final Map<String, DateTime> _macCaptureLastAttempt = {};
+  static const Duration _macCaptureCooldown = Duration(minutes: 10);
+
   /// Versión pública/parametrizada para callers que tienen los campos sueltos
   /// (ej. tests de Settings que trabajan con un UI model en vez de
   /// [PrinterConfig]). Idéntica semántica: fire-and-forget, no throw.
+  ///
+  /// [force] salta el cooldown: lo usa el "Probar impresión" de Settings,
+  /// que es una acción manual del instalador y debe capturar el MAC en el
+  /// intento, no quedarse esperando 10 minutos.
   void captureMacForPrinterIfMissing({
     required String printerId,
     String? ipAddress,
     String? existingMac,
+    bool force = false,
   }) {
     if (kIsWeb) return;
     final existing = existingMac?.trim();
     if (existing != null && existing.isNotEmpty) return;
     final ip = ipAddress?.trim();
     if (ip == null || ip.isEmpty) return;
+    if (!force) {
+      final last = _macCaptureLastAttempt[printerId];
+      if (last != null &&
+          DateTime.now().difference(last) < _macCaptureCooldown) {
+        return;
+      }
+    }
+    _macCaptureLastAttempt[printerId] = DateTime.now();
 
     Future.microtask(() async {
       try {
