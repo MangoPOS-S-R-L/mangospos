@@ -20,6 +20,8 @@ declare
   v_doc public.fiscal_documents;
   v_doc_id uuid;
 begin
+  -- Idempotency: if an active document already exists for this order/payment,
+  -- return it instead of issuing a second fiscal number.
   select *
     into v_doc
   from public.fiscal_documents fd
