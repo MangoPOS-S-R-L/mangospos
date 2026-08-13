@@ -8,6 +8,15 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../view/theme/table_status_style.dart';
 
+/// Ancho mínimo que el card necesita para dibujar su contenido sin truncar.
+///
+/// Es público a propósito: el grid del salón tiene que descontarlo al calcular
+/// columnas. Antes el grid partía de un ancho base de 220 y rendía celdas de
+/// 227 dp; como el card no puede encogerse por debajo de este valor, el nombre
+/// del mesero y el total se recortaban. Si los dos números se separan, vuelve
+/// el defecto — por eso vive aquí y no duplicado en el grid.
+const double kTableCardMinWidth = 240.0;
+
 /// Card de mesa con diseño responsive
 ///
 /// Documentación completa: DISENO_CARDS_MESAS.txt v2.0
@@ -74,7 +83,7 @@ class _TableCardState extends State<TableCard> {
               curve: Curves.easeInOut,
               height: 140, // FIJO - NO cambia
               constraints: const BoxConstraints(
-                minWidth: 240, // Ancho mínimo
+                minWidth: kTableCardMinWidth,
               ),
               decoration: BoxDecoration(
                 color: AppColors.card,

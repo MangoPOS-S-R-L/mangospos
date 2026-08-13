@@ -3,7 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
+import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/widgets/min_extent_grid_delegate.dart';
 import 'package:mangopos/presentation/sales/widgets/presentation_tabs.dart';
+
+// NOTA: este widget hoy NO se instancia en ninguna parte — la pantalla de
+// mesa usa su propio `_CatalogArea` dentro de table_order_screen.dart.
+// Se deja alineado con el delegate compartido para que, si se retoma, no
+// reintroduzca la lógica de columnas por su cuenta.
 
 class CatalogColumn extends ConsumerStatefulWidget {
   final String tableCode;
@@ -383,21 +390,21 @@ class _CategoriesView extends ConsumerWidget {
           const PresentationTabs(),
           const SizedBox(height: 12),
           Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.only(bottom: 80), // Space for scroll
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 250, // Responsive approximation
-                childAspectRatio: 4 / 3, // aspect-[4/3]
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
+            child: LayoutBuilder(
+              builder: (context, c) => GridView.builder(
+                padding: const EdgeInsets.only(bottom: 80), // Space for scroll
+                gridDelegate: const SliverGridDelegateWithMinCrossAxisExtent(
+                  minCrossAxisExtent: AppBreakpoints.minTile,
+                  mainAxisExtent: AppBreakpoints.rowProduct,
+                ),
+                itemCount: products.length,
+                itemBuilder: (context, index) {
+                  return _ProductCard(
+                    product: products[index],
+                    onTap: () => onProductTap(products[index]),
+                  );
+                },
               ),
-              itemCount: products.length,
-              itemBuilder: (context, index) {
-                return _ProductCard(
-                  product: products[index],
-                  onTap: () => onProductTap(products[index]),
-                );
-              },
             ),
           ),
         ],
@@ -405,12 +412,11 @@ class _CategoriesView extends ConsumerWidget {
     }
 
     // Categories List
-    return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 200,
-        childAspectRatio: 1.5,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+    return LayoutBuilder(
+      builder: (context, c) => GridView.builder(
+      gridDelegate: const SliverGridDelegateWithMinCrossAxisExtent(
+        minCrossAxisExtent: AppBreakpoints.minTile,
+        mainAxisExtent: 96,
       ),
       itemCount: categories.length,
       itemBuilder: (context, index) {
@@ -438,10 +444,14 @@ class _CategoriesView extends ConsumerWidget {
                 fontWeight: FontWeight.w700,
               ),
               textAlign: TextAlign.center,
+              // §3: ninguna etiqueta se parte a mitad de palabra.
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         );
       },
+      ),
     );
   }
 }
@@ -545,21 +555,21 @@ class _ProductsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GridView.builder(
-      padding: const EdgeInsets.only(bottom: 80),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 250,
-        childAspectRatio: 4 / 3,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+    return LayoutBuilder(
+      builder: (context, c) => GridView.builder(
+        padding: const EdgeInsets.only(bottom: 80),
+        gridDelegate: const SliverGridDelegateWithMinCrossAxisExtent(
+                  minCrossAxisExtent: AppBreakpoints.minTile,
+                  mainAxisExtent: AppBreakpoints.rowProduct,
+                ),
+        itemCount: products.length,
+        itemBuilder: (context, index) {
+          return _ProductCard(
+            product: products[index],
+            onTap: () => onProductTap(products[index]),
+          );
+        },
       ),
-      itemCount: products.length,
-      itemBuilder: (context, index) {
-        return _ProductCard(
-          product: products[index],
-          onTap: () => onProductTap(products[index]),
-        );
-      },
     );
   }
 }
@@ -641,7 +651,11 @@ class _ProductCardState extends State<_ProductCard> {
                 ),
             ],
           ),
-          padding: const EdgeInsets.all(20),
+          // 12 y no 20: con el alto de fila fijo en 104 dp (§5.1), el padding
+          // anterior más un nombre de dos líneas (43) y el precio (24) sumaba
+          // 107 y desbordaba. También deja 126 dp de texto en el mosaico
+          // mínimo de 150, en vez de 110.
+          padding: const EdgeInsets.all(12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,

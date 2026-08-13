@@ -6,9 +6,22 @@ class AppBreakpoints {
   // BREAKPOINT VALUES
   // ============================================================================
 
-  /// Mobile breakpoint - 600dp (Material 3 "compact").
+  /// Mobile breakpoint - 480dp.
   /// Por debajo de este ancho activamos el shell móvil (bottom nav + drawer).
-  static const double mobile = 600;
+  ///
+  /// Era 600 (el "compact" de Material 3) y dejaba a la tablet de campo
+  /// (1024×600 físicos = 600×1024 dp) justo en el borde: en vertical medía
+  /// exactamente 600 dp, y `600 < 600` es falso, así que entraba por la rama
+  /// tablet con el layout de tres paneles y el catálogo aplastado. La tablet
+  /// de 7" hdpi (533 dp en vertical) sí cruzaba, y cambiaba de esqueleto al
+  /// girar el equipo.
+  ///
+  /// Con 480 ninguna tablet del parque instalado entra por la rama móvil en
+  /// ninguna orientación, así que girar ya no reconstruye la navegación.
+  /// Cuántos paneles se dibujan es OTRA decisión, y se toma por el espacio
+  /// que le queda al catálogo, no por el ancho total — ver
+  /// [SalesSurfaceMetrics] en presentation/sales/layout/sales_surface.dart.
+  static const double mobile = 480;
 
   /// Tablet breakpoint - 1024dp (lg - contentWideBreakpoint)
   static const double tablet = 1024;
@@ -21,6 +34,45 @@ class AppBreakpoints {
 
   /// Max content width - 1440dp
   static const double maxContentWidth = 1440;
+
+  // ==========================================================================
+  // GEOMETRÍA DEL MÓDULO DE VENTAS  (DDT responsive · figura 1)
+  //
+  // Vive aquí para que ningún widget vuelva a declarar un ancho de riel, de
+  // comanda o de mosaico por su cuenta: los tests de aceptación leen estas
+  // mismas constantes que el layout.
+  // ==========================================================================
+
+  /// A partir de aquí el riel y la comanda usan su versión ancha.
+  /// Es el único umbral que el DDT añade respecto al PRD.
+  static const double fullChrome = 1200;
+
+  /// Piso de ancho del catálogo para justificar tres paneles (PRD §5.2).
+  static const double minCatalog = 400;
+
+  // Geometría de regiones.
+  static const double railCompact = 64;
+  static const double railFull = 88;
+  static const double cartCompact = 364;
+  static const double cartFull = 420;
+
+  // Mosaico (PRD §5.1).
+  static const double minTile = 150;
+  static const double gridGap = 11;
+
+  /// Padding lateral del catálogo. Los dos valores NO son arbitrarios: hacen
+  /// que el ancho de contenido sea 568 dp tanto en vertical (600 − 2×16) como
+  /// en horizontal (596 − 2×14), y de ahí sale el mosaico de 182,0 dp en las
+  /// dos orientaciones que pide el criterio de aceptación 1.
+  static const double padTwo = 16;
+  static const double padThree = 14;
+
+  // Alturas de fila.
+  static const double rowProduct = 104;
+  static const double rowTable = 118;
+
+  /// Versión pura de [ResponsiveHelper.isMobile]: se prueba sin `BuildContext`.
+  static bool isMobile(double width) => width < mobile;
 }
 
 /// Device type enum for responsive layouts.

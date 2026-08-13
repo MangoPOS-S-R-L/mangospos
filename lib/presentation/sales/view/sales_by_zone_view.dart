@@ -236,67 +236,106 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
     final isCompact = ResponsiveHelper.isMobile(context);
 
-    Widget buildZoneTabs() {
-      return Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(
-          color: SalesTheme.secondary,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        // Wrap (no Row) para que cuando las zonas no quepan en una línea
-        // pasen automáticamente a una segunda fila en vez de hacer
-        // scroll horizontal. `runSpacing` deja un respiro entre filas
-        // cuando hay wrap; `spacing: 0` mantiene el look pegado de los
-        // tabs cuando caben en una sola línea (el padding interno de
-        // cada chip ya genera el separador visual).
-        child: Wrap(
-          spacing: 0,
-          runSpacing: 4,
-          children: zones.asMap().entries.map((entry) {
-            final index = entry.key;
-            final zone = entry.value;
-            final isActive = _tabController?.index == index;
-            return MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: () => _tabController?.animateTo(index),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  curve: Curves.easeInOut,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: isCompact ? 12 : 16,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isActive
-                        ? SalesTheme.cardBackground
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    boxShadow: isActive
-                        ? [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.05),
-                              blurRadius: 2,
-                              offset: const Offset(0, 1),
-                            ),
-                          ]
-                        : null,
-                  ),
+    // Selector de zona como BOTÓN DESPLEGABLE.
+    //
+    // Antes era una fila de pestañas dentro de un `Expanded`. En la tablet de
+    // 600 dp los indicadores + zoom + mapa ocupan ~490 dp, así que al Expanded
+    // no le quedaban ni 100: las zonas se dibujaban como una franja vertical
+    // ilegible. Un desplegable ocupa lo que mide su etiqueta y NO se puede
+    // aplastar, así que el mismo widget sirve de 480 a 1366 dp sin ramas.
+    //
+    // El `TabController` sigue siendo la fuente de verdad de la zona activa:
+    // el menú solo llama a `animateTo`, y el resto de la vista no se entera
+    // del cambio de presentación.
+    Widget buildZoneSelector() {
+      final activeIndex =
+          (_tabController?.index ?? 0).clamp(0, zones.length - 1);
+      final activeZone = zones[activeIndex];
+
+      return PopupMenuButton<int>(
+        tooltip: 'Cambiar de zona',
+        position: PopupMenuPosition.under,
+        onSelected: (index) => _tabController?.animateTo(index),
+        itemBuilder: (_) => zones.asMap().entries.map((entry) {
+          final selected = entry.key == activeIndex;
+          return PopupMenuItem<int>(
+            value: entry.key,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  child: selected
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 18,
+                          color: SalesTheme.primary,
+                        )
+                      : null,
+                ),
+                Expanded(
                   child: Text(
-                    zone.name,
+                    entry.value.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: isCompact ? 13 : 14,
-                      fontWeight: FontWeight.w500,
-                      color: isActive
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected
                           ? SalesTheme.foreground
                           : SalesTheme.mutedForeground,
-                      letterSpacing: -0.2,
                     ),
                   ),
                 ),
+              ],
+            ),
+          );
+        }).toList(),
+        child: Container(
+          // 44 dp de lado menor: criterio de aceptación 7.
+          constraints: const BoxConstraints(minHeight: 44, maxWidth: 260),
+          padding: EdgeInsets.symmetric(
+            horizontal: isCompact ? 12 : 14,
+            vertical: 8,
+          ),
+          decoration: BoxDecoration(
+            color: SalesTheme.secondary,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: SalesTheme.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.place_outlined,
+                size: 18,
+                color: SalesTheme.mutedForeground,
               ),
-            );
-          }).toList(),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  activeZone.name,
+                  maxLines: 1,
+                  // §3 del PRD: ninguna etiqueta se parte a mitad de palabra.
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: TextStyle(
+                    fontSize: isCompact ? 14 : 15,
+                    fontWeight: FontWeight.w700,
+                    color: SalesTheme.foreground,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+              if (zones.length > 1) ...[
+                const SizedBox(width: 6),
+                const Icon(
+                  Icons.expand_more_rounded,
+                  size: 20,
+                  color: SalesTheme.mutedForeground,
+                ),
+              ],
+            ],
+          ),
         ),
       );
     }
@@ -385,16 +424,31 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
       );
     }
 
+    // La cabecera se apila o va en una sola fila según el ancho REAL, no
+    // según el breakpoint global.
+    //
+    // Con `isCompact` (width < 480) la tablet de 600 dp entraba por la rama de
+    // una fila, donde el desplegable (~190 dp) y los indicadores con zoom,
+    // mapa y refresco (~490 dp) piden 680 dp sobre 552 útiles: el `Spacer`
+    // quedaba negativo y reventaba con RenderFlex overflow.
+    //
+    // 900 dp es el piso donde la fila única entra con holgura incluso con un
+    // nombre de zona largo.
+    final stackedHeader = MediaQuery.sizeOf(context).width < 900;
+
     PreferredSizeWidget? appBarWidget;
     if (hasZones && _tabController != null) {
-      if (isCompact) {
+      if (stackedHeader) {
+        // El desplegable ocupa una línea fija, así que ya no hay que reservar
+        // altura para el wrap de pestañas: 152 → 116 dp recuperados para las
+        // mesas.
         appBarWidget = PreferredSize(
-          preferredSize: const Size.fromHeight(152),
+          preferredSize: const Size.fromHeight(116),
           child: AppBar(
             backgroundColor: SalesTheme.background,
             elevation: 0,
             automaticallyImplyLeading: false,
-            toolbarHeight: 152,
+            toolbarHeight: 116,
             titleSpacing: 0,
             title: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -402,11 +456,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Tabs de zonas: ya no scrollean horizontal, hacen wrap
-                  // a una segunda fila cuando no caben. La altura del
-                  // AppBar (152) cubre hasta 2 filas de tabs + 1 fila de
-                  // indicadores en mobile.
-                  buildZoneTabs(),
+                  buildZoneSelector(),
                   const SizedBox(height: 8),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
@@ -440,9 +490,24 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(child: buildZoneTabs()),
+                // Sin `Expanded`: el desplegable pide solo lo que mide su
+                // etiqueta. Es lo que evita que los indicadores lo aplasten
+                // cuando el ancho aprieta.
+                buildZoneSelector(),
                 const SizedBox(width: 12),
-                buildIndicators(),
+                // Los indicadores se quedan a la derecha, pero pueden hacer
+                // scroll si un nombre de zona largo les come el sitio: antes
+                // que recortar texto o reventar, se deslizan.
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      reverse: true,
+                      child: buildIndicators(),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -722,12 +787,20 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               // forzar el modo mobile (que cambia el shell completo).
               final isCompactDesk = ResponsiveHelper.isCompactDesktop(context);
 
-              final padding = isCompact
+              // El margen se decide por el ancho REAL del grid, no por el
+              // breakpoint global. Al bajar `mobile` a 480 (PRD §6), la
+              // tablet de 7" en vertical (533 dp) dejó de ser "compacta" y
+              // pasó a los márgenes de 48 dp: con 485 dp útiles ya no caben
+              // dos tarjetas de 240 + separación, y el grid colapsaba a UNA
+              // mesa por fila. Con el margen estrecho caben dos de 242.
+              final isNarrow = constraints.maxWidth < 600;
+
+              final padding = isNarrow
                   ? const EdgeInsets.fromLTRB(12, 6, 12, 12)
                   : isCompactDesk
                       ? const EdgeInsets.fromLTRB(14, 4, 14, 14)
                       : const EdgeInsets.fromLTRB(24, 4, 24, 24);
-              final horizontalPad = isCompact
+              final horizontalPad = isNarrow
                   ? 24.0
                   : isCompactDesk
                       ? 28.0
@@ -751,6 +824,22 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                             ((baseCardWidth * zoom) + gap))
                         .floor()
                         .clamp(1, 10);
+              }
+
+              // Ningún mosaico por debajo del mínimo que el propio card
+              // declara (PRD responsive, criterio §11.2). El cálculo de
+              // arriba parte de un ancho OBJETIVO (220, o 180 en compactDesk)
+              // y rendía celdas de 227 dp en horizontal y 234 en vertical:
+              // como TableCard tiene BoxConstraints(minWidth: 240) no puede
+              // encogerse, y lo que se recortaba era el texto. Bajamos
+              // columnas hasta que la celda respete el mínimo.
+              //
+              // El zoom del cajero puede AGRANDAR la celda, no encogerla por
+              // debajo de este piso: ahí el card se rompe, no se adapta.
+              while (columns > 1 &&
+                  (availableWidth - ((columns - 1) * gap)) / columns <
+                      kTableCardMinWidth) {
+                columns--;
               }
 
               // Calcular el ancho REAL de cada card

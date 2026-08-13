@@ -10,6 +10,8 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/widgets/min_extent_grid_delegate.dart';
+import 'package:mangopos/presentation/sales/layout/sales_surface.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
@@ -1153,13 +1155,25 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
-            final isDesktop = width >= 1200;
-            final isMobile = width < 600;
 
-            double cartWidth = 320.0;
-            if (isDesktop) {
-              cartWidth = 400.0;
-            }
+            // Único punto de verdad de la geometría del módulo (DDT capa 3).
+            // Cuántas superficies caben lo decide el espacio que le SOBRA al
+            // catálogo, no el ancho total: en la tablet de campo (600 dp en
+            // vertical) el reparto fijo dejaba 192 dp, y de ahí salían la
+            // columna única de producto, las categorías como bloques y las
+            // pestañas partidas a mitad de palabra.
+            //
+            // Con menos de `minCatalog` la comanda se colapsa a la hoja
+            // inferior — que ya existe y conserva total y acción primaria — y
+            // el riel a «Más opciones» en la cabecera.
+            //
+            // Nota: `resolve` descuenta el riel siempre, también en retail,
+            // donde no se dibuja. Es conservador a propósito: preferimos un
+            // único cálculo compartido con los tests antes que una segunda
+            // rama que pueda divergir.
+            final surface = SalesSurfaceMetrics.resolve(width);
+            final cartWidth = surface.cartWidth;
+            final isMobile = !surface.isThreePanel;
 
             final cart = _CartView(
               origin: widget.origin,
@@ -1167,7 +1181,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               onAssignClient: () => _handleAssignClient(context),
               deliveryAddressEnabled: _deliveryAddressEnabled,
             );
+            // Solo el catálogo necesita las métricas (para su padding lateral,
+            // que es lo que iguala el mosaico en las dos orientaciones), así
+            // que el scope se monta aquí y no sobre toda la pantalla.
             final catalog = _CatalogArea(
+              surface: surface,
               origin: widget.origin,
               tableCode: _currentTableCode ?? 'Venta Libre',
               onProductTap: (product) {
@@ -1232,6 +1250,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ),
                     onApplyDiscount: () => _handleApplyDiscount(context),
                     onApplyCourtesy: () => _handleCourtesyByProduct(context),
+                    onMarkAllTakeout: () => _handleMarkAllTakeout(context),
                     onChargeCredit: _canSellCredit
                         ? () => _handleChargeToCredit(context)
                         : null,
@@ -1265,6 +1284,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               children: [
                 if (!isRetail)
                   _SalesToolsRail(
+                    width: surface.railWidth,
                     onBack: () => _handleBack(context),
                     // Delivery también tiene OPCIONES (anular, descuento,
                     // cortesía, takeout, crédito); transferir/liberar
@@ -1390,6 +1410,10 @@ class _MobileSalesHeader extends StatelessWidget {
   final VoidCallback onApplyDiscount;
   final VoidCallback onApplyCourtesy;
 
+  /// Marca toda la cuenta como para llevar. Está en el riel de tres paneles;
+  /// sin esto se perdía al colapsar a dos superficies. Null = opción oculta.
+  final VoidCallback? onMarkAllTakeout;
+
   /// Cobrar la cuenta completa a crédito. Null = usuario sin permiso
   /// `creditos.vender` (mínimo supervisor) → la opción no se muestra.
   final VoidCallback? onChargeCredit;
@@ -1403,6 +1427,7 @@ class _MobileSalesHeader extends StatelessWidget {
     required this.onVoidOrder,
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
+    this.onMarkAllTakeout,
     this.onChargeCredit,
   });
 
@@ -1456,6 +1481,9 @@ class _MobileSalesHeader extends StatelessWidget {
                   case _MobileSalesAction.applyCourtesy:
                     onApplyCourtesy();
                     break;
+                  case _MobileSalesAction.markAllTakeout:
+                    onMarkAllTakeout?.call();
+                    break;
                   case _MobileSalesAction.chargeCredit:
                     onChargeCredit?.call();
                     break;
@@ -1505,6 +1533,15 @@ class _MobileSalesHeader extends StatelessWidget {
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
+                if (onMarkAllTakeout != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.markAllTakeout,
+                    child: ListTile(
+                      leading: Icon(Icons.takeout_dining_rounded),
+                      title: Text('Todo para llevar'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
                 if (onChargeCredit != null)
                   const PopupMenuItem(
                     value: _MobileSalesAction.chargeCredit,
@@ -1528,6 +1565,7 @@ enum _MobileSalesAction {
   voidOrder,
   applyDiscount,
   applyCourtesy,
+  markAllTakeout,
   chargeCredit,
 }
 
@@ -6594,6 +6632,10 @@ class _SalesToolsRail extends StatelessWidget {
   /// `creditos.vender` (mínimo supervisor) → el botón no se muestra.
   final VoidCallback? onChargeCredit;
 
+  /// Ancho resuelto por [SalesSurfaceMetrics]: 64 dp por debajo de 1200 dp de
+  /// pantalla, 88 por encima. A 64 los botones van sin etiqueta.
+  final double width;
+
   const _SalesToolsRail({
     required this.onBack,
     required this.showTableActions,
@@ -6604,12 +6646,14 @@ class _SalesToolsRail extends StatelessWidget {
     this.onTransferSession,
     required this.onMarkAllTakeout,
     this.onChargeCredit,
+    required this.width,
   });
 
   @override
   Widget build(BuildContext context) {
+    final compact = width < AppBreakpoints.railFull;
     return Container(
-      width: 88,
+      width: width,
       decoration: const BoxDecoration(
         color: _salesSurface,
         border: Border(right: BorderSide(color: _salesDivider)),
@@ -6622,6 +6666,7 @@ class _SalesToolsRail extends StatelessWidget {
               children: [
                 const SizedBox(height: 16),
                 _RailButton(
+                    compact: compact,
                   icon: Icons.arrow_back_ios_new_rounded,
                   label: 'Regresar',
                   isPrimary: true,
@@ -6642,38 +6687,45 @@ class _SalesToolsRail extends StatelessWidget {
                   const SizedBox(height: 8),
                   if (onTransferSession != null)
                     _RailButton(
+                    compact: compact,
                       icon: Icons.swap_horiz_rounded,
                       label: 'Transferir\ncuenta',
                       onTap: onTransferSession!,
                     ),
                   if (onReleaseTable != null)
                     _RailButton(
+                    compact: compact,
                       icon: Icons.logout_rounded,
                       label: 'Liberar\nmesa',
                       onTap: onReleaseTable!,
                     ),
                   _RailButton(
+                    compact: compact,
                     icon: Icons.block_rounded,
                     label: 'Anular\norden',
                     onTap: onVoidOrder,
                   ),
                   _RailButton(
+                    compact: compact,
                     icon: Icons.percent_rounded,
                     label: 'Aplicar\ndescuento',
                     onTap: onApplyDiscount,
                   ),
                   _RailButton(
+                    compact: compact,
                     icon: Icons.card_giftcard_rounded,
                     label: 'Cortesía\nproducto',
                     onTap: onApplyCourtesy,
                   ),
                   _RailButton(
+                    compact: compact,
                     icon: Icons.takeout_dining_rounded,
                     label: 'Todo\npara llevar',
                     onTap: onMarkAllTakeout,
                   ),
                   if (onChargeCredit != null)
                     _RailButton(
+                    compact: compact,
                       icon: Icons.request_quote_outlined,
                       label: 'Cobrar a\ncrédito',
                       onTap: onChargeCredit!,
@@ -6697,11 +6749,15 @@ class _RailButton extends StatelessWidget {
   final VoidCallback onTap;
   final bool isPrimary;
 
+  /// Riel angosto (64 dp): solo icono, la etiqueta pasa al tooltip.
+  final bool compact;
+
   const _RailButton({
     required this.icon,
     required this.label,
     required this.onTap,
     this.isPrimary = false,
+    this.compact = false,
   });
 
   @override
@@ -6711,13 +6767,15 @@ class _RailButton extends StatelessWidget {
         ? _salesTotalColor.withValues(alpha: 0.12)
         : _salesSurface;
 
-    return InkWell(
+    final button = InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Container(
-        width: 72,
+        width: compact ? 52 : 72,
         margin: const EdgeInsets.symmetric(vertical: 6),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        // 12 en compacto para que el lado menor del objetivo táctil llegue a
+        // 44 dp sin la etiqueta (criterio de aceptación 7).
+        padding: EdgeInsets.symmetric(vertical: compact ? 12 : 10),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(14),
@@ -6726,21 +6784,32 @@ class _RailButton extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: color, size: 20),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 11,
-                color: color,
-                fontWeight: isPrimary ? FontWeight.w700 : FontWeight.w500,
-                height: 1.1,
+            if (!compact) ...[
+              const SizedBox(height: 6),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: color,
+                  fontWeight: isPrimary ? FontWeight.w700 : FontWeight.w500,
+                  height: 1.1,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
+
+    // Sin etiqueta visible, el nombre tiene que seguir siendo alcanzable:
+    // tooltip en escritorio y pulsación larga en la tablet.
+    return compact
+        ? Tooltip(
+            message: label.replaceAll('\n', ' '),
+            child: button,
+          )
+        : button;
   }
 }
 
@@ -7687,10 +7756,16 @@ class _CatalogArea extends ConsumerStatefulWidget {
   final OrderOrigin origin;
   final String tableCode;
   final Function(dynamic) onProductTap;
+
+  /// Geometría resuelta del módulo. De aquí sale el padding lateral que hace
+  /// que el mosaico mida lo mismo en las dos orientaciones.
+  final SalesSurfaceMetrics surface;
+
   const _CatalogArea({
     required this.origin,
     required this.tableCode,
     required this.onProductTap,
+    required this.surface,
   });
 
   @override
@@ -7776,7 +7851,12 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
   Widget build(BuildContext context) {
     final isCompact = ResponsiveHelper.isMobile(context);
     final hPad = isCompact ? 12.0 : 24.0;
-    return Column(
+    // El scope baja por el árbol hasta los grids, que son widgets aparte:
+    // así el padding lateral y el mosaico salen del mismo cálculo que los
+    // tests de aceptación, sin pasar el dato por tres constructores.
+    return SalesSurfaceScope(
+      metrics: widget.surface,
+      child: Column(
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(hPad, isCompact ? 12 : 24, hPad, 0),
@@ -7892,6 +7972,7 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
           ),
         ),
       ],
+      ),
     );
   }
 }
@@ -9331,7 +9412,16 @@ class _CategoriesGrid extends ConsumerWidget {
         return Stack(
           children: [
             GridView.builder(
-              padding: EdgeInsets.all(isCompact ? mobilePadding : 16),
+              padding: EdgeInsets.all(
+                isCompact
+                    ? mobilePadding
+                    // padTwo (16) / padThree (14): los dos valores
+                    // dejan el ancho útil en 568 dp en las dos
+                    // orientaciones del equipo de referencia, que es
+                    // de donde sale el mosaico de 182 dp del criterio 1.
+                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding
+                        ?? AppBreakpoints.padTwo),
+              ),
               gridDelegate: isCompact
                   ? SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: mobileColumns,
@@ -9339,11 +9429,15 @@ class _CategoriesGrid extends ConsumerWidget {
                       crossAxisSpacing: mobileSpacing,
                       mainAxisSpacing: mobileSpacing,
                     )
-                  : SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 220 * zoom,
+                  // Mínimo, no máximo: el delegate de Flutter garantiza un
+                  // ancho MÁXIMO, y por eso con 192 dp de catálogo dibujaba
+                  // UNA categoría por fila. El zoom del cajero escala el
+                  // mínimo, así que sigue mandando sobre la densidad.
+                  : SliverGridDelegateWithMinCrossAxisExtent(
+                      minCrossAxisExtent: AppBreakpoints.minTile * zoom,
                       mainAxisExtent: categoryCardExtent.toDouble() * zoom,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
+                      crossAxisSpacing: AppBreakpoints.gridGap,
+                      mainAxisSpacing: AppBreakpoints.gridGap,
                     ),
               itemCount: categories.length,
               itemBuilder: (context, index) {
@@ -9561,7 +9655,16 @@ class _ProductsGrid extends ConsumerWidget {
         return Stack(
           children: [
             GridView.builder(
-              padding: EdgeInsets.all(isCompact ? mobilePadding : 16),
+              padding: EdgeInsets.all(
+                isCompact
+                    ? mobilePadding
+                    // padTwo (16) / padThree (14): los dos valores
+                    // dejan el ancho útil en 568 dp en las dos
+                    // orientaciones del equipo de referencia, que es
+                    // de donde sale el mosaico de 182 dp del criterio 1.
+                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding
+                        ?? AppBreakpoints.padTwo),
+              ),
               gridDelegate: isCompact
                   ? SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: mobileColumns,
@@ -9569,11 +9672,11 @@ class _ProductsGrid extends ConsumerWidget {
                       mainAxisSpacing: mobileSpacing,
                       mainAxisExtent: mobileCardHeight,
                     )
-                  : SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 220 * zoom,
+                  : SliverGridDelegateWithMinCrossAxisExtent(
+                      minCrossAxisExtent: AppBreakpoints.minTile * zoom,
                       mainAxisExtent: productCardExtent.toDouble() * zoom,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
+                      crossAxisSpacing: AppBreakpoints.gridGap,
+                      mainAxisSpacing: AppBreakpoints.gridGap,
                     ),
               itemCount: products.length,
               itemBuilder: (context, index) {
