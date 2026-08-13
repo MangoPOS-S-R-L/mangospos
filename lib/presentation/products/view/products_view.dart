@@ -53,6 +53,11 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
+    // Editar y eliminar productos son permisos propios: hasta acá bastaba
+    // `productos.acceso` para borrar cualquier ítem del menú.
+    final sessionCtrl = ref.watch(sessionProvider.notifier);
+    final canEditProducts = sessionCtrl.hasPermission('productos.editar');
+    final canDeleteProducts = sessionCtrl.hasPermission('productos.eliminar');
     final viewModel = ref.watch(productsViewModelProvider);
     final products = viewModel.filteredProducts;
 
@@ -149,6 +154,8 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                         product: product,
                       ),
                       onDelete: (id) => _confirmDelete(context, viewModel, id),
+                      canEdit: canEditProducts,
+                      canDelete: canDeleteProducts,
                     ),
                   ),
                 ],
@@ -521,6 +528,10 @@ class _ProductsHeader extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // `productos.acceso` gatea la ruta; crear es un permiso aparte. Antes
+    // cualquiera que abriera Productos podía dar de alta ítems de menú.
+    final canCreate =
+        ref.watch(sessionProvider.notifier).hasPermission('productos.crear');
     final compact = Breakpoints.isCompact(context);
 
     final title = Text(
@@ -599,7 +610,8 @@ class _ProductsHeader extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(width: AppSpacing.md),
+        if (canCreate) const SizedBox(width: AppSpacing.md),
+        if (canCreate)
         ElevatedButton.icon(
           onPressed: onAdd,
           icon: const Icon(Icons.add, size: 18),
@@ -645,12 +657,20 @@ class _ProductsTable extends StatelessWidget {
     required this.viewModel,
     required this.onEdit,
     required this.onDelete,
+    required this.canEdit,
+    required this.canDelete,
   });
 
   final List<Map<String, dynamic>> products;
   final ProductsViewModel viewModel;
   final ValueChanged<Map<String, dynamic>> onEdit;
   final ValueChanged<String> onDelete;
+
+  /// `productos.editar` — habilita editar y el toggle de disponibilidad.
+  final bool canEdit;
+
+  /// `productos.eliminar` — habilita el borrado.
+  final bool canDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -663,6 +683,8 @@ class _ProductsTable extends StatelessWidget {
         viewModel: viewModel,
         onEdit: onEdit,
         onDelete: onDelete,
+        canEdit: canEdit,
+        canDelete: canDelete,
       );
     }
     return Container(
@@ -890,10 +912,12 @@ class _ProductsTable extends StatelessWidget {
                         child: Center(
                           child: _AvailabilityIndicator(
                             state: _extractAvailability(product),
-                            onTap: () => viewModel.toggleAvailability(
-                              product['id'].toString(),
-                              isActive,
-                            ),
+                            onTap: !canEdit
+                                ? null
+                                : () => viewModel.toggleAvailability(
+                                      product['id'].toString(),
+                                      isActive,
+                                    ),
                           ),
                         ),
                       ),
@@ -902,28 +926,31 @@ class _ProductsTable extends StatelessWidget {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            IconButton(
-                              onPressed: () => onEdit(product),
-                              icon: Icon(
-                                Icons.edit,
-                                size: 18,
-                                color: AppColors.mutedForeground,
+                            if (canEdit)
+                              IconButton(
+                                onPressed: () => onEdit(product),
+                                icon: Icon(
+                                  Icons.edit,
+                                  size: 18,
+                                  color: AppColors.mutedForeground,
+                                ),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
                               ),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
-                            const SizedBox(width: AppSpacing.lg),
-                            IconButton(
-                              onPressed: () =>
-                                  onDelete(product['id'].toString()),
-                              icon: Icon(
-                                Icons.delete_outline,
-                                size: 18,
-                                color: AppColors.destructive,
+                            if (canEdit && canDelete)
+                              const SizedBox(width: AppSpacing.lg),
+                            if (canDelete)
+                              IconButton(
+                                onPressed: () =>
+                                    onDelete(product['id'].toString()),
+                                icon: Icon(
+                                  Icons.delete_outline,
+                                  size: 18,
+                                  color: AppColors.destructive,
+                                ),
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
                               ),
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(),
-                            ),
                           ],
                         ),
                       ),
@@ -1005,7 +1032,8 @@ _Availability _extractAvailability(Map<String, dynamic> product) {
 
 class _AvailabilityIndicator extends StatelessWidget {
   final _Availability state;
-  final VoidCallback onTap;
+  /// `null` sin `productos.editar`: el indicador queda de solo lectura.
+  final VoidCallback? onTap;
   final bool compact;
 
   const _AvailabilityIndicator({
@@ -1132,12 +1160,16 @@ class _ProductsCardList extends StatelessWidget {
     required this.viewModel,
     required this.onEdit,
     required this.onDelete,
+    required this.canEdit,
+    required this.canDelete,
   });
 
   final List<Map<String, dynamic>> products;
   final ProductsViewModel viewModel;
   final ValueChanged<Map<String, dynamic>> onEdit;
   final ValueChanged<String> onDelete;
+  final bool canEdit;
+  final bool canDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1181,6 +1213,8 @@ class _ProductsCardList extends StatelessWidget {
           viewModel: viewModel,
           onEdit: () => onEdit(product),
           onDelete: () => onDelete(product['id'].toString()),
+          canEdit: canEdit,
+          canDelete: canDelete,
         );
       },
     );
@@ -1193,12 +1227,18 @@ class _ProductCardMobile extends StatelessWidget {
     required this.viewModel,
     required this.onEdit,
     required this.onDelete,
+    required this.canEdit,
+    required this.canDelete,
   });
 
   final Map<String, dynamic> product;
   final ProductsViewModel viewModel;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+
+  /// `productos.editar` / `productos.eliminar` del usuario en sesión.
+  final bool canEdit;
+  final bool canDelete;
 
   static List<dynamic> _asList(dynamic value) =>
       value is List ? value : const [];
@@ -1241,7 +1281,7 @@ class _ProductCardMobile extends StatelessWidget {
       color: Colors.white,
       borderRadius: BorderRadius.circular(AppRadius.lg),
       child: InkWell(
-        onTap: onEdit,
+        onTap: canEdit ? onEdit : null,
         borderRadius: BorderRadius.circular(AppRadius.lg),
         child: Container(
           padding: const EdgeInsets.all(12),
@@ -1340,7 +1380,9 @@ class _ProductCardMobile extends StatelessWidget {
                   _AvailabilityIndicator(
                     state: _extractAvailability(product),
                     compact: true,
-                    onTap: () => viewModel.toggleAvailability(
+                    onTap: !canEdit
+                        ? null
+                        : () => viewModel.toggleAvailability(
                       product['id'].toString(),
                       isActive,
                     ),
@@ -1424,31 +1466,33 @@ class _ProductCardMobile extends StatelessWidget {
                       if (v == 'delete') onDelete();
                     },
                     itemBuilder: (_) => [
-                      PopupMenuItem<String>(
-                        value: 'edit',
-                        child: Row(
-                          children: [
-                            Icon(Icons.edit, size: 18,
-                                color: AppColors.mutedForeground),
-                            const SizedBox(width: 10),
-                            const Text('Editar producto'),
-                          ],
+                      if (canEdit)
+                        PopupMenuItem<String>(
+                          value: 'edit',
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit, size: 18,
+                                  color: AppColors.mutedForeground),
+                              const SizedBox(width: 10),
+                              const Text('Editar producto'),
+                            ],
+                          ),
                         ),
-                      ),
-                      PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Row(
-                          children: [
-                            Icon(Icons.delete_outline,
-                                size: 18, color: AppColors.destructive),
-                            const SizedBox(width: 10),
-                            Text(
-                              'Eliminar',
-                              style: TextStyle(color: AppColors.destructive),
-                            ),
-                          ],
+                      if (canDelete)
+                        PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline,
+                                  size: 18, color: AppColors.destructive),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Eliminar',
+                                style: TextStyle(color: AppColors.destructive),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ],

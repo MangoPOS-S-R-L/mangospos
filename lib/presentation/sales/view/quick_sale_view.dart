@@ -28,7 +28,17 @@ class QuickSaleView extends ConsumerWidget {
         ? null
         : summarizeOrderPricing(order, items);
     final total = pricingSummary?.total ?? 0.0;
-    final canPay = order != null && items.isNotEmpty && !loading && total > 0;
+    // `ventas_rapida.acceso` abre la pestaña; crear la orden y cobrarla son
+    // permisos propios que hasta acá no se consultaban en ningún lado.
+    final sessionCtrl = ref.watch(sessionProvider.notifier);
+    final canCreate = sessionCtrl.hasPermission('ventas_rapida.crear_orden');
+    final canCharge =
+        sessionCtrl.hasPermission('ventas_rapida.cobrar_inmediato');
+    final canPay = canCharge &&
+        order != null &&
+        items.isNotEmpty &&
+        !loading &&
+        total > 0;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Venta Rápida'),
@@ -40,8 +50,10 @@ class QuickSaleView extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.all(20),
               child: ElevatedButton.icon(
-                onPressed: () =>
-                    ref.read(currentOrderProvider.notifier).openQuick(),
+                onPressed: !canCreate
+                    ? null
+                    : () =>
+                        ref.read(currentOrderProvider.notifier).openQuick(),
                 icon: const Icon(Icons.flash_on),
                 label: const Text('Iniciar venta rápida'),
               ),
@@ -263,6 +275,9 @@ Future<void> _printQuickSaleComprobante(
       receiptItemDisplayMode: itemMode,
       template: invoiceTpl,
       currency: currentBusinessCurrencyOrFallback(ref),
+      // Layout segun el papel de la impresora destino (58 u 80mm). En modo
+      // sin impresora `printer` es null y se arma a 80mm para pantalla/PDF.
+      paperWidth: printer?.paperWidth ?? 80,
     );
     if (printerless) {
       if (viewContext != null && viewContext.mounted) {

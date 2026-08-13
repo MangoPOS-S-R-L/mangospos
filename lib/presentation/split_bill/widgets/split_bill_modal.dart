@@ -4,6 +4,7 @@ import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.da
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
+import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/printing/printerless_mode.dart';
@@ -56,8 +57,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
   }
 
   Future<bool> _ensureCanDeleteItem() async {
-    final sessionCtrl = ref.read(sessionProvider.notifier);
-    if (sessionCtrl.hasPermission('ventas.orden.eliminar_item')) {
+    if (operatorHasPermission(ref, 'ventas.orden.eliminar_item')) {
       return true;
     }
     return showPinVerificationModal(
@@ -154,6 +154,9 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
         discountDisplayMode: discountDisplayMode,
         template: invoiceTpl,
         currency: currentBusinessCurrencyOrFallback(ref),
+        // Layout segun el papel de la impresora destino (58 u 80mm). En modo
+        // sin impresora se arma a 80mm para pantalla/PDF.
+        paperWidth: assignedPrinter?.paperWidth ?? 80,
       );
 
       if (printerless) {

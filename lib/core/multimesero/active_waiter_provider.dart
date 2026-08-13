@@ -26,12 +26,27 @@ class ActiveWaiter {
   final String businessId;
   final DateTime validatedAt;
 
+  /// `user_id` del mesero identificado, cuando tiene cuenta de login.
+  /// `fn_verify_employee_pin` ya lo devolvía; antes se descartaba.
+  final String? userId;
+
+  /// Permisos efectivos del mesero identificado por PIN.
+  ///
+  /// `null` = no se pudieron resolver (sin login, sin red, RPC vacío). Es
+  /// distinto de `{}` (mesero sin ningún permiso): con `null` los gates
+  /// caen a los permisos de la sesión del dispositivo, que es el
+  /// comportamiento histórico. Nunca dejamos a un mesero sin operar por un
+  /// fallo de lectura.
+  final Set<String>? permissions;
+
   const ActiveWaiter({
     required this.employeeId,
     required this.firstName,
     required this.businessId,
     required this.validatedAt,
     this.lastName,
+    this.userId,
+    this.permissions,
   });
 
   /// Nombre legible para mostrar en UI (tarjetas de mesa, etc.).
@@ -47,6 +62,8 @@ class ActiveWaiter {
     String? lastName,
     String? businessId,
     DateTime? validatedAt,
+    String? userId,
+    Set<String>? permissions,
   }) {
     return ActiveWaiter(
       employeeId: employeeId ?? this.employeeId,
@@ -54,7 +71,26 @@ class ActiveWaiter {
       lastName: lastName ?? this.lastName,
       businessId: businessId ?? this.businessId,
       validatedAt: validatedAt ?? this.validatedAt,
+      userId: userId ?? this.userId,
+      permissions: permissions ?? this.permissions,
     );
+  }
+
+  /// Evalúa un permiso contra los del mesero identificado. Devuelve `null`
+  /// cuando no hay permisos resueltos — el caller debe caer a la sesión.
+  ///
+  /// Misma semántica de comodines que `SessionController`: `*` global y
+  /// `modulo.*` por prefijo.
+  bool? hasPermission(String permission) {
+    final granted = permissions;
+    if (granted == null) return null;
+    if (granted.contains('*')) return true;
+    if (granted.contains(permission)) return true;
+    final idx = permission.lastIndexOf('.');
+    if (idx > 0 && granted.contains('${permission.substring(0, idx)}.*')) {
+      return true;
+    }
+    return false;
   }
 }
 

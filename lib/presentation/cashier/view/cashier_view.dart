@@ -54,6 +54,10 @@ class _CashierViewState extends ConsumerState<CashierView>
       // Refresh inmediato al volver a foreground. El polling periódico
       // se mantiene corriendo en el VM independientemente del lifecycle.
       ref.read(cashierViewModelProvider).refreshSilently();
+      // Aprovechamos el regreso a foreground para releer permisos: si el
+      // dueño se los cambió mientras la caja estaba abierta, se recogen sin
+      // tener que cerrar sesión. El controller throttlea por su cuenta.
+      unawaited(ref.read(sessionProvider.notifier).refreshPermissions());
     }
   }
 

@@ -6,6 +6,7 @@
 // El repo NO mantiene estado — el state vive en `ActiveWaiterController`.
 // Acá solo van I/O y mapeos.
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -76,13 +77,65 @@ class MultimeseroRepository {
       return null;
     }
 
+    final resolvedBusinessId = map['business_id']?.toString() ?? businessId;
+    final userId = map['user_id']?.toString();
+
     return ActiveWaiter(
       employeeId: employeeId,
       firstName: firstName,
       lastName: map['last_name']?.toString(),
-      businessId: map['business_id']?.toString() ?? businessId,
+      businessId: resolvedBusinessId,
       validatedAt: DateTime.now(),
+      userId: userId,
+      permissions: await _loadWaiterPermissions(
+        userId: userId,
+        businessId: resolvedBusinessId,
+      ),
     );
+  }
+
+  /// Permisos efectivos del mesero que acaba de identificarse.
+  ///
+  /// Sin esto, los gates de mesa evaluaban los permisos del usuario logueado
+  /// en el dispositivo, no los del mesero que metió su PIN: en una tablet
+  /// compartida, el mesero A prestaba (o negaba) sus permisos a todos.
+  ///
+  /// Best-effort a propósito. Devuelve `null` ante cualquier tropiezo — sin
+  /// login, sin red, RPC vacío — y en ese caso el caller sigue usando los
+  /// permisos de la sesión. Nunca dejamos a un mesero sin poder trabajar
+  /// porque una lectura falló.
+  ///
+  /// El RLS de `user_permission_overrides` y `user_roles` es por negocio
+  /// (`fn_user_in_business`), no por `user_id`, así que un mesero puede
+  /// resolver los permisos de otro del mismo negocio sin privilegios extra.
+  Future<Set<String>?> _loadWaiterPermissions({
+    required String? userId,
+    required String businessId,
+  }) async {
+    if (userId == null || userId.isEmpty || businessId.isEmpty) return null;
+    try {
+      final response = await _client.rpc(
+        'fn_user_effective_permissions',
+        params: {'p_user_id': userId, 'p_business_id': businessId},
+      ).timeout(const Duration(seconds: 4));
+
+      if (response is! List) return null;
+      final granted = response
+          .where((row) =>
+              row is Map<String, dynamic> &&
+              row['allowed'] == true &&
+              row['code'] != null)
+          .map((row) => (row as Map<String, dynamic>)['code'].toString())
+          .where((code) => code.isNotEmpty)
+          .toSet();
+
+      // Vacío = no confiable (RBAC sin sembrar, respuesta parcial). Preferimos
+      // el fallback a la sesión antes que bloquear al mesero.
+      return granted.isEmpty ? null : granted;
+    } catch (e) {
+      debugPrint('[multimesero] permisos del mesero no resueltos: $e');
+      return null;
+    }
   }
 }
 

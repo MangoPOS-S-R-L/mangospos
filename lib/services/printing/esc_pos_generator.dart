@@ -547,6 +547,14 @@ class EscPosGenerator {
     return (' ' * left) + trimmed;
   }
 
+  /// Columnas disponibles en la línea AHORA mismo, ya descontado el factor
+  /// de ampliación horizontal vigente (`setTextSize`). A 80mm son 48 en
+  /// tamaño normal y 24 a doble ancho; a 58mm, 32 y 16.
+  ///
+  /// Los builders de tickets lo usan para no hardcodear 48/24: así el mismo
+  /// layout sirve para 58mm sin duplicar código.
+  int get maxChars => _getMaxChars();
+
   int _getMaxChars() {
     final base = paperWidth == 80 ? 48 : 32;
     final cols = (base / _textWidthFactor).floor();

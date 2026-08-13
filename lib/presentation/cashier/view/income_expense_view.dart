@@ -485,6 +485,9 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         sessionId: sessionId,
         when: DateTime.now(),
         currency: currentBusinessCurrencyOrFallback(ref),
+        // Layout segun el papel de la impresora destino (58 u 80mm). En modo
+        // sin impresora se arma a 80mm para pantalla/PDF.
+        paperWidth: printer?.paperWidth ?? 80,
       );
 
       if (printerless) {

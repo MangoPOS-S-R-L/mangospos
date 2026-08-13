@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository.dart';
 import '../../../data/utils/order_pricing_utils.dart';
+import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import '../../../services/session/session_controller.dart';
 import '../../sales/viewmodel/sales_viewmodel.dart';
 import '../state/split_bill_state.dart';
@@ -393,9 +394,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     required String sourceCheckId,
     required String targetCheckId,
   }) async {
-    if (!_ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.mesas.mover_unir')) {
+    if (!operatorHasPermissionRef(_ref, 'ventas.mesas.mover_unir')) {
       _setErrorWithAutoDismiss(
         'No tienes permiso para unir o mover sub-cuentas.',
       );
@@ -537,9 +536,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Asignar items seleccionados a un check (LOCAL)
   /// Asignar items seleccionados a un check (LOCAL)
   Future<void> assignSelectedItemsToCheck(String checkId) async {
-    if (!_ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.cuenta.split_manual')) {
+    if (!operatorHasPermissionRef(_ref, 'ventas.cuenta.split_manual')) {
       _setErrorWithAutoDismiss(
         'No tienes permiso para dividir cuentas manualmente.',
       );
@@ -718,9 +715,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   ///   2. Si total de unidades abiertas < personas, bloquear (no se puede
   ///      repartir 2 productos entre 4 personas sin fraccionar).
   Future<void> applyEqualSplit() async {
-    if (!_ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.cuenta.split_equiv')) {
+    if (!operatorHasPermissionRef(_ref, 'ventas.cuenta.split_equiv')) {
       _setErrorWithAutoDismiss(
         'No tienes permiso para dividir la cuenta en partes iguales.',
       );

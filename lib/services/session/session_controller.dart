@@ -2,7 +2,8 @@ import 'dart:async';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kDebugMode, kIsWeb, setEquals;
 import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
@@ -248,9 +249,17 @@ class SessionState {
   }
 }
 
+/// Ventana mínima entre releídas de permisos. Suficientemente corta para que
+/// un cambio de permisos se recoja en el mismo turno, y suficientemente larga
+/// para que las llamadas desde lifecycle/navegación no golpeen el RPC en cada
+/// gesto.
+const Duration _kPermissionsRefreshTtl = Duration(seconds: 45);
+
 class SessionController extends Notifier<SessionState> {
   StreamSubscription<AuthState>? _authSub;
   bool _explicitSignOut = false;
+  DateTime? _lastPermissionsRefresh;
+  bool _refreshingPermissions = false;
 
   @override
   SessionState build() {
@@ -1132,6 +1141,76 @@ class SessionController extends Notifier<SessionState> {
         }
       }
       setUnauthenticated();
+    }
+  }
+
+  /// Vuelve a leer los permisos efectivos del usuario logueado y actualiza
+  /// el state.
+  ///
+  /// Sin esto, los permisos quedaban congelados al momento del login: si el
+  /// dueño le concedía un permiso a un mesero que ya tenía la sesión abierta,
+  /// el cambio no surtía efecto hasta cerrar sesión y volver a entrar.
+  ///
+  /// Reglas de seguridad de este método:
+  ///   - NUNCA degrada. Si el RPC falla o devuelve vacío, deja el state como
+  ///     está. A diferencia de la hidratación inicial, acá no aplicamos
+  ///     `_fallbackPermissions`: pisar permisos buenos con el preset del rol
+  ///     por un error de red sería peor que no refrescar.
+  ///   - Throttle de [_kPermissionsRefreshTtl] para que llamarlo desde varias
+  ///     pantallas (lifecycle, navegación) no genere una tormenta de RPCs.
+  ///     `force: true` lo saltea.
+  ///
+  /// Devuelve `true` si los permisos se releyeron y aplicaron.
+  Future<bool> refreshPermissions({bool force = false}) async {
+    if (!state.isAuthenticated) return false;
+    final userId = state.userId;
+    final businessId = state.activeBusinessId;
+    if (userId == null || userId.isEmpty) return false;
+    if (businessId == null || businessId.isEmpty) return false;
+
+    if (!force && _lastPermissionsRefresh != null) {
+      final since = DateTime.now().difference(_lastPermissionsRefresh!);
+      if (since < _kPermissionsRefreshTtl) return false;
+    }
+    if (_refreshingPermissions) return false;
+    _refreshingPermissions = true;
+
+    try {
+      final response = await Supabase.instance.client.rpc(
+        'fn_user_effective_permissions',
+        params: {'p_user_id': userId, 'p_business_id': businessId},
+      );
+      if (response is! List) return false;
+
+      final granted = response
+          .where(
+            (row) =>
+                row is Map<String, dynamic> &&
+                row['allowed'] == true &&
+                row['code'] != null,
+          )
+          .map((row) => (row as Map<String, dynamic>)['code'].toString())
+          .where((code) => code.isNotEmpty)
+          .toSet();
+
+      // Vacío = no confiable (RLS, negocio sin RBAC sembrado, respuesta
+      // parcial). Preferimos conservar lo que ya teníamos.
+      if (granted.isEmpty) return false;
+
+      // Misma regla que la hidratación: la membresía owner/admin manda sobre
+      // el detalle del RPC, así el dueño no se queda fuera de su negocio por
+      // overrides incompletos.
+      final permissions = state.isOwner ? {'*', ...granted} : granted;
+      if (setEquals(state.permissions, permissions)) return true;
+
+      _safeSet(state.copyWith(permissions: permissions));
+      return true;
+    } catch (e) {
+      debugPrint('[session] refreshPermissions falló: $e');
+      return false;
+    } finally {
+      _lastPermissionsRefresh = DateTime.now();
+      _refreshingPermissions = false;
     }
   }
 

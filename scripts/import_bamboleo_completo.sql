@@ -1,0 +1,2250 @@
+-- ============================================================================
+-- IMPORT COMPLETO DE CATÁLOGO — BAMBOLEO
+-- Business 882ef5a4-93eb-4e58-92c3-bf532e179d45  ·  bamboleo.mangopos.do
+-- Fuente: MLYH9X2TGPA28_catalog-2026-08-11-0140.csv (export Square, MONCION)
+-- ============================================================================
+--
+-- Un solo archivo, una sola transacción: si algo falla NO queda nada a medias.
+-- Pégalo entero en Supabase Studio → SQL Editor y dale Run.
+--
+-- QUÉ CARGA
+--    1516 productos en 26 categorías (de 1.520 filas del CSV; 4 descartadas)
+--    1374 marcados inventariables, con insumo propio y stock inicial
+--    1500 productos a BARRA · 16 a COCINA
+--    1315 con código de barra listo para el scanner
+--
+-- DECISIONES DEL DUEÑO, YA APLICADAS AQUÍ
+--   · Impuestos: se vincula SOLO "Propina de Ley" (10%). El ITBIS 18% queda
+--     SIN vincular a propósito, aunque exista y esté activo.
+--     ⚠ Mientras siga así, las facturas salen con ITBIS 0.00 ante la DGII.
+--       menu_item_taxes es la ÚNICA fuente del impuesto por producto: PRD 2.5
+--       quitó el fallback a business_settings.default_tax_rate.
+--     Para activarlo algún día: cambia v_tax_name a 'ITBIS' en la PARTE 5 y
+--     vuelve a correr esa parte. Es idempotente.
+--   · Inventario: solo lo contable. Quedan FUERA Tragos, Cócteles, Comida,
+--     Fiesta y Hookah — son preparados y servicios. Square les puso stock de
+--     mentira (Long Island 1000, Martini 999, Mojitos 645) porque nunca se
+--     contaron. Un trago descuenta de la BOTELLA, no de sí mismo: eso necesita
+--     receta, no link 1:1.
+--   · Áreas: barra y cocina. Códigos verificados contra el negocio.
+--
+-- ┌────────────────────────────────────────────────────────────────────────┐
+-- │ 🚫 NO enciendas business_settings.service_fee_enabled mientras el 10%   │
+-- │    esté vinculado por producto: se cobraría DOS veces, una por ítem     │
+-- │    (menu_item_taxes) y otra por orden (calculate_order_totals).         │
+-- │    Hoy está en false. La PARTE 5 aborta si cambió.                      │
+-- │ 🚫 taxes.is_service_fee se queda en FALSE siempre.                      │
+-- └────────────────────────────────────────────────────────────────────────┘
+--
+-- RE-EJECUTABLE: todo inserta con NOT EXISTS y el stock inicial se registra
+--   una sola vez. Correrlo dos veces no duplica productos ni suma stock.
+--
+-- ROLLBACK: al final del archivo, comentado.
+--
+-- CONTEO ESPERADO POR CATEGORÍA
+--   Cerveza       235
+--   Wine          327
+--   Whiskey       101
+--   Rum            65
+--   Tequila        69
+--   Vodka          59
+--   Ginebra        13
+--   Cognac         22
+--   Brandy          4
+--   Licores        63
+--   Champaña       66
+--   Pre-Mix        50
+--   Mix            16
+--   Tragos         57
+--   Cócteles       21
+--   Fiesta         45
+--   Comida         16
+--   Hookah          3
+--   Jugos          52
+--   Papitas        16
+--   Chicle         31
+--   Cigarros       28
+--   Cigarrillos     9
+--   Tabaco          6
+--   E-Cig          95
+--   Misc           47
+--   TOTAL        1516
+-- ============================================================================
+
+begin;
+
+
+
+-- ##########################################################################
+-- ##  PARTE 1 — Tabla de staging con el catálogo
+-- ##########################################################################
+
+--
+-- PASO 1 — Tabla de staging con el catálogo completo.
+--
+-- POR QUÉ UNA TABLA INTERMEDIA en vez de 1.520 INSERT sueltos: todos los pasos
+-- que siguen (productos, áreas, inventario) son set-based contra esta tabla.
+-- Un solo bloque de datos, cero repetición, y si un paso falla se re-corre solo
+-- ese paso sin volver a pegar 300 KB de SQL.
+--
+-- La tabla se borra en el PASO 5. Vive en public y NO lleva RLS a propósito:
+-- es temporal y solo la toca el SQL Editor.
+--
+-- Ejecutar en Supabase Studio → SQL Editor.
+-- ============================================================================
+
+
+drop table if exists public._import_882ef5a4;
+
+create table public._import_882ef5a4 (
+  name        text primary key,
+  categoria   text not null,
+  price       numeric(12,2) not null,
+  cost        numeric,
+  sku         text,
+  barcode     text,
+  descr       text,
+  qty         numeric not null default 0,
+  is_bev      boolean not null,
+  inventariable boolean not null,
+  area        text not null,      -- 'bar' | 'cocina' (etiqueta lógica)
+  vendor      text,
+  posicion    int not null
+);
+
+
+-- filas 1–400
+insert into public._import_882ef5a4 (name, categoria, price, cost, sku, barcode, descr, qty, is_bev, inventariable, area, vendor, posicion) values
+('Américo cigars Don Leo','Cigarros',1200.00,null,null,'720140978433',null,13,false,true,'bar',null,0),
+('1800 Blanco 750ml','Tequila',2500.00,1414.5700,'4090968','811538010139',null,3,true,true,'bar','WG',0),
+('1800 Reposado Tequila, 750 ml','Tequila',2800.00,1735.6500,null,'811538010238',null,3,true,true,'bar','WG',1),
+('1800 Tequila Coconut, 750ml','Tequila',2500.00,1414.0000,null,'811538010375',null,2,true,true,'bar','WG',2),
+('19 Crime Cab Sauv 750ml','Wine',1500.00,495.0000,'Y198873','012354001350',null,2,true,true,'bar','WG',0),
+('19 Crime The Uprising Red 750ml','Wine',1500.00,495.0000,'1235400193',null,'19 crímenes El levantamiento Vino tinto envejecido 30 días en barriles de ron Sudeste de Australia',3,true,true,'bar','WG',1),
+('19 Crimes America MW Red blend 750ml','Wine',1500.00,665.0000,null,'012354016156',null,0,true,true,'bar','WG',2),
+('19 Crimes Cali Chill 750ml','Wine',1500.00,665.0000,null,'012354019751',null,0,true,true,'bar','WG',3),
+('19 Crimes Cali Gold Sparkling 750ml','Champaña',1500.00,778.2100,'248300T','012354007666',null,1,true,true,'bar','WG',0),
+('19 Crimes Cali Red 750ml','Wine',1500.00,1300.0000,'573400P','012354004290',null,34,true,true,'bar','Price Smart',4),
+('19 Crimes Cali Sauv Blanc 750ml','Wine',1500.00,595.0000,null,'012354008113',null,1,true,true,'bar','WG',5),
+('19 Crimes Cali Smooth Silky Red Blend 750ml','Wine',1500.00,665.0000,null,'012354016552',null,0,true,true,'bar','WG',6),
+('19 Crimes Cali Sweet 750ml','Wine',1500.00,665.0000,null,'012354019140',null,0,true,true,'bar','WG',7),
+('19 Crimes Red Wine 750ml','Wine',1500.00,1220.0000,'4047885','012354000995',null,4,true,true,'bar','Price Smart',8),
+('19 Crimes Snoop Dog Cali Rose 750ml','Wine',1500.00,677.0400,null,'012354005006',null,1,true,true,'bar','WG',9),
+('19 Crimes The Punishment Pinot Noir 750ml','Wine',1500.00,495.0000,'106730L','089819721443',null,1,true,true,'bar','WG',10),
+('19 Crimes Uprising Red Wine 750ml','Wine',1500.00,495.0000,null,'012354001930',null,2,true,true,'bar','WG',11),
+('19 Crimes the Banished Dark Red 750ml','Wine',1500.00,595.0000,null,'012354001688',null,3,true,true,'bar','WG',12),
+('1903 Rum E. Leon jimenez 700ml','Rum',2200.00,1643.3800,null,'7465603156869',null,1,true,true,'bar','Abeja Logístic Group SRL',0),
+('1906 Reserva Especisl 12oz','Cerveza',200.00,80.0000,null,'020106502673',null,0,true,true,'bar','WG',0),
+('1919 López Niceti Malbec 750ml','Wine',1100.00,330.0000,'K103820','010086201512',null,2,true,true,'bar','WG',13),
+('1924 Red Blend Bourbon Barrel aged 750ml','Wine',2000.00,826.5900,null,'082242017602',null,2,true,true,'bar','WG',14),
+('21 Amendment  TALL HAT imperial Ipa 12oz','Cerveza',200.00,100.0000,null,'850036109143',null,3,true,true,'bar','WG',1),
+('21 Amendment  hazzy brew 12oz','Cerveza',225.00,100.0000,null,'859612001918',null,3,true,true,'bar','WG',2),
+('21 Amendment brewry  pale Ale 12oz','Cerveza',225.00,100.0000,null,'859612001826',null,3,true,true,'bar','WG',3),
+('21 Amendment, IPA Brew Free or Die Single12onz','Cerveza',225.00,100.0000,null,'859612001017',null,0,true,true,'bar','WG',4),
+('21st Amendment, Brew Free Blood Orange 12oz','Cerveza',225.00,100.0000,null,'859612001321',null,9,true,true,'bar','WG',5),
+('43 Licor 750ml','Licores',1800.00,1252.6800,'D905358','029929115411',null,2,true,true,'bar','WG',0),
+('43 Licor Horchata 750ml','Licores',1800.00,1252.6800,'2673771','029929115466',null,2,true,true,'bar','WG',1),
+('7 Deadly Zins Lodi Old Vine Zinfandel 750ml','Wine',1700.00,664.9500,null,'652935100012',null,4,true,true,'bar','WG',15),
+('7up','Jugos',100.00,null,null,null,null,0,true,true,'bar',null,0),
+('90+ Cotes de Provence Rose 750ml','Wine',1500.00,502.2800,null,'810879020340',null,1,true,true,'bar','WG',16),
+('911 Energy 12oz','Jugos',100.00,79.9100,null,'7467003480551',null,21,true,true,'bar','Abeja Logístic Group SRL',1),
+('99 Banana 50ml','Licores',75.00,27.5000,'875232L','080660620992',null,3,true,true,'bar','WG',2),
+('99 Durazno 50ml','Licores',75.00,27.5000,'H055838','089000990610',null,8,true,true,'bar','WG',3),
+('99 Manzana 50ml','Licores',75.00,27.5000,'S114404','089000118397',null,9,true,true,'bar','WG',4),
+('99 Sandía 50ml','Licores',75.00,27.5000,'245869Q','089000991044',null,2,true,true,'bar','WG',5),
+('Abita Purple Haze  12oz Lata','Cerveza',225.00,100.0000,null,'080020500056',null,1,true,true,'bar','WG',6),
+('Absolut Vodka  50ml','Vodka',300.00,122.2400,null,'835229000001',null,9,true,true,'bar','WG',0),
+('Absolut Vodka Tragos','Tragos',200.00,36.7000,'H958575',null,null,118,true,false,'bar','WG',0),
+('Absolut vodka 750ml','Vodka',1500.00,992.6800,'Q733345','835229000308',null,4,true,true,'bar','WG',1),
+('Aceituna fígaro','Misc',250.00,389.9500,null,'8410159206024',null,0,false,true,'bar','Supermercado Morel',0),
+('Aceitunas','Misc',200.00,0.0000,'N893012','607766020022',null,0,false,true,'bar','Price Smart',1),
+('Adaliya MI Amor  250G','Tabaco',800.00,476.0000,null,'8681655717530',null,11,false,true,'bar','Habibi',0),
+('Adaliya Mi Amor 50G','Tabaco',200.00,68.7500,'5148850','8681511386771',null,33,false,true,'bar','David Hookah',1),
+('Agave Boom Margarita pasión fruit','Cócteles',400.00,120.0000,null,'810095914829',null,11,true,false,'bar','WG',0),
+('Agua Xtra','Jugos',50.00,8.3300,null,'7462826108040',null,0,true,true,'bar','Karla Mini Market',2),
+('Agua cool heaven','Jugos',50.00,15.0000,null,null,null,63,true,true,'bar','Jose Fran',3),
+('Agua cristal','Jugos',50.00,11.2500,null,null,null,25,true,true,'bar','José Minimarket',4),
+('Agua de Coco con Pulpa','Jugos',400.00,150.0000,null,'041331021951',null,5,true,true,'bar','Súper Mercado Espinal',5),
+('Aguila Pilsener 12oz','Cerveza',200.00,60.0000,null,'097549132828',null,2,true,true,'bar','WG',7),
+('Aguilas/Lecey Camisetas','Misc',1300.00,870.0000,null,'5397312564128',null,79,false,true,'bar','WG',2),
+('Al Capone Jamaican Rum 2pk','Cigarros',150.00,68.7500,'Y236931','717519011716',null,34,false,true,'bar','David Hookah',1),
+('Al Capone cognac 2pk','Cigarros',150.00,68.7500,'629780V','717519011419',null,52,false,true,'bar','David Hookah',2),
+('Al Fakher Gum Mint 15000 Puff','E-Cig',1000.00,638.0000,'5061032894864','5061032894864',null,0,false,true,'bar','WG',0),
+('Al Fakher Menta 250G','Tabaco',800.00,295.0000,null,'6291108166796',null,1,false,true,'bar','Habibi',2),
+('Al Fakher Menta 50g','Tabaco',200.00,55.0000,'6157922','6291108160008',null,0,false,true,'bar','David Hookah',3),
+('Al Fakher Toronja Minta 50G','Tabaco',200.00,96.0000,null,'6291108164372',null,5,false,true,'bar','Hookah Paradise',4),
+('Alamos Malbec 750L','Wine',1200.00,638.0000,null,'085000018194',null,7,true,true,'bar','WG',17),
+('Alec Bradley Black Market Robusto','Cigarros',800.00,440.0000,null,'815337011885',null,0,false,true,'bar','Club Cigar',3),
+('Alhambra Reserva Lager 12oz','Cerveza',175.00,120.0000,null,'078477807910',null,35,true,true,'bar','Beers & Co By BBP',8),
+('Alhambra Roja Lager 11.2 0z','Cerveza',225.00,107.0000,null,'812162020129',null,2,true,true,'bar','WG',9),
+('Allagash White Belgian 12oz','Cerveza',200.00,80.0000,null,'603675101678',null,11,true,true,'bar','WG',10),
+('Allegrini Palazzo Della Torro Red Blend 750ml','Wine',2800.00,1013.0400,null,'812643020006',null,3,true,true,'bar','WG',18),
+('Aloha Grape blue razz ice 3k','E-Cig',400.00,63.0000,null,'850004895481',null,4,false,true,'bar','Vape Wholesale',1),
+('Aloha Luau Punch 3k','E-Cig',400.00,126.0000,null,'703674232646',null,3,false,true,'bar','Vape Wholesale',2),
+('Aloha Strawberry Mango 3k','E-Cig',400.00,126.0000,null,'703674238112',null,0,false,true,'bar','Vape Wholesale',3),
+('Aloha White gummy ice 3k','E-Cig',400.00,63.0000,null,'860008488725',null,0,false,true,'bar','Vape Wholesale',4),
+('Alpha coco premiun 1kg','Tabaco',700.00,425.0000,null,'5040664551567',null,10,false,true,'bar','Seteo Vape Shop',5),
+('Alta Luna Pinot Grigio 750ml','Wine',900.00,433.0000,'L462517','086785431055',null,2,true,true,'bar','WG',19),
+('Amarillo Amarillo De Manzanares 750ml','Licores',2000.00,800.4000,null,'087752036020',null,6,true,true,'bar','WG',6),
+('Américo cigars aniversario','Cigarros',1200.00,null,null,'720140978440',null,20,false,true,'bar',null,4),
+('Andre Peach Bellini Champagne 750ml','Champaña',1200.00,413.0000,'N639047','085000034323',null,3,true,true,'bar','WG',1),
+('Andre Pineapple Mimosa 750ml','Champaña',1200.00,413.0000,'T640167','085000034330',null,3,true,true,'bar','WG',2),
+('Andre Strawberry Mimosa 750ml','Champaña',1200.00,413.0000,'6132814','085000036990',null,3,true,true,'bar','WG',3),
+('Andrés Mimosa Mango 750ml','Champaña',1200.00,413.0000,'7787744','085000036976',null,3,true,true,'bar','WG',4),
+('Angry Orchard Crisp Apple 12oz','Cerveza',200.00,74.7000,'1860268','087692821007',null,1,true,true,'bar','WG',11),
+('Angry Orchard Rose 12oz','Cerveza',200.00,74.7000,'838106V','087692006596',null,0,true,true,'bar','WG',12),
+('Anis Del Mono Anisado 750ml','Licores',1500.00,680.6800,'X742122','022851400266',null,3,true,true,'bar','WG',7),
+('Antioqueńo Aguardiente 750ml','Licores',1800.00,934.0000,null,'664858000027',null,6,true,true,'bar','WG',8),
+('Antioqueńo Aguardiente Sin Azúcar 750ml','Licores',1800.00,934.0000,null,'664858000119',null,6,true,true,'bar','WG',9),
+('Antioqueńo Aguardiente Sin Azúcar Trago','Tragos',250.00,39.8400,null,null,null,61,true,false,'bar','WG',1),
+('Aperol Aperitivo  750ml','Licores',2200.00,1569.0000,null,'721059001311',null,2,true,true,'bar','WG',10),
+('Aperol Aperitivo 375ml','Licores',1300.00,965.0000,null,'887341340060',null,0,true,true,'bar','WG',11),
+('Aperol Spritz Ready to Enjoy Cocktail, 200ml','Pre-Mix',400.00,238.0000,null,'887341340077',null,1,true,true,'bar','WG',0),
+('Apothic Cab Sauv 750ml','Wine',1200.00,590.0000,null,'085000030967',null,4,true,true,'bar','WG',20),
+('Apothic Crush Smooth Red Wine','Wine',1200.00,600.0000,null,'085000023488',null,0,true,true,'bar','WG',21),
+('Apothic Dark Red 750ml','Wine',1200.00,495.0000,'8500002286','085000022863',null,2,true,true,'bar','WG',22),
+('Apothic Inferno Red Blend 750ml','Wine',1500.00,708.5900,null,'085000024904',null,2,true,true,'bar','WG',23),
+('Apothic Red 750ml','Wine',1200.00,550.0000,'8500001774','085000017746','Indulge in the rich, velvety flavors of Apothic Red wine. With its perfect blend of dark fruit and hints of mocha, this 750ml bottle is the ideal companion for any occasion. Treat yourself to a glass of pure luxury and elevate your wine experience with Apothic Red.',5,true,true,'bar','WG',24),
+('Apothic Rose 750ml','Wine',1200.00,560.0000,null,'085000021545',null,6,true,true,'bar','WG',25),
+('Ardbeg 10Y 750ml','Whiskey',5000.00,2521.4800,'V882318','083300072106',null,2,true,true,'bar','WG',0),
+('Arturo Fuente Double Chateu','Cigarros',1200.00,519.7500,null,'843182101338',null,21,false,true,'bar','Club Cigar',5),
+('Arturo Fuente Magnun','Cigarros',1000.00,464.7500,null,'843182123286',null,6,false,true,'bar','Club Cigar',6),
+('Aveleda Vinho Verde 750ml','Wine',800.00,385.0000,'C385899','764793213336',null,3,true,true,'bar','WG',26),
+('Aviation Gin, 750ml','Ginebra',2500.00,1480.3100,null,'853507000024',null,3,true,true,'bar','WG',0),
+('BC 5000 Sunset 5k','E-Cig',1000.00,240.0000,null,'4895255208426',null,4,false,true,'bar','Vape Wholesale',5),
+('BIC Classic Pocket Lighters,Colors,','Misc',75.00,55.0000,null,'070330600065',null,40,false,true,'bar','WG',3),
+('Bacardi Blanco 50ml','Rum',100.00,38.5000,'167949N','080480016210',null,26,true,true,'bar','WG',1),
+('Bacardi Blanco 750ml','Rum',1500.00,719.9500,null,'080480015404',null,2,true,true,'bar','WG',2),
+('Bacardi Blanco Tragos','Tragos',200.00,25.0000,'A425992',null,null,143,true,false,'bar','WG',2),
+('Bacardi Coquito 750ml','Licores',2000.00,1323.0000,null,'080480008192',null,3,true,true,'bar','WG',12),
+('Bacardi Gold  750 ml','Rum',1500.00,719.9500,null,'080480025403',null,3,true,true,'bar','WG',3),
+('Bacardi Gold 50ml','Rum',100.00,38.5000,'893513P','080480026219',null,4,true,true,'bar','WG',4),
+('Bacardi Gold Tragos','Tragos',200.00,30.2500,'M602768',null,null,54,true,false,'bar',null,3),
+('Bacchus Pinot Noir 750ml','Wine',700.00,495.0000,'3621161731','736211617316',null,3,true,true,'bar','WG',27),
+('Baileys Churros 50ml','Licores',250.00,121.5000,null,'086767705501',null,9,true,true,'bar','WG',13),
+('Baileys Original Irish Cream 50 ml','Licores',250.00,121.8000,null,'086767210128',null,8,true,true,'bar','WG',14),
+('Bailey’s  Colada 750ml','Licores',1800.00,1385.4800,'8838505','086767705051',null,0,true,true,'bar','WG',15),
+('Bailey’s Chocolate 750ml','Licores',1800.00,1428.0000,null,'086767705488',null,1,true,true,'bar','WG',16),
+('Bailey’s Irish Cream 375ml','Licores',900.00,758.6800,'5642043','086767210098',null,3,true,true,'bar','WG',17),
+('Bailey’s Irish Cream 750ml','Licores',1800.00,1325.4800,'132033H','086767210067',null,4,true,true,'bar','WG',18),
+('Bailey’s Irish Cream Tragos','Tragos',250.00,50.0000,'9232348',null,null,17,true,false,'bar',null,4),
+('Bailey’s Strawberries Cream 750ml','Licores',1800.00,1325.0000,null,'086767704832',null,3,true,true,'bar','WG',19),
+('Bailey’s S’Mores 750ml','Licores',1800.00,1385.0000,'5557664','086767705419',null,2,true,true,'bar','WG',20),
+('Ballantines Finest Blended Scotch Whisky 750ml','Whiskey',1200.00,769.1300,null,'5010106111451',null,12,true,true,'bar','United brands',1),
+('Bamboleo Negro','Cócteles',250.00,null,null,null,null,0,true,false,'bar',null,1),
+('Barceló Añejo 700 ml','Rum',1000.00,445.0000,'832999D','7461323129237',null,0,true,true,'bar','Provisiones Kelvin',5),
+('Barceló Blanco Añejado 700 ml','Rum',650.00,439.0000,'S789692','7461323129480',null,0,true,true,'bar','Provisiones Kelvin',6),
+('Barceló Dorado Añejado 700 ml','Rum',650.00,439.0000,'399225C','7461323129015',null,3,true,true,'bar','Provisiones Kelvin',7),
+('Barceló Gran Añejo 700 ml','Rum',650.00,473.0000,'7475319','7461323129350',null,0,true,true,'bar','Provisiones Kelvin',8),
+('Barceló Imp Maple Cask 700ml','Rum',1500.00,1414.7300,null,'7461281118557',null,3,true,true,'bar','Abeja Logístic Group SRL',9),
+('Barceló Imperial 375ml','Rum',800.00,750.0000,null,'7461323129749',null,2,true,true,'bar','Abeja Logístic Group SRL',10),
+('Barceló Imperial Onyx 700ml','Rum',1400.00,1094.0000,'A516889','7461323129183',null,2,true,true,'bar','Provisiones Kelvin',11),
+('Barefoot Cab Sauv 187ml','Wine',150.00,78.0000,'N339041','085000005217',null,0,true,true,'bar','Gallo',28),
+('Barefoot Chardonnay 187ml','Wine',150.00,78.0000,'732797N','085000005361',null,0,true,true,'bar','Gallo',29),
+('Barefoot Merlot 187ml','Wine',150.00,78.0000,'C944377','085000005460',null,0,true,true,'bar','Gallo',30),
+('Barefoot Moscato 187ml','Wine',150.00,78.0000,'S756727','085000005590',null,3,true,true,'bar','Gallo',31),
+('Barefoot Pink Moscato 187ml','Wine',150.00,78.0000,'7546007','085000005941',null,0,true,true,'bar','Gallo',32),
+('Barefoot Pink Moscato 750ml','Wine',800.00,348.0000,'085000020456','085000020456',null,3,true,true,'bar','WG',33),
+('Barefoot Pinot Grigio 187ml','Wine',150.00,78.0000,'D604610','085000005286',null,0,true,true,'bar','Gallo',34),
+('Barefoot Pinot Noir 187ml','Wine',150.00,78.0000,'E170188','085000005606',null,4,true,true,'bar','Gallo',35),
+('Barefoot Red Moscato 187ml','Wine',150.00,78.0000,'1083630','085000001851',null,0,true,true,'bar','Gallo',36),
+('Barefoot Riesling 187ml','Wine',150.00,78.0000,'405169A','085000006269',null,0,true,true,'bar','Gallo',37),
+('Barefoot Rose 187ml','Wine',150.00,78.0000,'7563238','085000006641',null,0,true,true,'bar','Gallo',38),
+('Barefoot White Zinf 187ml','Wine',150.00,78.0000,'279323P','085000005316',null,0,true,true,'bar','Gallo',39),
+('Barros Ruby Porto 750ml','Wine',1500.00,568.1500,null,'5601194102829',null,1,true,true,'bar','WG',40),
+('Barros Tawny Porto 750ml','Wine',1500.00,568.1500,null,'5601194102683',null,1,true,true,'bar','WG',41),
+('Bartenura Moscato 750ml','Wine',1500.00,605.0000,'087752005644','087752005644',null,7,true,true,'bar','WG',42),
+('Barternura Pinot Grigio 750ml','Wine',1700.00,572.0000,'3569499','087752003435',null,2,true,true,'bar','WG',43),
+('Barton & Guestier Rose D’Anjou 750ml','Wine',1400.00,412.0000,'852541Z','087000103702',null,3,true,true,'bar','WG',44),
+('Bay Brezze','Cócteles',150.00,null,null,null,null,1000,true,false,'bar',null,2),
+('Becks 12oz','Cerveza',200.00,61.0000,'6647995','08248886',null,10,true,true,'bar','WG',13),
+('Beefeater Gin 750ml','Ginebra',1600.00,1040.6800,'W072447','089540333496',null,4,true,true,'bar','WG',1),
+('Beer Hug Big Juicy imperial Ipa 12oz','Cerveza',200.00,80.5200,null,'736920213700',null,14,true,true,'bar','WG',14),
+('Beer Hug Tropical Imperial IPA de 12oz','Cerveza',200.00,80.5200,null,'736920211621',null,8,true,true,'bar','WG',15),
+('Belvedere Vodka Tragos','Tragos',200.00,45.0000,'9959865',null,null,54,true,false,'bar',null,5),
+('Belvedere vodka 750ml','Vodka',3000.00,1958.0000,'1643995','081753837822',null,3,true,true,'bar','WG',2),
+('Belverdere','Fiesta',2500.00,null,null,null,null,0,true,false,'bar',null,0),
+('Beringer White Zinfandel 750ml','Wine',900.00,620.0000,'786427B','089819006526',null,1,true,true,'bar','Price Smart',45),
+('Bermudez Añ̃ejo Selecto 700ml','Rum',900.00,0.0000,null,'7460522300157',null,0,true,true,'bar','WG',12),
+('Bermudez Blanco 700ml','Rum',800.00,703.0000,null,'7460522300676',null,7,true,true,'bar','WG',13),
+('Bermudez Don Armando 700ml','Rum',1000.00,855.9300,'640983E','7460522300447',null,2,true,true,'bar','Abeja Logístic Group SRL',14),
+('Bermudez Dorado 700ml','Rum',800.00,0.0000,null,'7460522300683',null,1,true,true,'bar','WG',15),
+('Bermúdez Ron Anerversario 700ml','Rum',1500.00,1121.0000,null,'7460522300324',null,3,true,true,'bar','WG',16),
+('Berne Romance Rose 750ml','Wine',1700.00,550.0000,'8654710','818252020475',null,3,true,true,'bar','WG',46),
+('Black & Mild Original','Cigarrillos',100.00,53.3600,null,'070137100188',null,9,false,true,'bar','WG',0),
+('Black & Mild Wine','Cigarrillos',100.00,53.3600,null,'070137105237',null,10,false,true,'bar','WG',1),
+('Black & White Blended Scotch 750ml','Whiskey',1400.00,720.0000,null,'50196135',null,3,true,true,'bar','Ocho Santos Mao',2),
+('Black Haus Licor 750ml','Licores',2000.00,1148.6800,'A021928','088004037918',null,3,true,true,'bar','WG',21),
+('Black Haus Mora 50ml','Licores',75.00,36.3000,'P174665','088004035778',null,14,true,true,'bar','WG',22),
+('Black Stallion Napa Cab Sauv 750ml','Wine',3000.00,1288.5600,null,'082242162432',null,3,true,true,'bar','WG',47),
+('Blackstone Merlot 750ml','Wine',900.00,335.0000,'M031181','081434500151',null,3,true,true,'bar','WG',48),
+('Blanton''s Bourbon Whiskey 750ml','Whiskey',25000.00,3780.0000,null,'080244002039',null,1,true,true,'bar','WG',3),
+('Blu Prosecco','Champaña',1000.00,489.0000,'7437346','010086103403',null,12,true,true,'bar','WG',5),
+('Blue Chair Bay Mango 50ml','Licores',75.00,38.0000,'K071469','856881004688',null,5,true,true,'bar','WG',23),
+('Blue Moon Belgian White 12oz','Cerveza',200.00,73.9300,'08787337','08787337',null,14,true,true,'bar','WG',16),
+('Blue Moon Belgian White 12oz Lata','Cerveza',200.00,84.0000,null,'08785737',null,31,true,true,'bar','WG',17),
+('Blue Moon Mango Wheat 12oz Lata','Cerveza',200.00,84.0000,null,'08787036',null,9,true,true,'bar','WG',18),
+('Blue Point Brewing Company Summer Ale  12oz','Cerveza',200.00,80.0000,null,'681745311127',null,6,true,true,'bar','WG',19),
+('Bogle Cab Sauv 750ml','Wine',1500.00,495.0000,'102443Q','080887493966',null,2,true,true,'bar','WG',49),
+('Bogle Essential Red 750ml','Wine',1500.00,495.0000,'8078749643','080887496431',null,5,true,true,'bar','WG',50),
+('Bogle Pinot Noir 750ml','Wine',1500.00,440.0000,'080887496318','080887496318',null,2,true,true,'bar','WG',51),
+('Bogle Vineyards Phantom 750ml','Wine',2000.00,715.1200,null,'080887490231',null,2,true,true,'bar','WG',52),
+('Bolsa De Regalo de Colores','Misc',150.00,100.0000,'2315153','743990151665',null,2,false,true,'bar','WG',4),
+('Bolsas De Regalo Silver','Misc',50.00,9.3500,null,'194425309623',null,94,false,true,'bar','Amazon',5),
+('Bombay Saphire 750ml','Ginebra',1800.00,1044.6800,'8141015427','080480301026',null,3,true,true,'bar','WG',2),
+('Bombay Saphire Gin Tragos','Tragos',300.00,53.0000,'507372E',null,null,55,true,false,'bar',null,6),
+('Bonanza Cabernet Sauvignon','Wine',2200.00,1239.0000,null,'017224710202',null,17,true,true,'bar','WG',53),
+('Bonanza Napa Cab Sauv 750ml','Wine',4000.00,2205.0000,null,'017224710219',null,3,true,true,'bar','WG',54),
+('Bonterra Merlot 750ml','Wine',1500.00,515.0000,'7737420','082896077793',null,2,true,true,'bar','WG',55),
+('Brancott Estate Pinot Noir 750ml','Wine',1300.00,570.0000,'2646138','852832104735',null,2,true,true,'bar','WG',56),
+('Bread and Butter Cab Sauv 750ml','Wine',1500.00,700.0000,null,'818051020744',null,2,true,true,'bar','WG',57),
+('Brewdog Beer Elvis Juice IPA Lata','Cerveza',200.00,80.0000,null,'842817100173',null,6,true,true,'bar','WG',20),
+('Brilla Prosecco 187ml','Champaña',450.00,200.0000,'8219967','8008863068979',null,3,true,true,'bar','WG',6),
+('Brilla Prosecco 750ml','Champaña',1500.00,550.0000,'W351500','8008863060379',null,8,true,true,'bar','WG',7),
+('Brilla Rose 750ml','Champaña',1500.00,550.0000,'157494H','8008863065596',null,4,true,true,'bar','WG',8),
+('Brooklyn Pilsner SGL Lata','Cerveza',200.00,null,null,'030613103225',null,0,true,true,'bar',null,21),
+('Brugal 1888 Doblemente Añejo 700 ml','Rum',3000.00,1925.0000,'F257033','7460855230206',null,0,true,true,'bar','Provisiones Kelvin',17),
+('Brugal Añejo','Fiesta',1200.00,null,null,null,null,0,true,false,'bar',null,1),
+('Brugal Añejo 1.75L','Rum',1600.00,1250.0000,null,'7460855200407',null,1,true,true,'bar','Cruce Guayacan Bebidas',18),
+('Brugal Añejo 350 ml','Rum',333.00,239.0000,'D018903','74624201',null,1,true,true,'bar','Provisiones Kelvin',19),
+('Brugal Añejo 700 ml','Rum',700.00,479.0000,'4481486','74620708',null,51,true,true,'bar','Provisiones Kelvin',20),
+('Brugal Ańejo Tragos','Tragos',150.00,25.0000,null,null,null,17,true,false,'bar','Provisiones Kelvin',7),
+('Brugal Blanco 700 ml','Rum',700.00,479.0000,'616219P','74668021',null,0,true,true,'bar','Provisiones Kelvin',21),
+('Brugal Blanco Tragos','Rum',150.00,28.3200,null,'812066020119',null,49,true,true,'bar','WG',22),
+('Brugal Doble Reserva','Fiesta',1250.00,null,null,null,null,0,true,false,'bar',null,2),
+('Brugal Doble Reserva 700ml','Rum',1000.00,750.0000,'510242J','7460855233498',null,72,true,true,'bar','Ocho santos',23),
+('Brugal Doble Reserva Tragos','Tragos',200.00,null,null,null,null,0,true,false,'bar',null,8),
+('Brugal Extra Viejo','Fiesta',1200.00,null,null,null,null,0,true,false,'bar',null,3),
+('Brugal Extra Viejo  350 ml','Rum',333.33,266.0000,'3396911','7460855234983',null,2,true,true,'bar','Provisiones Kelvin',24),
+('Brugal Extra Viejo 1.75L','Rum',1600.00,1250.0000,null,'74683826',null,3,true,true,'bar','Cruce Guayacan Bebidas',25),
+('Brugal Extra Viejo 700 ml','Rum',700.00,516.0000,'374888T','7460855234990',null,16,true,true,'bar','Provisiones Kelvin',26),
+('Brugal ExtraViejo Trago','Tragos',150.00,26.0000,null,null,null,38,true,false,'bar','Provisiones Kelvin',9),
+('Brugal Leyenda','Fiesta',2400.00,null,null,null,null,0,true,false,'bar',null,4),
+('Brugal Leyenda 700ml','Rum',1400.00,1050.0000,'K435463','7460855208694',null,0,true,true,'bar','Provisiones Kelvin',27),
+('Brugal Leyenda Cognac 700ml','Rum',3000.00,1481.6600,null,'7460855237991',null,1,true,true,'bar','Importadora bosa',28),
+('Brugal Triple Reserva','Fiesta',2100.00,null,null,null,null,0,true,false,'bar',null,5),
+('Brugal Triple Reserva 700ml','Rum',1400.00,890.0000,null,'7460855238066',null,32,true,true,'bar','Luis Romo',29),
+('Brugal XV','Fiesta',1200.00,null,null,null,null,0,true,false,'bar',null,6),
+('Brugal XV 1.75L','Rum',1600.00,1415.0000,null,'7460855235256',null,3,true,true,'bar','Cruce Guayacan Bebidas',30),
+('Brugal XV 700 ml','Rum',700.00,558.0000,'359466T','7460855235270',null,27,true,true,'bar','Provisiones Kelvin',31),
+('Brugal XV Trago','Tragos',150.00,27.0000,null,null,null,0,true,false,'bar','Provisiones Kelvin',10),
+('Brugal Xv 350 ml','Rum',350.00,295.0000,'4123646','7460855235263',null,3,true,true,'bar','Provisiones Kelvin',32),
+('Buchanan’s 12Yr Tragos','Tragos',300.00,78.0000,'748888X',null,null,6,true,false,'bar',null,11),
+('Buchanan’s 12y 375ml','Whiskey',1700.00,1045.0000,'5901490','088110955335',null,3,true,true,'bar','WG',4),
+('Buchanan’s 12y 50ml','Whiskey',250.00,59.9500,'T342691','082000005490',null,34,true,true,'bar','WG',5),
+('Buchanan’s 12y 750ml','Whiskey',3000.00,2250.0000,'8811095532','088110955328',null,6,true,true,'bar','Provisiones Kelvin',6),
+('Buchanan’s 18','Fiesta',9000.00,null,null,null,null,0,true,false,'bar',null,7),
+('Buchanan’s 18 y 750ml','Whiskey',7000.00,3249.9500,'F865263','088110955342',null,5,true,true,'bar','WG',7),
+('Buchanan’s Green Seal 750ml','Whiskey',14000.00,4725.0000,null,'088076190566',null,4,true,true,'bar','WG',8),
+('Buchanan’s Master','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,8),
+('Buchanan’s Master 750ml','Whiskey',4000.00,2279.4300,'2259438','088076177789',null,9,true,true,'bar','WG',9),
+('Buchanan’s Select 15y 750ml','Whiskey',5000.00,2149.9500,'162583A','088076182691',null,0,true,true,'bar','WG',10),
+('Buchannan’s 12','Fiesta',3500.00,1780.0000,null,null,null,0,true,false,'bar',null,9),
+('Buchannan’s 18','Fiesta',8000.00,null,null,null,null,0,true,false,'bar',null,10),
+('Buchannan’s Pineapple 750ml','Licores',3200.00,1595.4400,'W194272','088076187245',null,4,true,true,'bar','WG',24),
+('Bud Light 12oz Lata','Cerveza',150.00,54.0000,null,'01810622',null,14,true,true,'bar','WG',22),
+('Bud Light 16oz Alum','Cerveza',200.00,76.0000,'01879528','01879528',null,0,true,true,'bar','WG',23),
+('Bud Light Chelada Fuego 25oz','Cerveza',300.00,149.0000,null,'018200261404',null,3,true,true,'bar','WG',24),
+('Bud Light Chelada Tajín 25oz','Cerveza',300.00,149.0000,null,'018200261626',null,2,true,true,'bar','WG',25),
+('Budweiser 12oz','Cerveza',100.00,42.5700,'01801624','01801624',null,16,true,true,'bar','WG',26),
+('Budweiser 16oz Alum','Cerveza',200.00,76.0000,null,'018200004735',null,3,true,true,'bar','WG',27),
+('Budweiser Chelada Clamato 25oz','Cerveza',300.00,149.0000,null,'018200255090',null,0,true,true,'bar','WG',28),
+('Buffalo Trace Kentucky Bourbon Whiskey, 750 ml','Whiskey',6000.00,1711.0000,null,'080244009236',null,2,true,true,'bar','WG',11),
+('Bulleit Borbon 750ml','Whiskey',2500.00,1508.0000,'D774446','087000005525',null,3,true,true,'bar','WG',12),
+('Butane Torch Lighter','Misc',350.00,150.0000,'0037',null,null,1,false,true,'bar','WG',6),
+('Buzzballs Cranberry Blaster Cocktail 200ml','Pre-Mix',300.00,174.0000,null,'857641002005',null,20,true,true,'bar','WG',1),
+('Buzzballs Forbidden Apple Cocktail 200ml','Pre-Mix',300.00,174.0000,null,'857641002234',null,17,true,true,'bar','WG',2),
+('Buzzballz Chili Mango 200ml','Pre-Mix',300.00,174.0000,null,'857674007855',null,12,true,true,'bar','WG',3),
+('Buzzballz Chillers Cranberry 187ml','Pre-Mix',300.00,133.0000,null,'857641002104',null,23,true,true,'bar','WG',4),
+('Buzzballz Chillers Lemon Tea Cocktail','Pre-Mix',300.00,133.0000,null,'855200005511',null,23,true,true,'bar','WG',5),
+('Buzzballz Chillers Watermelon 187ml','Cócteles',300.00,133.0000,null,'855200005542',null,13,true,false,'bar','WG',3),
+('Buzzballz Chillerz Strawberry Chiller 187mñ','Pre-Mix',300.00,133.0000,null,'857641002654',null,39,true,true,'bar','WG',6),
+('Buzzballz Choc Tease 200ml','Pre-Mix',300.00,174.0000,'647696J','857641002753',null,20,true,true,'bar','WG',7),
+('Buzzballz Eggnog 200ml','Pre-Mix',300.00,199.6000,'8277769','857674007961',null,6,true,true,'bar','WG',8),
+('Buzzballz Espresso Martini 200ml','Pre-Mix',300.00,174.0000,null,'857674007923',null,12,true,true,'bar','WG',9),
+('Buzzballz Grapes Gone Wild 200ml','Cócteles',300.00,119.6000,null,'855200005368',null,21,true,false,'bar','WG',4),
+('Buzzballz Horchata 200ml','Pre-Mix',300.00,175.0000,null,'854530008568',null,6,true,true,'bar','WG',10),
+('Buzzballz Lota Colada 200ml','Pre-Mix',300.00,174.0000,'K279049','857641002258',null,0,true,true,'bar','WG',11),
+('Buzzballz Peach 200ml','Pre-Mix',300.00,174.0000,'V446724','857641002951',null,18,true,true,'bar','WG',12),
+('Buzzballz Peach Chill Cocktail 187ml','Pre-Mix',300.00,133.0000,null,'855200005283',null,14,true,true,'bar','WG',13),
+('Buzzballz Pink Lemonsqueezy 200ml','Pre-Mix',300.00,174.0000,null,'088004076580',null,6,true,true,'bar','WG',14),
+('Buzzballz Rita 200ml','Pre-Mix',300.00,119.6000,'7374036','257641008609',null,10,true,true,'bar','WG',15),
+('Buzzballz Spirits Cookie Nookie P24 200ml','Pre-Mix',300.00,174.0000,null,'851091006149',null,33,true,true,'bar','WG',16),
+('Buzzballz Straw Rita 200ml','Pre-Mix',300.00,174.0000,'861382K','857641002609',null,0,true,true,'bar','WG',17),
+('Buzzballz Wine Cookie Nookie P24 187ml','Pre-Mix',300.00,133.0000,null,'851091006774',null,0,true,true,'bar','WG',18),
+('Buzzballz Wine Passionfruit Martini P24 187ml','Pre-Mix',300.00,133.0000,null,'850042638286',null,9,true,true,'bar','WG',19),
+('Buzzballz berry cherry limeade 200 ml','Pre-Mix',300.00,119.6000,null,'850042638743',null,0,true,true,'bar','WG',20),
+('Buzzballz hazelnut latte 200ml','Pre-Mix',300.00,119.6000,null,'857674007671',null,10,true,true,'bar','WG',21),
+('Buzzballz pineapple jalapeño 200ml','Pre-Mix',300.00,119.6000,null,'088004020491',null,15,true,true,'bar','WG',22),
+('Buzzballz watermelon chiller 200ml','Cócteles',300.00,119.6000,null,'857674007909',null,19,true,false,'bar','WG',5),
+('Buzzballz® Tea-licious Cocktails 200ml','Pre-Mix',300.00,174.0000,null,'855200005337',null,24,true,true,'bar','WG',23),
+('Cakebread Cab Sauv 750ml','Wine',8000.00,3710.0000,'S831065','084692479146',null,1,true,true,'bar','WG',58),
+('Camarena Silver Tequila, 750 ml','Tequila',2500.00,1480.0000,null,'085000016824',null,4,true,true,'bar','WG',3),
+('Campari Aperitivo 750ml','Licores',3000.00,1605.4500,null,'721059047500',null,3,true,true,'bar','WG',25),
+('Campo Viejo Tempranillo 750ml','Wine',1100.00,720.0000,'855624A','852832106258',null,5,true,true,'bar','Price Smart',59),
+('Canada Dry Club Soda 500 ml','Jugos',50.00,23.0000,'345131L','7465383000352',null,67,true,true,'bar','Coca-Cola',6),
+('Canada Dry Ginger Ale 12oz','Jugos',100.00,null,null,'07811403',null,3,true,true,'bar',null,7),
+('Candela Mamajuana 750ml','Rum',2300.00,1200.0000,null,'746159213068',null,6,true,true,'bar','WG',33),
+('Candoni Moscato 750ml','Wine',1500.00,635.0000,null,'813645002694',null,3,true,true,'bar','WG',60),
+('Cantina Zaccaggnini Rose 750ml','Wine',1300.00,623.0000,'4637543','089475501410',null,3,true,true,'bar','WG',61),
+('Cantina Zaccagnini Montepulciano 750ml','Wine',1300.00,623.7000,null,'089475501014',null,4,true,true,'bar','WG',62),
+('Capa Tempranillo 750ml','Wine',1400.00,520.0000,'3462240','817036010879',null,4,true,true,'bar','WG',63),
+('Caposaldo Moscato 750ml','Wine',1300.00,586.3000,null,'084692471744',null,3,true,true,'bar','WG',64),
+('Capriccio Peach Sangria 750ml','Wine',800.00,420.0000,null,'089016000228',null,3,true,true,'bar','WG',65),
+('Capriccio Sangria Blanca 375ml','Wine',400.00,108.6800,'D813110','089016018148',null,3,true,true,'bar','WG',66),
+('Capriccio Sangria Blanca 750ml','Wine',800.00,421.0000,null,'089016017943',null,3,true,true,'bar','WG',67),
+('Capriccio Sangria Roja 375ml','Wine',400.00,108.6800,'N213149','089016016755',null,4,true,true,'bar','WG',68),
+('Capriccio Sangria Roja 750ml','Wine',800.00,421.0000,null,'089016017264',null,5,true,true,'bar','WG',69),
+('Capriccio sangría 355ml','Cerveza',200.00,null,null,'089016000808',null,0,true,true,'bar',null,29),
+('Captain Morgan Spice 50ml','Rum',100.00,40.0000,'08731409','08731409',null,20,true,true,'bar','WG',34),
+('Captain Morgan Spice 750ml','Rum',1300.00,585.0000,'256960Z','087000002715',null,3,true,true,'bar','WG',35),
+('Captain Morgan Spice Tragos','Tragos',200.00,38.0000,'981460F',null,null,55,true,false,'bar',null,12),
+('Carbon Pk','Misc',200.00,null,'T961308',null,null,0,false,true,'bar',null,7),
+('Carbon▪️suelto','Misc',30.00,9.3700,null,null,null,7,false,true,'bar','Jesier',8),
+('Cardenal Mendoza Brandy de Jerez 750ml','Brandy',4000.00,2030.0000,null,'088320560008',null,2,true,true,'bar','WG',0),
+('Caribas Naty chip maduro','Papitas',35.00,24.5100,null,'7460496801476',null,3,false,true,'bar','Frito Lay’s',0),
+('Caribas Plátanos Original36oz','Papitas',35.00,24.5100,'8756974','7460496800523',null,11,false,true,'bar','Frito Lay’s',1),
+('Carlo Rossi Dark 750ml','Wine',550.00,335.0400,null,'085000029879',null,3,true,true,'bar','Abeja Logístic Group SRL',70),
+('Carlo Rossi Fruity Red 750ml','Wine',550.00,334.0000,'933140K','085000022030',null,0,true,true,'bar','Abeja Logístic Group SRL',71),
+('Carlo Rossi Moscato Sangria 750ml','Wine',550.00,168.0000,null,'085000025024',null,2,true,true,'bar','WG',72),
+('Carlo Rossi Pink Moscato 750ml','Wine',550.00,168.0000,null,'085000025031',null,3,true,true,'bar','WG',73),
+('Carlo Rossi Red 750ml','Wine',550.00,334.9400,'A162029','085000001882',null,1,true,true,'bar','Abeja Logístic Group SRL',74),
+('Carlo Rossi Rose 750ml','Wine',550.00,334.9400,'Q360111','085000001875',null,0,true,true,'bar','Abeja Logístic Group SRL',75),
+('Carlo Rossi Sangria 750','Wine',550.00,168.0000,null,'085000025017',null,14,true,true,'bar','WG',76),
+('Carlo Rossi Sweet Red 750ml','Wine',550.00,168.0000,null,'085000025048',null,3,true,true,'bar','WG',77),
+('Carlsberg Elephant 12oz','Cerveza',200.00,74.0000,'J745170','087600100224',null,12,true,true,'bar','WG',30),
+('Carlsberg Pilsner 12oz','Cerveza',200.00,74.0000,'7249651','087600100170',null,21,true,true,'bar','WG',31),
+('Carmel Winery King David  Sacramental Red 750ml','Wine',800.00,363.0000,null,'081452433103',null,3,true,true,'bar','WG',78),
+('Carne Salada','Comida',400.00,null,null,null,null,23,false,false,'cocina',null,0),
+('Carne Salada + Guarnicion','Comida',500.00,null,null,null,null,20,false,false,'cocina',null,1),
+('Casa Dragones Blanco 750ml','Tequila',13000.00,2964.0000,'X677524','736040532736',null,1,true,true,'bar','WG',4),
+('Casamigo Añejo 50ml','Tequila',500.00,208.4500,'6982845','856724006039',null,11,true,true,'bar','WG',5),
+('Casamigo Blanco 1.75L','Tequila',10000.00,5220.0000,null,null,null,10,true,true,'bar','WG',6),
+('Casamigo Blanco Tragos','Tragos',300.00,88.0000,'P424462',null,null,0,true,false,'bar','WG',13),
+('Casamigo Silver','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,11),
+('Casamigos Añejo 750ml','Tequila',6000.00,2604.6800,'L034984','856724006015',null,2,true,true,'bar','WG',7),
+('Casamigos Blanco 375ml','Tequila',2500.00,1096.6800,'8230622','856724006121',null,6,true,true,'bar','WG',8),
+('Casamigos Blanco 50ml','Tequila',400.00,105.0500,'6919260','856724006138',null,11,true,true,'bar','WG',9),
+('Casamigos Blanco 750ml','Tequila',3500.00,2188.6800,'485056C','856724006114',null,9,true,true,'bar','WG',10),
+('Casamigos Jalapeño 750ml','Tequila',4500.00,2557.2200,null,'088076186880',null,3,true,true,'bar','WG',11),
+('Casamigos Mezcal 375ml','Tequila',3000.00,1408.6800,'1488525','856724006435',null,1,true,true,'bar','WG',12),
+('Casamigos Reposado','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,12),
+('Casamigos Reposado 375ml','Tequila',2700.00,1200.6800,'6219224','856724006220',null,3,true,true,'bar','WG',13),
+('Casamigos Reposado 50ml','Tequila',500.00,213.9500,'327156Q','856724006237',null,4,true,true,'bar','WG',14),
+('Casamigos Reposado 750ml','Tequila',5000.00,2396.6800,'6152105','856724006213',null,4,true,true,'bar','WG',15),
+('Casamigos Reposado Cristalino 750ml','Tequila',7000.00,3030.9500,null,'088076189041',null,2,true,true,'bar','WG',16),
+('Casamigos Tequila Anejo 375ml','Tequila',3000.00,1489.9500,null,'856724006022',null,2,true,true,'bar','WG',17),
+('Cascada Agua 16oz','Jugos',100.00,8.3300,null,'7460000046300',null,97,true,true,'bar','Súper Mercado Espinal',8),
+('Casillero Del Diablo Cab Sauv 750ml','Wine',900.00,495.0000,'867930G','082734001096',null,4,true,true,'bar','WG',79),
+('Casillero Del Diablo Merlot 750ml','Wine',900.00,495.0000,null,null,null,3,true,true,'bar','WG',80),
+('Casillero Del Diablo Rose 750ml','Wine',900.00,495.0000,null,'082734258247',null,5,true,true,'bar','WG',81),
+('Catena Classic Malbec 750ml','Wine',1600.00,928.0000,null,'098709088580',null,2,true,true,'bar','WG',82),
+('Cavit Pinot Grigio 750ml','Wine',1000.00,503.0000,'M233154','086785000084',null,4,true,true,'bar','WG',83),
+('Caymus - Saisun Grand Durif 750ml','Wine',6000.00,2438.0000,'1264947','017224710004',null,1,true,true,'bar','WG',84),
+('Caymus Cab Sauv 750ml','Wine',8000.00,4081.0000,'4916599','017224712107',null,3,true,true,'bar','WG',85),
+('Caymus Cali Cab Sauv 750ml','Wine',7000.00,3465.0000,null,'017224713104',null,3,true,true,'bar','WG',86),
+('Cerdo Asado 1LB','Comida',700.00,450.0000,null,null,null,0,false,false,'cocina',null,2),
+('Cesari Amarone della Valpolicella 750ml','Wine',4000.00,1855.0000,'S460405','080175664757',null,1,true,true,'bar','WG',87),
+('Cesari Due Torri Pinot Grigio 750ml','Wine',900.00,312.0000,'756559K','080175513758',null,1,true,true,'bar','WG',88),
+('Chandon Brut Sparkling 750ml','Champaña',3000.00,1200.0000,null,'085155000013',null,0,true,true,'bar','WG',9),
+('Chandon Rose Sparkling 750ml','Champaña',3000.00,1200.0000,null,'085155000402',null,0,true,true,'bar','WG',10),
+('Chateau Pont De Pierre 750ml','Wine',1000.00,495.0000,'4158633576','641586335768',null,1,true,true,'bar','WG',89),
+('Chateau Ste. Michelle Dry Riesling  750 ml','Wine',1500.00,515.0000,null,'088586642890',null,4,true,true,'bar','WG',90),
+('Chateau Ste. Michelle Gewurztraminer 750 ml','Wine',1500.00,515.0000,null,'088586625848',null,6,true,true,'bar','WG',91),
+('Chateau Ste. Michelle Riesling 750ml','Wine',1500.00,515.0000,'R149788','088586621840',null,11,true,true,'bar','WG',92),
+('Chateau Ste. Michelle Sweet Riesling 750 ml','Wine',1500.00,515.0000,null,'088586004162',null,3,true,true,'bar','WG',93),
+('Chatel Rose Dulce 750ml','Champaña',1000.00,421.3000,'139217B','667946940120',null,5,true,true,'bar','WG',11),
+('Chatel Semi Dulce 750ml','Champaña',1000.00,421.3000,'5114375','667946940113',null,8,true,true,'bar','WG',12),
+('Chemistry Alliance Pinot Noir 750ml','Wine',1300.00,433.0000,null,'640656000148',null,3,true,true,'bar','WG',94),
+('Cherries Goya','Misc',200.00,259.9500,null,'041331015608',null,3,false,true,'bar','Supermercado Morel',9),
+('Chicharron Limón29oz','Papitas',35.00,24.5100,'871697C','7464113824121',null,7,false,true,'bar','Frito Lay’s',2),
+('Chicharrón flamin hot 27g','Papitas',35.00,24.5100,null,null,null,3,false,true,'bar','Frito Lay’s',3),
+('Chicle Trident Island Berry Lima sin azúcar 1x14 piezas','Chicle',150.00,null,null,'012546011600',null,0,false,true,'bar',null,0),
+('Chicle sin azúcar Eclipse','Chicle',150.00,null,null,'022000013194',null,0,false,true,'bar',null,1),
+('Chimay Blue 12oz','Cerveza',250.00,120.0000,null,'081706000037',null,0,true,true,'bar','WG',32),
+('Chimay Cinq Cent 12oz','Cerveza',250.00,120.0000,null,'081706000020',null,0,true,true,'bar','WG',33),
+('Chimay Red 12oz','Cerveza',250.00,120.0000,null,'081706000013',null,0,true,true,'bar','WG',34),
+('Chimney Rock Cab Sauv 750ml','Wine',5000.00,4558.0000,'E735552','086891071503',null,1,true,true,'bar','WG',95),
+('Chivas Regal 12','Fiesta',3500.00,1740.0000,null,null,null,0,true,false,'bar',null,13),
+('Chivas Regal 12 Años 750ml','Whiskey',2800.00,1512.6800,'321220X','080432400395',null,6,true,true,'bar','WG',13),
+('Chivas Regal 12 Ańos 1.75L','Whiskey',7000.00,3689.9500,null,'080432400463',null,2,true,true,'bar','WG',14),
+('Chivas Regal 12 Ańos Tragos','Tragos',300.00,80.0000,'157063E',null,null,29,true,false,'bar',null,14),
+('Chivas Regal 18','Fiesta',8000.00,null,null,null,null,0,true,false,'bar',null,14),
+('Chivas Regal 18 Ańos Tragos','Tragos',500.00,163.0000,'T527744',null,null,108,true,false,'bar','WG',15),
+('Chivas Regal 18Y 750ml','Whiskey',6500.00,4529.2200,'6C780021','080432400487',null,4,true,true,'bar','WG',15),
+('Chivas Regal 18y 1.0L','Whiskey',8000.00,5194.0000,'Q611655','5000299255049',null,0,true,true,'bar','Dufry',16),
+('Chivas Regal Royal Salute 21Y 750ml','Whiskey',21000.00,10176.0000,'4939977','080432400524',null,1,true,true,'bar','WG',17),
+('Christian Brother Brandy Tragos','Tragos',250.00,30.2500,'671867N',null,null,50,true,false,'bar',null,16),
+('Ciclón 8 oz','Jugos',150.00,68.0000,'701417H','830207010706',null,10,true,true,'bar','Provisiones Kelvin',9),
+('Cigar City Guayabera Pale Ale 12oz lata','Cerveza',250.00,90.0000,null,'850005189008',null,6,true,true,'bar','WG',35),
+('Ciroc Coco 50ml','Vodka',200.00,103.0000,'0822560',null,null,19,true,true,'bar','WG',3),
+('Ciroc Coconut, 375 ml','Vodka',1300.00,817.2200,null,'088076174948',null,1,true,true,'bar','WG',4),
+('Ciroc Durazno 50ml','Vodka',200.00,103.0000,null,'08230803',null,14,true,true,'bar','WG',5),
+('Ciroc Durazno 750ml','Vodka',2000.00,1512.6800,'834754A','088076177406',null,3,true,true,'bar','WG',6),
+('Ciroc Mango 750ml','Vodka',2000.00,1512.6800,'K488388','088076180697',null,3,true,true,'bar','WG',7),
+('Ciroc Manzana 50ml','Vodka',200.00,103.0000,'08252407','08252407',null,28,true,true,'bar','WG',8),
+('Ciroc Manzana 750ml','Vodka',2000.00,1512.6800,'336085M','088076180451',null,3,true,true,'bar','WG',9),
+('Ciroc Passion 50ml','Vodka',200.00,103.0000,null,'08269407',null,12,true,true,'bar','WG',10),
+('Ciroc Piña 750ml','Vodka',2000.00,1512.6800,'E048326','088076179080',null,2,true,true,'bar','WG',11),
+('Ciroc Summer Citrus 50ml','Vodka',200.00,60.0000,'8269407','08268204',null,0,true,true,'bar','WG',12),
+('Ciroc Summer Citrus 750ml','Vodka',2000.00,1760.0000,null,'088076185395',null,1,true,true,'bar','WG',13),
+('Ciroc Vodka 750ml','Vodka',2000.00,1890.0000,'F165392','088076161863',null,3,true,true,'bar','WG',14),
+('Ciroc Vodka Coconut, 750ml','Vodka',2000.00,1890.0000,null,'088076174955',null,2,true,true,'bar','WG',15),
+('Ciroc Vodka Tragos','Tragos',200.00,57.0000,'R828408',null,null,40,true,false,'bar',null,17),
+('Clamato 163 ml','Jugos',100.00,44.0000,'01485131','01485131',null,0,true,true,'bar','Provisiones Kelvin',10),
+('Clase Azul Reposado 750ml','Tequila',21000.00,8928.0000,'221249Z','850014275099',null,2,true,true,'bar','WG',18),
+('Clean Co Ginebra Trago','Tragos',200.00,72.0000,null,null,null,19,true,false,'bar','WG',18),
+('Clean Co Rum Trago','Tragos',200.00,72.0000,null,null,null,21,true,false,'bar','WG',19),
+('Clean Co Tequila Trago','Tragos',200.00,72.0000,null,null,null,21,true,false,'bar','WG',20),
+('Clean Co Vodka Trago','Tragos',200.00,72.0000,null,null,null,21,true,false,'bar','WG',21),
+('Clean Slate Riesling 750ml','Wine',1300.00,480.0000,null,'750625653012',null,3,true,true,'bar','WG',96),
+('Clos du Bois Pinot Noir 750ml','Wine',1000.00,500.0000,'8735644212','087356442128',null,2,true,true,'bar','WG',97),
+('Coca-Cola 400ml','Jugos',50.00,18.0000,'2664182','049000057638',null,126,true,true,'bar','Cocacola',11),
+('Coco Bebida de Coco Aloe','Jugos',250.00,120.0000,null,'884394000538',null,2,true,true,'bar','Ocho Santos Mao',12),
+('Cohiba Crystal Nicaragua','Cigarros',1500.00,943.2500,null,'689674070481',null,18,false,true,'bar','WG',7),
+('Cohiba Toro Dom .Rep.','Cigarros',1000.00,563.7500,null,'689674033950',null,5,false,true,'bar','Club Cigar',8),
+('Cointreau Orange Liqueor 375ml','Licores',1500.00,1148.6800,'1280525','087236565206',null,3,true,true,'bar','WG',26),
+('Cointreau Orange Liqueor 750ml','Licores',2900.00,1870.0000,null,'087236565107',null,2,true,true,'bar','WG',27),
+('Columbia Crest Merlot 750ml','Wine',900.00,515.0000,'D831196','088586402845',null,3,true,true,'bar','WG',98),
+('Concha Y Toro Gran Reserva Cab 750ml','Wine',1000.00,586.0000,'405397T','082734413837',null,2,true,true,'bar','WG',99),
+('Confetti Sweet Red','Wine',900.00,605.0000,'Z120856','086785670201',null,5,true,true,'bar','WG',100),
+('Constanza Mentol','Cigarrillos',150.00,95.0000,null,'74600472',null,18,false,true,'bar','Cruce Guayacan Bebidas',2),
+('Conundrum Red Blend 750ml','Wine',2200.00,1126.3100,null,'017224760122',null,6,true,true,'bar','WG',101),
+('Cooper & Thief Bourbon Barrel Aged Red Blend 750','Wine',2100.00,1320.0000,null,'083120015093',null,3,true,true,'bar','WG',102),
+('Coors Banquet 12oz Lata','Cerveza',150.00,60.0000,null,'07199743',null,12,true,true,'bar','WG',36),
+('Coors Light 8oz Lata','Cerveza',100.00,32.5000,null,'08784039',null,0,true,true,'bar','WG',37),
+('Coors Light lata 12oz','Cerveza',150.00,43.2400,'07199840','07199840',null,32,true,true,'bar','WG',38),
+('Coors Light, 16 oz Alum','Cerveza',200.00,65.0000,null,'071990301033',null,8,true,true,'bar','WG',39);
+
+
+-- filas 401–800
+insert into public._import_882ef5a4 (name, categoria, price, cost, sku, barcode, descr, qty, is_bev, inventariable, area, vendor, posicion) values
+('Coors light 10oz Lata','Cerveza',100.00,56.0000,null,'08780538',null,0,true,true,'bar','United brands',40),
+('Coors light 12oz','Cerveza',200.00,94.0400,'07199044','07199044',null,46,true,true,'bar','United brands',41),
+('Coors light 16oz Lata','Cerveza',200.00,81.5000,null,'071990320003',null,4,true,true,'bar','United brands',42),
+('Copas Plásticas','Misc',400.00,null,null,null,null,0,false,true,'bar',null,10),
+('Coppa Cocktails Mojito 750ml','Pre-Mix',1500.00,715.0000,'424997D','850035231043',null,2,true,true,'bar','WG',24),
+('Coppa Cocktails Piña Colada 750ml','Pre-Mix',1500.00,715.0000,'560114J','8712436131877',null,3,true,true,'bar','WG',25),
+('Coppa Cocktails Sex On The Beach 750ml','Pre-Mix',1500.00,715.0000,'H035685','8712436131860',null,1,true,true,'bar','WG',26),
+('Coppa Cocktails Teq Sunrise 750ml','Pre-Mix',1500.00,715.0000,'9346591','8712436131853',null,3,true,true,'bar','WG',27),
+('Cora Pinot Grigio','Wine',700.00,360.0000,null,'636824791413',null,4,true,true,'bar','WG',103),
+('Corona Cero Alcohol 12oz','Cerveza',175.00,70.0000,null,'033544001851',null,19,true,true,'bar','WG',43),
+('Corona Cubetazo','Fiesta',1000.00,null,null,null,null,0,true,false,'bar',null,15),
+('Corona Extra 12oz','Cerveza',200.00,66.0400,'S011804','08066145',null,78,true,true,'bar','WG',44),
+('Corona Extra 24oz','Cerveza',250.00,142.6800,null,'080660956411',null,0,true,true,'bar','WG',45),
+('Corona Extra, de 12oz lata','Cerveza',200.00,85.0000,null,'080660956855',null,37,true,true,'bar','WG',46),
+('Corona Familiar 12oz','Cerveza',200.00,66.0000,'409181F','033544950555',null,1,true,true,'bar','WG',47),
+('Corona Sunbrew 12oz','Cerveza',200.00,85.0000,null,'033544002377',null,0,true,true,'bar','WG',48),
+('Corona refresca Guayaba 12 oz','Cerveza',200.00,73.0000,'A339459','033544950661',null,6,true,true,'bar','WG',49),
+('Corona refresca Piña 12 oz','Cerveza',200.00,73.0000,'137319S','033544001523',null,14,true,true,'bar','WG',50),
+('Corona refresca chinola 12 oz','Cerveza',200.00,73.0000,'5406583','033544950654',null,7,true,true,'bar','WG',51),
+('Corona refresca coconut 12 oz','Cerveza',200.00,73.0000,'P781940','033544000120',null,10,true,true,'bar','WG',52),
+('Coronita Extra 7oz','Cerveza',100.00,64.7700,null,'7503034941217',null,0,true,true,'bar','Abeja Logístic Group SRL',53),
+('Country barn Cranberry 946ML','Jugos',200.00,150.0000,'Z079798','035406034106',null,7,true,true,'bar','Elegant Liquor',13),
+('Courvoisier VS 375ml','Cognac',1800.00,1100.0000,'X626511','080686961086',null,3,true,true,'bar','WG',0),
+('Courvoisier VS 750ml','Cognac',3500.00,1616.6800,'2624149','080686961048',null,2,true,true,'bar','WG',1),
+('Courvoisier VS Tragos','Tragos',350.00,76.0000,'2809766',null,null,54,true,false,'bar',null,22),
+('Courvoisier VSOP 375ml','Cognac',2500.00,992.6800,'H955156','080686962083',null,3,true,true,'bar','WG',2),
+('Courvoisier VSOP 750ml','Cognac',4800.00,2479.9500,'693373S','080686962045',null,3,true,true,'bar','WG',3),
+('Crown Bar Alfakher mint 8000 Puff','E-Cig',1500.00,510.0000,null,'6974418749094',null,0,false,true,'bar','Habibi',6),
+('Crown Royal Canadian Whiskey 750ml','Whiskey',3000.00,1711.0000,null,'087000007253',null,3,true,true,'bar','WG',18),
+('Crown Royal Canadian Whiskey Trago','Tragos',400.00,59.1000,null,null,null,50,true,false,'bar','WG',23),
+('Crown Royal Peach Flavored Whisky, 750 ml','Whiskey',3000.00,1890.0000,null,'082000782919',null,1,true,true,'bar','WG',19),
+('Cuba Libre Mojito 12oz','Pre-Mix',200.00,116.0500,null,'7500462981051',null,10,true,true,'bar','Abeja Logístic Group SRL',28),
+('Cuba Libre Ron Cola 12oz','Pre-Mix',200.00,116.0500,null,'7500462981006',null,8,true,true,'bar','Abeja Logístic Group SRL',29),
+('Culito Cab Merlot 750ml','Wine',800.00,385.0000,'V145986','607054112019',null,3,true,true,'bar','WG',104),
+('Culito Merlot 750ml','Wine',800.00,385.0000,null,'607054110176',null,3,true,true,'bar','WG',105),
+('Culito Moscato 750ml','Wine',800.00,168.0000,'4176541','607054111074',null,2,true,true,'bar','WG',106),
+('Culito Moscato Rose 750ml','Wine',800.00,385.0000,null,'607054110183',null,0,true,true,'bar','WG',107),
+('Culitos Cab Sauv 750ml','Wine',800.00,385.0000,null,'607054190239',null,3,true,true,'bar','WG',108),
+('Cup Condom','Misc',100.00,50.0000,null,'860004357643',null,24,false,true,'bar',null,11),
+('Cupcake Black Forest 750ml','Wine',1000.00,495.0000,'8130800372','081308003726',null,3,true,true,'bar','WG',109),
+('Cupcake Merlot 750ml','Wine',1000.00,495.0000,'T748267','081308000282',null,3,true,true,'bar','WG',110),
+('Cupcake Pinot Grigio 750ml','Wine',1000.00,420.7800,'2650590','081308001067',null,3,true,true,'bar','WG',111),
+('Cupcake Rose 750ml','Wine',1000.00,436.8600,'2235334','081308004143',null,2,true,true,'bar','WG',112),
+('Cutwater Expresso Martini 12oz','Pre-Mix',300.00,165.0000,null,'816751023720',null,1,true,true,'bar','WG',30),
+('Cutwater Mango Margarita 12oz','Pre-Mix',300.00,165.0000,'K892432','816751022099',null,18,true,true,'bar','WG',31),
+('Cutwater Pineapple Margarita 12oz','Pre-Mix',300.00,165.0000,null,'816751022785',null,8,true,true,'bar','WG',32),
+('Cutwater Piña Colada 12oz','Pre-Mix',300.00,165.0000,'E904837','816751022471',null,14,true,true,'bar','WG',33),
+('Cutwater Spicy Bloody Mary 12oz','Pre-Mix',300.00,165.0000,null,'816751020088',null,7,true,true,'bar','WG',34),
+('Cutwater Spirits Fugu Vodka Mule 12oz','Pre-Mix',300.00,165.0000,null,'816751020590',null,6,true,true,'bar','WG',35),
+('Cutwater Spirits Grapefruit Tequila Paloma 12oz','Pre-Mix',300.00,165.0000,null,'816751021184',null,9,true,true,'bar','WG',36),
+('Cutwater Spirits Long Island Iced Tea 12oz','Pre-Mix',300.00,165.0000,null,'816751021986',null,11,true,true,'bar','WG',37),
+('Cutwater Strawberry Margarita 12oz','Pre-Mix',300.00,165.0000,'Z961248','816751022440',null,11,true,true,'bar','WG',38),
+('Cutwater Tiki Rum Punch 12oz','Pre-Mix',300.00,165.0000,'T863551','816751022617',null,11,true,true,'bar','WG',39),
+('Cutwater lemon Drop Martini','Cerveza',200.00,165.0000,null,'816751023782',null,12,true,true,'bar','WG',54),
+('CutwaterLime Tequila Margarita 12oz','Pre-Mix',300.00,165.0000,'N705637','816751021214',null,23,true,true,'bar','WG',40),
+('Código 1530 Blanco 50ml','Tequila',300.00,192.5000,'Z519148','859061006724',null,9,true,true,'bar','WG',19),
+('DORITOS NACHO CHEESE 32G','Papitas',30.00,21.0200,'Q808103','7460496803999',null,11,false,true,'bar','Frito Lay’s',4),
+('DUVEL Moortgat Belgium Ale 12oz','Cerveza',250.00,120.0000,null,'859996000330',null,29,true,true,'bar','WG',55),
+('Da Vinci Pinot Grigio 750ml','Wine',1300.00,572.0000,'E974087','085000016589',null,3,true,true,'bar','WG',113),
+('Dark Horse Cab Sauv 750ml','Wine',700.00,480.0000,'3309100','085000020302',null,3,true,true,'bar','WG',114),
+('Dark Horse Chardonnay 750ml','Wine',700.00,390.0000,'2317599','085000020319',null,3,true,true,'bar','WG',115),
+('Dasani Agua 20oz','Jugos',50.00,50.0000,'H415368','049000409772',null,352,true,true,'bar','Coca-Cola',14),
+('Dasani Limon 20oz','Jugos',50.00,24.0000,'B900101','049000051636',null,0,true,true,'bar','Coca-Cola',15),
+('Dasani Toronja 20oz','Jugos',50.00,24.0000,'998204E','049000051612',null,146,true,true,'bar','Coca-Cola',16),
+('Daura Damm Lager 12oz','Cerveza',200.00,75.0000,null,'050648262933',null,0,true,true,'bar','WG',56),
+('De Luze VS 750ml','Cognac',2300.00,1092.0000,'284253Y','894098002202',null,2,true,true,'bar','WG',4),
+('Decoy Cab Sauv 750ml','Wine',2400.00,1044.0000,'8376598','669576019269',null,2,true,true,'bar','WG',116),
+('Decoy California Red 750ml','Wine',2400.00,846.0000,null,'669576019207',null,6,true,true,'bar','WG',117),
+('Decoy Limited AV Cabernet Sauvignon 750ml','Wine',2500.00,1400.0000,null,'669576020449',null,0,true,true,'bar','WG',118),
+('Deep Eddy Vodka 750ml','Vodka',1300.00,997.5000,null,'856065002035',null,1,true,true,'bar','United brands',16),
+('Dekuyper Manzana Tragos','Tragos',100.00,20.0000,'7027170',null,null,55,true,false,'bar',null,24),
+('Delirium Pale Belgian Tremens 12oz','Cerveza',500.00,315.0000,null,'815184010208',null,3,true,true,'bar','WG',57),
+('Delirium, Dark Belgian Nocturnum 12oz','Cerveza',500.00,315.0000,null,'815184010222',null,3,true,true,'bar','WG',58),
+('Dentyne Fire Sugar Free Gum Spicy Cinnamon','Chicle',150.00,75.0000,null,'012546315098',null,1,false,true,'bar','WG',2),
+('Dentyne Ice Spearmint','Chicle',150.00,75.0000,null,'073390055493',null,0,false,true,'bar','WG',3),
+('Dentyne Ice Sugar Free Gum, Peppermint','Chicle',150.00,75.0000,null,'073390055035',null,12,false,true,'bar','WG',4),
+('Dentyne Ice Sugar-Free Gum, Arctic Chill','Chicle',150.00,75.0000,null,'073390055011',null,20,false,true,'bar','WG',5),
+('Descorche','Fiesta',1000.00,null,null,null,null,0,true,false,'bar',null,16),
+('Desperados Original 12oz','Cerveza',200.00,112.7500,null,'3155930006015',null,10,true,true,'bar','Beers & Co By BBP',59),
+('Desperados Red 12oz','Cerveza',200.00,115.2500,null,'3119783007513',null,42,true,true,'bar','Beers & Co By BBP',60),
+('Dewar’s 12y 750ml','Whiskey',3700.00,1379.9500,'765909S','080480231026',null,3,true,true,'bar','WG',20),
+('Dewar’s 12yrs 375ml','Whiskey',1500.00,775.0000,'5653935','080480231033',null,3,true,true,'bar','WG',21),
+('Dewar’s 15y 750ml','Whiskey',4200.00,2200.0000,'575654Z','080480005221',null,0,true,true,'bar','WG',22),
+('Dewar’s 18y 750ml','Whiskey',5000.00,null,'4233067','080480000127',null,0,true,true,'bar',null,23),
+('Dewar’s 21y 750ml','Whiskey',5000.00,null,'R043395','080480984403',null,0,true,true,'bar',null,24),
+('Dewar’s White Label 375ml','Whiskey',600.00,385.0000,'F609785','080480230036',null,3,true,true,'bar','WG',25),
+('Dewar’s White Label 50ml','Whiskey',150.00,50.0000,'713165D','080480230074',null,12,true,true,'bar','WG',26),
+('Dewar’s White Label 750ml','Whiskey',1200.00,764.9500,'W079039','080480230029',null,4,true,true,'bar','WG',27),
+('Dewar’s White Label Tragos','Tragos',200.00,46.0000,'576360Q',null,null,55,true,false,'bar',null,25),
+('Diplomático Mantuano 750ml','Rum',2000.00,1323.0000,null,'5099873027219',null,2,true,true,'bar','WG',36),
+('Diplomático Planas 750ml','Rum',2000.00,1323.0000,null,'5099873027257',null,2,true,true,'bar','WG',37),
+('Diplomático Reserva Exclusiva Rum 750ml','Rum',3200.00,2016.0000,null,'5099873027301',null,3,true,true,'bar','WG',38),
+('Disaronno Amarreto 750ml','Licores',2500.00,1993.1600,'243436L','050037014501',null,0,true,true,'bar','WG',28),
+('Dogfish Head 60 Minute IPA 12oz','Cerveza',225.00,80.0000,null,'638489000558',null,0,true,true,'bar','WG',61),
+('Dogfish Head 90 Minute IPA 12oz','Cerveza',300.00,93.0000,null,'638489000602',null,7,true,true,'bar','WG',62),
+('Dogfish Head Brewery 120 Minute IPA 12oz','Cerveza',1000.00,444.7800,null,'638489000206',null,4,true,true,'bar','WG',63),
+('Dole Pineapple Juice 6 oz','Jugos',200.00,50.9600,null,'038900009144',null,90,true,true,'bar','WG',17),
+('Dom Perignon Brut 750ml','Champaña',30000.00,11289.0000,'8363382','081753811020',null,1,true,true,'bar','WG',13),
+('Don Diego Preludes 6pk','Cigarros',900.00,420.7500,null,'071610827233',null,6,false,true,'bar','Club Cigar',9),
+('Don Julio 1942 50ml','Tequila',1500.00,557.5500,null,'08273109',null,10,true,true,'bar','WG',20),
+('Don Julio 1942 750ml','Tequila',18000.00,7668.0000,'A690011','674545000322',null,3,true,true,'bar','WG',21),
+('Don Julio 1942 Anejo 375ml','Tequila',10000.00,3000.0000,null,'088076189355',null,1,true,true,'bar','WG',22),
+('Don Julio 70','Fiesta',9000.00,null,null,null,null,0,true,false,'bar',null,17),
+('Don Julio 70th Anniversary Tequila, 750ml','Tequila',6500.00,3084.9500,null,'674545000827',null,8,true,true,'bar','WG',23),
+('Don Julio Añejo','Fiesta',9000.00,null,null,null,null,0,true,false,'bar',null,18),
+('Don Julio Añejo 375ml','Tequila',3200.00,1562.9100,null,'674545000612',null,13,true,true,'bar','WG',24),
+('Don Julio Añejo 50ml','Tequila',700.00,185.0000,null,'674545000070',null,7,true,true,'bar','WG',25),
+('Don Julio Añejo 750ml','Tequila',6000.00,2860.0000,'W816933','674545000063',null,4,true,true,'bar','WG',26),
+('Don Julio Añejo Tragos','Tragos',500.00,118.8000,null,null,null,36,true,false,'bar','WG',26),
+('Don Julio Blanco','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,19),
+('Don Julio Blanco 375ml','Tequila',2700.00,1170.7700,'506264V','674545000599',null,1,true,true,'bar','WG',27),
+('Don Julio Blanco 50ml','Tequila',350.00,165.0000,null,'674545000025',null,9,true,true,'bar','WG',28),
+('Don Julio Blanco 750ml','Tequila',4000.00,2261.4800,'861312M','674545000001',null,3,true,true,'bar','WG',29),
+('Don Julio Blanco Tragos','Tragos',300.00,125.2000,'602713K',null,null,1,true,false,'bar','WG',27),
+('Don Julio Primavera Tequila, 750ml','Tequila',9000.00,6300.0000,null,'088076185500',null,1,true,true,'bar','WG',30),
+('Don Julio Reposado 1.75 L','Tequila',12000.00,5510.0000,null,'674545000636',null,0,true,true,'bar','WG',31),
+('Don Julio Reposado 50ml','Tequila',600.00,168.0000,null,'674545000421',null,84,true,true,'bar','WG',32),
+('Don Julio Reposado 750ml','Tequila',5500.00,2715.4400,'Q914607','674545000414',null,12,true,true,'bar','WG',33),
+('Don Julio Reposado Tragos','Tragos',400.00,95.0000,null,null,null,0,true,false,'bar','WG',28),
+('Don Julio Resposado 375ml','Tequila',2900.00,1421.3100,null,'674545000605',null,3,true,true,'bar','WG',34),
+('Don Julio Rosado Tequila Reposado, 750 ml','Tequila',10000.00,6300.0000,null,'088076187955',null,2,true,true,'bar','WG',35),
+('Don Merchor Cab Sauv 750ml','Wine',14000.00,4770.0000,'161627T','082734753131',null,0,true,true,'bar','WG',119),
+('Don Miguel Gascón Malbec 750ml','Wine',1600.00,660.0000,'161831S','085000016145',null,2,true,true,'bar','WG',120),
+('Don julio Reposado','Fiesta',7000.00,null,null,null,null,0,true,false,'bar',null,20),
+('Dorito PM 32','Papitas',30.00,21.0200,null,'7460496804002',null,9,false,true,'bar','Frito Lay’s',5),
+('Doritos flamin hot 32g','Papitas',30.00,21.0200,null,null,null,1,false,true,'bar','Frito Lay’s',6),
+('Doritos swap sabor a rufle de carne','Papitas',30.00,21.0100,null,'721282411109',null,4,false,true,'bar','Frito Lay’s',7),
+('Dornfelder Fritz Windisch 750ml','Wine',1400.00,440.0000,'186082R','610746000051',null,4,true,true,'bar','WG',121),
+('Dos Artes Tequila Joven 1.0L','Tequila',20000.00,6174.0000,null,'858349001857',null,2,true,true,'bar','WG',36),
+('Dos Equis Amber 12oz','Cerveza',175.00,107.5000,null,'072311130110',null,14,true,true,'bar','United brands',64),
+('Dos Equis Lager 12oz','Cerveza',175.00,61.0000,'C113760','072311130127',null,0,true,true,'bar','WG',65),
+('Doña Maurilia Vinho Tinto 750ml','Wine',1200.00,440.0000,'C491983','5601946123454',null,1,true,true,'bar','WG',122),
+('Dreaming Tree Crush Red 750ml','Wine',1000.00,660.0000,'8210073853','082100738533',null,4,true,true,'bar','WG',123),
+('Drumshanbo, Gunpowder Irish Gin 750ml','Ginebra',4500.00,1860.0000,null,'086785091075',null,2,true,true,'bar','WG',3),
+('Duckhorn Vineyards Napa Valley Cabernet Sauvignon 750ml','Wine',5000.00,3720.0000,null,'669576019344',null,1,true,true,'bar','WG',124),
+('Dulce Bamboleo','Cócteles',250.00,null,null,null,null,1000,true,false,'bar',null,6),
+('Dulcinea Pink Modcato 750ml','Wine',800.00,330.0000,'5239554','788115376974',null,3,true,true,'bar','WG',125),
+('Dummy Guava Frenzy 8000 Puff','E-Cig',1300.00,471.0000,null,'850051196388',null,3,false,true,'bar','Vape Wholesale',7),
+('Dummy Kika Kiwi 8000 Puff','E-Cig',1300.00,471.0000,null,'6975980055903',null,0,false,true,'bar','Vape Wholesale',8),
+('Dummy Twisted Tangy 8k','E-Cig',1300.00,471.0000,null,'850051196364',null,1,false,true,'bar','Vape Wholesale',9),
+('Dummy Vapes Brooklyn Blue 8000 Puff','E-Cig',1300.00,616.0000,null,'850051196548',null,0,false,true,'bar','Habibi',10),
+('Dummy Vapes Cosmic Blast 8000 Puff','E-Cig',1300.00,616.0000,null,'850051196340',null,0,false,true,'bar','Habibi',11),
+('Dummy Vapes Gummo Gummy 8000 Puff','E-Cig',1300.00,616.0000,null,'850051196449',null,0,false,true,'bar','Habibi',12),
+('Dusses VSOP 375ml','Cognac',3600.00,1356.6800,'T105366','080480002930',null,3,true,true,'bar','WG',5),
+('Dusses VSOP 750ml','Cognac',6500.00,2805.0400,'3777753','080480002923',null,3,true,true,'bar','WG',6),
+('D’Usse VSOP','Fiesta',6500.00,null,null,null,null,0,true,false,'bar',null,21),
+('El Caramba Malbec 750ml','Wine',900.00,400.0000,null,'7798301230907',null,3,true,true,'bar','WG',126),
+('El Loko De Bamboleo','Cócteles',200.00,null,null,null,null,920,true,false,'bar',null,7),
+('El Toro Tequila Gold 1.7L','Tequila',2000.00,825.0000,null,'082928206917',null,4,true,true,'bar','WG',37),
+('El Toro Tequila Plata 1.75L','Tequila',2000.00,825.0000,null,'082928206818',null,3,true,true,'bar','WG',38),
+('El Toro Tequila Plata Tragos','Tragos',100.00,17.0000,null,null,null,150,true,false,'bar','WG',29),
+('Elouan Pinot Noir 750ml','Wine',2300.00,935.0000,'6577600007','865776000070','De color magenta oscuro, este vino se abre con aromas de chocolate negro, ciruela seca, marionberry y un toque de pimienta blanca y clavo.  En boca es equilibrado y robusto con notas de cereza ácida, frambuesa, zarzamora silvestre y violeta triturada.  La profundidad y la concentración notables complementan los ricos taninos y conducen a un final suave y medio.
+Acompaña con lomo de cerdo asado al tomillo y ajo, torta de champiñones caramelizados o tartar de atún.',2,true,true,'bar','WG',127),
+('Empress Gin 1908,, 750ml','Ginebra',4000.00,2129.3100,null,'628451773108',null,2,true,true,'bar','WG',4),
+('Enriquillo Agua Tónica','Jugos',50.00,21.3600,'D477850','7468973202341',null,49,true,true,'bar','Abeja Logístic Group SRL',18),
+('Enriquillo Soda 450ml','Jugos',50.00,23.0000,'869071T','7468973202358',null,1,true,true,'bar','Provisiones Kelvin',19),
+('Ensalada De Pollo Ala Poatrilla','Comida',400.00,null,null,null,null,0,false,false,'cocina',null,3),
+('Erdinger, Dunkel 12oz','Cerveza',200.00,85.0000,null,'711556092745',null,0,true,true,'bar','WG',66),
+('Esporao Monte Velho Tinto 750ml','Wine',1000.00,330.0000,'1405381','858666003107',null,2,true,true,'bar','WG',128),
+('Estrella Damm Lager 12oz','Cerveza',200.00,80.0000,null,'050648232936',null,17,true,true,'bar','WG',67),
+('Estrella, Jalisco 12oz','Cerveza',200.00,73.0000,null,'018200258152',null,0,true,true,'bar','WG',68),
+('Evan William Fire 750','Licores',1500.00,0.0000,null,'096749021284',null,1,true,true,'bar','United brands',29),
+('Extra Peppermint gum','Chicle',150.00,60.0000,null,'02289106',null,0,false,true,'bar','WG',6),
+('Extra Polar Ice','Chicle',150.00,60.0000,null,'02289805',null,0,false,true,'bar','WG',7),
+('Extra spearmint gum','Chicle',150.00,60.0000,null,'02289902',null,0,false,true,'bar','WG',8),
+('Faustino VII Rioja 750ml','Wine',1000.00,500.0000,'814571L','086785660073',null,0,true,true,'bar','WG',129),
+('Ferrari Carano Merlot','Wine',1600.00,935.0000,'8110600','742651142196',null,2,true,true,'bar','WG',130),
+('Fetzer Merlot 750ml','Wine',900.00,385.0000,'565670N','082896700394',null,1,true,true,'bar','WG',131),
+('Fidel Amador Cab Sauv 750ml','Wine',4000.00,1650.0000,null,'840914100270',null,2,true,true,'bar','WG',132),
+('Finest Call Bar Syrup 1.0L','Mix',500.00,200.0000,null,'070491021754',null,0,true,true,'bar','WG',0),
+('Finest Call Chinola 1.0L','Mix',500.00,200.0000,'7049112113','070491121133',null,4,true,true,'bar','WG',1),
+('Finest Call Grenadine 1.0L','Mix',500.00,200.0000,null,'070491807952',null,3,true,true,'bar','WG',2),
+('Finest Call Margarita 1.0L','Mix',500.00,200.0000,null,'070491802957',null,4,true,true,'bar','WG',3),
+('Finest Call Mojito 1.0L','Mix',500.00,385.0000,'7049154400','070491544000',null,5,true,true,'bar','WG',4),
+('Finest Call Piña Colada 1.0L','Mix',500.00,200.0000,'7049180495','070491804951',null,4,true,true,'bar','WG',5),
+('Finest Call Sour Apple 1.0L','Mix',500.00,200.0000,null,'070491543003',null,3,true,true,'bar','WG',6),
+('Finest Call Strawberry 1.OL','Mix',500.00,200.0000,null,'070491803954',null,1,true,true,'bar','WG',7),
+('Finest Call Sweet & Sour 1.0L','Mix',500.00,169.1200,null,'070491801950',null,0,true,true,'bar','WG',8),
+('Finest Call Triple Sec 1.0L','Mix',500.00,200.0000,'7049180895','070491808959',null,1,true,true,'bar','WG',9),
+('Fireball 1.75 L','Licores',5000.00,1568.0000,null,'088004009281',null,8,true,true,'bar','WG',30),
+('Fireball 375ml','Licores',900.00,416.0000,'C870631','088004144722',null,1,true,true,'bar','WG',31),
+('Fireball 50ml','Whiskey',100.00,41.4000,'548859H','088004144708',null,157,true,true,'bar','WG',28),
+('Fireball 750ml','Licores',1700.00,950.0000,'743616M','088004146689',null,11,true,true,'bar','WG',32),
+('Fireball Blazin '' Apple 50ml','Licores',100.00,44.1000,null,'088004069155',null,0,true,true,'bar','WG',33),
+('Fireball Blazin '' Apple 750ml','Licores',1700.00,950.6700,null,'088004069148',null,5,true,true,'bar','WG',34),
+('Fireball Tragos','Tragos',100.00,35.0000,'576014H',null,null,41,true,false,'bar','WG',30),
+('Fit Vine Pinot Grigio 750ml','Wine',1100.00,572.0000,'252382E','853086008077',null,4,true,true,'bar','WG',133),
+('Flavor Beast Bomb Blue Razz','E-Cig',2000.00,278.0000,null,'827152133420',null,1,false,true,'bar','Vape Wholesale',13),
+('Flavor Beast Bussin Banana 25k puff','E-Cig',2000.00,278.0000,null,'827152133444',null,3,false,true,'bar','Vape Wholesale',14),
+('Flavor Beast Depositivo Blanco','E-Cig',400.00,63.0000,null,'827152133871',null,3,false,true,'bar','Vape Wholesale',15),
+('Flavor Beast Depositivo Negro','E-Cig',400.00,63.0000,null,'827152133864',null,3,false,true,'bar','Vape Wholesale',16),
+('Flavor Beast Extreme Mint 25K puff','E-Cig',2000.00,278.0000,null,'827152133451',null,0,false,true,'bar','Vape Wholesale',17),
+('Flavor Beast Grape Passion Fruit 25k puff','E-Cig',2000.00,278.0000,null,'827152133468',null,3,false,true,'bar','Vape Wholesale',18),
+('Flavor Beast Gusto Green Apple 25k puff','E-Cig',2000.00,278.0000,null,'827152133475',null,3,false,true,'bar','Vape Wholesale',19),
+('Flavor Beast Mango Peach 25k puff','E-Cig',2000.00,278.0000,null,'827152133482',null,3,false,true,'bar','Vape Wholesale',20),
+('Flavor Beast Peach Berry 25k puff','E-Cig',2000.00,278.0000,null,'827152133499',null,3,false,true,'bar','Vape Wholesale',21),
+('Flavor Beast Rainbow Skittz 25k Puff','E-Cig',2000.00,278.0000,null,'827152133505',null,3,false,true,'bar','Vape Wholesale',22),
+('Flavor Beast Sic Straw 25k puff','E-Cig',2000.00,278.0000,null,'827152133512',null,3,false,true,'bar','Vape Wholesale',23),
+('Flavor Beast Slammin Sour Gummy 25k puff','E-Cig',2000.00,278.0000,null,'827152133529',null,3,false,true,'bar','Vape Wholesale',24),
+('Flavor Beast Straw Banana 25k puff','E-Cig',2000.00,278.0000,null,'827152133536',null,2,false,true,'bar','Vape Wholesale',25),
+('Flavor Beast Watermelon chew 25k puff','E-Cig',2000.00,357.0000,null,'827152133543',null,3,false,true,'bar','Vape Wholesale',26),
+('Flor De La India Toro','Cigarros',800.00,252.0000,null,'046500052927',null,17,false,true,'bar','Club Cigar',10),
+('Flying Embers Orange Peach Passion 12oz Lata','Cerveza',200.00,80.0000,null,'810058730084',null,2,true,true,'bar','WG',69),
+('Foco Agua De Coco 17oz','Jugos',300.00,60.0000,null,'016229901479',null,3,true,true,'bar','WG',20),
+('Fonseca Bin 27 Port 750ml','Wine',2000.00,751.3000,null,'084692303649',null,3,true,true,'bar','WG',134),
+('Fords Gin 750ml','Ginebra',2100.00,1040.6800,'T383896','081128005207',null,7,true,true,'bar','WG',5),
+('Founders All Day IPA 12oz','Cerveza',200.00,57.3000,'328161D','642860700241',null,5,true,true,'bar',null,70),
+('Four Loko Blue 473ml','Cerveza',350.00,290.0000,'2633412','849806002319',null,0,true,true,'bar','Elegant Liquor',71),
+('Four Loko Electric Lemonade 24oz','Cerveza',350.00,109.6600,null,'849806003002',null,0,true,true,'bar','WG',72),
+('Four Loko Gold 473ml','Cerveza',350.00,290.0000,'9963303','849806001756',null,0,true,true,'bar','Elegant Liquor',73),
+('Four Loko Green 473ml','Cerveza',350.00,290.0000,'4211219','849806001855',null,0,true,true,'bar','Elegant Liquor',74),
+('Four Loko Mango 473ml','Cerveza',350.00,290.0000,'J673490','849806003859',null,0,true,true,'bar','Elegant Liquor',75),
+('Four Loko Ponche De Frutas 473ml','Cerveza',350.00,290.0000,'293404P','849806001220',null,0,true,true,'bar','Elegant Liquor',76),
+('Four Loko Púrpura  473ml','Cerveza',350.00,254.0000,'6673560','849806002746',null,0,true,true,'bar','Elegant Liquor',77),
+('Four Loko Sandia 473ml','Cerveza',350.00,290.0000,'G325997','849806001206',null,1,true,true,'bar','Elegant Liquor',78),
+('Four Loko Sour Grape 24oz','Cerveza',350.00,109.6600,null,'849806002678',null,0,true,true,'bar','WG',79),
+('Four Loko Stawberry Lemonade 24oz','Cerveza',350.00,109.6600,null,'895216001497',null,0,true,true,'bar','WG',80),
+('Four Loko purple 355ml','Cerveza',200.00,166.9800,null,'849806005273',null,4,true,true,'bar','Abeja Logístic Group SRL',81),
+('Four Roses Bourbon 750ml','Whiskey',3000.00,992.6800,'240826B','040063400409',null,3,true,true,'bar','WG',29),
+('Four loko maracuya 473ml','Cerveza',350.00,218.3100,null,'849806004962',null,0,true,true,'bar','Abeja Logístic Group SRL',82),
+('Fragancia de Marta Rose 750ml','Wine',1200.00,675.0000,null,'8429617065301',null,6,true,true,'bar','WG',135),
+('Francis Coppola Claret Cab Sauv 750ml','Wine',1500.00,830.0000,'5689566','739958974001',null,8,true,true,'bar','WG',136),
+('Francis Coppola DMD Pinot Noir 750ml','Wine',1400.00,770.0000,'3995801450','739958014509','El fruto de esta añada se caracterizó por pequeñas bayas con sabores muy precisos y complejos.  Desde su ramo aromático que recuerda a frutas rojas dulces, flores y especias, hasta sabores suculentos y acidez natural fresca, este vino es elegante y vivo.',3,true,true,'bar','WG',137),
+('Frangelico Licor 375ml','Licores',1000.00,680.6800,'6647836','721059983754',null,2,true,true,'bar','WG',35),
+('Franziskaner Hefe Weisse 12oz','Cerveza',200.00,75.0000,null,'088394000325',null,1,true,true,'bar','WG',83),
+('Fre Merlot N/A 750ml','Wine',800.00,420.0000,null,'08510828',null,3,true,true,'bar','WG',138),
+('Fre Moscato N/A 750ml','Wine',800.00,420.0000,null,'08510624',null,3,true,true,'bar','WG',139),
+('Fre Red blend N/A 750ml','Wine',800.00,420.0000,null,'08510420',null,3,true,true,'bar','WG',140),
+('Fre White Zinfandel N/A 750ml','Wine',800.00,420.0000,null,'08510022',null,3,true,true,'bar','WG',141),
+('Freixenet Cordon Rosado 750ml','Champaña',1400.00,527.2200,'590242Q','033293002017',null,3,true,true,'bar','WG',14),
+('Freixenet Extra Dry 750ml','Champaña',1400.00,527.2200,'178163N','033293003809',null,3,true,true,'bar','WG',15),
+('Freixenet Ice Cava 750ml','Champaña',1400.00,527.2200,'4775518','033293006312',null,4,true,true,'bar','WG',16),
+('Frontera After Midnight 750ml','Wine',700.00,490.9400,'5208613','082734627395',null,0,true,true,'bar','Abeja Logístic Group SRL',142),
+('Frontera Cab Merlot 750ml','Wine',700.00,205.0000,null,'082734001027',null,0,true,true,'bar','WG',143),
+('Frontera Carbenet 750ml','Wine',700.00,490.9500,'285828W','7804320559001',null,0,true,true,'bar','Abeja Logístic Group SRL',144),
+('Frontera Merlot 750ml','Wine',700.00,205.0000,null,'082734313748',null,3,true,true,'bar','WG',145),
+('Frontera Sauv Blanc 750ml','Wine',700.00,205.0000,null,'082734001041',null,0,true,true,'bar','WG',146),
+('Frontera Sweet Red 750ml','Wine',700.00,490.9500,null,'082734757672',null,1,true,true,'bar','Abeja Logístic Group SRL',147),
+('Fundador Brandy de Jerez 750ml','Brandy',2000.00,897.0000,'R653635','856950008012',null,2,true,true,'bar','WG',1),
+('Gancia Prosecco 750ml','Champaña',900.00,525.0000,'876591Q','857853002343',null,0,true,true,'bar','WG',17),
+('Gancia Rose 750ml','Champaña',900.00,525.0000,'5785300251','857853002510',null,3,true,true,'bar','WG',18),
+('Garage beer Classic lime 12oz lata','Cerveza',200.00,90.0000,null,'851834008676',null,12,true,true,'bar','WG',84),
+('Garage beer light 12oz Lata','Cerveza',200.00,90.0000,null,'851834008669',null,24,true,true,'bar','WG',85),
+('Gatorade Fruit Punch 600 ml','Jugos',100.00,44.0000,'9702449','7460548000154',null,6,true,true,'bar','Provisiones Kelvin',21),
+('Gazela Vinho Verde 750ml','Wine',900.00,300.0000,'9247011','739949010404',null,3,true,true,'bar','WG',148),
+('Gemma DI Luna P Grigio 750ml','Wine',1000.00,525.0000,'5766000459','857660004592',null,3,true,true,'bar','WG',149),
+('Gemma Di Luna Red 750ml','Wine',1000.00,586.3000,null,'857660004929',null,3,true,true,'bar','WG',150),
+('Gentlemans Collection Cabernet Sauvignon 750ml','Wine',1400.00,780.4500,null,'012354001459',null,3,true,true,'bar','WG',151),
+('Geroux Grenadine 750ml','Mix',600.00,200.0000,null,'071850221112',null,5,true,true,'bar','WG',10),
+('Gibson’s Blood Orange 750ml','Ginebra',1100.00,817.0100,null,'3147699122563',null,0,true,true,'bar','United brands',6),
+('Gibson’s Gin 750ml','Ginebra',1100.00,724.2000,null,'3147690060703',null,1,true,true,'bar','United brands',7),
+('Gitano 18 700ml','Wine',450.00,210.0000,'3832133','7462324252528',null,3,true,true,'bar','Abeja Logístic Group SRL',152),
+('Glenfiddich Scotch 12Y 750ml','Whiskey',6000.00,3304.0000,null,'083664107360',null,2,true,true,'bar','WG',30),
+('Glenfiddich, Scotch 21 Year 750ml','Whiskey',35000.00,15000.0000,null,'083664872565',null,1,true,true,'bar','WG',31),
+('Glenlivet 12Y','Fiesta',8500.00,null,null,null,null,0,true,false,'bar',null,22),
+('Glenlivet Fouders Reserve','Fiesta',7000.00,null,null,null,null,0,true,false,'bar',null,23),
+('Glenmorangie 10y 750ml','Whiskey',3700.00,2039.9500,'K788722','081753833008',null,1,true,true,'bar','WG',32),
+('Glenmorangie Lasanta 12y 750mlo','Whiskey',4700.00,2589.9500,'9221068','081753810863',null,2,true,true,'bar','WG',33),
+('Glenmorangie Quinta Ruban 14y 750ml','Whiskey',4700.00,2930.9500,'513654Q','081753831486',null,2,true,true,'bar','WG',34),
+('Gnarly Head Pinot Noir 750ml','Wine',900.00,495.0000,'8224229343','082242293433',null,3,true,true,'bar','WG',153),
+('Gnarly Head Sauvignon Blanc 750ml','Wine',900.00,500.0000,'4711841','082242010757',null,2,true,true,'bar','WG',154),
+('Gold River rare reserve 700ml','Whiskey',900.00,510.5100,null,'3147690087205',null,2,true,true,'bar','United brands',35),
+('Good Fucking Red 750ml','Wine',1000.00,495.0000,'0015360322','700153603225',null,3,true,true,'bar','WG',155),
+('Good Fucking Rose 750ml','Wine',1000.00,495.0000,'Y781439','700153603232',null,3,true,true,'bar','WG',156),
+('Goodnoff Vodka 1,75L','Vodka',1500.00,550.0000,null,'893828001485',null,8,true,true,'bar','WG',17),
+('Goodnoff Vodka Tragos','Tragos',100.00,11.0000,null,null,null,50,true,false,'bar','WG',31),
+('Goose Island IPA 12oz','Cerveza',225.00,85.0000,null,'736920111310',null,6,true,true,'bar','WG',86),
+('Goose Island IPA 12oz lata','Cerveza',200.00,90.0000,null,'736920114403',null,9,true,true,'bar','WG',87),
+('Gordon Gin 1.7L','Ginebra',2000.00,1008.3100,'0886003','08860032',null,1,true,true,'bar','WG',8),
+('Gordon Gin 750ml','Ginebra',1100.00,732.6800,'08860236','08860236',null,1,true,true,'bar','WG',9),
+('Goya Coconut Water 350 ml','Jugos',200.00,110.0000,'041331027854','041331027854',null,0,true,true,'bar','José Minimarket',22),
+('Goya Coconut Water 520ml','Jugos',300.00,150.0000,'Q219091','041331027878',null,9,true,true,'bar','Elegant Liquor',23),
+('Gran Duque D’Alba Solera 750ml','Brandy',5000.00,3956.6800,'660623J','086785643212',null,1,true,true,'bar','WG',2),
+('Grand Marnier  50ml','Licores',500.00,215.4600,null,'649188900360',null,11,true,true,'bar','WG',36),
+('Grand Marnier Orange Liquor 375ml','Licores',1900.00,940.6800,'C461930','649188900469',null,2,true,true,'bar','WG',37),
+('Grand Marnier Orange Liquor 750ml','Licores',3500.00,1870.0000,null,'649188900476',null,4,true,true,'bar','WG',38),
+('Grand Old Parr 18Y 750ml','Whiskey',6500.00,4150.0000,null,'088076186910',null,2,true,true,'bar','Almacén genao',36),
+('Grand old Parr 12','Fiesta',3500.00,null,null,null,null,0,true,false,'bar',null,24),
+('Grand old Parr 12Y 750ml','Whiskey',3000.00,1919.2200,'P396382','088076174641',null,15,true,true,'bar','WG',37),
+('Grand old parr 18','Fiesta',9000.00,null,null,null,null,0,true,false,'bar',null,25),
+('Grey Goose','Fiesta',2500.00,null,null,null,null,0,true,false,'bar',null,26),
+('Grey Goose Berry 50ml','Vodka',300.00,163.1700,null,'080480990091',null,10,true,true,'bar','WG',18),
+('Grey Goose Vodka 375ml','Vodka',1500.00,732.6800,'T684421','080480280031',null,5,true,true,'bar','WG',19),
+('Grey Goose Vodka 50ml','Vodka',300.00,163.1700,'08480989347','080480989347',null,21,true,true,'bar','WG',20),
+('Grey Goose Vodka Tragos','Tragos',200.00,46.1300,'9341482',null,null,85,true,false,'bar','WG',32),
+('Grey Goose vodka 1.75L','Tequila',7000.00,2223.0000,null,null,null,0,true,true,'bar',null,39),
+('Grey Goose vodka 750ml','Vodka',2000.00,1252.6800,'1414482','080480280024',null,3,true,true,'bar','WG',21),
+('Grolsch Pilsener 12oz','Cerveza',200.00,75.0000,null,'08374189',null,6,true,true,'bar','WG',88),
+('Guillotina de Cigarros(Cigar Cutter)','Cigarros',200.00,57.7500,'36528222','36528222',null,13,false,true,'bar','Club Cigar',11),
+('Guinness Extra Stout 12oz','Cerveza',200.00,77.0000,'2538188','083820123555',null,9,true,true,'bar','WG',89),
+('Guinness Pub Draft Stout, 14.9 oz Lata','Cerveza',200.00,110.0000,null,'083820123609',null,0,true,true,'bar','WG',90),
+('Gulden Draak Ale, Single Bottle, 11.2 fl oz','Cerveza',500.00,310.0000,null,'710168004016',null,5,true,true,'bar','WG',91),
+('H.Upman 1844 Aperitifs 6pk','Cigarros',900.00,420.7500,null,'071610894617',null,3,false,true,'bar','Club Cigar',12),
+('H.Upmann Aj Fernández 6pk','Cigarros',1000.00,590.1500,null,'071610514461',null,2,false,true,'bar','Club Cigar',13),
+('H3 Merlot 750ml','Wine',1200.00,665.0000,'922255J','088586003431',null,3,true,true,'bar','WG',157),
+('Habana Q Double Robusto','Cigarros',500.00,151.8000,null,'076622773004',null,7,false,true,'bar','Club Cigar',14),
+('Hacker Pschorr Munich Gold Helles 12oz','Cerveza',200.00,80.0000,null,'049483261737',null,1,true,true,'bar','WG',92),
+('Hacker Pschorr, Weissbier 12oz','Cerveza',200.00,80.0000,null,'049483262031',null,0,true,true,'bar','WG',93),
+('Halls Azul','Chicle',100.00,100.0000,'1254662970',null,null,0,false,true,'bar','WG',9),
+('Halls Straw','Chicle',100.00,100.0000,'1254662771',null,null,0,false,true,'bar','WG',10),
+('Halls limon Miel','Chicle',100.00,100.0000,'1254662872',null,null,0,false,true,'bar','WG',11),
+('Hamburger','Comida',500.00,null,null,null,null,21,false,false,'cocina',null,4),
+('Hamburger + Guarniciones','Comida',600.00,null,null,null,null,1,false,false,'cocina',null,5),
+('Harmony Bordeaux','Wine',2500.00,1980.0000,null,'850446007732',null,3,true,true,'bar','WG',158),
+('Harveys Bristol Cream Sherry 750ml','Wine',1500.00,774.9500,null,'856950008043',null,3,true,true,'bar','WG',159),
+('Havana Club Ańejo Blanco 50ml','Rum',100.00,27.5000,'V073837','080480006907',null,20,true,true,'bar','WG',39),
+('Heineken 12onz','Cerveza',200.00,125.0000,null,'8712000030575',null,72,true,true,'bar','La Daguilla Liquor Store',94),
+('Heineken 12oz','Cerveza',200.00,100.0000,'X678461','072890004994',null,26,true,true,'bar','Provisiones Kelvin',95),
+('Heineken 22 oz','Cerveza',225.00,123.5800,'L203200','8712000030582',null,0,true,true,'bar','Provisiones Kelvin',96),
+('Heineken 7oz','Cerveza',100.00,50.0000,null,'00948791',null,0,true,true,'bar','WG',97),
+('Heineken 8oz Lata','Cerveza',100.00,59.6200,null,'87120103',null,33,true,true,'bar','United brands',98),
+('Heineken Barrica 5L','Cerveza',1800.00,900.0000,null,'072890001740',null,12,true,true,'bar','WG',99),
+('Heineken Cubetazo','Fiesta',1000.00,null,null,null,null,0,true,false,'bar',null,27),
+('Heineken Draft (Grifo) Vaso 16oz','Cerveza',150.00,null,null,null,null,0,true,true,'bar',null,100),
+('Heineken Sin Alcohol 12oz','Cerveza',200.00,70.0000,null,'072890006196',null,7,true,true,'bar','WG',101),
+('Heinken 16oz Lata','Cerveza',175.00,99.4100,null,'8712000900045',null,7,true,true,'bar','United brands',102),
+('Hendrick’s Gin 750ml','Ginebra',3000.00,2028.0000,'Z956945','083664990436',null,1,true,true,'bar','WG',10),
+('Hendrick’s Gin Trago','Tragos',400.00,73.2600,null,null,null,35,true,false,'bar','WG',33),
+('Hennessy Black 375ml','Cognac',2700.00,1253.2000,'2602752','081753816971',null,2,true,true,'bar','WG',7),
+('Hennessy Black 750ml','Cognac',5000.00,2240.6800,'M589329','081753815554',null,3,true,true,'bar','WG',8),
+('Hennessy Pure White 750ml','Cognac',6500.00,4480.0000,null,'3245991460205',null,2,true,true,'bar','Dufry',9),
+('Hennessy VS','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,28),
+('Hennessy VS 375ml','Cognac',2400.00,1117.4800,'5274424','088110150631',null,5,true,true,'bar','WG',10),
+('Hennessy VS 50ml','Cognac',400.00,270.2200,'609780F','088110150501',null,10,true,true,'bar','WG',11),
+('Hennessy VS 750ml','Cognac',4000.00,2226.9500,'403406Y','088110150556',null,4,true,true,'bar','WG',12),
+('Hennessy VS Tragos','Tragos',350.00,90.0000,'247796F',null,null,169,true,false,'bar','WG',34),
+('Hennessy VSOP','Fiesta',6000.00,null,null,null,null,0,true,false,'bar',null,29),
+('Hennessy VSOP 375ml','Cognac',3200.00,1544.9500,'251945C','081753825492',null,4,true,true,'bar','WG',13),
+('Hennessy VSOP 750ml','Cognac',6000.00,3029.0400,'9857917','088110151058',null,0,true,true,'bar','WG',14),
+('Hennessy XO 375ml','Cognac',7500.00,4394.0000,'531403C','081753830724',null,1,true,true,'bar','WG',15),
+('Hennessy XO 750ml','Cognac',14000.00,8788.0000,'8245355','088110153052',null,1,true,true,'bar','WG',16),
+('Herradura Ańejo 50ml','Tequila',400.00,154.0000,'3223597','744607013406',null,8,true,true,'bar','WG',40),
+('Hess Collection Allomi Cabernet Sauv 750ml','Wine',3000.00,1620.0000,null,'717888410226',null,1,true,true,'bar','WG',160),
+('Hess Select North Coast Cab Sauv 750ml','Wine',2000.00,600.0000,null,'717888510025',null,2,true,true,'bar','WG',161),
+('Hielo 13LB','Misc',100.00,35.0000,null,null,null,1005,false,true,'bar','HIELO REYES',12),
+('High Commissioner Blended Whisky 700ml','Whiskey',900.00,567.3200,null,'5016840000211',null,2,true,true,'bar','United brands',38),
+('High Noon Tequila Lim','Cerveza',200.00,106.0000,null,'085000035962',null,11,true,true,'bar','WG',103),
+('High Noon Vodka Pińa 12oz','Cerveza',200.00,106.0000,null,'085000029268',null,6,true,true,'bar','WG',104),
+('High Noon Vodka Selt Mandarina 12oz','Cerveza',200.00,106.0000,null,'085000036624',null,0,true,true,'bar','WG',105),
+('High Noon Vodka Selt Pera 12oz','Cerveza',200.00,106.0000,null,'085000034767',null,0,true,true,'bar','WG',106),
+('High Noon tequila princkly pear','Cerveza',200.00,106.0000,null,'085000037416',null,6,true,true,'bar','WG',107),
+('High Noon vodka Selt Chinola 12oz','Cerveza',200.00,106.0000,null,'085000032565',null,8,true,true,'bar','WG',108),
+('High noon tequila Grapefruit','Cerveza',200.00,106.0000,null,'085000035979',null,15,true,true,'bar','WG',109),
+('High noon tequila pasión fruit','Cerveza',200.00,106.0000,null,'085000035986',null,6,true,true,'bar','WG',110),
+('High noon tequila strawberry','Cerveza',200.00,106.0000,null,'085000035955',null,6,true,true,'bar','WG',111),
+('High tequila blood Orange','Cerveza',200.00,106.0000,null,'085000037409',null,6,true,true,'bar','WG',112),
+('Hilton Mentol','Cigarrillos',100.00,63.7500,null,'74600298',null,11,false,true,'bar','Cruce Guayacan Bebidas',3),
+('Hiram Walker Liqueur Blue Curscao 750ml','Licores',600.00,400.0000,null,'089540167619',null,0,true,true,'bar','WG',39),
+('Hoegaarden 12oz','Cerveza',200.00,76.0000,null,'786150000373',null,4,true,true,'bar','WG',113),
+('Hofbrau Original 12oz','Cerveza',200.00,72.5400,'Q497333','675747001018',null,11,true,true,'bar','WG',114),
+('Honoro Vera Organic Monastrell 750ml','Wine',1300.00,440.0000,null,'851115002256',null,0,true,true,'bar','WG',162),
+('Hookah','Hookah',1000.00,60.0000,null,null,null,0,false,false,'bar','Habibi',0),
+('Hookah Premium','Hookah',1000.00,null,null,null,null,0,false,false,'bar',null,1),
+('Hookah Recarga','Hookah',500.00,60.0000,null,null,null,0,false,false,'bar','Habibi',2),
+('Hookah Taza','E-Cig',300.00,50.0000,null,null,null,10,false,true,'bar','Seteo Vape Shop',27),
+('Hookah premium Refill','Fiesta',600.00,null,null,null,null,0,true,false,'bar',null,30),
+('Hot Dog','Comida',200.00,null,null,null,null,10,false,false,'cocina',null,6),
+('Hot Dog + Guarnicion','Comida',300.00,null,null,null,null,16,false,false,'cocina',null,7),
+('Iron Mike Tyson Apple Punch 15k','E-Cig',1300.00,549.0000,null,'784847569288',null,4,false,true,'bar','Vape Wholesale',28),
+('Iron Mike Tyson Cake 15k','E-Cig',1300.00,549.0000,null,'784847574787',null,6,false,true,'bar','Vape Wholesale',29),
+('Iron Mike Tyson Cali Cherry 15k','E-Cig',1300.00,549.0000,null,'784847574794',null,6,false,true,'bar','Vape Wholesale',30),
+('Iron Mike Tyson Cool Mint 15K Hits','E-Cig',1300.00,348.0000,null,'784847569219',null,0,false,true,'bar','Habibi',31),
+('Iron Mike Tyson CranGrape 15K Hits','E-Cig',1300.00,348.0000,null,'784847569301',null,0,false,true,'bar','Habibi',32),
+('Iron Mike Tyson Frozen Mango 15K Hits','E-Cig',1300.00,348.0000,null,'784847570505',null,0,false,true,'bar','Habibi',33),
+('Iron Mike Tyson Melonhead 15K Hits','E-Cig',1300.00,348.0000,null,'784847569226',null,0,false,true,'bar','Habibi',34),
+('Iron Mike Tyson Pineapple Melon 15k','E-Cig',1300.00,549.0000,null,'784847572097',null,3,false,true,'bar','Vape Wholesale',35),
+('Iron Mike Tyson Rasb Watermelon 15k','E-Cig',1300.00,549.0000,null,'784847569318',null,0,false,true,'bar','Vape Wholesale',36),
+('Iron Mike Tyson Toro Rosso 15K Hits','E-Cig',1300.00,348.0000,null,'784847570475',null,0,false,true,'bar','Habibi',37),
+('J Lohr Cab Sauv 750ml','Wine',1400.00,715.0000,'W318798','089121288122',null,3,true,true,'bar','WG',163),
+('JP Chenet Ice Edition 750ml','Champaña',1100.00,660.0000,'1693550','641586336802',null,7,true,true,'bar','Price Smart',19),
+('JP Cheney Ice Rose 750ml','Champaña',1100.00,660.0000,'C735010','641586338868',null,2,true,true,'bar','WG',20),
+('JW Black Label 12yrs 1.75L','Whiskey',7500.00,3909.9500,null,'088076163171',null,7,true,true,'bar','WG',39),
+('JW Black Label 12yrs 750ml','Whiskey',2800.00,1687.2200,'251338J','088110011307',null,28,true,true,'bar','WG',40),
+('JW Black Label 50ml','Whiskey',300.00,116.0000,'891110',null,null,42,true,true,'bar','WG',41),
+('JW Black Label Tragos','Tragos',300.00,70.0000,'NO',null,null,0,true,false,'bar','WG',35),
+('JW Blue Label 200ml','Whiskey',4200.00,1590.0000,'7388210','088076161597',null,0,true,true,'bar','WG',42),
+('JW Blue Label 750ml','Whiskey',21000.00,11088.0000,'1014640','088110070052',null,8,true,true,'bar','WG',43),
+('JW Blue Label Tragos','Tragos',900.00,185.0000,null,null,null,20,true,false,'bar','WG',36),
+('JW Discovery Pack 50ml','Whiskey',3000.00,1237.0400,null,'088076183230',null,2,true,true,'bar','WG',44),
+('JW Doble Black Litro','Fiesta',6000.00,2350.0000,null,null,null,0,true,false,'bar',null,31),
+('JW Double Black 1.0L','Whiskey',5000.00,3000.0000,'Q379855','088076177819',null,2,true,true,'bar','Provisiones Kelvin',45),
+('JW Double Black 750ml','Whiskey',4500.00,2000.1300,'X921546','088076177703',null,0,true,true,'bar','WG',46),
+('JW Gold 18','Fiesta',8000.00,null,null,null,null,0,true,false,'bar',null,32),
+('JW Gold Label 18Y 750ml','Whiskey',7000.00,4597.0400,'J772712','088076181366',null,18,true,true,'bar','WG',47),
+('JW Gold Label Tragos','Tragos',400.00,null,null,null,null,0,true,false,'bar',null,37),
+('JW Gold Reserve 1.0L','Whiskey',7000.00,3673.0000,null,'5000267117584',null,0,true,true,'bar','Dufry',48),
+('JW Gold Reserve 750ml','Whiskey',5000.00,3213.0000,'8807617','088076190030',null,16,true,true,'bar','WG',49),
+('JW Green Label 750ml','Whiskey',6500.00,3192.0000,'161361D','088076162624',null,4,true,true,'bar','WG',50),
+('JW Red Label  750ml','Whiskey',1800.00,1426.0000,'8337196','088110021306',null,6,true,true,'bar','WG',51),
+('JW Red Label 375ml','Whiskey',1100.00,794.6800,'X211439','088110021191',null,5,true,true,'bar','WG',52),
+('JW Red Label 50ml','Whiskey',200.00,48.0000,'891130',null,null,11,true,true,'bar',null,53),
+('Jack Daniel''s Apple 50ml','Whiskey',250.00,121.0000,null,'082184004395',null,10,true,true,'bar','WG',54),
+('Jack Daniel''s Black Jack Cola 10 oz','Pre-Mix',200.00,74.0000,null,'082184026052',null,0,true,true,'bar','WG',41),
+('Jack Daniel''s Country Cocktails Downhome Punch 10 oz','Pre-Mix',200.00,74.0000,null,'082184026014',null,0,true,true,'bar','WG',42),
+('Jack Daniel''s Fire 50ml','Whiskey',250.00,121.0000,null,'082184001189',null,7,true,true,'bar','WG',55),
+('Jack Daniel''s Honey 50ml','Licores',250.00,121.0000,null,'082184000359',null,8,true,true,'bar','WG',40),
+('Jack Daniel''s Honey750ml','Whiskey',2000.00,1706.0000,null,'082184000335',null,3,true,true,'bar','WG',56),
+('Jack Daniel''s Sinatra Select Tennessee Whiskey, 90 Proof','Whiskey',17000.00,9513.0000,null,'082184055533',null,1,true,true,'bar','WG',57),
+('Jack Daniels Tragos','Tragos',200.00,50.0000,'468271C',null,null,106,true,false,'bar','WG',38),
+('Jack Daniel’s Black 50ml','Whiskey',200.00,110.0000,'482768P','082184000052',null,12,true,true,'bar','WG',58),
+('Jack Daniel’s Black 750ml','Whiskey',2000.00,1304.6800,'6455867','082184090466',null,2,true,true,'bar','WG',59);
+
+
+-- filas 801–1200
+insert into public._import_882ef5a4 (name, categoria, price, cost, sku, barcode, descr, qty, is_bev, inventariable, area, vendor, posicion) values
+('Jack Daniel’s Blackberry 50ml','Whiskey',250.00,121.0000,null,'082184008768',null,10,true,true,'bar','WG',60),
+('Jack Daniel’s Fire 375ml','Whiskey',1100.00,715.0000,'651757V','082184001561',null,3,true,true,'bar','WG',61),
+('Jack Daniel’s Miel Tragos','Tragos',200.00,56.7400,'1759807',null,null,119,true,false,'bar','WG',39),
+('Jack Daniel’s Watermelon Punch 10iz','Pre-Mix',200.00,74.0000,null,'082184026038',null,0,true,true,'bar','WG',43),
+('Jade Fresa Sandía Riesling 750ml','Champaña',800.00,263.3200,'693784T','4842239000187',null,4,true,true,'bar','WG',21),
+('Jade Peach  Bellini 750ml','Champaña',800.00,263.3200,'632563C','4842239000163',null,1,true,true,'bar','WG',22),
+('Jagermaister 375ml','Licores',1000.00,493.4800,'9658136','083089660358',null,2,true,true,'bar','WG',41),
+('Jagermeister 750ml','Licores',2000.00,1156.5300,null,'083089524001',null,2,true,true,'bar','WG',42),
+('Jameson 375ml','Whiskey',900.00,784.6800,'7178641','080432500149',null,3,true,true,'bar','WG',62),
+('Jameson 750ml','Whiskey',2500.00,1797.0400,'472809M','080432500170',null,3,true,true,'bar','WG',63),
+('Jameson Irish Whiskey Tragos','Tragos',200.00,60.0000,'2075313',null,null,54,true,false,'bar',null,40),
+('Jeunesse Cab Sauv 750ml','Wine',1100.00,550.0000,null,'087752010716',null,7,true,true,'bar','WG',164),
+('Jeunesse Pink Moscato 750ml','Wine',1100.00,550.0000,'648198Q','087752015315',null,2,true,true,'bar','WG',165),
+('Jim Beam Bourbon 375ml','Whiskey',800.00,578.0000,'897305G','080686001607',null,5,true,true,'bar','WG',64),
+('Jim Beam Bourbon 50ml','Whiskey',100.00,40.0000,'134217J','080686001904',null,20,true,true,'bar','WG',65),
+('Jim Beam Honey/Miel 50ml','Whiskey',100.00,40.0000,'4134273','080686006091',null,18,true,true,'bar','WG',66),
+('John Barr Scotch Whiskey 750ml','Whiskey',2000.00,870.0000,null,'087647111962',null,4,true,true,'bar','WG',67),
+('Jordan Alexander Valley Cab Sauv 750ml','Wine',6000.00,2860.0000,null,'084444100205',null,1,true,true,'bar','WG',166),
+('Jose Cuervo Blanco 750ml','Tequila',1800.00,992.6800,'102007R','811538010856',null,4,true,true,'bar','WG',41),
+('Jose Cuervo Gold 50ml','Tequila',150.00,77.5000,'C398939','811538010948',null,23,true,true,'bar','WG',42),
+('Jose Cuervo Gold 750ml','Tequila',1800.00,992.6800,'D760006','811538010832',null,3,true,true,'bar','WG',43),
+('Josh Cellars Cab Sauv 750ml','Wine',1400.00,715.0000,'4432339','857744001318',null,6,true,true,'bar','WG',167),
+('Josh Cellars Legacy Red Blend 750ml','Wine',1400.00,789.0400,null,'031259048024',null,5,true,true,'bar','WG',168),
+('Josh Cellars Prosecco Rose, Rose Wine','Champaña',1500.00,759.2200,'806642B','031259004495',null,2,true,true,'bar','WG',23),
+('Josh Cellars Prosecco, 750ml','Champaña',1500.00,759.2200,'882232Z','031259003726',null,3,true,true,'bar','WG',24),
+('Josh Cellars Reserve Bourbon Cab 750ml','Wine',2500.00,1008.3800,null,'031259004327',null,5,true,true,'bar','WG',169),
+('Josh Cellars Reserve North Coast Cabernet Sauvignon, Red Wine','Wine',2200.00,1008.3100,null,'031259000046',null,3,true,true,'bar','WG',170),
+('Josh Cellars Reserve Paso Robles Cabernet Sauvignon, Red Wine','Wine',2200.00,1008.3100,null,'031259049236',null,3,true,true,'bar','WG',171),
+('José Cuervo Blanco 50ml','Tequila',150.00,77.5000,'605116V','811538010955',null,21,true,true,'bar','WG',44),
+('José Cuervo Blanco Tragos','Tragos',200.00,43.0000,'413595F',null,null,177,true,false,'bar','WG',41),
+('José Cuervo Gold','Fiesta',4000.00,null,null,null,null,0,true,false,'bar',null,33),
+('José Cuervo Gold Tragos','Tragos',200.00,51.0000,'780736P',null,null,40,true,false,'bar',null,42),
+('José Cuervo Margarita Mix 1.0L','Mix',500.00,237.0000,null,'811538011211',null,0,true,true,'bar','WG',11),
+('José Cuervo Silver','Fiesta',4000.00,null,null,null,null,0,true,false,'bar',null,34),
+('Juan Gil Silver Monastrell 750ml','Wine',2000.00,840.0000,null,'819451005003',null,0,true,true,'bar','WG',172),
+('Jugos Naturales','Cócteles',100.00,null,null,null,null,0,true,false,'bar',null,8),
+('Jugos Naturales 12oz','Jugos',80.00,0.4500,null,null,null,7,true,true,'bar',null,24),
+('Julia James CA Pinot Noir 750ml','Wine',900.00,495.0000,'8017553109','080175531097','Reconocido internacionalmente por su hermosa fruta pura combinada con gran elegancia, el Pinot noir de California prospera entre las zonas costeras más frías del estado.  Caracterizados por sabores eclécticos y aromas de fresa, cereza negra, ciruela y popurrí con notas de suelo de bosque, champiñones o té negro, los mejores Pinot noir de California cuentan con una textura suave y buena acidez, lo que les da la capacidad de mejorar con la edad.',3,true,true,'bar','WG',173),
+('Justin Cab Sauv Pasó Robles 750ml','Wine',2000.00,1320.0000,null,'733952997103',null,2,true,true,'bar','WG',174),
+('Jw Black Label','Fiesta',3500.00,null,null,null,null,0,true,false,'bar',null,35),
+('Jw Gold Reserve','Fiesta',6000.00,null,null,null,null,0,true,false,'bar',null,36),
+('Kahlua Cafe 375ml','Licores',1000.00,676.0000,'866433H','089540145631',null,2,true,true,'bar','WG',43),
+('Kahlua Cafe 750ml','Licores',1700.00,1159.9500,null,'089540122717',null,2,true,true,'bar','WG',44),
+('Kahlua Cafe Tragos','Tragos',100.00,40.0000,'3686986',null,null,50,true,false,'bar',null,43),
+('Kalembu Mamajuana By CD 700ml','Rum',1000.00,731.4300,null,'7461592130965',null,13,true,true,'bar','WG',40),
+('Kendall-Jackson VR Chard 750ml','Wine',1300.00,720.0000,'2606090','081584013105',null,6,true,true,'bar','WG',175),
+('Kendall-Jackson VR Pinot Noir 750ml','Wine',1300.00,825.0000,'8158413151','081584131519','Esta gema de color granate oscuro ofrece frutas brillantes de cereza, fresa y frambuesa con elegantes notas terrosas infundidas con notas de cola y especias suaves.  El envejecimiento en roble agrega un toque de vainilla y un final suave y tostado.',2,true,true,'bar','WG',176),
+('Kentia Albarino 750ml','Wine',1500.00,840.0000,null,'851115002287',null,0,true,true,'bar','WG',177),
+('Ketel One','Fiesta',4000.00,null,null,null,null,0,true,false,'bar',null,37),
+('Ketel One Toronja Rosa 50ml','Vodka',200.00,60.0000,'900913C','085156750009',null,6,true,true,'bar','WG',22),
+('Ketel One Vodka 375ml','Vodka',1000.00,472.6800,'H306637','085156122158',null,5,true,true,'bar','WG',23),
+('Ketel One Vodka 750ml','Vodka',2000.00,988.0000,'9684199','085156515417',null,5,true,true,'bar','WG',24),
+('Ketel One Vodka Tragos','Tragos',200.00,46.1300,'6200168',null,null,141,true,false,'bar','WG',44),
+('Ketel One Vodka, 1.75 L','Vodka',4500.00,2301.0000,null,'085156803682',null,4,true,true,'bar','WG',25),
+('Ketel One flor de naranja durazno 50ml','Vodka',150.00,60.0000,'948698N','085156650002',null,12,true,true,'bar','WG',26),
+('Kim Crawford Rose 250ml','Wine',200.00,100.0000,null,'689352010068',null,2,true,true,'bar','WG',178),
+('Kim Crawford Sauv Blanc 750ml','Wine',2300.00,775.0000,'E371753','689352009611',null,3,true,true,'bar','WG',179),
+('Kings Label 350 ml','Whiskey',350.00,259.0000,'3524773','7460522300553',null,1,true,true,'bar','Provisiones Kelvin',68),
+('Kings Label blanco 700ml','Whiskey',550.00,511.8900,null,'7460522300539',null,0,true,true,'bar','Abeja Logístic Group SRL',69),
+('King’s label negro 700ml','Whiskey',650.00,574.4700,null,'7460522300829',null,0,true,true,'bar','Abeja Logístic Group SRL',70),
+('Korbel Brut California 750ml','Champaña',1300.00,767.0000,'X972442','084704091328',null,6,true,true,'bar','WG',25),
+('Korber Brut 187ml','Champaña',450.00,206.5000,'4083761','084704091229',null,6,true,true,'bar','WG',26),
+('Kraken Rum 70 Proof 50ml','Rum',175.00,55.0000,'V540442','811538013925',null,5,true,true,'bar','WG',41),
+('Kraken Rum 94 Proof 750ml','Rum',1800.00,739.9600,null,'811538013024',null,3,true,true,'bar','WG',42),
+('LAYS LIMON 35G','Papitas',35.00,24.5100,'1588721','7460496803968',null,10,false,true,'bar','Frito Lay’s',8),
+('LAYS QUESO BLANCO35G','Papitas',35.00,24.5100,'C464984','7460496803951',null,2,false,true,'bar','Frito Lay’s',9),
+('La Benedicta Sidra 12oz','Cerveza',200.00,94.6300,null,'7467303621494',null,0,true,true,'bar','Importadora bosa',115),
+('La Chouffe Blonde 12oz','Cerveza',250.00,183.7500,null,'5410769100081',null,9,true,true,'bar','Beers & Co By BBP',116),
+('La Chouffe Cherry 330ml','Cerveza',250.00,197.9100,null,'5410769800097',null,0,true,true,'bar','Beers & Co By BBP',117),
+('La Familia Cubana Robusto','Cigarros',800.00,233.7500,null,'09780735711020',null,6,false,true,'bar','Club Cigar',15),
+('La Fiole Du Pape CDP 750ml','Wine',3000.00,1378.0000,'3580226','080175118885',null,1,true,true,'bar','WG',180),
+('La Fuerza Sweet Red 750ml','Wine',500.00,315.0000,null,'7460736901904',null,7,true,true,'bar','WG',181),
+('La Fuerza Vino 350ml','Wine',150.00,101.0000,'B641207','7460736980114',null,0,true,true,'bar','Abeja Logístic Group SRL',182),
+('La Marca Prosecco 187ml','Champaña',500.00,236.0000,'Z641276','085000022436',null,6,true,true,'bar','WG',27),
+('La Marca Prosecco 750ml','Champaña',1800.00,780.0000,'838104F','085000017739',null,12,true,true,'bar','WG',28),
+('La Marca Prosecco Rose 187ml','Champaña',500.00,236.0000,'6203397','085000034705',null,4,true,true,'bar','WG',29),
+('La Marca Prosecco Rose 750ml','Champaña',1800.00,780.0000,'8674290','085000032442',null,4,true,true,'bar','WG',30),
+('La Vainita Power','Misc',50.00,26.0000,'00123456789101112133',null,null,23,false,true,'bar','Yan Carlos',13),
+('Label 5 Gold 700ml','Whiskey',2000.00,1274.7000,null,'5060116321906',null,2,true,true,'bar','United brands',71),
+('Lagavulin 16 Year Single Malt Scotch Whisky, 750ml','Whiskey',10000.00,446.0000,null,'088110140052',null,2,true,true,'bar','WG',72),
+('Lagunitas Brewing Yuzu Lemon Hard Tea 12oz lata','Cerveza',200.00,80.0000,null,'723830141124',null,6,true,true,'bar','WG',118),
+('Lagunitas Brewing, Ipa 12oz Lata','Cerveza',200.00,80.0000,null,'723830111127',null,4,true,true,'bar','WG',119),
+('Lagunitas Ipa 12oz','Cerveza',225.00,80.0000,null,'723830000100',null,2,true,true,'bar','WG',120),
+('Lagunitas Maximus IPA 12oz','Cerveza',200.00,80.0000,null,'723830005440',null,0,true,true,'bar','WG',121),
+('Lalo Blanco 375ml','Tequila',3000.00,1450.0000,null,'811041030044',null,0,true,true,'bar','WG',45),
+('Lalo Blanco 750ml','Tequila',6000.00,2709.0000,null,'811041030013',null,0,true,true,'bar','WG',46),
+('Lamole DI Lamole Lareale Chianti 750ml','Wine',2300.00,1265.0000,'R211901','632987000256',null,1,true,true,'bar','WG',183),
+('Lamole di Lamole Maggiolo Chianti 750ml','Wine',1500.00,1000.0000,'2846303','632987200151',null,1,true,true,'bar','WG',184),
+('Landshark Lager 12oz','Cerveza',200.00,72.0000,'01877928','01877928',null,6,true,true,'bar','WG',122),
+('Lava Plus Black Ice','E-Cig',1000.00,330.0000,null,'6166821805720',null,2,false,true,'bar','WG',38),
+('Lava Plus Clear 2600 Puff','E-Cig',1000.00,360.0000,null,'700987802375',null,10,false,true,'bar','Habibi',39),
+('Lava Plus Jolly Ice','E-Cig',1000.00,330.0000,null,'700987805130',null,7,false,true,'bar','WG',40),
+('Lava Plus Peach Ice','E-Cig',1000.00,330.0000,null,'700987801873',null,9,false,true,'bar','WG',41),
+('Lava Plus Pińa Coco Rum 2600 Puff','E-Cig',1000.00,360.0000,null,'700987801323',null,0,false,true,'bar','Habibi',42),
+('Lava Plus Solo Mint 2600Puff','E-Cig',1000.00,360.0000,null,'700987804331',null,8,false,true,'bar','Habibi',43),
+('Lava Plus Straw Ice 2600 Puffs','E-Cig',1000.00,360.0000,null,'700987802269',null,1,false,true,'bar','Habibi',44),
+('Lays swap con sabor a doritos','Papitas',35.00,24.5100,null,'721282411055',null,2,false,true,'bar','Frito Lay’s',10),
+('Lay’S Clásicas 35G','Papitas',35.00,24.5100,null,'7460496803944',null,7,false,true,'bar','Frito Lay’s',11),
+('Lay’s BBQ','Papitas',35.00,24.5100,null,'7460496804811',null,1,false,true,'bar','Frito Lay’s',12),
+('Leaf vaso de tragos 1oz','Misc',250.00,118.0000,'01OZHC0050',null,null,7,false,true,'bar','WG',14),
+('Leffe Blonde 12oz','Cerveza',200.00,73.0000,'832584V','786150000311',null,0,true,true,'bar','WG',123),
+('Legado El Caballo Mayor Rum 700ml','Rum',3000.00,1791.0400,null,'7461592130316',null,6,true,true,'bar','WG',43),
+('Leinenkugel Summer Shandy 12oz','Cerveza',200.00,70.0000,null,'03477414',null,7,true,true,'bar','WG',124),
+('Leinenkugel’s summer shandy lemonade flavor 12oz','Cerveza',200.00,119.6000,'03478112','03478112',null,12,true,true,'bar','WG',125),
+('Leonara Pitillo 50pk','Misc',300.00,70.0000,null,'640522798285',null,161,false,true,'bar','Habibi',15),
+('Lexington Bourbon 750ml','Whiskey',3500.00,1512.6800,'Z670752','812459010437',null,2,true,true,'bar','WG',73),
+('Leyenda Cognac','Fiesta',2400.00,null,null,null,null,0,true,false,'bar',null,38),
+('Life Savers Five Flavors Hard Candy, 1.14 Ounce (Pack of 2)','Chicle',100.00,44.0000,null,'02243405',null,1,false,true,'bar','WG',12),
+('Life Vine Cab Sauv 750ml','Wine',1200.00,600.0000,null,'852411007563',null,3,true,true,'bar','WG',185),
+('Lightstrike Orange Mango 16oz','Cerveza',250.00,110.0000,null,'754787012502',null,16,true,true,'bar','WG',126),
+('Limón','Misc',25.00,15.0000,null,null,null,0,false,true,'bar',null,16),
+('Lindeman’s Merlot 750ml','Wine',700.00,225.0000,'625650G','012354089990',null,2,true,true,'bar','WG',186),
+('Lolea No.1 Red Sangria 750ml','Wine',1200.00,600.0000,null,'8437014256017',null,3,true,true,'bar','WG',187),
+('Lolea No2 White Sangria 750ml','Wine',1200.00,600.0000,null,'8437014256024',null,3,true,true,'bar','WG',188),
+('Long Island','Cócteles',250.00,null,null,null,null,1000,true,false,'bar',null,9),
+('Louis Jadot Beaujolais-Villages 750ml','Wine',1800.00,825.0000,'S352362','084692400546',null,3,true,true,'bar','WG',189),
+('Louis Jadot Macon-Villages 750ml','Wine',1800.00,825.0000,'4913156','084692418541',null,1,true,true,'bar','WG',190),
+('Luc Belaire Bleu 750ml','Champaña',4000.00,1351.5000,'8200559','813497007809',null,2,true,true,'bar','WG',31),
+('Luc Belaire Brut Gold 750ml','Champaña',4000.00,1351.5000,'H163212','813497007038',null,3,true,true,'bar','WG',32),
+('Luc Belaire Luxe Rose 750ml','Champaña',4000.00,1351.5000,'4578107','813497004310',null,3,true,true,'bar','WG',33),
+('Luc Belaire Rare Luxe 750ml','Champaña',4000.00,1351.5000,'813497005904','813497005904',null,2,true,true,'bar','WG',34),
+('Luc Belaire Rare Rose 750ml','Champaña',4000.00,1351.5000,'813497005010','813497005010',null,2,true,true,'bar','WG',35),
+('Luna Di Luna Pinot Grigio 750ml','Wine',1300.00,468.0000,'8185157','857660004615',null,3,true,true,'bar','WG',191),
+('Luna Di Luna Red Blend 750ml','Wine',1300.00,460.0000,'598277X','021893789087',null,3,true,true,'bar','WG',192),
+('Lunazul Blanco, 750ml','Tequila',2700.00,1223.2200,null,'096749908035',null,3,true,true,'bar','WG',47),
+('Macorix Gran Reserva 750ml','Rum',900.00,627.1700,null,'7460736903731',null,5,true,true,'bar','WG',44),
+('Macorix Mamajuana 750ml','Rum',1000.00,767.0000,null,'7460736904356',null,12,true,true,'bar','WG',45),
+('Mad Dog, Mad Margarita 200ml','Pre-Mix',300.00,126.0000,null,'085904015589',null,23,true,true,'bar','WG',44),
+('Madria Sangria Moscato','Wine',800.00,330.0000,null,'085000019993',null,1,true,true,'bar','WG',193),
+('Madria Sangria Roja 750ml','Wine',800.00,330.0000,null,'085000016923',null,11,true,true,'bar','WG',194),
+('Mahou Maestra 12oz','Cerveza',200.00,113.0000,null,'8411327001960',null,42,true,true,'bar','Beers & Co By BBP',127),
+('Mahou Sin 12oz Lata','Cerveza',100.00,49.7500,null,'8411327011167',null,0,true,true,'bar','Beers & Co By BBP',128),
+('Makers Mark, Bourbon 375ml','Whiskey',1500.00,884.9500,null,'085246185001',null,2,true,true,'bar','WG',74),
+('Malibu Coco 1.7L','Rum',3500.00,2145.0000,null,'089540449326',null,3,true,true,'bar','WG',46),
+('Malibu Coco 750ml','Rum',1800.00,888.6800,'669878T','089540448992',null,5,true,true,'bar','WG',47),
+('Malibu Coco Tragos','Tragos',200.00,33.0000,'545006T',null,null,83,true,false,'bar','WG',45),
+('Malibu Rum Caribbean Original Coconut Rum 50ml Bottle','Rum',200.00,100.0000,null,'089540453927',null,3,true,true,'bar','WG',48),
+('Manguera De Hookah (Hose)','Misc',200.00,60.0000,null,'814605025104',null,118,false,true,'bar','Habibi',17),
+('Mani copa','Misc',150.00,68.9900,null,null,null,19,false,true,'bar','Supermercado Morel',18),
+('Manischewitz Concord Grape 750L','Wine',700.00,315.0000,null,'085976033931',null,4,true,true,'bar','WG',195),
+('Margarita','Cócteles',200.00,null,null,null,null,899,true,false,'bar',null,10),
+('Mark West Black 750ml','Wine',1500.00,500.0000,null,'086003018082',null,3,true,true,'bar','WG',196),
+('Mark West Pinot Noir 750ml','Wine',1200.00,495.0000,'5171800004','851718000048',null,2,true,true,'bar','WG',197),
+('Marlboro Gold','Cigarrillos',300.00,260.0000,null,'7622100913313',null,2,false,true,'bar','Cruce Guayacan Bebidas',4),
+('Marlboro Rojo','Cigarrillos',150.00,115.0000,null,'7460985107942',null,0,false,true,'bar','Cruce Guayacan Bebidas',5),
+('Marques De Murrieta Rioja 2019 750ml','Wine',2400.00,1416.0000,null,'8411509192028',null,2,true,true,'bar','WG',198),
+('Marques De Murrieta Rioja Finca Ygay 750ml','Wine',2400.00,1320.0000,null,'8411509182029',null,0,true,true,'bar','WG',199),
+('Marques De Riscal Reserva 750ml','Wine',2000.00,812.4900,'8832000302','088320003024',null,11,true,true,'bar','WG',200),
+('Marques de Cáceres Rioja Rose 750ml','Wine',1300.00,550.0000,'6266417','089419000658',null,3,true,true,'bar','WG',201),
+('Marquis de Greyssac Medoc 750ml','Wine',1700.00,425.0000,'2593561100','025935611008',null,3,true,true,'bar','WG',202),
+('Martin Codax Albarino 750ml','Wine',1500.00,623.7000,null,'085000015926',null,4,true,true,'bar','WG',203),
+('Martini','Cócteles',150.00,null,null,null,null,999,true,false,'bar',null,11),
+('Martini & Rossi Extra Dry  750ml','Wine',900.00,469.2200,null,'011034420054',null,4,true,true,'bar','WG',204),
+('Martini & Rossi Sweet Vermouth 750ml','Wine',900.00,469.2200,null,'011034410055',null,4,true,true,'bar','WG',205),
+('Medalla Light 12oz','Cerveza',200.00,71.0000,null,'081553000204',null,0,true,true,'bar','WG',129),
+('Meiomi Pinot Noir 750ml','Wine',1500.00,935.0000,'855165005076','855165005076','De un rico color granate, el vino revela elevados aromas frutales de fresas brillantes y frutas confitadas, moca, vainilla y roble tostado.  Los sabores expresivos de mora, mora, cereza oscura, fresa jugosa y moca tostada aportan complejidad al paladar suave y lujoso.  El roble bien integrado proporciona estructura y profundidad pocas veces vistas en Pinot Noir.',3,true,true,'bar','WG',206),
+('Menage A Trois Red Blend 750ml','Wine',1300.00,504.0000,null,'099988071096',null,6,true,true,'bar','WG',207),
+('Menage a Trois Decadence Cab Sauv 750ml','Wine',1300.00,504.0000,null,'099988071416',null,4,true,true,'bar','WG',208),
+('Menage a Trois Silk Red Wine 750 ml','Wine',1300.00,504.0000,null,'099988071362',null,4,true,true,'bar','WG',209),
+('Mentos Chewy Mint','Chicle',100.00,37.4000,null,'073390000110',null,0,false,true,'bar','WG',13),
+('Meridian Merlot 750ml','Wine',600.00,200.0000,'M346557','089819068012',null,3,true,true,'bar','WG',210),
+('Mezcla para bebida de curaçao azul premium de 1 litro','Mix',500.00,null,null,'070491051805',null,0,true,true,'bar',null,12),
+('Mi Amore Blanco 750ml','Wine',1000.00,495.0000,'7276200015','672762000156',null,4,true,true,'bar','WG',211),
+('Mi Amore Red 750ml','Wine',1000.00,495.0000,'7276200014','672762000149',null,14,true,true,'bar','WG',212),
+('Mi Amore Rose 750ml','Wine',1000.00,380.0500,'M821349','672762000163',null,4,true,true,'bar','WG',213),
+('Michelob Ultra 12oz','Cerveza',200.00,98.4100,null,null,null,2,true,true,'bar','Abeja Logístic Group SRL',130),
+('Michelob Ultra 12oz Lata','Cerveza',200.00,65.0000,'01833429','01833429',null,1,true,true,'bar','WG',131),
+('Michelob Ultra 16oz Alum','Cerveza',250.00,91.0000,'01866524','01866524',null,22,true,true,'bar','WG',132),
+('Midori Melon Liqueur, 750 ml','Licores',2000.00,1049.9500,null,'088857003306',null,2,true,true,'bar','WG',45),
+('Mikes Hard Limonada 12oz','Cerveza',200.00,66.2500,'3898179','635985000013',null,0,true,true,'bar','WG',133),
+('Mikes Hard Mango 12oz','Cerveza',200.00,66.2500,'5561530','635985010210',null,1,true,true,'bar','WG',134),
+('Mikes Hard Straw 12oz','Cerveza',200.00,66.2500,'8299219','635985224150',null,3,true,true,'bar','WG',135),
+('Miller Genuine Draft 12oz','Cerveza',200.00,102.4100,null,'03456217',null,20,true,true,'bar','United brands',136),
+('Miller Lite 12oz Lata','Cerveza',150.00,50.4000,'03435418','03435418',null,15,true,true,'bar','WG',137),
+('Minute Man refill  líquido de lemon','E-Cig',100.00,650.0000,null,'637740314106',null,0,false,true,'bar','Seteo Vape Shop',45),
+('Minute man líquido de lemon 30ml','E-Cig',850.00,525.0000,null,null,null,5,false,true,'bar','Seteo Vape Shop',46),
+('Mionetto Brut Prosecco Doc Treviso 750ml','Champaña',1800.00,900.0000,null,'727760501638',null,0,true,true,'bar','WG',36),
+('Modelo Cubetazo','Fiesta',1000.00,null,null,null,null,0,true,false,'bar',null,39),
+('Modelo Especial 12oz','Cerveza',200.00,115.0000,'S042847','75031602',null,35,true,true,'bar','Abeja Logístic Group SRL',138),
+('Modelo Especial 12oz Lata','Cerveza',150.00,77.0000,null,'080660957555',null,0,true,true,'bar','WG',139),
+('Modelo Negra 12 oz','Cerveza',250.00,120.0000,'9576832','75031589',null,8,true,true,'bar','Provisiones Kelvin',140),
+('Modelo Pura Malta 12oz','Cerveza',200.00,121.0000,'V644798','7503024460155',null,0,true,true,'bar','Abeja Logístic Group SRL',141),
+('Moet & Chandon Ice Imperial 750ml','Champaña',8000.00,3084.9500,'4544440','081753818029',null,2,true,true,'bar','WG',37),
+('Moet Ice Rose Imp 750ml','Champaña',8500.00,4350.0000,'081753828004','081753828004',null,3,true,true,'bar','WG',38),
+('Moet Imperial Brut Blanco 750ml','Champaña',4000.00,2240.6800,'4533390','088110551056',null,7,true,true,'bar','WG',39),
+('Moet Imperial Rose 750ml','Champaña',6500.00,2745.0800,'401315Z','088110552404',null,2,true,true,'bar','WG',40),
+('Moet Nectar Imperial Azul 750ml','Champaña',6500.00,2344.6800,'929348A','088110551254',null,3,true,true,'bar','WG',41),
+('Moet Nectar Imperial Rose 750ml','Champaña',8000.00,3690.0500,'8682560','088076161658',null,2,true,true,'bar','WG',42),
+('Mofongo snax 50g','Papitas',40.00,28.0100,null,'7460496805672',null,19,false,true,'bar','Frito Lay’s',13),
+('Mojitos','Cócteles',200.00,0.0000,null,null,null,645,true,false,'bar',null,12),
+('Molson Canadian 12oz','Cerveza',200.00,80.0000,null,'068213001375',null,10,true,true,'bar','WG',142),
+('Moncionera','Cócteles',250.00,null,null,null,null,0,true,false,'bar',null,13),
+('Monkey Shoulder Scotch Whisky 750ml','Whiskey',3500.00,1925.4000,null,'083664872541',null,3,true,true,'bar','WG',75),
+('Monster Energy Drink 473ml','Jugos',200.00,100.0000,'917892B','070847029106',null,6,true,true,'bar','Elegant Liquor',25),
+('Montauk Golden Ale 12oz Lata','Cerveza',200.00,80.0000,null,'852247008598',null,2,true,true,'bar','WG',143),
+('Monte Alban Mezcal 750ml','Tequila',2400.00,1205.8200,null,'080660577258',null,2,true,true,'bar','WG',48),
+('Montecarlo','Cigarrillos',125.00,95.0000,null,'74600465',null,14,false,true,'bar','Cruce Guayacan Bebidas',6),
+('Montecristo Blanco 20pk','Cigarros',900.00,336.6000,null,'071610517530',null,5,false,true,'bar','Club Cigar',16),
+('Montecristo Memories 6 cigars','Cigarrillos',800.00,null,null,'071610933361',null,0,false,true,'bar',null,7),
+('Montecristo Platinum Le Roth Tubo 5x50','Cigarros',800.00,453.7500,null,'071610945814',null,20,false,true,'bar','Club Cigar',17),
+('Moosehead Lager 12oz','Cerveza',200.00,52.0000,'Q972187','07231162',null,5,true,true,'bar','WG',144),
+('Moretti Birra 12oz','Cerveza',200.00,112.7500,null,'8001435310018',null,6,true,true,'bar','Beers & Co By BBP',145),
+('Motts Manzana 10oz','Jugos',80.00,57.6600,'01489438','01489438',null,5,true,true,'bar','Abeja Logístic Group SRL',26),
+('Motts Manzana 32oz','Jugos',200.00,null,null,null,null,0,true,true,'bar',null,27),
+('Mya Hookah con Jaula','Mix',3000.00,1416.0000,null,'10848375001669',null,11,true,true,'bar','Habibi',13),
+('Myers’s Rum 750ml','Rum',2000.00,1148.6800,'08771300','08771300',null,2,true,true,'bar','WG',49),
+('Ménage a Trois Lavish Merlot 750ml','Wine',1300.00,600.0000,'https://qrcodes.pro/1ECOCo',null,null,3,true,true,'bar','WG',214),
+('N/A Pink Whitney 50ml','Vodka',50.00,40.0000,'08567507','08567507',null,2,true,true,'bar','WG',27),
+('Nacho cheese + carne','Comida',200.00,null,null,null,null,7,false,false,'cocina',null,8),
+('Natura chips yuca queso','Mix',30.00,24.5100,null,'7460496805108',null,3,true,true,'bar','Frito Lay’s',14),
+('Nerea Tempranillo Resv 750ml','Wine',1700.00,550.0000,'Y462521','879591001297',null,4,true,true,'bar','WG',215),
+('New  Belgium Brewing Voodoo Ranger Juice Force IPA 12oz lata','Cerveza',225.00,80.5200,null,'754527011734',null,7,true,true,'bar','WG',146),
+('New Belgium Brewing, Fat Tire Amber Ale','Cerveza',225.00,100.0000,null,'754527001605',null,7,true,true,'bar','WG',147),
+('New Belgium Brewing, IPA Ranger original 12oz lata','Cerveza',225.00,100.0000,null,'754527003616',null,24,true,true,'bar','WG',148),
+('New Belgium brewing brewing voodoo fruit forcé fruit punch ipa 12oz lata','Cerveza',225.00,100.0000,null,'754527012199',null,6,true,true,'bar','WG',149),
+('New Belgium brewing voodoo tropic force ipa 12Fz lata','Cerveza',225.00,100.0000,null,'754527012113',null,6,true,true,'bar','WG',150),
+('New Dominican Oro Rum 1.0L','Rum',6000.00,3933.5300,null,'7461592130729',null,1,true,true,'bar','WG',50),
+('New Dominican Rum 1.0L','Rum',5000.00,3245.0000,null,'7467303622972',null,1,true,true,'bar','WG',51),
+('New Voodoo Ranger Juicy Haze IPA 12oz Lata','Cerveza',225.00,80.5200,null,'754527009977',null,0,true,true,'bar','WG',151),
+('Newport Box','Cigarrillos',500.00,250.0000,null,'74201334',null,0,false,true,'bar','Importadora bosa',8),
+('Noble Vines 242 Sauv Blanc 750ml','Wine',1100.00,605.0000,'931998E','082242010924',null,3,true,true,'bar','WG',216),
+('Norton Reserva Cab Sauv 750ml','Wine',1700.00,1200.0000,'812477W','717888711125',null,1,true,true,'bar','WG',217),
+('Nota75  bubaloo x tremo  ice 30ml','E-Cig',800.00,500.0000,null,'6971644361052',null,4,false,true,'bar','Seteo Vape Shop',47),
+('Nota75  líquido la 42 medio refill','E-Cig',50.00,25.0000,null,null,null,0,false,true,'bar','Seteo Vape Shop',48),
+('Nota75 Líquido bubaloo   ice  refill','E-Cig',100.00,25.0000,null,null,null,0,false,true,'bar','Seteo Vape Shop',49),
+('Nota75 Líquido la 42  30ml','E-Cig',800.00,500.0000,null,'6971644360932',null,4,false,true,'bar','Seteo Vape Shop',50),
+('Novelty Hill Red 750ml','Wine',1100.00,605.0000,'5651200216','856512002168',null,2,true,true,'bar','WG',218),
+('Néctar Del Amor','Misc',50.00,26.0000,null,'1235646963238',null,40,false,true,'bar','Yan Carlos',19),
+('Oban 18 y 750ml','Whiskey',13000.00,6708.0000,'3698563','088076172494',null,1,true,true,'bar','WG',76),
+('Oban Single Malt 14 y 750ml','Whiskey',7000.00,4056.0000,'H567170','088110160050',null,1,true,true,'bar','WG',77),
+('Ocean Spray Cramberry 15 oz','Jugos',100.00,75.0000,'Z728620','031200008091',null,0,true,true,'bar','Provisiones Kelvin',28),
+('Ocean Spray Cranberry 32oz','Jugos',200.00,150.0000,null,'031200200006',null,4,true,true,'bar','Ocho Santos Mao',29),
+('Ocean Spray Rojo Ruby 64oz','Jugos',350.00,307.0000,null,'031200276278',null,2,true,true,'bar','Súpermercado Maeño',30),
+('Oliva Serie V Double Robusto Toro','Cigarros',1100.00,574.7500,null,'814539012546',null,19,false,true,'bar','Club Cigar',18),
+('Olmeca Altos Tequila 760ml','Tequila',2500.00,0.0000,null,'080432106846',null,1,true,true,'bar','United brands',49),
+('Opus One Napa Valley 2014 750ml','Wine',40000.00,13200.0000,'5360406214','753604062140',null,1,true,true,'bar','WG',219),
+('Orbit Gum Bubblemint Gum','Chicle',150.00,76.8600,null,'022000004895',null,10,false,true,'bar','WG',14),
+('Orbit Gum Sweet Mint Gum','Chicle',150.00,76.8600,null,'022000004833',null,0,false,true,'bar','WG',15),
+('Orbit Gum Wintermint Gum','Chicle',150.00,76.8600,null,'022000004888',null,0,false,true,'bar','WG',16),
+('Orbit Peppermint Gum','Chicle',150.00,76.8600,'5097642',null,null,12,false,true,'bar','WG',17),
+('Orbit Spearmint  Gum','Chicle',150.00,76.8600,null,'022000004840',null,12,false,true,'bar','WG',18),
+('Osborne Carlos I Solera 750ml','Brandy',3600.00,1716.0000,'414981D','022851055015',null,1,true,true,'bar','WG',3),
+('Oyster Bay Merlot 750ml','Wine',1300.00,570.0000,'4063804','870661008147',null,3,true,true,'bar','WG',220),
+('Oyster Bay Rose 750ml','Wine',1300.00,609.0000,'104835Z','870661008055',null,3,true,true,'bar','WG',221),
+('Pacifico Clara 12oz','Cerveza',200.00,61.0000,null,'08066640',null,4,true,true,'bar','WG',152),
+('Paderborner pilsener 500ml','Cerveza',200.00,90.7900,null,'4101120015106',null,8,true,true,'bar','United brands',153),
+('Paloma Spicy','Cócteles',250.00,null,null,null,null,952,true,false,'bar',null,14),
+('Paniza 654 Tiffany Garnacha 750ml','Wine',800.00,112.0000,null,'851806003425',null,6,true,true,'bar','WG',222),
+('Paniza Flamboyant Royal Garnacha 750ml','Wine',800.00,112.0000,null,'851806003395',null,6,true,true,'bar','WG',223),
+('Papas fritas','Comida',100.00,null,null,null,null,0,false,false,'cocina',null,9),
+('Papi Cab Sauv 750ml','Wine',1000.00,275.0000,'S680487','893828001003',null,6,true,true,'bar','WG',224),
+('Papi Gran Suave Dulce 750ml','Champaña',1000.00,367.0000,'X084036','8033344038646',null,3,true,true,'bar','WG',43),
+('Papi Sangría Chinola 750ml','Wine',800.00,183.0000,null,'893828001850',null,3,true,true,'bar','WG',225),
+('Papi Tequila Blanco 750ml','Tequila',2000.00,1298.0000,null,'893828001737',null,8,true,true,'bar','WG',50),
+('Papi Tequila Reposado 750ml','Tequila',2000.00,1298.0000,null,'893828001676',null,4,true,true,'bar','WG',51),
+('Partagas Sabrosos','Cigarros',700.00,404.2500,null,'689674026129',null,9,false,true,'bar','Club Cigar',19),
+('Passport Selection whiskey 750ml','Whiskey',900.00,582.0000,null,'5000299210413',null,14,true,true,'bar','United brands',78),
+('Patron Añejo 750ml','Tequila',5200.00,2500.6800,'1972929','721733000012',null,2,true,true,'bar','WG',52),
+('Patron El Cielo Tequila, 750ml','Tequila',16000.00,5347.0200,null,'721733005949',null,1,true,true,'bar','WG',53),
+('Patron Reposado 750ml','Tequila',4800.00,2534.9500,null,'721733000159',null,3,true,true,'bar','WG',54),
+('Patron Silver','Fiesta',5000.00,null,null,null,null,0,true,false,'bar',null,40),
+('Patron Silver 750ml','Tequila',4000.00,2424.9500,'6361404','721733000029',null,10,true,true,'bar','WG',55),
+('Patron Tequila, Extra Anejo 750ml','Tequila',6000.00,3799.9500,null,'721733003075',null,2,true,true,'bar','WG',56),
+('Patrón Cristalino 750ml','Tequila',6500.00,3538.0000,null,'721733006137',null,4,true,true,'bar','WG',57),
+('Patrón Silver  375ml','Tequila',2500.00,1272.0000,'E500995','721733000944',null,0,true,true,'bar','WG',58),
+('Patrón Silver 50ml','Tequila',500.00,239.0000,'2541854','721733000234',null,28,true,true,'bar','WG',59),
+('Patrón Silver Tragos','Tragos',300.00,102.0000,'J370076',null,null,43,true,false,'bar','WG',46),
+('Patrón XO Cafe 750ml','Licores',3500.00,1925.4000,null,'721733000036',null,3,true,true,'bar','WG',46),
+('Paulaner Hefe-Weizen 12iz','Cerveza',250.00,195.0000,null,'4066600060741',null,0,true,true,'bar','WG',154),
+('Paulaner Oktoberfest Mä̈RZen 12oz','Cerveza',250.00,85.0000,null,'4066600303336',null,7,true,true,'bar','WG',155),
+('Paulaner weissbier 0;0%','Cerveza',175.00,163.0100,null,'4066600941910',null,2,true,true,'bar','Impocerveza ;SRL',156),
+('Paulaner, Lager Original 12oz','Cerveza',200.00,85.0000,null,'080157111361',null,0,true,true,'bar','WG',157),
+('Pazo De Mauro Albarińo 750','Wine',1700.00,900.0000,'420572N','8429345023086',null,3,true,true,'bar','WG',226),
+('Pernod Anise 750ml','Licores',3000.00,1807.2800,null,'080432291672',null,2,true,true,'bar','WG',47),
+('Peroni 12oz','Cerveza',200.00,66.3000,'S089921','181954000015',null,4,true,true,'bar','WG',158),
+('Perrier Agua 330 ml','Jugos',200.00,79.0000,'07478341','07478341',null,0,true,true,'bar','Provisiones Kelvin',31),
+('Piattelli Grand Reserva 750ml','Wine',2000.00,1200.0000,null,'875752000239',null,3,true,true,'bar','WG',227),
+('Piattelli Vineyards Reserve Malbec 750ml','Wine',1800.00,1100.0000,null,'875752000390',null,3,true,true,'bar','WG',228),
+('Pierre Patou VSOP 750ml','Cognac',2700.00,1300.0000,'3544339','858962004594',null,3,true,true,'bar','WG',17),
+('Pilsner Urquell 12oz','Cerveza',200.00,80.0000,'295959',null,null,6,true,true,'bar','WG',159),
+('Pinord Moscatel 750ml','Wine',1300.00,816.0000,null,'667946740003',null,6,true,true,'bar','WG',229),
+('Piña colada','Cócteles',200.00,null,null,null,null,968,true,false,'bar',null,15),
+('Planeta Azul Agua 16oz','Jugos',50.00,9.7600,null,'701891100014',null,144,true,true,'bar','Abeja Logístic Group SRL',32),
+('Planeta Azul Limón 16oz','Jugos',50.00,11.0200,null,'701891103022',null,28,true,true,'bar','Abeja Logístic Group SRL',33),
+('Planeta toronja','Jugos',50.00,19.1500,null,'701891103015',null,22,true,true,'bar','Abeja Logístic Group SRL',34),
+('Planters Heat Penuts 1.75oz','Misc',100.00,21.0000,'S0100534-01',null,null,17,false,true,'bar','Almacén Vesino',20),
+('Planters Salted Cashew 1.5oz','Misc',150.00,61.0000,'S0100963-01',null,null,15,false,true,'bar','Almacén Vesino',21),
+('Planters honey cashews 1.5oz','Misc',150.00,61.0000,'S0100964-01',null,null,17,false,true,'bar','Almacén Vesino',22),
+('Planters salted Peanuts 1.75oz','Misc',100.00,21.0000,'S0100605-01',null,null,15,false,true,'bar','Almacén Vesino',23),
+('Poca Loca Sweet Ref 750ml','Wine',900.00,406.0000,null,'860010078938',null,3,true,true,'bar','WG',230),
+('Poliakov Vodka 37.5% 700ml','Vodka',900.00,669.2700,null,'3147690061007',null,0,true,true,'bar','United brands',28),
+('Pollo Alitas Buffalo 8+ Guarnición','Comida',500.00,null,null,null,null,22,false,false,'cocina',null,10),
+('Pollo Alitas Buffalo 8PC','Comida',400.00,null,null,null,null,29,false,false,'cocina',null,11),
+('Pollo Deditos 6 + Guarnicion','Comida',500.00,null,null,null,null,30,false,false,'cocina',null,12),
+('Pollo Deditos 6 PC','Comida',400.00,null,null,null,null,27,false,false,'cocina',null,13),
+('Ponche Crema De Oro 700ml','Licores',700.00,355.0000,'Q624136','7462324240624',null,2,true,true,'bar','Abeja Logístic Group SRL',48),
+('Prati Louis Martini Sonoma Cab Sauv 750','Wine',1600.00,928.0000,null,'085000011638',null,3,true,true,'bar','WG',231),
+('Presidente 12oz','Cerveza',150.00,95.0800,'4931602','74621767',null,385,true,true,'bar','Abeja Logístic Group SRL',160),
+('Presidente 12oz Lata','Cerveza',100.00,78.6200,null,'74653294',null,1,true,true,'bar','Abeja Logístic Group SRL',161),
+('Presidente 22oz','Cerveza',250.00,142.3100,'1551283','74601554',null,0,true,true,'bar','Abeja Logístic Group SRL',162),
+('Presidente 8oz Lata','Cerveza',100.00,83.2500,null,'7463172802149',null,0,true,true,'bar','Abeja Logístic Group SRL',163),
+('Presidente Black 12oz','Cerveza',150.00,91.5400,null,'7463172803764',null,0,true,true,'bar','Abeja Logístic Group SRL',164),
+('Presidente Chinola 8oz','Cerveza',100.00,75.0000,null,'7463172803061',null,8,true,true,'bar','Ocho Santos Mao',165),
+('Presidente Cubetazo','Fiesta',1000.00,660.0000,null,null,null,0,true,false,'bar',null,41),
+('Presidente Light  8oz Lata','Cerveza',100.00,83.2500,null,'7463172802132',null,12,true,true,'bar','Abeja Logístic Group SRL',166),
+('Presidente Light 12 onz Lata','Cerveza',100.00,78.6200,null,null,null,1,true,true,'bar','Abeja Logístic Group SRL',167),
+('Presidente Light 22oz','Cerveza',250.00,142.3100,'T689025','74601561',null,12,true,true,'bar','Abeja Logístic Group SRL',168),
+('Presidente Ligth 12oz','Cerveza',150.00,87.6600,'4408928','74621774',null,409,true,true,'bar','Abeja Logístic Group SRL',169),
+('Presidente Ligth cubetazo','Fiesta',1000.00,1500.0000,null,null,null,0,true,false,'bar',null,42),
+('Prestige Les Vigneron blanc 750ml','Wine',1000.00,403.0000,'W639500','3268535909008',null,4,true,true,'bar','WG',232),
+('Primos Amore Moscato 750ml','Wine',1000.00,500.0000,null,'876153002846',null,3,true,true,'bar','WG',233),
+('Proper Twelve Irish Whiskey  750ml','Whiskey',2700.00,936.0000,'G954523','811538019569',null,3,true,true,'bar','WG',79),
+('Proper Twelve Irish Whiskey 375ml','Whiskey',1400.00,605.0000,'H089441','811538019682',null,2,true,true,'bar','WG',80),
+('Protos Ribera Del Duero 750ml','Wine',1300.00,1160.0000,'798353B','8420342002012',null,0,true,true,'bar','Price Smart',234),
+('Protos Tinto Fino Ribera del Duero 750ml','Wine',1000.00,668.4700,null,'015643509636',null,4,true,true,'bar','WG',235),
+('Puerta Negra Blanco Trago','Tragos',150.00,26.4600,null,null,null,100,true,false,'bar','WG',47),
+('Puerta Negra Reposado Trago','Tragos',150.00,26.4600,null,null,null,50,true,false,'bar','WG',48),
+('Punch R/Corojo Gusto Tube','Cigarros',900.00,453.7500,null,'689674093893',null,14,false,true,'bar','Club Cigar',20),
+('Puntacana Black 750ml','Rum',2800.00,2013.8100,null,'7466871107430',null,2,true,true,'bar','WG',52),
+('Puntacana Espléndido 750ml','Rum',2500.00,1767.0000,null,'7466871107423',null,2,true,true,'bar','WG',53),
+('Puntacana Oliver XO 50Ańos 750ml','Rum',4300.00,2583.8100,'14668717','7466871100813',null,2,true,true,'bar','WG',54),
+('Puntacana Tesoro 750ml','Rum',3000.00,2013.8100,null,'7466871107416',null,2,true,true,'bar','WG',55),
+('Pure Plus Aloe Orig 500ml','Jugos',175.00,96.9500,null,'8809125063011',null,15,true,true,'bar','Abeja Logístic Group SRL',35),
+('Pyne Pod Blue Razz Watermelon ice 30K','E-Cig',2300.00,660.0000,null,'6977668590881',null,2,false,true,'bar','Vape Wholesale',51),
+('Pyne Pod Straw Watermelon 30k puff','E-Cig',2300.00,660.0000,null,'6977668590829',null,1,false,true,'bar','Vape Wholesale',52),
+('Pyne Pod White Grape Ice 25k puff','E-Cig',2300.00,660.0000,null,'6977668590744',null,2,false,true,'bar','Vape Wholesale',53),
+('Raiza Rioja Temp 750ml','Wine',1200.00,550.0000,'360635K','8410310606892',null,2,true,true,'bar','WG',236),
+('Rashi Claret Red Semi Dulce 750ml','Wine',1300.00,825.0000,null,'087752008454',null,4,true,true,'bar','WG',237),
+('Red Breast 12Y 750ml','Whiskey',8000.00,3029.9500,'885384F','080432586174',null,2,true,true,'bar','WG',81),
+('Red Breast 15Y 750ml','Whiskey',12000.00,4992.0000,'8301915','080432106419',null,1,true,true,'bar','WG',82),
+('Red Bull','Jugos',350.00,157.0800,null,'9002490267544',null,20,true,true,'bar','Abeja Logístic Group SRL',36),
+('Red Bull 250 ml','Jugos',200.00,73.0000,'9465839','9002490100490',null,0,true,true,'bar','Provisiones Kelvin',37),
+('Red Bull 355ml','Jugos',300.00,110.0000,null,null,null,0,true,true,'bar','Abeja Logístic Group SRL',38),
+('Red Diamond Merlot 750ml','Wine',1000.00,370.0000,'650487Q','088586001123',null,1,true,true,'bar','WG',238),
+('Red Stripe Jamaican Lager 12oz','Cerveza',200.00,73.7500,null,'083820359626',null,3,true,true,'bar','WG',170),
+('Refil butano','Misc',200.00,null,null,null,null,0,false,true,'bar',null,24),
+('Relax Bubble Rose 750ml','Champaña',1300.00,468.0000,'P911271','088474012552',null,2,true,true,'bar','WG',44),
+('Relax Pink Rose 750ml','Wine',1400.00,490.8600,'Y581485','088474008050',null,2,true,true,'bar','WG',239),
+('Relax Riesling 750ml','Wine',1400.00,500.0000,'W779908','088474022407',null,3,true,true,'bar','WG',240),
+('Remy Martin 1738 750ml','Cognac',6500.00,2920.8600,'692755G','087236002114',null,5,true,true,'bar','WG',18),
+('Remy Martin VSOP 375ml','Cognac',2700.00,1258.6800,'4868833','087236001247',null,2,true,true,'bar','WG',19),
+('Remy Martín 1738 375ml','Cognac',5000.00,1517.4500,'784750W','087236002831',null,3,true,true,'bar','WG',20),
+('Remy Martín VSOP 750ml','Cognac',3500.00,2448.6800,'283243F','087236001162',null,3,true,true,'bar','WG',21),
+('Remy Pannier Muscadet 750ml','Wine',2300.00,715.0000,'8941929','086785353760',null,3,true,true,'bar','WG',241),
+('Replica Cellars Just Right Cabernet 750ml','Wine',1500.00,550.0000,null,'850892003647',null,3,true,true,'bar','WG',242),
+('República La Dura 5.0 11.2oz','Cerveza',150.00,100.0000,null,'8423453914946',null,11,true,true,'bar','WG',171),
+('República La Dura 5.0 16oz Lata','Cerveza',200.00,95.0000,null,'8423453915011',null,30,true,true,'bar','WG',172),
+('República La Tuya 330ml','Cerveza',150.00,100.0000,'282400W','8423453910535',null,0,true,true,'bar','Elegant Liquor',173),
+('República La Tuya 330ml Lata','Cerveza',150.00,100.0000,'182646D','8423453910566',null,0,true,true,'bar','Elegant Liquor',174),
+('Rheinhessen Fritz Windisch Riesling 750ml','Wine',1500.00,551.0000,null,'4025857052053',null,5,true,true,'bar','WG',243),
+('Rica Naranja 32oz','Jugos',250.00,82.0000,'S649724','790330021126',null,0,true,true,'bar','Madera Minimarket',39),
+('Ricura Horchata Cream 750ml','Licores',2000.00,880.0000,null,'084279988382',null,3,true,true,'bar','WG',49),
+('Ripiao Añejo 700ml','Rum',1800.00,1140.0000,null,'7461592130118',null,6,true,true,'bar','WG',56),
+('Riunite Lambrusco 750ml','Wine',900.00,411.0000,null,'089744765482',null,6,true,true,'bar','WG',244),
+('Robert Mondavi  Napa Valley Cab Sauv 750ml','Wine',4500.00,2795.0200,null,'086003051843',null,1,true,true,'bar','WG',245),
+('Robert Mondavi PS Cab Sauv 750ml','Wine',1000.00,460.0000,'T735875','086003061910',null,2,true,true,'bar','WG',246),
+('Rocky Patel Hamlet Tabaquero Robusto Grande','Cigarros',700.00,324.5000,null,'846261012921',null,7,false,true,'bar','Club Cigar',21),
+('Romana Sambuca 100ml','Licores',300.00,167.5800,null,'088004043070',null,4,true,true,'bar','WG',50),
+('Romana Sambuca 50ml','Licores',200.00,75.0000,'T942824','088004036720',null,2,true,true,'bar','WG',51),
+('Romana Sambuca 750ml','Licores',2000.00,1096.6800,'460578T','088004037475',null,1,true,true,'bar','WG',52),
+('Rombauer Napa Cab Sauv 750ml','Wine',7000.00,4200.0000,null,'097921872106',null,0,true,true,'bar','WG',247),
+('Romeo & Julieta Amores 6pk','Cigarros',600.00,420.7500,null,'076452362553',null,0,false,true,'bar','Club Cigar',22),
+('Romeo & Julieta Clemenceau Tubo','Cigarros',900.00,511.0000,null,'076452351243',null,31,false,true,'bar','Club Cigar',23),
+('Romeo & Julieta Reserva Real 6pk','Cigarros',900.00,420.7500,null,'076452362621',null,6,false,true,'bar','Club Cigar',24),
+('Romeo & Julieta Reserva Real Verona','Cigarros',900.00,409.7500,null,'076452351656',null,0,false,true,'bar','Club Cigar',25),
+('Romeo & Julieta Romeos 6pk','Cigarros',800.00,420.7500,null,'076452348618',null,0,false,true,'bar','Club Cigar',26),
+('Romeo 505 Pirámide Nicaragua','Cigarros',1100.00,376.7500,null,'076452346959',null,16,false,true,'bar','Club Cigar',27),
+('Ron Abuelo Anejo 750ml','Rum',1000.00,682.5000,null,'088291100050',null,2,true,true,'bar','United brands',57),
+('Ron Barceló Imperial Botella 700 ml','Rum',1800.00,1036.7500,null,'7461323129459',null,2,true,true,'bar','Abeja Logístic Group SRL',58),
+('Ron Rico Silver Rum 1.7L','Rum',1100.00,760.0000,null,'080686141129',null,3,true,true,'bar','WG',59),
+('Ronson 78RBF Multi-fill Butane Fuel 135ml','Misc',500.00,147.0000,null,'037900991442',null,12,false,true,'bar','WG',25),
+('Roscato Moscato 750ml','Wine',1200.00,610.0000,'1388698','086785213002',null,3,true,true,'bar','WG',248),
+('Roscato Rose Dolce 750ml','Wine',1200.00,610.0000,'906291Z','086785212463',null,5,true,true,'bar','WG',249),
+('Roscato Rosso Dolce GL 750ml','Wine',1200.00,610.0000,'C090004','086785213125',null,1,true,true,'bar','WG',250),
+('Roscato Sweet Red BL 750ml','Wine',1200.00,610.0000,'M719513','086785110738',null,12,true,true,'bar','WG',251),
+('Rosemount DMF Pinot Noir 750ml','Wine',900.00,440.0000,'Q742855','012894865313',null,3,true,true,'bar','WG',252),
+('Royal Honey Vip 20g','Misc',300.00,46.0000,null,'9555755800036',null,0,false,true,'bar','Amazon',26),
+('Royal club triple sec','Licores',700.00,398.3700,null,'080660000329',null,0,true,true,'bar','United brands',53),
+('Rubirosa 4 Ańo Rum 750ml','Rum',2500.00,1334.0000,null,'850027223162',null,2,true,true,'bar','WG',60),
+('Ruffino Prosecco 187ml','Champaña',450.00,200.0000,'405301Y','083085420239',null,0,true,true,'bar','WG',45),
+('Ruffino Reserva Ducale Oro 750ml','Wine',2700.00,1696.0000,'P998040','083085903220',null,3,true,true,'bar','WG',253),
+('Ruffino Riserva Ducale Chianti Classico 750ml','Wine',1700.00,1159.9500,null,'083085903084',null,2,true,true,'bar','WG',254),
+('Ruffles Carne Asada29oz','Papitas',30.00,21.0200,'690961Y','721282402770',null,6,false,true,'bar','Frito Lay’s',14),
+('Ruffles Queso29oz','Papitas',30.00,21.0200,'8049178','721282402787',null,6,false,true,'bar','Frito Lay’s',15),
+('Rum Chata Horchata 375ml','Licores',1100.00,659.8800,'2310992','890355001032',null,1,true,true,'bar','WG',54),
+('Rum Chata Horchata 50ml','Licores',200.00,73.1500,'381828M','890355001049',null,8,true,true,'bar','WG',55),
+('Rum Chata Horchata 750ml','Licores',2000.00,1273.4800,'M211995','890355001025',null,4,true,true,'bar','WG',56),
+('Rum Chata Horchata Tragos','Tragos',200.00,55.0000,'X804509',null,null,35,true,false,'bar',null,49),
+('Rum Chata Pińa 50ml','Licores',200.00,77.1400,null,'085000007464',null,20,true,true,'bar','WG',57),
+('Rum Heaven Coco 50ml','Rum',75.00,38.5000,'867659M','085000023334',null,53,true,true,'bar','WG',61),
+('Ruthless  Grape Líquido Vape 100ml','E-Cig',1200.00,500.0000,null,'819371025785',null,1,false,true,'bar','Seteo Vape Shop',54),
+('Ruthrford Hill Merlot Napa Valley 750ml','Wine',2300.00,1324.4000,null,'086891028927',null,1,true,true,'bar','WG',255),
+('Ríondo Prosecco 750nl','Champaña',1500.00,522.0000,'9263072','835655000026',null,3,true,true,'bar','WG',46),
+('Sacacorchos De Camarero','Misc',400.00,136.0000,'WAC2000112',null,null,4,false,true,'bar','WG',27),
+('Sacacorchos Doble Alas','Misc',400.00,136.0000,'WIC2000312',null,null,6,false,true,'bar','WG',28),
+('Sacacorchos Plástico','Misc',100.00,62.0600,null,'024291110200',null,6,false,true,'bar','WG',29),
+('Salchipapas','Comida',250.00,null,null,null,null,0,false,false,'cocina',null,14),
+('Samuel Adams Boston Lager 12oz','Cerveza',200.00,84.0000,null,'08769251',null,3,true,true,'bar','WG',175),
+('Samuel Adams October Fest 12 oz','Cerveza',250.00,93.0000,null,'087692300533',null,3,true,true,'bar','WG',176),
+('Sam’s Manzana Dulce 750ml','Wine',700.00,216.0000,'8765276','853936007977',null,3,true,true,'bar','WG',256);
+
+
+-- filas 1201–1516
+insert into public._import_882ef5a4 (name, categoria, price, cost, sku, barcode, descr, qty, is_bev, inventariable, area, vendor, posicion) values
+('San Pellegrino 500ml','Jugos',200.00,52.0000,null,'041508800082',null,0,true,true,'bar','WG',40),
+('San Pellegrino Blood Orange 12oz','Jugos',200.00,100.0000,null,'041508992688',null,3,true,true,'bar','WG',41),
+('San Pellegrino Lemon, 12oz','Jugos',200.00,100.0000,null,'041508265089',null,0,true,true,'bar','WG',42),
+('Sanpellegrino Aranciata rossa','Jugos',200.00,139.9500,null,'8002270696831',null,1,true,true,'bar','Supermercado Morel',43),
+('Sanpellegrino Pomegranate and Orange 12oz','Jugos',200.00,100.0000,null,'041508659376',null,9,true,true,'bar','WG',44),
+('Santa Margherita Pinot Grigio 750ml','Wine',1600.00,1144.0000,'K154356','632987200205',null,4,true,true,'bar','WG',257),
+('Santa Margherita Prosecco 750ml','Champaña',1800.00,1276.0000,'S460645','632987201103',null,3,true,true,'bar','WG',47),
+('Santa Margherita Rose 750ml','Wine',1600.00,1142.9600,'W545989','632987200328',null,2,true,true,'bar','WG',258),
+('Santa Rita Medalla Real Cab  Sauv 750ml','Wine',1200.00,660.5500,null,'686586002005',null,3,true,true,'bar','WG',259),
+('Santero Coco & Moscato 750ml','Champaña',1100.00,416.0000,'3545415','713757780414',null,1,true,true,'bar','WG',48),
+('Santero Mimosa 750ml','Champaña',1100.00,416.0000,'511075J','8004385037172',null,3,true,true,'bar','WG',49),
+('Santero Moscato Chinola 750ml','Champaña',1100.00,416.0000,'56565656','56565656',null,1,true,true,'bar','WG',50),
+('Santero Moscato Piña 750ml','Champaña',1100.00,416.0000,'5682277','8004385034553',null,3,true,true,'bar','WG',51),
+('Santi Pinot Grigio 750ml','Wine',1000.00,520.0000,'351974V','089744334121',null,2,true,true,'bar','WG',260),
+('Sapporo Lager 12oz Lata','Cerveza',200.00,80.0000,null,'087975023500',null,4,true,true,'bar','WG',177),
+('Sapporo Premium 12oz','Cerveza',200.00,80.0000,null,'087975003502',null,3,true,true,'bar','WG',178),
+('Scarlet Shiraz cab Merlot 750ml','Wine',800.00,624.4400,null,'3012993057012',null,1,true,true,'bar','United brands',261),
+('Seagrams 7 American whisky 375ml','Whiskey',700.00,480.0000,'08776509','08776509',null,4,true,true,'bar','WG',83),
+('Seagrams CALYPSO COLADA 12oz','Cerveza',200.00,120.0000,'450116M','080432100868',null,0,true,true,'bar','Price Smart',179),
+('Seagrams CLASSIC LIME MARGARITA 12oz','Cerveza',200.00,120.0000,'Z970657','080432802380',null,0,true,true,'bar','Price Smart',180),
+('Seagrams Escapes WILD BERRIES 12oz','Cerveza',200.00,120.0000,'324597D','080432802656',null,0,true,true,'bar','Price Smart',181),
+('Seagrams Gin 750ml','Ginebra',1100.00,680.6800,'P581884','080432401231',null,4,true,true,'bar','WG',11),
+('Seagrams JAMAICAN ME HAPPY 12oz','Cerveza',200.00,120.0000,'1090788','080432103456',null,0,true,true,'bar','Price Smart',182),
+('Seagrams PASSIONFRUIT MANGO','Cerveza',200.00,120.0000,'2428054','070310013083',null,0,true,true,'bar','Price Smart',183),
+('Seagrams STRAWBERRY DAIQUIRI','Cerveza',200.00,120.0000,'D897407','080432802533',null,8,true,true,'bar','Price Smart',184),
+('Secret Vines Red Blend 750ml','Wine',1300.00,750.0000,'6815427','854295006243',null,6,true,true,'bar','WG',262),
+('Secrets Red Blend Reserve 750ml','Wine',1100.00,796.2700,null,null,null,0,true,true,'bar','Price Smart',263),
+('Segura Viudas Brut Reserva 750ml','Champaña',1200.00,527.2200,'476749P','033293690009',null,2,true,true,'bar','WG',52),
+('Segura Viudas Brut Rose 750ml','Champaña',1200.00,527.2200,'319184F','033293640004',null,2,true,true,'bar','WG',53),
+('Segura Viudas Heredad Reserve Brut Cava 750ml','Champaña',3500.00,1862.6700,null,'033293650003',null,2,true,true,'bar','WG',54),
+('SelvaRey Coco 750ml','Rum',3000.00,1629.2200,null,'816136025813',null,3,true,true,'bar','WG',62),
+('Sex On The Beach','Cócteles',200.00,null,'7600469',null,null,1000,true,false,'bar',null,16),
+('Señor Sangria Blanca 750ml','Wine',800.00,429.0000,null,'857674005028',null,4,true,true,'bar','WG',264),
+('Señor Sangria Roja 750ml','Wine',800.00,429.0000,null,'857674005004',null,3,true,true,'bar','WG',265),
+('Shock Top Belgian White 12oz','Cerveza',200.00,70.0000,null,'018200008672',null,2,true,true,'bar','WG',185),
+('Siboney Blanco Ron 750ml','Rum',700.00,454.6500,null,'7467325360111',null,6,true,true,'bar','United brands',63),
+('Sierra Batuco Carmenere Reserva 750ml','Wine',1200.00,385.0000,'S510917','851764002294',null,3,true,true,'bar','WG',266),
+('Sierra Nevada Pale Ale 12oz','Cerveza',225.00,82.0000,null,'08378354',null,1,true,true,'bar','WG',186),
+('Silk & Spice, Red Blend 750ml','Wine',1000.00,432.0000,null,'739949026320',null,12,true,true,'bar','WG',267),
+('Simi California Cab Sauv 750ml','Wine',2400.00,1044.0000,null,'088415780557',null,2,true,true,'bar','WG',268),
+('Simi Sonoma Pinot Noir 750ml','Wine',2000.00,1000.0000,'8841578966','088415789666','Este Pinot Noir del condado de Sonoma exhibe sabores de las mejores regiones de cultivo en todo el condado de Sonoma.  Un bouquet aromático de frutas rojas maduras, especias y piel de naranja brinda una acidez brillante, taninos suaves y mineralidad en el final.',3,true,true,'bar','WG',269),
+('Six Eigth Nine Red Wine750ml','Wine',1500.00,1125.7600,'884831Y','051497322618',null,0,true,true,'bar','Price Smart',270),
+('Sixpoint brewery the Crisp Pilz 12oz','Cerveza',200.00,119.6000,null,'859093002374',null,6,true,true,'bar','WG',187),
+('Skittles original','Chicle',100.00,100.0000,'4000000160',null,null,0,false,true,'bar','WG',19),
+('Skrewball Peanut Butter Whiskey 50ml','Licores',250.00,103.8600,null,'860265002429',null,16,true,true,'bar','WG',58),
+('Skrewball Peanut Butter Whiskey 750ml','Licores',2300.00,1455.0000,null,'860265002405',null,2,true,true,'bar','WG',59),
+('Slim Jim Beef and Cheese  1.5 oz','Misc',150.00,97.0000,null,'026200112008',null,24,false,true,'bar','WG',30),
+('Slim Jim Beef and Cheese Stick Pepperoni n Cheese 1.5 oz','Misc',150.00,97.0000,null,'026200114200',null,13,false,true,'bar','WG',31),
+('Slim Jim Original Smoked Snack Sticks','Misc',100.00,69.0000,null,'026200117003',null,22,false,true,'bar','WG',32),
+('Slim Jim Tabasco Spiced Giant Stick','Misc',100.00,69.0000,null,'026200117300',null,20,false,true,'bar','WG',33),
+('Smirnoff Green Apple 50ml','Vodka',75.00,40.0000,'08210003','08210003',null,9,true,true,'bar','WG',29),
+('Smirnoff Ice Desarmador 12oz','Cerveza',200.00,65.0000,'951049E','082000757474',null,6,true,true,'bar','WG',188),
+('Smirnoff Ice Frambuesa 12oz','Cerveza',200.00,65.0000,'5090003','082000727507',null,0,true,true,'bar','WG',189),
+('Smirnoff Ice Mango 12oz','Cerveza',200.00,65.0000,'G825213','082000743439',null,0,true,true,'bar','WG',190),
+('Smirnoff Ice Manzana Verde 12oz','Cerveza',200.00,65.0000,'716412F','082000727477',null,4,true,true,'bar','WG',191),
+('Smirnoff Ice Orig 12oz','Cerveza',200.00,65.0000,'B223366','541016964234',null,10,true,true,'bar','WG',192),
+('Smirnoff Ice Pink Lemonade 12oz','Cerveza',200.00,65.0000,'C915153','082000797227',null,1,true,true,'bar','WG',193),
+('Smirnoff Ice Sandia Mimosa 12oz','Cerveza',200.00,65.0000,'705138L','082000773689',null,1,true,true,'bar','WG',194),
+('Smirnoff Naranja 50ml','Vodka',75.00,40.0000,'08239008','08239008',null,14,true,true,'bar','WG',30),
+('Smirnoff Piña 12oz','Cerveza',200.00,65.0000,'307992L','082000747833',null,0,true,true,'bar','WG',195),
+('Smirnoff Vodka 50ml','Vodka',75.00,40.0000,'08247201','08247201',null,7,true,true,'bar','WG',31),
+('Smirnoff Vodka 750ml','Vodka',1300.00,576.6800,'177221K','082000000068',null,4,true,true,'bar','WG',32),
+('Smirnoff Vodka Tragos','Tragos',150.00,27.5000,'916657L',null,null,48,true,false,'bar',null,50),
+('Snapple Lemon Tea 16oz','Jugos',150.00,45.0000,null,'076183003152',null,11,true,true,'bar','WG',45),
+('Snow Monkey Dragón fruit keylime','Cerveza',200.00,118.0000,null,'850046355233',null,4,true,true,'bar','WG',196),
+('Snow Monkey mandarín Grapefruit','Cerveza',200.00,118.0000,null,'850046355240',null,3,true,true,'bar','WG',197),
+('Snow Monkey mango guava 12onz','Cerveza',200.00,118.0000,null,'850046355264',null,4,true,true,'bar','WG',198),
+('Snow Monkey yuzu hibiscus 12onz','Cerveza',200.00,118.0000,null,'850046355257',null,4,true,true,'bar','WG',199),
+('Something Special 750 ml','Whiskey',1200.00,739.0000,'6370051','080432402795',null,3,true,true,'bar','Provisiones Kelvin',84),
+('Sonoroso Sweet Red 750ml','Wine',900.00,335.0000,'6305452','087241880493',null,3,true,true,'bar','WG',271),
+('Sonoroso Sweet White 750ml','Wine',900.00,335.0000,'4051103','087241880479',null,4,true,true,'bar','WG',272),
+('Southern Comfort, 750ml','Licores',1800.00,991.0000,null,'088544019054',null,3,true,true,'bar','WG',60),
+('Southern Confort Tragos','Tragos',100.00,30.0000,'680573C',null,null,54,true,false,'bar',null,51),
+('Spaten, Lager 12oz','Cerveza',200.00,80.0000,null,'088394000011',null,11,true,true,'bar','WG',200),
+('Sprite 400ml','Jugos',50.00,18.0000,'7005257','049000057690',null,23,true,true,'bar','Madera Minimarket',46),
+('St. Germain Elderflower Liqueur, 750ml','Licores',3000.00,1800.0000,null,'080480004699',null,3,true,true,'bar','WG',61),
+('Starborough Sauv Blanc 750ml','Wine',1500.00,550.0000,'5491471','085000016602',null,3,true,true,'bar','WG',273),
+('Starbuzz carbón pk','Misc',120.00,90.0000,null,'847244018466',null,0,false,true,'bar','Jesier',34),
+('Starlight Carbon Rollo','Misc',100.00,null,'683964900403','683964900403',null,0,false,true,'bar',null,35),
+('Starlight Charcoal, 1 Box, 10 Rolls','Misc',1000.00,350.0000,null,'683964900014',null,12,false,true,'bar','Habibi',36),
+('Stella Artois 22oz','Cerveza',250.00,124.1200,null,'786150000571',null,0,true,true,'bar','WG',201),
+('Stella Artois 8oz Lata','Cerveza',125.00,80.0000,'957115X','7702004010254',null,7,true,true,'bar','Abeja Logístic Group SRL',202),
+('Stella Artois Cidra 12oz','Cerveza',200.00,49.5500,'K472989','018200251009',null,17,true,true,'bar','WG',203),
+('Stella Artois Lager 12oz','Cerveza',175.00,73.0000,'823397J','786150000052',null,14,true,true,'bar','WG',204),
+('Stella Artois Solstice 12oz','Cerveza',200.00,73.0000,'335016W','018200260391',null,4,true,true,'bar','WG',205),
+('Stella Rosa Black 750ml','Wine',1400.00,605.0000,'D211328','087872633369',null,3,true,true,'bar','WG',274),
+('Stella Rosa Moscato D''Asti 750ml','Wine',1400.00,610.0000,null,'087872630122',null,6,true,true,'bar','WG',275),
+('Stella Rosa Pink 750ml','Wine',1400.00,500.0000,'867592M','087872632232',null,4,true,true,'bar','WG',276),
+('Stella Rosa, Red 750ml','Wine',1400.00,605.0000,null,'087872633406',null,3,true,true,'bar','WG',277),
+('Sterling Vinter’s C Pinot Noir 750ml','Wine',1100.00,600.0000,'8869286210','088692862106',null,3,true,true,'bar','WG',278),
+('Stoli Vodka 1.75L','Vodka',2700.00,2185.0000,null,'4750021000102',null,0,true,true,'bar','Elegant Liquor',33),
+('Stoli Vodka 750ml','Vodka',1500.00,904.0000,'695866T','4750021000157',null,10,true,true,'bar','Abeja Logístic Group SRL',34),
+('Stoli Vodka Tragos','Tragos',150.00,43.0000,'V456745',null,null,92,true,false,'bar','Provisiones Kelvin',52),
+('Stoli vodka','Fiesta',2000.00,null,null,null,null,0,true,false,'bar',null,43),
+('Stone Arrogant Bastard 16oz','Cerveza',250.00,100.0000,null,'636251740794',null,5,true,true,'bar','WG',206),
+('Stone Brewing, delicious 12oz','Cerveza',200.00,80.5200,null,'636251742033',null,4,true,true,'bar','WG',207),
+('Stone Buenaveza Salt Lime Lager 12 oz','Cerveza',200.00,80.0000,null,'636251743986',null,0,true,true,'bar','WG',208),
+('Suefside iced tea y lemonade + vodka','Cócteles',200.00,null,null,'850025605427',null,0,true,false,'bar',null,17),
+('Sunfside  Lemonade + Vodka 12oz','Cerveza',200.00,80.0000,null,'850025605946',null,0,true,true,'bar','WG',209),
+('Sunseeker Rose 750ml','Wine',900.00,360.1800,'A233214','085000028834',null,3,true,true,'bar','WG',279),
+('Surfside  strawberry lemonade +vodka','Cerveza',200.00,80.0000,null,'850050071228',null,3,true,true,'bar','WG',210),
+('Surfside Black Cherry lemonade + Vodka','Cerveza',200.00,80.0000,null,'850025605366',null,10,true,true,'bar','WG',211),
+('Surfside Raspberry lemonade +vodka 12oz','Cerveza',200.00,80.0000,null,'850050071006',null,10,true,true,'bar','WG',212),
+('Surfside iced tea +vodka','Cócteles',200.00,80.0000,null,'850025605205',null,0,true,false,'bar','WG',18),
+('Surfside iced tea lemonade vodka','Vodka',200.00,80.0000,null,null,null,8,true,true,'bar','WG',35),
+('Surfside lemonade vodka','Vodka',200.00,80.0000,null,null,null,5,true,true,'bar','WG',36),
+('Surfside peach tra +vodka','Cócteles',200.00,null,null,'850025605311',null,0,true,false,'bar',null,19),
+('Sutter Home Cab Sauv 187ml','Wine',200.00,74.8200,null,'08500520',null,4,true,true,'bar','WG',280),
+('Sutter Home Merlot 187ml','Wine',200.00,74.8200,null,'08500229',null,4,true,true,'bar','WG',281),
+('Sutter Home Moscato 187ml','Wine',200.00,74.8200,null,'08501626',null,12,true,true,'bar','WG',282),
+('Sutter Home Pink Moscato 187ml','Wine',200.00,74.8200,null,'08509929',null,5,true,true,'bar','WG',283),
+('Sutter Home Pinot Grigio 187ml','Wine',200.00,74.8200,null,'08501422',null,8,true,true,'bar','WG',284),
+('Sutter Home Red Sangria 187ml','Wine',200.00,null,'08521921','08521921',null,0,true,true,'bar',null,285),
+('Sutter Home Sauv Blanc 187ml','Wine',200.00,74.8200,null,'08500724',null,8,true,true,'bar','WG',286),
+('Sutter Home Sweet Red 187','Wine',200.00,74.8200,null,'08507824',null,7,true,true,'bar','WG',287),
+('Sutter Home White Zinfandel 187ml','Wine',200.00,74.8200,null,'08500928',null,12,true,true,'bar','WG',288),
+('Sweet Bitch Pinot Grigio 750ml','Wine',800.00,275.0000,'0705449227','607054492272',null,3,true,true,'bar','WG',289),
+('Swft icon blue cotton cande 7,500 puffs','E-Cig',1000.00,650.0000,null,'810011329164',null,1,false,true,'bar','Seteo Vape Shop',55),
+('Swft icon blue razz berry ice 7,500 puffs','E-Cig',1000.00,650.0000,null,'810011329171',null,2,false,true,'bar','Seteo Vape Shop',56),
+('Swft icon lemon mist ice 7,500 puffs','E-Cig',1000.00,650.0000,null,'810011329225',null,0,false,true,'bar','Seteo Vape Shop',57),
+('Swft icon watermelon appleberry 7,500 puffs','E-Cig',1000.00,650.0000,null,'810011329324',null,0,false,true,'bar','Seteo Vape Shop',58),
+('Swft icon watermelon bubblegum 7,500','E-Cig',1000.00,650.0000,null,'810011329331',null,0,false,true,'bar','Seteo Vape Shop',59),
+('Swft_ strawberry 30,000 puffs','E-Cig',1500.00,690.0000,null,'810152540510',null,1,false,true,'bar','Seteo Vape Shop',60),
+('TARJETA DE REGALOS','Misc',300.00,115.0000,null,'1111111111116',null,20,false,true,'bar','Amazon',37),
+('TMT Black Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923757',null,3,false,true,'bar','Vape Wholesale',61),
+('TMT Blue Ice Mint 15k','E-Cig',1700.00,360.0000,null,'6974537923696',null,4,false,true,'bar','Vape Wholesale',62),
+('TMT Blue Razz 15k','E-Cig',1700.00,360.0000,null,'6974537923740',null,2,false,true,'bar','Vape Wholesale',63),
+('TMT Lush Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923733',null,4,false,true,'bar','Vape Wholesale',64),
+('TMT Mango Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923764',null,5,false,true,'bar','Vape Wholesale',65),
+('TMT Miami Mint 15k','E-Cig',1700.00,360.0000,null,'6974537923689',null,1,false,true,'bar','Vape Wholesale',66),
+('TMT Mint Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923665',null,1,false,true,'bar','Vape Wholesale',67),
+('TMT Peach Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923818',null,4,false,true,'bar','Vape Wholesale',68),
+('TMT Pineapple Mango Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923801',null,5,false,true,'bar','Vape Wholesale',69),
+('TMT Sour Apple Ice 15k','E-Cig',1700.00,360.0000,null,'6974537923771',null,5,false,true,'bar','Vape Wholesale',70),
+('TMT Straw Bansna 15k','E-Cig',1700.00,360.0000,null,'6974537923702',null,5,false,true,'bar','Vape Wholesale',71),
+('TMT Straw Kiwi 15k','E-Cig',1700.00,360.0000,null,'6974537923726',null,4,false,true,'bar','Vape Wholesale',72),
+('TMT Straw Watermelon 15k','E-Cig',1700.00,360.0000,null,'6974537923719',null,5,false,true,'bar','Vape Wholesale',73),
+('TMT Tropical Rainbow 15k','E-Cig',1700.00,360.0000,null,'6974537923788',null,5,false,true,'bar','Vape Wholesale',74),
+('Tacos 3','Comida',500.00,null,null,null,null,19,false,false,'cocina',null,15),
+('Tanqueray Gin 750ml','Ginebra',1800.00,1044.6800,'Y849353','088110110307',null,3,true,true,'bar','WG',12),
+('Taqueray Gin Tragos','Tragos',250.00,40.0000,'538879T',null,null,34,true,false,'bar',null,53),
+('Tasha Sparkling Rose 750ml','Champaña',3000.00,1029.5500,'C276290','695825338683',null,2,true,true,'bar','WG',55),
+('Taylor New York Port 750ml','Wine',800.00,366.8500,null,'088940000014',null,0,true,true,'bar','WG',290),
+('Tempranillo Honoro Vera Garnacha 750ml','Wine',1300.00,440.0000,null,'851115002218',null,0,true,true,'bar','WG',291),
+('Tequila G4, Blanco Premium 750ml','Tequila',4000.00,2360.0000,null,'7503018079004',null,2,true,true,'bar','WG',60),
+('Tequila Ocho Blanco 750ml','Tequila',5000.00,2585.4000,null,'898627001308',null,3,true,true,'bar','WG',61),
+('Tequila Ocho Reposado, 750ml','Tequila',6000.00,2849.4000,null,'898627001315',null,2,true,true,'bar','WG',62),
+('Tequila Rose Liqueur 750ml','Licores',2200.00,1268.9500,null,'085592121043',null,2,true,true,'bar','WG',62),
+('Teremana Blanco 375ml','Tequila',2000.00,784.6800,'5650115','850015640001',null,3,true,true,'bar','WG',63),
+('Teremana Blanco 750ml','Tequila',3600.00,1705.0000,null,'850015640025',null,3,true,true,'bar','WG',64),
+('Teremana Blanco Trago','Tragos',200.00,70.6700,null,null,null,50,true,false,'bar','WG',54),
+('Teremana Reposado 375ml','Tequila',2300.00,995.0000,null,'850015640018',null,3,true,true,'bar','WG',65),
+('Teremana Reposado Tequila 750ml','Tequila',4500.00,1984.9500,null,'850015640032',null,5,true,true,'bar','WG',66),
+('Teremana Reposado Trago','Tragos',200.00,70.6700,null,null,null,27,true,false,'bar','WG',55),
+('The Balvenie Caribbean Cask 14a 750ml','Whiskey',6000.00,2392.0000,'3397099','083664871681',null,1,true,true,'bar','WG',85),
+('The Balvenie Doublewood 12a 750ml','Whiskey',7000.00,4056.0000,'9183314','083664112210',null,1,true,true,'bar','WG',86),
+('The Beast Mean Green 12oz','Cerveza',200.00,125.0000,null,'810117130008',null,2,true,true,'bar','WG',213),
+('The Beast Peach Perfect 12oz','Cerveza',200.00,125.0000,null,'810117130060',null,5,true,true,'bar','WG',214),
+('The Beast Scary Berries 12oz','Cerveza',200.00,125.0000,null,'810117130091',null,6,true,true,'bar','WG',215),
+('The Beast hard White Haze 12oz','Cerveza',200.00,125.0000,null,'810117130039',null,1,true,true,'bar','WG',216),
+('The Glen Silver’s 750ml','Whiskey',1500.00,532.0000,null,'814261010070',null,2,true,true,'bar','WG',87),
+('The Glenlivet 12y 750ml','Whiskey',5500.00,3392.4200,'6L280006',null,null,1,true,true,'bar','WG',88),
+('The Glenlivet 14 y 750ml','Whiskey',5800.00,3949.2200,'198041S','080432114926',null,2,true,true,'bar','WG',89),
+('The Glenlivet 15y 750ml','Whiskey',8000.00,4070.0000,'6LD80010',null,null,2,true,true,'bar','WG',90),
+('The Glenlivet 18 y 750ml','Whiskey',11000.00,6824.9500,'4470957','080432400661',null,1,true,true,'bar','WG',91),
+('The Glenlivet Caribbean Reserve 750ml','Whiskey',5000.00,3132.0000,'6ZV80000',null,null,2,true,true,'bar','WG',92),
+('The Glenlivet Founders Reserve 750ml','Whiskey',5000.00,2754.0000,'1597088','080432109755',null,5,true,true,'bar','WG',93),
+('The Infamous Goose Sauv Blanc 750ml','Wine',1600.00,660.0000,'793265Z','690300551397',null,2,true,true,'bar','WG',292),
+('The Macallan 12y Sherry Oak 750ml','Whiskey',7000.00,4019.9500,'809572J','812066020553',null,2,true,true,'bar','WG',94),
+('The Macallan 18yr Sherry Oak Scotch 750ml','Whiskey',29000.00,16831.6000,null,'812066020355',null,1,true,true,'bar','WG',95),
+('The Macallan Distillers Double Cask 15yr 750ml','Whiskey',12000.00,7946.0000,null,'812066023066',null,1,true,true,'bar','WG',96),
+('The Macallan Double Cask 12Años 750ml','Whiskey',7000.00,3120.0000,'X243623','812066021598',null,0,true,true,'bar','WG',97),
+('The One 12oz','Cerveza',150.00,70.0000,null,'74601325',null,0,true,true,'bar','Ocho Santos Mao',217),
+('The One 12oz Lata','Cerveza',100.00,42.3300,null,'7463172803221',null,0,true,true,'bar','Abeja Logístic Group SRL',218),
+('The One 22oz','Cerveza',200.00,104.0100,'74601127','74601127',null,0,true,true,'bar','Abeja Logístic Group SRL',219),
+('The Pale Rose by Sacha Lichine 750ml','Wine',1200.00,580.0000,null,'088320002638',null,3,true,true,'bar','WG',293),
+('The Pinot Project P Grigio 750ml','Wine',1000.00,468.0000,'Y280246','747736417053',null,2,true,true,'bar','WG',294),
+('The Pinot Project Rose 750ml','Wine',1000.00,476.3000,'707667D','747736619822',null,1,true,true,'bar','WG',295),
+('The Prisoner Napa Valley Cab Sauv 750ml','Wine',5600.00,2491.0000,'J721020','086003255142',null,3,true,true,'bar','WG',296),
+('The Prisoner Red Blend 750ml','Wine',5000.00,2491.0000,'2866545','086003255067',null,2,true,true,'bar','WG',297),
+('The Seeker Rose 750ml','Wine',1000.00,476.3000,'D405480','084692454143',null,3,true,true,'bar','WG',298),
+('The Singleton  18 Year Old Single Malt 750ml','Whiskey',7000.00,4130.0000,null,'088076180765',null,2,true,true,'bar','WG',98),
+('Tiscaz Tequila Blanco 750ml','Tequila',1500.00,894.8100,null,'3147699105597',null,2,true,true,'bar','United brands',67),
+('Tisdale Cab Sauv 750ml','Wine',650.00,378.6600,null,'085000011423',null,0,true,true,'bar','Abeja Logístic Group SRL',299),
+('Tisdale Merlot 750ml','Wine',650.00,379.0000,null,'085000011416',null,0,true,true,'bar','Abeja Logístic Group SRL',300),
+('Titos Vodka','Fiesta',2500.00,null,null,null,null,0,true,false,'bar',null,44),
+('Tito’s Vodka  1.7L','Vodka',3000.00,1958.6700,null,null,null,6,true,true,'bar','WG',37),
+('Tito’s Vodka 50ml','Vodka',300.00,73.1500,'832719L','619947000068',null,47,true,true,'bar','WG',38),
+('Tito’s Vodka 750ml','Vodka',1800.00,992.6800,'178437E','619947000020',null,15,true,true,'bar','WG',39),
+('Tito’s Vodka Tragos','Tragos',200.00,36.6800,'9525425',null,null,102,true,false,'bar','WG',56),
+('Tito’s vodka 375ml','Vodka',1000.00,507.0000,'J811945','619947000051',null,3,true,true,'bar','WG',40),
+('Trapiche Broquel Cab Sauv 750ml','Wine',1800.00,715.0000,'V944048','089744750525',null,2,true,true,'bar','WG',301),
+('Tres Generaciones Plata 750ml','Tequila',4000.00,1824.6800,'2165760','080686836018',null,2,true,true,'bar','WG',68),
+('Trident Cinnamon','Chicle',150.00,55.0000,null,'012546011471',null,2,false,true,'bar','WG',20),
+('Trident Cool bubble 18pk','Chicle',150.00,null,null,'7506105606091',null,0,false,true,'bar',null,21),
+('Trident Pineapple Twist Chewing Gum Sugar Free Stick RP 14 ct','Chicle',150.00,55.0000,null,'012546011587',null,0,false,true,'bar','WG',22),
+('Trident Sandía 18Ok','Chicle',150.00,null,null,'7506105606084',null,0,false,true,'bar',null,23),
+('Trident Spearmint Sugar Free Gum','Chicle',150.00,55.0000,null,'012546011075',null,0,false,true,'bar','WG',24),
+('Trident Tripical Twist','Chicle',150.00,74.0000,null,'073390055172',null,12,false,true,'bar','WG',25),
+('Trident Watermelon Gum','Chicle',150.00,55.0000,null,'012546011136',null,0,false,true,'bar','WG',26),
+('Trident menta','Chicle',100.00,16.6600,null,'7622201776664',null,0,false,true,'bar','Madera Minimarket',27),
+('Trident verde de 5 ió','Chicle',100.00,null,null,'7622201776565',null,0,false,true,'bar',null,28),
+('Trident, Original','Chicle',150.00,74.0000,null,'073390055196',null,5,false,true,'bar','WG',29),
+('Tridente, toque tropical','Chicle',150.00,55.0000,null,'012546011112',null,5,false,true,'bar','WG',30),
+('Trivento Cab Sauv 750ml','Wine',1300.00,403.0000,'4875327','082734341444',null,5,true,true,'bar','WG',302),
+('Trivento Malbec Resv 750ml','Wine',1300.00,450.0000,'V402615','082734341246',null,4,true,true,'bar','WG',303),
+('TroJAN ENZ Lubricated Condoms','Misc',200.00,100.0000,null,'022600930501',null,10,false,true,'bar','WG',38),
+('Troegs Brewery, Rotating Hop Cycle 12oz Lata','Cerveza',200.00,80.0000,null,'637704071014',null,17,true,true,'bar','WG',220),
+('Troegs Graffity highway ipa 12oz Lata','Cerveza',200.00,80.0000,null,'637704005019',null,10,true,true,'bar','WG',221),
+('Troegs Sushone Lager 13oz','Cerveza',200.00,80.0000,null,'637704030004',null,12,true,true,'bar','WG',222),
+('Troegs The Mad Elf 12 oz','Cerveza',300.00,115.0000,null,'637704100011',null,2,true,true,'bar','WG',223),
+('Trojan Magnum XL Condoms','Misc',200.00,100.0000,null,'022600642039',null,7,false,true,'bar','WG',39),
+('Tropic Chillerz Sour Apple 187ml','Pre-Mix',400.00,133.0000,null,'857641002210',null,24,true,true,'bar','WG',45),
+('Trotamundos Riesling 375ml','Wine',600.00,385.0000,null,'7804634720524',null,4,true,true,'bar','WG',304),
+('Troyan Black Label','Misc',50.00,26.0000,null,'4584156594454',null,72,false,true,'bar','Yan Carlos',40),
+('Tsingtao Lager 12oz','Cerveza',200.00,80.0000,null,'09230006',null,0,true,true,'bar','WG',224),
+('Turboscato Moscato 750ml','Wine',1500.00,450.0000,null,'4546129865350',null,3,true,true,'bar','WG',305),
+('Twang Lime Beer Salt 1.4oz','Misc',200.00,null,null,'023604231076',null,23,false,true,'bar',null,41),
+('Twang-A-Rita Classic Rimming Salt Tub','Mix',300.00,120.0000,null,'023604304008',null,6,true,true,'bar','WG',15),
+('Twisted Shotz Miami Vice, 4 Pack','Pre-Mix',500.00,262.0000,null,'766427003573',null,4,true,true,'bar','WG',46),
+('Twisted Shotz Pineapple upside down cake, 4 Pack','Pre-Mix',500.00,262.0000,null,'766427004853',null,2,true,true,'bar','WG',47),
+('Twisted Shotz Sex On The Beach, 4 Pack','Pre-Mix',500.00,262.0000,'6642700344',null,null,9,true,true,'bar','WG',48),
+('Twisted Shtz Strwbry Shortcake 4pk 100ml','Pre-Mix',500.00,262.0000,null,'766427003405',null,3,true,true,'bar','WG',49),
+('Twisted Tea Original 12oz','Cerveza',200.00,80.0000,null,'087692831006',null,8,true,true,'bar','WG',225),
+('Twisted tea Half & Half','Cerveza',150.00,60.0000,null,'087692751311',null,6,true,true,'bar','WG',226),
+('Twisted tea Raspberry','Cerveza',150.00,60.0000,null,'087692003854',null,4,true,true,'bar','WG',227),
+('Twisted tea original','Cerveza',150.00,60.0000,null,'087692831310',null,2,true,true,'bar','WG',228),
+('Twisted tea peach','Cerveza',150.00,60.0000,null,'087692005094',null,4,true,true,'bar','WG',229),
+('Two Angels Petite Sirah 750ml','Wine',1200.00,560.0000,null,'899911000250',null,3,true,true,'bar','WG',306),
+('Two Chicks  Peach cutea 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',41),
+('Two Chicks  lemon & lime coctail','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',42),
+('Two Chicks cranberry & lime 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',43),
+('Two Chicks honeydew & lime cocktail 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',44),
+('Two Chicks lemon strawberry kiss','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',45),
+('Two Chicks limoncello lemonade','Vodka',250.00,150.0000,null,null,null,8,true,true,'bar','WG',46),
+('Two Chicks raspberry pink grapefruit lemonade 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',47),
+('Two Chicks sparkling black cherry sour vodka 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',48),
+('Two Chicks vodka Fizz 12oz','Vodka',250.00,150.0000,null,null,null,8,true,true,'bar','WG',49),
+('Two Chicks watermelon & lime cocktail 12oz','Vodka',250.00,150.0000,null,null,null,6,true,true,'bar','WG',50),
+('Tyson 2.0 Legend Apple Melonberry 30k','E-Cig',2700.00,1020.0000,null,'784847575012',null,3,false,true,'bar','Vape Wholesale',75),
+('Tyson 2.0 Legend Blue Razz 30k','E-Cig',2500.00,1020.0000,null,'784847575036',null,3,false,true,'bar','Vape Wholesale',76),
+('Tyson 2.0 Legend Clear 30k','E-Cig',2500.00,1020.0000,null,'784847575043',null,3,false,true,'bar','Vape Wholesale',77),
+('Tyson 2.0 Legend Cool Mint 30k','E-Cig',2500.00,1020.0000,null,'784847575067',null,0,false,true,'bar','Vape Wholesale',78),
+('Tyson 2.0 Legend Frozen Banana 30k','E-Cig',2500.00,1020.0000,null,'784847575074',null,3,false,true,'bar','Vape Wholesale',79),
+('Tyson 2.0 Legend Frozen Grape 30k','E-Cig',2500.00,1020.0000,null,'784847575098',null,3,false,true,'bar','Vape Wholesale',80),
+('Tyson 2.0 Legend Watermelon 30k','E-Cig',2500.00,1020.0000,null,'784847575180',null,1,false,true,'bar','Vape Wholesale',81),
+('Tyson Legend  Frozen Mango 30k','E-Cig',2500.00,1020.0000,null,'784847575104',null,3,false,true,'bar','Vape Wholesale',82),
+('UNC QB Banana Ice 2200 Puff','E-Cig',400.00,280.0000,null,'6972249900394',null,0,false,true,'bar','Habibi',83),
+('UNC QB Cool Mint 2700 Puff','E-Cig',400.00,280.0000,null,'6972249900417',null,0,false,true,'bar','Habibi',84),
+('UNC QB Mango Ice','E-Cig',400.00,280.0000,null,'7004438694476',null,0,false,true,'bar','Habibi',85),
+('UNC QB Nerdz Ice 2700. Puff','E-Cig',400.00,280.0000,null,'6975361053559',null,0,false,true,'bar','Habibi',86),
+('UNC QB Pink Lemonade 2700 Puff','E-Cig',400.00,280.0000,null,'7004438694544',null,0,false,true,'bar','Habibi',87),
+('UNC QB Strawberry Ice 2700 Puff','E-Cig',400.00,280.0000,null,'6972249900448',null,0,false,true,'bar','Habibi',88),
+('Uno Antigal Malbec 750ml','Wine',1200.00,605.0000,'9018680','874390001035',null,3,true,true,'bar','WG',307),
+('Upstate Apples Vodka 750ml','Vodka',2000.00,1214.2200,null,'698545584019',null,6,true,true,'bar','WG',51),
+('Vaso con hielo','Misc',25.00,null,null,null,null,0,false,true,'bar',null,42),
+('Vaso foam 16 onz','Misc',150.00,96.3900,null,'7460234530057',null,9,false,true,'bar','Importadora bosa',43),
+('Vasos 50PK','Misc',100.00,60.0000,null,'7460234550031',null,80,false,true,'bar','Súper Mercado Espinal',44),
+('Verdi Spumante 187ml','Champaña',350.00,132.7500,'3199968','03807552',null,24,true,true,'bar','WG',56),
+('Verdi Spumante 750ml','Champaña',700.00,300.0000,'533185Z','038075202302',null,9,true,true,'bar','WG',57),
+('Veuve Clicquot Brut 750ml','Champaña',6000.00,2548.0000,'5201799','081753050207',null,1,true,true,'bar','WG',58),
+('Veuve Cliquot Rose 750ml','Champaña',7000.00,3041.4800,'081753802479','08175383902479',null,2,true,true,'bar','WG',59),
+('Veuve Du Vernay Ice 750ml','Champaña',1900.00,624.0000,'3854641','810885011219',null,3,true,true,'bar','WG',60),
+('Veuve Du Vernay Rose 750ml','Champaña',1900.00,624.0000,'831478X','810885011226',null,3,true,true,'bar','WG',61),
+('Victoria 12oz','Cerveza',200.00,126.0000,'855607R','080660958880',null,14,true,true,'bar','WG',230),
+('Victory Golden Monkey 12oz lata','Cerveza',225.00,100.0000,null,'630279465318',null,4,true,true,'bar','WG',231),
+('Victory tastykake peanut butter kandy kake 12oz','Cerveza',200.00,80.0000,null,'630279752012',null,6,true,true,'bar','WG',232),
+('Vive 100 Cherry Fresa 300ML','Jugos',50.00,27.1200,'4247223','7702354251093',null,3,true,true,'bar','Quala',47),
+('Vive 100 Manzana 300ML','Jugos',50.00,27.0000,'R016873','7702354251109',null,6,true,true,'bar','Quala',48),
+('Vive 100 Moringa 300ML','Jugos',50.00,27.0000,'F534185','7702354252403',null,1,true,true,'bar','Quala',49),
+('Vive 100 Original 300ML','Jugos',50.00,27.0000,'1902903','7702354936464',null,0,true,true,'bar','Quala',50),
+('Vive 100 Zero 300ML','Jugos',50.00,27.0000,'850804L','7702354253578',null,3,true,true,'bar','Quala',51),
+('Voopco  ARGUSZ2','E-Cig',800.00,400.0000,null,'6941291572415',null,1,false,true,'bar','Seteo Vape Shop',89),
+('Voopco ARGUS Tanque de Vape 3ml','E-Cig',750.00,450.0000,null,'6941291559324',null,5,false,true,'bar','Seteo Vape Shop',90),
+('Voopco VWATE','E-Cig',1200.00,650.0000,null,'6941291535892',null,2,false,true,'bar','Seteo Vape Shop',91),
+('Voopco VWATE   unidad de tanque de 3mg','E-Cig',250.00,null,null,null,null,0,false,true,'bar',null,92),
+('Voopco VWATE Tanque de Vape 3ml','E-Cig',500.00,300.0000,null,'6941291559744',null,0,false,true,'bar','Seteo Vape Shop',93),
+('Véngalas','E-Cig',100.00,28.5700,null,'742832662017',null,34,false,true,'bar','Angel Tabacalera',94),
+('Víctory Brewing co Berry Monkey  12oz','Cerveza',200.00,80.5200,null,'630279376317',null,4,true,true,'bar','WG',233),
+('Wester Son Pera 50ml','Vodka',50.00,27.5000,'468168R','859685005028',null,51,true,true,'bar','WG',52),
+('Wester Son Rasb 50ml','Vodka',50.00,27.5000,'456228R','855939007206',null,23,true,true,'bar','WG',53),
+('Wester Son Sandía  50ml','Vodka',50.00,27.5000,'Z728480','859685005837',null,19,true,true,'bar','WG',54),
+('Western Son Durazno 50ml','Vodka',50.00,27.5000,'V267931','859685005011',null,58,true,true,'bar','WG',55),
+('Western Son Lime 50ml','Vodka',50.00,27.5000,'230262Q','855939007152',null,23,true,true,'bar','WG',56),
+('Western Son Toronja 50ml','Vodka',50.00,27.5000,'Z915332','859685005004',null,52,true,true,'bar','WG',57),
+('Western Son Vodka 50ml','Vodka',50.00,27.5000,'3564288','856417003284',null,89,true,true,'bar','WG',58),
+('Whispering Angel Rose 750ml','Wine',2100.00,1080.0000,'4393202','081753833916',null,6,true,true,'bar','WG',308),
+('White Claw Seltzer peach 12oz','Cócteles',200.00,78.6800,null,'635985801566',null,0,true,false,'bar','WG',20),
+('William Hill North Coast Cabernet Sauvignon Wine','Wine',1500.00,812.0000,null,'085000021606',null,3,true,true,'bar','WG',309),
+('Wolffer Estate Summer in a Bottle Rose 2022 (750ml)','Wine',2100.00,1278.5800,null,'644996140090',null,2,true,true,'bar','WG',310),
+('Woodbridge Merlot 750ml','Wine',900.00,315.0000,'776180N','086003000490',null,2,true,true,'bar','WG',311),
+('Woodford Rs Bourbon 50ml','Whiskey',200.00,137.0000,'845923K','081128701550',null,5,true,true,'bar','WG',99),
+('XXL Apples 750ml','Wine',800.00,433.0000,null,'763955017003',null,3,true,true,'bar','WG',312),
+('XXL BlackBerry 750ml','Wine',800.00,433.0000,null,null,null,3,true,true,'bar',null,313),
+('XXL Blueberry 750ml','Wine',800.00,433.0000,null,'763955020003',null,2,true,true,'bar','WG',314),
+('XXL Cherry 750ml','Wine',800.00,433.0000,null,'763955019007',null,3,true,true,'bar','WG',315),
+('XXL Guava 750ml','Wine',800.00,433.0000,null,'763955018000',null,2,true,true,'bar','WG',316),
+('XXL Mango 750ml','Wine',800.00,433.0000,null,'763955013005',null,3,true,true,'bar','WG',317),
+('XXL Peach 750ml','Wine',800.00,433.0000,null,'763955015009',null,0,true,true,'bar','WG',318),
+('XXL Pineapple 750ml','Wine',800.00,433.0000,null,'763955014002',null,3,true,true,'bar','WG',319),
+('XXL Sparkling Moscato 750ml','Champaña',800.00,433.0000,'2340226','763955000081',null,3,true,true,'bar','WG',62),
+('XXL Strawberry 750ml','Wine',800.00,433.0000,null,'763955016006',null,3,true,true,'bar','WG',320),
+('XXX BlackBerry 750nl','Wine',1000.00,433.0000,null,'763955010004',null,3,true,true,'bar','WG',321),
+('Xtras Cab Sauv 750ml','Wine',1100.00,500.0000,'728857Z','082734751830',null,3,true,true,'bar','WG',322),
+('Yago Sangria 750ml','Wine',800.00,247.0000,null,'088352115351',null,4,true,true,'bar','WG',323),
+('Yalumba Viognier  750ml','Wine',1100.00,550.0000,'2054236','089208400089',null,3,true,true,'bar','WG',324),
+('Yamazaki 12 Y Singe Malt 750ml','Whiskey',35000.00,9097.2100,null,'088857001616',null,1,true,true,'bar','WG',100),
+('Yellow Tail Barrel Aged Red 750ml','Wine',900.00,495.0000,'M042559','839743002954',null,3,true,true,'bar','WG',325),
+('Yellow Tail Bubbles Sparkling 750ml','Champaña',1000.00,527.2200,'8399328','031259014760',null,3,true,true,'bar','WG',63),
+('Yellow Tail Bubbles Sparkling Rose 750ml','Champaña',1000.00,527.2200,'2137912','031259030739',null,3,true,true,'bar','WG',64),
+('Yellow Tail Merlot 750ml','Wine',900.00,350.0000,'2891872','031259009223',null,0,true,true,'bar','WG',326),
+('Yuengling Lager 12oz','Cerveza',200.00,52.0000,'5861485','08992468',null,4,true,true,'bar','WG',234),
+('Zacapa Rum 23 Años 750ml','Rum',5000.00,2080.0000,'612223G','699013000550',null,2,true,true,'bar','WG',64),
+('Zomo Coconut Charcoal 1KG','Misc',600.00,350.0000,null,'7841881001051',null,10,false,true,'bar','Habibi',45),
+('martinellis sidra gold medal','Champaña',500.00,250.0000,null,'041244000067',null,2,true,true,'bar','WG',65),
+('vaso plástico 10onz','Misc',100.00,59.3200,null,null,null,50,false,true,'bar','Importadora bosa',46);
+
+
+-- ##########################################################################
+-- ##  PARTE 2 — Categorías y productos
+-- ##########################################################################
+
+--
+-- PASO 2 — Categorías y productos.
+--
+-- IMPUESTOS: los 1516 productos entran en tax_mode = 'exclusive' y SIN
+--   ningún vínculo en menu_item_taxes. En MangoPOS esa tabla es la ÚNICA fuente
+--   del impuesto por producto: sin vínculo, el POS cobra el precio tal cual,
+--   con ITBIS 0. Es lo pedido — el precio del CSV es el precio que se cobra.
+--
+-- IDEMPOTENTE: inserta por NOT EXISTS contra lower(name). Re-ejecutar no
+--   duplica ni pisa precios ya editados en la app.
+--
+-- Requiere el PASO 1.
+-- ============================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- 2a) Categorías (26)
+-- ---------------------------------------------------------------------------
+
+insert into public.categories (id, business_id, name, position, is_active)
+select gen_random_uuid(), '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid, c.name, c.pos, true
+from (values
+  ('Cerveza', 0),
+  ('Wine', 1),
+  ('Whiskey', 2),
+  ('Rum', 3),
+  ('Tequila', 4),
+  ('Vodka', 5),
+  ('Ginebra', 6),
+  ('Cognac', 7),
+  ('Brandy', 8),
+  ('Licores', 9),
+  ('Champaña', 10),
+  ('Pre-Mix', 11),
+  ('Mix', 12),
+  ('Tragos', 13),
+  ('Cócteles', 14),
+  ('Fiesta', 15),
+  ('Comida', 16),
+  ('Hookah', 17),
+  ('Jugos', 18),
+  ('Papitas', 19),
+  ('Chicle', 20),
+  ('Cigarros', 21),
+  ('Cigarrillos', 22),
+  ('Tabaco', 23),
+  ('E-Cig', 24),
+  ('Misc', 25)
+) as c(name, pos)
+where not exists (
+  select 1 from public.categories x
+  where x.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and x.name = c.name
+);
+
+-- ---------------------------------------------------------------------------
+-- 2b) Productos
+--     `barcode` ← GTIN de Square, más 33 que estaban guardados en la columna
+--     SKU con el GTIN vacío (se reconocen por la forma: 8/12/13/14 dígitos).
+--     Sin ese rescate quedarían sin escanear teniendo el número ahí mismo.
+--     Cero duplicados en todo el catálogo, así que el scanner nunca va a
+--     traer el producto equivocado.
+-- ---------------------------------------------------------------------------
+
+insert into public.menu_items (
+  id, business_id, category_id, name, description, price, cost,
+  tax_mode, sku, barcode, is_active, is_beverage, position
+)
+select
+  gen_random_uuid(),
+  '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid,
+  cat.id,
+  s.name,
+  s.descr,
+  s.price,
+  s.cost,
+  'exclusive',
+  s.sku,
+  s.barcode,
+  true,
+  s.is_bev,
+  s.posicion
+from public._import_882ef5a4 s
+join public.categories cat
+  on cat.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid
+ and cat.name = s.categoria
+where not exists (
+  select 1 from public.menu_items m
+  where m.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid
+    and lower(m.name) = lower(s.name)
+);
+
+
+-- ##########################################################################
+-- ##  PARTE 3 — Áreas de producción (comandas)
+-- ##########################################################################
+
+--
+-- PASO 3 — Áreas de producción (comandas).
+--
+-- Barra 1500 · Cocina 16  (total 1516)
+--   Cocina = la categoría Comida. Todo lo demás va a barra, incluido el retail
+--   (chicles, vapes, papitas): no necesitan comanda, pero `print_area_code` es
+--   NOT NULL y su default es 'kitchen_hot' — un código que este negocio no
+--   tiene. Con un código inexistente, "Enviar a cocina" revienta con
+--   UnknownPrintAreaCodeException y NO sale NINGUNA comanda de la orden.
+--
+-- SE ESCRIBEN LOS DOS MECANISMOS, A PROPÓSITO:
+--   1. menu_item_print_areas (N:M) — fuente de verdad; el orchestrator la
+--      prefiere cuando hay filas.
+--   2. menu_items.print_area_code (legacy) — NO es redundante:
+--      fn_add_item_from_menu lo COPIA al order_item al insertarlo, y ese valor
+--      es el fallback. El lookup N:M se salta entero sin red y tiene timeout de
+--      8s online; sin el legacy correcto, un bache de red manda la comida a la
+--      impresora de la barra.
+--
+-- ▼▼▼ ÚNICO LUGAR A EDITAR: los `code` reales de este negocio.
+--     Sácalos del diagnóstico (scripts/diag_business_882ef5a4.sql, consulta 3).
+-- ============================================================================
+
+
+do $$
+declare
+  v_business uuid := '882ef5a4-93eb-4e58-92c3-bf532e179d45';
+
+  -- ▼▼▼ EDITA ESTOS DOS ▼▼▼
+  v_code_bar    text := 'bar';
+  v_code_cocina text := 'cocina';
+  -- ▲▲▲
+
+  v_missing text;
+begin
+  -- Guarda: las áreas deben existir y estar activas, si no aborta sin tocar nada.
+  select string_agg(w.code, ', ') into v_missing
+  from (values (v_code_bar), (v_code_cocina)) as w(code)
+  where not exists (
+    select 1 from public.print_areas a
+    where a.business_id = v_business and a.code = w.code and a.is_active
+  );
+
+  if v_missing is not null then
+    raise exception
+      'Faltan áreas de producción activas en este negocio: %. Créalas en '
+      'Ajustes → Impresoras → Áreas, o corrige los códigos arriba.', v_missing;
+  end if;
+
+  -- 1) Legacy print_area_code — saca a los productos de 'kitchen_hot'
+  update public.menu_items mi
+  set print_area_code = case s.area when 'cocina' then v_code_cocina
+                                    else v_code_bar end
+  from public._import_882ef5a4 s
+  where mi.business_id = v_business
+    and lower(mi.name) = lower(s.name)
+    and mi.print_area_code is distinct from
+        (case s.area when 'cocina' then v_code_cocina else v_code_bar end);
+
+  -- 2a) N:M — borra asignaciones que NO son el área objetivo.
+  --     Sin esto, un producto con un área vieja se rutea a DOS impresoras.
+  delete from public.menu_item_print_areas mipa
+  using public.menu_items mi
+  join public._import_882ef5a4 s on lower(s.name) = lower(mi.name)
+  where mipa.menu_item_id = mi.id
+    and mi.business_id = v_business
+    and mipa.print_area_id <> (
+      select a.id from public.print_areas a
+      where a.business_id = v_business
+        and a.code = case s.area when 'cocina' then v_code_cocina
+                                 else v_code_bar end
+    );
+
+  -- 2b) N:M — asigna la correcta
+  insert into public.menu_item_print_areas (menu_item_id, print_area_id)
+  select mi.id, a.id
+  from public.menu_items mi
+  join public._import_882ef5a4 s on lower(s.name) = lower(mi.name)
+  join public.print_areas a
+    on a.business_id = mi.business_id
+   and a.code = case s.area when 'cocina' then v_code_cocina else v_code_bar end
+  where mi.business_id = v_business
+    and not exists (
+      select 1 from public.menu_item_print_areas x
+      where x.menu_item_id = mi.id and x.print_area_id = a.id
+    );
+end $$;
+
+
+-- ##########################################################################
+-- ##  PARTE 4 — Inventario
+-- ##########################################################################
+
+--
+-- PASO 4 — Inventario: 1374 productos contables.
+--
+-- QUÉ ENTRA: todo salvo Tragos, Cócteles, Comida, Fiesta y Hookah — preparados
+--   y servicios. Square les puso stock de mentira (Long Island 1000,
+--   Martini 999, Mojitos 645) porque nunca se contaron. Un trago descuenta de
+--   la BOTELLA, no de sí mismo: eso necesita receta, no link 1:1, y quedó fuera
+--   por decisión explícita.
+--
+-- CÓMO: link directo menu_items.inventory_item_id → inventory_items (1:1),
+--   sin recetas. Vende 1, descuenta 1.
+--
+-- POR QUÉ DML DIRECTO Y NO fn_menu_item_set_inventory_tracked: esa función es
+--   SECURITY DEFINER y valida auth.uid() contra user_business_role. Desde el
+--   SQL Editor auth.uid() es null → INSUFFICIENT_ROLE. Este script hace
+--   exactamente lo mismo que la función, paso por paso.
+--
+-- STOCK INICIAL: 1132 productos con cantidad > 0, del conteo MONCION del
+--   CSV. Se registra como movimiento 'purchase'; el trigger
+--   trg_inventory_stock_sync actualiza inventory_stock solo. Las 53 cantidades
+--   negativas del CSV entraron como 0 (ver 00_REPORTE.md).
+--
+-- inventory_mode = 'advanced' de ÚLTIMO, a propósito: hasta que se sube, el
+--   motor no descuenta nada aunque los productos estén marcados.
+--
+-- Requiere los PASOS 1 y 2.
+-- ============================================================================
+
+
+do $$
+declare
+  v_business  uuid := '882ef5a4-93eb-4e58-92c3-bf532e179d45';
+  v_warehouse uuid;
+  v_creados   int;
+  v_linkeados int;
+  v_movs      int;
+begin
+  -- Bodega destino del stock inicial: la principal.
+  select id into v_warehouse
+  from public.warehouses
+  where business_id = v_business
+    and coalesce(is_active, true)
+    and name is distinct from '__IN_TRANSIT__'
+  order by is_main desc nulls last, created_at asc nulls first
+  limit 1;
+
+  if v_warehouse is null then
+    raise exception
+      'Este negocio no tiene ninguna bodega activa. Crea la bodega principal '
+      'en Ajustes → Inventario antes de correr este paso.';
+  end if;
+
+  -- 1) Insumo por producto contable. Nombre idéntico al producto para que se
+  --    puedan cruzar de un vistazo en la pantalla de Insumos.
+  insert into public.inventory_items (business_id, sku, name, unit, cost, is_active)
+  select v_business, nullif(btrim(coalesce(s.sku,'')),''), s.name, 'unidad',
+         coalesce(s.cost, 0), true
+  from public._import_882ef5a4 s
+  where s.inventariable
+    and not exists (
+      select 1 from public.inventory_items ii
+      where ii.business_id = v_business
+        and lower(btrim(ii.name)) = lower(btrim(s.name))
+    );
+  get diagnostics v_creados = row_count;
+
+  -- 2) Link directo + flag de tracking.
+  update public.menu_items mi
+  set inventory_item_id = ii.id,
+      is_inventory_tracked = true
+  from public._import_882ef5a4 s
+  join public.inventory_items ii
+    on ii.business_id = v_business
+   and lower(btrim(ii.name)) = lower(btrim(s.name))
+  where mi.business_id = v_business
+    and lower(mi.name) = lower(s.name)
+    and s.inventariable
+    and (mi.inventory_item_id is distinct from ii.id
+         or coalesce(mi.is_inventory_tracked, false) = false);
+  get diagnostics v_linkeados = row_count;
+
+  -- 3) Stock inicial. IDEMPOTENTE: solo si ese insumo no tiene ya un
+  --    movimiento 'initial_stock'. Re-ejecutar NO vuelve a sumar.
+  insert into public.inventory_movements (
+    business_id, warehouse_id, item_id, movement_type, quantity,
+    cost_per_unit, reference_type, notes
+  )
+  select v_business, v_warehouse, ii.id, 'purchase'::public.movement_type,
+         s.qty, s.cost, 'initial_stock',
+         'Stock inicial import Square (conteo MONCION) — ' || s.name
+  from public._import_882ef5a4 s
+  join public.inventory_items ii
+    on ii.business_id = v_business
+   and lower(btrim(ii.name)) = lower(btrim(s.name))
+  where s.inventariable
+    and s.qty > 0
+    and not exists (
+      select 1 from public.inventory_movements m
+      where m.item_id = ii.id and m.reference_type = 'initial_stock'
+    );
+  get diagnostics v_movs = row_count;
+
+  -- 4) Encender el motor. Va de último: sin esto nada descuenta.
+  update public.business_settings
+  set inventory_mode = 'advanced'
+  where business_id = v_business
+    and inventory_mode is distinct from 'advanced';
+
+  raise notice 'insumos creados: % | productos linkeados: % | movimientos de stock inicial: %',
+    v_creados, v_linkeados, v_movs;
+end $$;
+
+
+-- ##########################################################################
+-- ##  PARTE 5 — Propina de Ley (10%)
+-- ##########################################################################
+
+--
+-- PASO 6 — Vincular la Propina de Ley (10%).
+--
+-- DECISIÓN DEL DUEÑO (2026-08-10): se vincula SOLO la Propina de Ley.
+--   El ITBIS 18% queda SIN vincular a propósito, aunque el impuesto exista
+--   y esté activo en el negocio. El precio del CSV se cobra tal cual y encima
+--   solo se suma el 10%.
+--
+--   ⚠ Consecuencia fiscal: mientras el ITBIS no se vincule, las facturas de
+--     este negocio salen con ITBIS 0.00 ante la DGII. `menu_item_taxes` es la
+--     ÚNICA fuente del impuesto por producto — no hay fallback a
+--     business_settings.default_tax_rate (PRD 2.5 lo quitó). Si más adelante
+--     se quiere el ITBIS, es este mismo script cambiando v_tax_name.
+--
+-- DÓNDE SE COBRA — lo gobiernan los apply_on del impuesto, ya configurados:
+--     zona ✓   manual ✓   delivery ✓   |   quick ✗   takeout ✗
+--   O sea: el trago en mesa cobra el 10%; la botella en venta rápida o para
+--   llevar, no. No hay que mantener listas de productos.
+--
+-- ┌────────────────────────────────────────────────────────────────────────┐
+-- │ 🚫 `taxes.is_service_fee` se queda en FALSE. Si se enciende, el servidor │
+-- │    lo mete dentro del oi.tax consolidado Y el cliente lo vuelve a sumar │
+-- │    aparte: la factura cobra 10% + 10%. Regla fija, no se toca.          │
+-- ├────────────────────────────────────────────────────────────────────────┤
+-- │ ⚠ Tampoco enciendas business_settings.service_fee_enabled. Con el 10%   │
+-- │   vinculado por producto Y ese switch en true, se cobra dos veces: una  │
+-- │   por ítem (menu_item_taxes) y otra por orden (calculate_order_totals).  │
+-- │   Hoy está en false; el PASO 1 de abajo aborta si cambió.               │
+-- └────────────────────────────────────────────────────────────────────────┘
+--
+-- ALCANCE: todos los productos activos del negocio, no solo los del import.
+--   Así no depende de la tabla de staging (que se borra en el paso 5).
+--
+-- IDEMPOTENTE: re-ejecutar no duplica vínculos.
+-- ============================================================================
+
+
+do $$
+declare
+  -- ▼▼▼ Impuesto a vincular. Confirmado en el diagnóstico del 2026-08-10:
+  --     "Propina de Ley" · 10.0% · activo · is_service_fee=false
+  v_tax_name text := 'Propina de Ley';
+  -- ▲▲▲
+
+  v_business uuid := '882ef5a4-93eb-4e58-92c3-bf532e179d45';
+  v_tax_id   uuid;
+  v_tax_rate numeric;
+  v_sf_on    boolean;
+  v_matches  int;
+  v_linked   int;
+begin
+  -- Guarda 1: el impuesto existe, es único por nombre y está activo.
+  select count(*) into v_matches
+  from public.taxes where business_id = v_business and name = v_tax_name;
+
+  if v_matches = 0 then
+    raise exception
+      'No existe un impuesto llamado "%" en este negocio. Revisa el nombre '
+      'exacto en Ajustes → Impuestos (distingue mayúsculas y espacios).',
+      v_tax_name;
+  elsif v_matches > 1 then
+    raise exception
+      'Hay % impuestos llamados "%". Desambigua por id antes de continuar.',
+      v_matches, v_tax_name;
+  end if;
+
+  select id, rate into v_tax_id, v_tax_rate
+  from public.taxes where business_id = v_business and name = v_tax_name;
+
+  if not exists (select 1 from public.taxes
+                 where id = v_tax_id and coalesce(is_active, true)) then
+    raise exception
+      'El impuesto "%" existe pero está INACTIVO: no cobraría nada. Actívalo '
+      'en Ajustes → Impuestos y vuelve a correr.', v_tax_name;
+  end if;
+
+  -- Guarda 2: cobro doble.
+  select coalesce(service_fee_enabled, false) into v_sf_on
+  from public.business_settings where business_id = v_business;
+
+  if coalesce(v_sf_on, false) then
+    raise exception
+      'ABORTADO: business_settings.service_fee_enabled está en TRUE. Vincular '
+      '"%" (% %%) por producto con ese switch encendido cobra la propina DOS '
+      'veces. Apágalo en Ajustes y vuelve a correr.', v_tax_name, v_tax_rate;
+  end if;
+
+  -- 1) Garantizar modo exclusivo (el impuesto se suma encima del precio).
+  update public.menu_items
+  set tax_mode = 'exclusive'
+  where business_id = v_business and tax_mode is distinct from 'exclusive';
+
+  -- 2) Vincular.
+  insert into public.menu_item_taxes (item_id, tax_id)
+  select mi.id, v_tax_id
+  from public.menu_items mi
+  where mi.business_id = v_business
+    and mi.is_active
+    and not exists (
+      select 1 from public.menu_item_taxes x
+      where x.item_id = mi.id and x.tax_id = v_tax_id
+    );
+  get diagnostics v_linked = row_count;
+
+  raise notice 'OK — "%" (% %%) vinculado a % productos nuevos.',
+    v_tax_name, v_tax_rate, v_linked;
+end $$;
+
+
+-- ##########################################################################
+-- ##  PARTE 6 — Limpieza
+-- ##########################################################################
+
+-- El staging ya cumplió: todo lo de arriba salió de él.
+drop table if exists public._import_882ef5a4;
+
+commit;
+
+
+
+-- ##########################################################################
+-- ##  VERIFICACIÓN — correr después del commit
+-- ##########################################################################
+
+
+-- 1) RESUMEN. Esperado:
+--    categorias 26 · productos 1516 · inventariables 1374
+--    insumos 1374 · con_propina 1516 · con_itbis 0
+select
+  (select count(*) from public.categories
+    where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid)                          as categorias,
+  (select count(*) from public.menu_items
+    where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and is_active)            as productos,
+  (select count(*) from public.menu_items
+    where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and is_inventory_tracked) as inventariables,
+  (select count(*) from public.inventory_items
+    where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid)                          as insumos,
+  (select count(*) from public.menu_item_taxes mit
+     join public.menu_items mi on mi.id = mit.item_id
+     join public.taxes t on t.id = mit.tax_id
+    where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and t.rate = 10)       as con_propina,
+  (select count(*) from public.menu_item_taxes mit
+     join public.menu_items mi on mi.id = mit.item_id
+     join public.taxes t on t.id = mit.tax_id
+    where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and t.rate = 18)       as con_itbis,
+  (select count(*) from public.menu_items
+    where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and barcode is not null)  as con_barcode;
+
+-- 2) Desglose por categoría: productos, ruteo de comanda, inventario e impuesto.
+select
+  c.position, c.name                                     as categoria,
+  count(*)                                               as productos,
+  string_agg(distinct mi.print_area_code, ',')           as area,
+  count(*) filter (where mi.is_inventory_tracked)        as inventariables,
+  count(mit.tax_id)                                      as con_propina
+from public.menu_items mi
+join public.categories c             on c.id = mi.category_id
+left join public.menu_item_taxes mit on mit.item_id = mi.id
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+group by c.position, c.name
+order by c.position;
+
+-- 3) RED FLAGS — las cinco deben dar 0 filas.
+-- f1: producto apuntando a un área inexistente (ej. 'kitchen_hot').
+--     Con esto, "Enviar a cocina" revienta y NO sale ninguna comanda.
+select mi.name, mi.print_area_code
+from public.menu_items mi
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+  and not exists (select 1 from public.print_areas a
+                  where a.business_id = mi.business_id
+                    and a.code = mi.print_area_code and a.is_active);
+
+-- f2: sin asignación N:M de área
+select mi.name from public.menu_items mi
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+  and not exists (select 1 from public.menu_item_print_areas x
+                  where x.menu_item_id = mi.id);
+
+-- f3: legacy y N:M en desacuerdo (rutearían distinto si falla la red)
+select mi.name, mi.print_area_code as legacy, a.code as nm
+from public.menu_items mi
+join public.menu_item_print_areas mipa on mipa.menu_item_id = mi.id
+join public.print_areas a on a.id = mipa.print_area_id
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+  and a.code is distinct from mi.print_area_code;
+
+-- f4: marcado inventariable pero sin insumo → se vende sin descontar
+select mi.name from public.menu_items mi
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+  and mi.is_inventory_tracked and mi.inventory_item_id is null;
+
+-- f5: producto activo sin la propina vinculada
+select mi.name from public.menu_items mi
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and mi.is_active
+  and not exists (select 1 from public.menu_item_taxes x
+                  join public.taxes t on t.id = x.tax_id
+                  where x.item_id = mi.id and t.name = 'Propina de Ley');
+
+-- 4) Simulación de cobro EN MESA. Presidente 12oz de 150 → 165.
+--    En venta rápida y para llevar se cobra el precio pelado, porque
+--    apply_on_quick y apply_on_takeout del impuesto están en false.
+select
+  mi.name, mi.price as precio,
+  sum(t.rate)                                    as tasa,
+  round(mi.price * (1 + sum(t.rate) / 100.0), 2) as total_en_mesa
+from public.menu_items mi
+join public.menu_item_taxes mit on mit.item_id = mi.id
+join public.taxes t             on t.id = mit.tax_id and t.is_active
+where mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid
+  and mi.name in ('Presidente 12oz', 'Corona Extra 12oz', 'Hookah', 'Hamburger')
+group by mi.name, mi.price
+order by mi.price;
+
+-- 5) Valor del inventario cargado
+select count(*) as insumos_con_stock, sum(st.quantity) as unidades,
+       round(sum(st.quantity * coalesce(ii.cost, 0)), 2) as valor_costo
+from public.inventory_stock st
+join public.inventory_items ii on ii.id = st.item_id
+where ii.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and st.quantity > 0;
+
+
+
+-- ##########################################################################
+-- ##  PENDIENTES DEL NEGOCIO (no los hace este script)
+-- ##########################################################################
+
+-- 1) El área `cocina` tiene 0 impresoras activas: los 16 productos de
+--    Comida generan comanda que no sale por ningún lado.
+--    Se asigna en Ajustes → Impresoras → Áreas. Para ver el estado:
+--      select a.code, count(pap.printer_id) filter (where pap.enabled) as impresoras
+--      from public.print_areas a
+--      left join public.print_area_printers pap on pap.area_id = a.id
+--      where a.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45' group by a.code;
+--
+-- 2) "Propina de Ley" tiene apply_on_delivery = true: una botella despachada a
+--    domicilio cobra el 10% de servicio. Si el delivery es solo venta de
+--    botella, descomenta:
+--
+-- update public.taxes set apply_on_delivery = false
+-- where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and name = 'Propina de Ley';
+--
+-- 3) Categoría de prueba `ggvg` con 1 producto. Para borrarla:
+--
+-- delete from public.menu_items m using public.categories c
+-- where c.id = m.category_id and c.name = 'ggvg'
+--   and m.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+-- delete from public.categories
+-- where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid and name = 'ggvg';
+--
+-- 4) Contar físicamente las 53 referencias que el CSV traía en negativo
+--    (Presidente 22oz -105, Heineken Draft -73, los cubetazos). Entraron en 0.
+--    La lista completa está en scripts/import_882ef5a4/00_REPORTE.md.
+
+
+
+-- ##########################################################################
+-- ##  ROLLBACK — deshace TODO el import
+-- ##########################################################################
+
+-- ⚠ Solo si el negocio no ha vendido todavía. Borrar productos es seguro para
+--   los tickets ya emitidos (order_items.product_id es ON DELETE SET NULL y el
+--   ticket conserva product_name/unit_price), pero los reportes por producto
+--   pierden el enlace.
+--
+-- begin;
+--
+-- delete from public.inventory_movements m using public.inventory_items ii
+-- where m.item_id = ii.id and ii.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid
+--   and m.reference_type = 'initial_stock';
+--
+-- delete from public.inventory_stock st using public.inventory_items ii
+-- where st.item_id = ii.id and ii.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- update public.menu_items set inventory_item_id = null,
+--                              is_inventory_tracked = false
+-- where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- delete from public.inventory_items where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- delete from public.menu_item_taxes mit using public.menu_items mi
+-- where mit.item_id = mi.id and mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- delete from public.menu_item_print_areas mipa using public.menu_items mi
+-- where mipa.menu_item_id = mi.id and mi.business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- delete from public.menu_items where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+-- delete from public.categories where business_id = '882ef5a4-93eb-4e58-92c3-bf532e179d45'::uuid;
+--
+-- drop table if exists public._import_882ef5a4;
+--
+-- commit;
+-- ============================================================================

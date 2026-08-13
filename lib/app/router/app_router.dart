@@ -416,7 +416,9 @@ class AppRouter {
                       .trim();
                   switch (mode) {
                     case 'manual':
-                      return const OrderScreen(origin: OrderOrigin.manual);
+                      return const PosBarcodeScanner(
+                        child: OrderScreen(origin: OrderOrigin.manual),
+                      );
                     case 'rapida':
                       // RF-R1: escaneo de barras HID en venta rápida (retail).
                       // Gateado por barcodeEnabled dentro de PosBarcodeScanner.
@@ -429,10 +431,12 @@ class AppRouter {
                     case 'delivery_order':
                       final tableId = state.uri.queryParameters['tableId'];
                       final deliveryType = state.uri.queryParameters['deliveryType'] ?? 'own';
-                      return OrderScreen(
-                        origin: OrderOrigin.delivery,
-                        tableId: tableId,
-                        deliveryType: deliveryType,
+                      return PosBarcodeScanner(
+                        child: OrderScreen(
+                          origin: OrderOrigin.delivery,
+                          tableId: tableId,
+                          deliveryType: deliveryType,
+                        ),
                       );
                     case 'selfservice':
                       return const SelfServiceView();
@@ -454,13 +458,16 @@ class AppRouter {
               ),
               GoRoute(
                 path: AppRoutes.salesManual,
-                builder: (context, state) =>
-                    const OrderScreen(origin: OrderOrigin.manual),
+                builder: (context, state) => const PosBarcodeScanner(
+                  child: OrderScreen(origin: OrderOrigin.manual),
+                ),
               ),
               GoRoute(
                 path: AppRoutes.salesQuick,
-                builder: (context, state) =>
-                    const OrderScreen(origin: OrderOrigin.quick),
+                builder: (context, state) => const PosBarcodeScanner(
+                  autoOpenQuick: true,
+                  child: OrderScreen(origin: OrderOrigin.quick),
+                ),
               ),
               GoRoute(
                 path: AppRoutes.salesDelivery,
@@ -484,14 +491,19 @@ class AppRouter {
               final zoneId = state.uri.queryParameters['zone'] ?? '';
               final initialPeopleCount =
                   int.tryParse(state.uri.queryParameters['guests'] ?? '') ?? 1;
-              return OrderScreen(
-                origin: OrderOrigin.table,
-                tableId: tableId,
-                tableCode: tableCode,
-                zoneId: zoneId,
-                initialPeopleCount: initialPeopleCount > 0
-                    ? initialPeopleCount
-                    : 1,
+              // Escaneo HID también en venta por zona: la mesa ya tiene orden
+              // abierta, así que autoOpenQuick queda en false — el ítem se
+              // agrega a la orden de la mesa, no abre una venta rápida.
+              return PosBarcodeScanner(
+                child: OrderScreen(
+                  origin: OrderOrigin.table,
+                  tableId: tableId,
+                  tableCode: tableCode,
+                  zoneId: zoneId,
+                  initialPeopleCount: initialPeopleCount > 0
+                      ? initialPeopleCount
+                      : 1,
+                ),
               );
             },
           ),

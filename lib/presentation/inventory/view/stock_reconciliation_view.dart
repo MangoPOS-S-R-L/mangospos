@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -419,6 +420,18 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
   }
 
   Future<void> _submit() async {
+    // Un ajuste reescribe el stock contra el conteo físico: va bajo
+    // `inventario.ajustes.crear`, no bajo el acceso al módulo. Se valida acá
+    // porque es el único punto que llama a `adjustInventory`.
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('inventario.ajustes.crear')) {
+      setState(
+        () => _errorMessage = 'No tienes permiso para registrar ajustes de '
+            'inventario.',
+      );
+      return;
+    }
     final error = _validate();
     if (error != null) {
       setState(() => _errorMessage = error);

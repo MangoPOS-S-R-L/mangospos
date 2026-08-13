@@ -40,6 +40,11 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
+    // `clientes.ver` gatea la ruta; dar de alta o modificar la ficha del
+    // cliente es `clientes.crear_editar`, que hasta acá no se consultaba.
+    final canEditCustomers = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('clientes.crear_editar');
     final vm = ref.watch(customersViewModelProvider);
     final customers = vm.customers;
     final isLoading = vm.isLoading;
@@ -131,7 +136,8 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                     ),
                   ),
                 ),
-                const SizedBox(width: AppSpacing.md),
+                if (canEditCustomers) const SizedBox(width: AppSpacing.md),
+                if (canEditCustomers)
                 ElevatedButton(
                   onPressed: () {
                     showDialog(
@@ -334,6 +340,7 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
+                                    if (canEditCustomers)
                                     OutlinedButton.icon(
                                       onPressed: () {
                                         showDialog(

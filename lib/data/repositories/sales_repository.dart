@@ -253,6 +253,23 @@ class SalesRepository {
     } catch (_) {}
   }
 
+  /// Patch de anulación para `fiscal_documents`. El motivo lo escribe el
+  /// cajero al anular y hasta ahora se descartaba; para un NCF cancelado es
+  /// justamente lo que hay que poder justificar después.
+  ///
+  /// Solo estas 4 columnas son actualizables por el cliente
+  /// (mig 20260812_0001: policy fd_update + grant acotado).
+  Map<String, dynamic> _cancelledFiscalDocumentPatch(String? reason) {
+    final trimmed = reason?.trim();
+    return <String, dynamic>{
+      'status': 'cancelled',
+      'cancelled_at': DateTime.now().toUtc().toIso8601String(),
+      if (trimmed != null && trimmed.isNotEmpty) 'cancellation_reason': trimmed,
+      if (_client.auth.currentUser?.id != null)
+        'cancelled_by': _client.auth.currentUser!.id,
+    };
+  }
+
   Future<void> annulPayment({
     required String paymentId,
     required String orderId,
@@ -271,42 +288,72 @@ class SalesRepository {
       throw Exception('ORDER_ID_REQUIRED');
     }
 
-    // Para pagos full-order: detectar split por métodos. Si no hay pagos
-    // hermanos, mantener anulación total (legacy). Si hay hermanos, caer al
-    // flujo de anulación parcial sin tocar items.
-    if (!hasCheck) {
-      final siblingsRaw = await _client
+    // La unidad de anulación es el DOCUMENTO FISCAL, no el pago suelto.
+    //
+    // El historial agrupa por documento fiscal: una venta con pago mixto
+    // (efectivo + tarjeta) es UNA fila cuyo botón "Anular" trae el pago
+    // pivote — el que creó el NCF. Cancelar solo ese pago dejaba la venta a
+    // medias: el NCF quedaba cancelado, pero la orden revivía como
+    // `partially_paid`, la mesa volvía a `occupied` y la otra pierna seguía
+    // en `completed` sin forma de anularla desde la UI (la fila ya no
+    // aparecía como activa). Por eso se anulan juntas todas las piernas que
+    // comparten el mismo NCF.
+    const paymentCols = 'id, order_id, check_id, fiscal_document_id, '
+        'payment_method_id, amount, change_amount, session_id, status';
+
+    final pivotRaw = await _client
+        .from('payments')
+        .select(paymentCols)
+        .eq('id', trimmedPaymentId)
+        .maybeSingle();
+
+    if (pivotRaw == null) {
+      throw Exception('PAYMENT_NOT_FOUND');
+    }
+    final pivotPayment = Map<String, dynamic>.from(pivotRaw);
+    if ((pivotPayment['status']?.toString() ?? '') != 'completed') {
+      // Antes retornaba en silencio y la UI festejaba un "anulada
+      // correctamente" que no había ocurrido.
+      throw Exception('Esta venta ya estaba anulada.');
+    }
+
+    // Piernas de ESTA venta. Sin fiscal_document_id (venta sin NCF), la
+    // venta es solo el pago pivote.
+    final fiscalDocumentId =
+        pivotPayment['fiscal_document_id']?.toString().trim();
+    var salePayments = <Map<String, dynamic>>[pivotPayment];
+    if (fiscalDocumentId != null && fiscalDocumentId.isNotEmpty) {
+      final legsRaw = await _client
           .from('payments')
-          .select('id')
-          .eq('order_id', trimmedOrderId)
-          .isFilter('check_id', null)
-          .eq('status', 'completed')
-          .neq('id', trimmedPaymentId);
-      final hasSiblings = (siblingsRaw as List).isNotEmpty;
-      if (!hasSiblings) {
-        await annulOrder(orderId: trimmedOrderId, reason: reason);
-        return;
-      }
+          .select(paymentCols)
+          .eq('fiscal_document_id', fiscalDocumentId)
+          .eq('status', 'completed');
+      final legs = List<Map<String, dynamic>>.from(legsRaw);
+      if (legs.isNotEmpty) salePayments = legs;
+    }
+    final salePaymentIds =
+        salePayments.map((p) => p['id'].toString()).toSet();
+
+    // ¿Le quedan pagos vivos a la orden FUERA de esta venta? Si no, la
+    // anulación es total: anula ítems, cierra la orden como `void` y libera
+    // la mesa. Si sí (dos ventas con NCF distintos sobre la misma orden, o
+    // cuentas divididas), solo se anula esta y la orden vuelve a
+    // `partially_paid`.
+    final orderPaymentsRaw = await _client
+        .from('payments')
+        .select('id, check_id')
+        .eq('order_id', trimmedOrderId)
+        .eq('status', 'completed');
+    final hasSurvivors = List<Map<String, dynamic>>.from(orderPaymentsRaw)
+        .where((p) => !hasCheck ? p['check_id'] == null : true)
+        .any((p) => !salePaymentIds.contains(p['id'].toString()));
+
+    if (!hasCheck && !hasSurvivors) {
+      await annulOrder(orderId: trimmedOrderId, reason: reason);
+      return;
     }
 
     try {
-      final paymentRaw = await _client
-          .from('payments')
-          .select(
-            'id, order_id, check_id, payment_method_id, amount, change_amount, session_id, status',
-          )
-          .eq('id', trimmedPaymentId)
-          .maybeSingle();
-
-      if (paymentRaw == null) {
-        throw Exception('PAYMENT_NOT_FOUND');
-      }
-
-      final payment = Map<String, dynamic>.from(paymentRaw);
-      if ((payment['status']?.toString() ?? '') != 'completed') {
-        return;
-      }
-
       final orderRaw = await _client
           .from('orders')
           .select('session_id')
@@ -324,33 +371,56 @@ class SalesRepository {
         tableId = sessionRaw?['table_id']?.toString();
       }
 
-      String? paymentMethodCode;
-      final paymentMethodId = payment['payment_method_id']?.toString();
-      if (paymentMethodId != null && paymentMethodId.isNotEmpty) {
-        final methodRaw = await _client
+      // Códigos de método de TODAS las piernas de la venta (una consulta).
+      final methodIds = salePayments
+          .map((p) => p['payment_method_id']?.toString())
+          .whereType<String>()
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      final methodCodeById = <String, String>{};
+      if (methodIds.isNotEmpty) {
+        final methodsRaw = await _client
             .from('payment_methods')
-            .select('code')
-            .eq('id', paymentMethodId)
-            .maybeSingle();
-        paymentMethodCode = methodRaw?['code']?.toString();
+            .select('id, code')
+            .inFilter('id', methodIds);
+        for (final m in List<Map<String, dynamic>>.from(methodsRaw)) {
+          final id = m['id']?.toString();
+          final code = m['code']?.toString();
+          if (id != null && code != null) methodCodeById[id] = code;
+        }
       }
+      String? codeOf(Map<String, dynamic> p) =>
+          methodCodeById[p['payment_method_id']?.toString() ?? ''];
+      final hasCreditLeg = salePayments.any((p) => codeOf(p) == 'credit');
 
       // Venta a crédito: si su CxC ya tiene abonos, bloquear ANTES de tocar
       // nada (el trigger server-side también lo bloquea, pero aquí damos el
       // mensaje amigable sin dejar estado a medias).
-      if (paymentMethodCode == 'credit') {
+      if (hasCreditLeg) {
         await _ensureCreditAnnullable(trimmedOrderId);
       }
 
       await _client
           .from('payments')
           .update({'status': 'cancelled'})
-          .eq('id', trimmedPaymentId);
+          .inFilter('id', salePaymentIds.toList(growable: false));
 
-      await _client
-          .from('fiscal_documents')
-          .update({'status': 'cancelled'})
-          .eq('payment_id', trimmedPaymentId);
+      // El NCF se cancela por documento cuando existe: en pago mixto las
+      // piernas comparten fiscal_document_id y `fd.payment_id` apunta solo
+      // al pivote, así que filtrar por payment_id dejaba fuera el resto.
+      final fdPatch = _cancelledFiscalDocumentPatch(reason);
+      if (fiscalDocumentId != null && fiscalDocumentId.isNotEmpty) {
+        await _client
+            .from('fiscal_documents')
+            .update(fdPatch)
+            .eq('id', fiscalDocumentId);
+      } else {
+        await _client
+            .from('fiscal_documents')
+            .update(fdPatch)
+            .inFilter('payment_id', salePaymentIds.toList(growable: false));
+      }
 
       // Reabrir items y check sólo para el flujo basado en checks. En split
       // full-order los items pertenecen a la orden entera (no a un check);
@@ -390,26 +460,31 @@ class SalesRepository {
             .eq('id', tableId);
       }
 
-      if (paymentMethodCode == 'cash') {
-        final cashierSessionId = payment['session_id']?.toString();
+      // Caja: una reversa por cada pierna en efectivo, contra la sesión de
+      // caja donde se cobró (pueden ser distintas si el split se registró en
+      // dos turnos).
+      for (final leg in salePayments) {
+        if (codeOf(leg) != 'cash') continue;
+        final cashierSessionId = leg['session_id']?.toString();
         final netAmount = netPaymentAmount(
-          payment['amount'],
-          payment['change_amount'],
+          leg['amount'],
+          leg['change_amount'],
         );
         if (cashierSessionId != null &&
             cashierSessionId.isNotEmpty &&
             netAmount > 0) {
+          final legId = leg['id'].toString();
           await _client.from('cash_transactions').insert({
             'session_id': cashierSessionId,
             'amount': -netAmount,
             'type': 'sale',
-            'description': 'Anulacion pago ${trimmedPaymentId.substring(0, 8)}',
+            'description': 'Anulacion pago ${legId.substring(0, 8)}',
             'related_order_id': trimmedOrderId,
           });
         }
       }
 
-      if (paymentMethodCode == 'credit') {
+      if (hasCreditLeg) {
         await _cancelOpenCreditsForOrder(trimmedOrderId);
       }
     } catch (e) {
@@ -2711,7 +2786,7 @@ class SalesRepository {
       // 5. Anular Documentos Fiscales asociados
       await _client
           .from('fiscal_documents')
-          .update({'status': 'cancelled'})
+          .update(_cancelledFiscalDocumentPatch(reason))
           .eq('order_id', orderId);
 
       // 6. Cancelar CxC abiertas de la orden (venta a crédito anulada).

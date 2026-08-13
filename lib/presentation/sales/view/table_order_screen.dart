@@ -13,6 +13,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
@@ -103,10 +104,18 @@ Future<bool> _ensureCanDeleteOrderItem(
 }) async {
   if (isDraft) return true;
 
-  // Solo el owner del negocio se salta el PIN. Cualquier otro rol (admin,
-  // supervisor, cajero, mesero…) debe escribir PIN de supervisor/admin para
-  // reducir la cantidad o eliminar un item que YA salió impreso a cocina/bar.
-  if (ref.read(sessionProvider).isOwner) return true;
+  // El owner pasa directo, igual que quien tenga `ventas.orden.eliminar_item`
+  // concedido en su perfil de acceso. Cualquier otro debe escribir PIN de
+  // supervisor/admin para reducir la cantidad o eliminar un item que YA salió
+  // impreso a cocina/bar.
+  //
+  // El chequeo de permiso faltaba acá aunque el mismo gate en cuentas
+  // divididas (split_bill_modal.dart) sí lo hacía: borrar un item desde la
+  // mesa pedía PIN y borrarlo desde la subcuenta no.
+  if (operatorIsOwner(ref)) return true;
+  if (operatorHasPermission(ref, 'ventas.orden.eliminar_item')) {
+    return true;
+  }
 
   final authorized = await showPinVerificationModal(
     context,
@@ -562,8 +571,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   /// permiso del usuario LOGUEADO, así que autorizar con PIN ajeno dejaría
   /// al cajero en un modal sin la opción.
   bool get _canSellCredit {
-    if (ref.read(sessionProvider).isOwner) return true;
-    return ref.read(sessionProvider.notifier).hasPermission('creditos.vender');
+    if (operatorIsOwner(ref)) return true;
+    return operatorHasPermission(ref, 'creditos.vender');
   }
 
   /// "Cobrar a crédito" (riel/menú de opciones de la mesa): abre el cobro de
@@ -632,8 +641,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     required String pinTitle,
     required String pinSubtitle,
   }) async {
-    if (ref.read(sessionProvider).isOwner) return true;
-    if (ref.read(sessionProvider.notifier).hasPermission(permission)) {
+    if (operatorIsOwner(ref)) return true;
+    if (operatorHasPermission(ref, permission)) {
       return true;
     }
     return showPinVerificationModal(
@@ -732,9 +741,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // (p. ej. un mesero con 'ventas.mesas.liberar') también pasa directo.
     // Cualquier otro rol debe escribir PIN de Supervisor/Administrador
     // como respaldo para anular o liberar la mesa.
-    final isOwner = ref.read(sessionProvider).isOwner;
+    final isOwner = operatorIsOwner(ref);
     final hasBypassPermission = bypassPermission != null &&
-        ref.read(sessionProvider.notifier).hasPermission(bypassPermission);
+        operatorHasPermission(ref, bypassPermission);
     if (!isOwner && !hasBypassPermission) {
       final authorized = await showPinVerificationModal(
         context,
@@ -870,6 +879,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   Future<void> _handleAssignClient(BuildContext context) async {
+    // Asignar cliente a la cuenta define a quién se le factura (y con qué
+    // RNC): va bajo `clientes.asignar_a_mesa`, que hasta acá nadie leía.
+    if (!operatorHasPermission(ref, 'clientes.asignar_a_mesa')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No tienes permiso para asignar clientes a la cuenta.'),
+        ),
+      );
+      return;
+    }
     final selected = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (_) => const _AssignCustomerDialog(),
@@ -2945,10 +2964,8 @@ class _CartView extends ConsumerWidget {
         // (sin el permiso) no puede descontar sin autorización. El descuento
         // automático de ofertas no pasa por aquí.
         onAuthorizeDiscount: () async {
-          if (ref.read(sessionProvider).isOwner) return true;
-          if (ref
-              .read(sessionProvider.notifier)
-              .hasPermission('ventas.orden.descuento_aplicar')) {
+          if (operatorIsOwner(ref)) return true;
+          if (operatorHasPermission(ref, 'ventas.orden.descuento_aplicar')) {
             return true;
           }
           return showPinVerificationModal(
@@ -5709,6 +5726,10 @@ class _CartView extends ConsumerWidget {
                 discountDisplayMode: discountDisplayMode,
                 template: invoiceTpl,
                 openCashDrawer: shouldOpenDrawer,
+                // Layout segun el papel de ESTA impresora (58 u 80mm). En
+                // modo sin impresora no hay destino: se arma a 80mm, que es
+                // el ancho del ticket en pantalla/PDF.
+                paperWidth: assignedPrinter?.paperWidth ?? 80,
               )
             : PrintTicketService.generatePrecheck(
                 order: orderObj,
@@ -5730,6 +5751,7 @@ class _CartView extends ConsumerWidget {
                 taxBreakdown: printTaxBreakdown,
                 discountDisplayMode: discountDisplayMode,
                 template: invoiceTpl,
+                paperWidth: assignedPrinter?.paperWidth ?? 80,
               );
       }
 
@@ -8053,6 +8075,11 @@ class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
                               ),
                             ),
                             const SizedBox(width: 16),
+                            // Alta de ficha desde la mesa: mismo permiso que
+                            // en la pantalla de Clientes. Sin él, el mesero
+                            // solo puede buscar y asignar uno existente.
+                            if (operatorHasPermission(
+                                ref, 'clientes.crear_editar'))
                             Tooltip(
                               message: 'Crear cliente',
                               child: SizedBox(

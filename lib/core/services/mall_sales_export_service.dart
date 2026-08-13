@@ -58,6 +58,17 @@ class MallSalesExportService {
   ///   - ID_TRANSACCION: ddMMyy + hora (2 dígitos) → único por fila/día.
   ///   - HORA: entero 0-23 (la tabla del manual la define INT).
   ///   - TOTALART con 6 decimales, montos con 2.
+  ///
+  /// CONVENCIÓN DE MONTOS (confirmada por la plaza el 2026-08-13):
+  ///   TOTALBRUTO      = base SIN impuesto
+  ///   TOTALIMPUESTOS  = impuesto
+  ///   TOTALNETO       = TOTALBRUTO + TOTALIMPUESTOS = lo que pagó el cliente
+  ///
+  /// Es al revés de la nomenclatura interna, donde `totalGross` es el monto
+  /// cobrado y `totalNet` la base. Se verifica con el ejemplo del propio
+  /// manual: 10 959.40 es exactamente el 18% de 60 885.60, así que ese primer
+  /// número es la base y no el cobrado. Por eso el mapeo va cruzado:
+  ///   TOTALBRUTO ← row.totalNet   ·   TOTALNETO ← row.totalGross
   static String buildCsv({
     required MallSalesExportConfig config,
     required DateTime date,
@@ -85,9 +96,9 @@ class MallSalesExportService {
           row.txCount.toString(),
           row.totalItems.toStringAsFixed(6),
           tasa,
-          row.totalGross.toStringAsFixed(2),
-          row.totalTax.toStringAsFixed(2),
-          row.totalNet.toStringAsFixed(2),
+          row.totalNet.toStringAsFixed(2), // TOTALBRUTO = base sin impuesto
+          row.totalTax.toStringAsFixed(2), // TOTALIMPUESTOS
+          row.totalGross.toStringAsFixed(2), // TOTALNETO = base + impuesto
         ], ',');
     }
     buffer.write('\r\n');

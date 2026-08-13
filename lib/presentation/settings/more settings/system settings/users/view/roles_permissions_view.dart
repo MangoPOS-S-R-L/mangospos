@@ -42,6 +42,22 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
   String? _error;
   String? _businessId;
 
+  /// Permisos efectivos tal como se leyeron al abrir la pantalla.
+  ///
+  /// Hace falta porque esta grilla no cubre todo el catálogo: contabilidad,
+  /// créditos y reservas no tienen fila acá. Como el guardado borra los
+  /// overrides del usuario y reinserta solo lo que se manda, sin este
+  /// respaldo un guardado desde esta pantalla le arrancaba en silencio
+  /// permisos de esos módulos que habían sido concedidos desde Usuarios.
+  Set<String> _loadedCodes = <String>{};
+
+  /// Todos los códigos que esta grilla sabe conceder o quitar. Lo que caiga
+  /// fuera de este conjunto no se toca al guardar.
+  static final Set<String> _managedCodes = _codeMap.values
+      .expand((byAction) => byAction.values)
+      .expand((codes) => codes)
+      .toSet();
+
   @override
   void initState() {
     super.initState();
@@ -312,6 +328,7 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
       _businessId = bid;
       final codes =
           await _repo.fetchEffectivePermissions(businessId: bid, userId: userId);
+      _loadedCodes = codes;
       _syncFromCodes(codes);
       setState(() {
         _loading = false;
@@ -357,6 +374,14 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
         desiredCodes.addAll(_codeMap[rowCode]?[action] ?? const []);
       }
     });
+
+    // Conservar lo que esta grilla no gestiona (contabilidad, créditos,
+    // reservas). El guardado hace borrón y cuenta nueva sobre los overrides
+    // del usuario, así que todo lo que no se reenvíe se pierde.
+    desiredCodes.addAll(
+      _loadedCodes.where((code) => !_managedCodes.contains(code)),
+    );
+
     try {
       await _repo.saveUserOverrides(
         businessId: _businessId!,

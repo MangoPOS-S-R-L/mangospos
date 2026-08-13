@@ -648,7 +648,10 @@ class _CreditCard extends ConsumerWidget {
           ),
           _StatusChip(status: status, overdue: overdue),
           const SizedBox(width: AppSpacing.lg),
-          if (isOpen)
+          // Registrar un abono/pago mueve caja: `creditos.abonar`. Antes
+          // bastaba con `creditos.acceso` para cobrar contra una cuenta.
+          if (isOpen &&
+              ref.read(sessionProvider.notifier).hasPermission('creditos.abonar'))
             FilledButton.tonal(
               onPressed: onAbono,
               child: Text(isPayable ? 'Pagar' : 'Abonar'),

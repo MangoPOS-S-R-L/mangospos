@@ -18,6 +18,7 @@ import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/tax/tax_exceptions.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -2118,9 +2119,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     double? productFullTaxRate,
     List<SelectedModifierInput> selectedModifiers = const [],
   }) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.agregar_item')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.agregar_item')) {
       state = state.copyWith(
         error: 'No tienes permiso para agregar productos a la orden.',
       );
@@ -2517,9 +2516,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     double? productTaxRate,
     int checkPos = 1,
   }) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.agregar_item')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.agregar_item')) {
       state = state.copyWith(
         error: 'No tienes permiso para agregar productos a la orden.',
       );
@@ -2878,9 +2875,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItemQuantity(String itemId, double quantity) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.editar_item')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.editar_item')) {
       state = state.copyWith(
         error: 'No tienes permiso para editar líneas de orden.',
       );
@@ -3037,9 +3032,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItemNotes(String itemId, String notes) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.editar_item')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.editar_item')) {
       state = state.copyWith(
         error: 'No tienes permiso para editar líneas de orden.',
       );
@@ -3217,9 +3210,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> updateItem(String itemId, OrderItem updatedItem) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.editar_item')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.editar_item')) {
       state = state.copyWith(
         error: 'No tienes permiso para editar líneas de orden.',
       );
@@ -3291,9 +3282,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // (permiso del usuario o PIN de supervisor de respaldo). El chequeo
     // de permiso queda como red de seguridad para cualquier otro llamador.
     if (!preAuthorized &&
-        !ref
-            .read(sessionProvider.notifier)
-            .hasPermission('ventas.orden.descuento_aplicar')) {
+        !operatorHasPermissionRef(ref, 'ventas.orden.descuento_aplicar')) {
       state = state.copyWith(
         error: 'No tienes permiso para aplicar descuentos.',
       );
@@ -3372,9 +3361,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Ver nota en applyDiscountPercentToItems: la pantalla autoriza con
     // permiso o PIN de respaldo; aquí solo queda la red de seguridad.
     if (!preAuthorized &&
-        !ref
-            .read(sessionProvider.notifier)
-            .hasPermission('ventas.orden.descuento_aplicar')) {
+        !operatorHasPermissionRef(ref, 'ventas.orden.descuento_aplicar')) {
       state = state.copyWith(
         error: 'No tienes permiso para aplicar descuentos.',
       );
@@ -3470,9 +3457,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Ver nota en applyDiscountPercentToItems: la pantalla autoriza con
     // permiso o PIN de respaldo; aquí solo queda la red de seguridad.
     if (!preAuthorized &&
-        !ref
-            .read(sessionProvider.notifier)
-            .hasPermission('ventas.orden.descuento_aplicar')) {
+        !operatorHasPermissionRef(ref, 'ventas.orden.descuento_aplicar')) {
       state = state.copyWith(
         error: 'No tienes permiso para aplicar cortesías.',
       );
@@ -3650,9 +3635,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> closeOrderPaid() async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.mesas.liberar')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.mesas.liberar')) {
       state = state.copyWith(
         error: 'No tienes permiso para cerrar y liberar la mesa.',
       );
@@ -3799,9 +3782,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// escala al worker. Retorna `null` si no había orden o si la orden
   /// fue al path local (offline / orden local sin sincronizar).
   Future<KitchenSendResult?> confirmOrder({String? tableName, String? waiterName}) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('ventas.orden.enviar_cocina')) {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.enviar_cocina')) {
       state = state.copyWith(
         error: 'No tienes permiso para enviar órdenes a cocina.',
       );
@@ -3980,9 +3961,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String orderId,
     List<OrderItem>? items,
   }) async {
-    if (!ref
-        .read(sessionProvider.notifier)
-        .hasPermission('kds.reimprimir_comanda')) {
+    if (!operatorHasPermissionRef(ref, 'kds.reimprimir_comanda')) {
       state = state.copyWith(
         error: 'No tienes permiso para reimprimir comandas.',
       );

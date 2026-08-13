@@ -18,6 +18,23 @@ const { printRawViaWinspoolWindows } = require('./winspool');
 const { printPreCheck } = require('./templates/precheck');
 const { printInvoice } = require('./templates/invoice');
 
+/**
+ * Detecta un trabajo en modo raster de Star (StarGraphic / futurePRNT, la
+ * emulacion de la linea TSP100). Empieza con `ESC * r A` = 1B 2A 72 41.
+ * Esos bytes ya traen su propio corte, asi que el agente no debe apendarle
+ * comandos ESC/POS.
+ */
+const isStarRasterPayload = (buf) => {
+    const head = buf.subarray(0, 32);
+    for (let i = 0; i + 3 < head.length; i++) {
+        if (head[i] === 0x1b && head[i + 1] === 0x2a &&
+            head[i + 2] === 0x72 && head[i + 3] === 0x41) {
+            return true;
+        }
+    }
+    return false;
+};
+
 const processPrintJob = (job) => new Promise(async (resolve, reject) => {
     logger.info(`Procesando job ${job.id} tipo: ${job.printer?.type || 'unknown'} - Contenido: ${job.content?.type}`);
 
@@ -95,7 +112,15 @@ const processPrintJob = (job) => new Promise(async (resolve, reject) => {
                     if (!dataBase64) throw new Error('Missing dataBase64 in raw job');
                     const payload = Buffer.from(dataBase64, 'base64');
                     device.write(payload);
-                    printer.feed(3).cut().close();
+                    // El cliente ya manda el ticket completo. Si viene en modo
+                    // raster de Star (TSP100/TSP143: ESC * r A ...), el feed+cut
+                    // ESC/POS de abajo es ruido que esa impresora no entiende y
+                    // que ademas llega DESPUES de que el job ya se corto solo.
+                    if (isStarRasterPayload(payload)) {
+                        device.close();
+                    } else {
+                        printer.feed(3).cut().close();
+                    }
                 } else if (content.type === 'precheck') {
                     await printPreCheck(device, printer, content.data);
                 } else if (content.type === 'invoice') {

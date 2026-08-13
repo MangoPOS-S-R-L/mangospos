@@ -68,6 +68,12 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   }
 
   void _loadData() {
+    // Relee los permisos del usuario logueado junto con el resto del salón.
+    // El controller aplica su propio throttle, así que llamarlo en cada
+    // refresco (30s) no genera tráfico extra por gesto. Sin esto, un permiso
+    // concedido desde Usuarios no surtía efecto hasta cerrar sesión.
+    unawaited(ref.read(sessionProvider.notifier).refreshPermissions());
+
     final cashierVm = ref.read(cashierViewModelProvider);
     if (!cashierVm.isLoading) {
       if (cashierVm.currentRegisterId == null || cashierVm.businessId == null) {

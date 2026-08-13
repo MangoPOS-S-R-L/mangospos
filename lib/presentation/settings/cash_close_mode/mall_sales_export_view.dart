@@ -167,7 +167,26 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
     }
   }
 
-  Future<void> _sendToday() async {
+  Future<void> _sendToday() => _send(DateTime.now());
+
+  /// Reenvío manual de un día pasado. Sirve para validar el formato con la
+  /// plaza sin esperar al cierre de caja: el archivo del día se regenera
+  /// completo y sobrescribe el remoto, así que reenviar no duplica nada.
+  Future<void> _pickDateAndSend() async {
+    if (_sending || _resolvedBusinessId == null) return;
+    final today = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: today.subtract(const Duration(days: 1)),
+      firstDate: today.subtract(const Duration(days: 90)),
+      lastDate: today,
+      helpText: 'Día de ventas a enviar',
+    );
+    if (picked == null) return;
+    await _send(picked);
+  }
+
+  Future<void> _send(DateTime date) async {
     if (_sending || _resolvedBusinessId == null) return;
     if (!await _save(silent: true)) return;
     setState(() {
@@ -177,7 +196,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
     try {
       final fileName = await MallSalesExportService().sendForDate(
         businessId: _resolvedBusinessId!,
-        date: DateTime.now(),
+        date: date,
         config: _buildConfig(),
       );
       if (!mounted) return;
@@ -414,6 +433,18 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: busy ? null : _pickDateAndSend,
+            icon: const Icon(Icons.event_repeat_outlined),
+            label: const Text('Reenviar otro día...'),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
         ),
         const SizedBox(height: 12),
         SizedBox(

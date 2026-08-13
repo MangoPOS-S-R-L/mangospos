@@ -302,24 +302,28 @@ class PrintingService {
         final dispatchId = _createLocalDispatchId(areaCode);
         createdJobs[areaCode] = dispatchId;
 
-        final ticket = PrintTicketService.generateKitchenTicket(
-          order: order,
-          items: areaItems,
-          tableName: orderData['tableName']?.toString() ?? 'N/A',
-          waiterName: orderData['waiterName']?.toString(),
-          cashierName: _resolveCashierName(),
-          customerName: orderData['customerName']?.toString(),
-          businessName: businessName,
-          areaCode: areaCode,
-          receiptItemDisplayMode: receiptItemDisplayMode,
-          showDineInBanner: kitchenBanners.dineIn,
-          showTakeoutBanner: kitchenBanners.takeout,
-          isAddition: sendResult.merged,
-        );
+        // Un ticket POR impresora: el área puede tener una de 80mm y otra
+        // de 58mm y cada layout se arma con su ancho.
+        List<int> buildKitchenBytes(PrinterConfig printer) =>
+            PrintTicketService.generateKitchenTicket(
+              order: order,
+              items: areaItems,
+              tableName: orderData['tableName']?.toString() ?? 'N/A',
+              waiterName: orderData['waiterName']?.toString(),
+              cashierName: _resolveCashierName(),
+              customerName: orderData['customerName']?.toString(),
+              businessName: businessName,
+              areaCode: areaCode,
+              receiptItemDisplayMode: receiptItemDisplayMode,
+              showDineInBanner: kitchenBanners.dineIn,
+              showTakeoutBanner: kitchenBanners.takeout,
+              isAddition: sendResult.merged,
+              paperWidth: printer.paperWidth,
+            ).escPosCommands;
 
         final outcome = await _dispatchKitchenTicket(
           printers: printers,
-          bytes: ticket.escPosCommands,
+          buildBytes: buildKitchenBytes,
           areaCode: areaCode,
           fallbackData: {
             'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
@@ -356,9 +360,13 @@ class PrintingService {
     }
   }
 
+  /// [buildBytes] arma la comanda para UNA impresora concreta. Es una
+  /// función y no una lista de bytes fija porque el área puede tener una
+  /// térmica de 80mm y otra de 58mm: cada una necesita su propio layout
+  /// (ver `PrintTicketService.generateKitchenTicket(paperWidth:)`).
   Future<KitchenPrintOutcome> _dispatchKitchenTicket({
     required List<PrinterConfig> printers,
-    required List<int> bytes,
+    required List<int> Function(PrinterConfig printer) buildBytes,
     required String areaCode,
     required Map<String, dynamic> fallbackData,
     // Sprint 1.3.b: necesarios para fallback al cloud queue cuando los
@@ -375,7 +383,7 @@ class PrintingService {
       try {
         final outcome = await _printKitchenTicketToPrinter(
           printer: printer,
-          bytes: bytes,
+          bytes: buildBytes(printer),
           areaCode: areaCode,
           fallbackData: fallbackData,
           businessId: businessId,
@@ -1093,28 +1101,32 @@ class PrintingService {
         continue;
       }
 
-      final ticket = PrintTicketService.generateKitchenTicket(
-        order: order,
-        items: entry.value,
-        tableName: tableName,
-        waiterName: waiterName,
-        cashierName: _resolveCashierName(),
-        // Modo offline / pre-confirmación: el customer viene del state
-        // local que el cajero capturó al abrir la mesa.
-        customerName: localState.customerName,
-        businessName: resolvedBusinessName,
-        areaCode: areaCode,
-        receiptItemDisplayMode: receiptItemDisplayMode,
-        showDineInBanner: kitchenBanners.dineIn,
-        showTakeoutBanner: kitchenBanners.takeout,
-      );
+      // Un ticket POR impresora (80mm vs 58mm), igual que en el camino
+      // online.
+      List<int> buildKitchenBytes(PrinterConfig printer) =>
+          PrintTicketService.generateKitchenTicket(
+            order: order,
+            items: entry.value,
+            tableName: tableName,
+            waiterName: waiterName,
+            cashierName: _resolveCashierName(),
+            // Modo offline / pre-confirmación: el customer viene del state
+            // local que el cajero capturó al abrir la mesa.
+            customerName: localState.customerName,
+            businessName: resolvedBusinessName,
+            areaCode: areaCode,
+            receiptItemDisplayMode: receiptItemDisplayMode,
+            showDineInBanner: kitchenBanners.dineIn,
+            showTakeoutBanner: kitchenBanners.takeout,
+            paperWidth: printer.paperWidth,
+          ).escPosCommands;
 
       final dispatchId = _createLocalDispatchId(areaCode);
       createdJobs[areaCode] = dispatchId;
 
       await _dispatchKitchenTicket(
         printers: printers,
-        bytes: ticket.escPosCommands,
+        buildBytes: buildKitchenBytes,
         areaCode: areaCode,
         fallbackData: {
           'title': 'COMANDA $tableName',
@@ -1148,24 +1160,26 @@ class PrintingService {
             continue;
           }
           final itemsForArea = itemsByArea[areaCode] ?? const <OrderItem>[];
-          final ticket = PrintTicketService.generateKitchenTicket(
-            order: order,
-            items: itemsForArea,
-            tableName: tableName,
-            waiterName: waiterName,
-            cashierName: _resolveCashierName(),
-            customerName: localState.customerName,
-            businessName: resolvedBusinessName,
-            areaCode: areaCode,
-            receiptItemDisplayMode: receiptItemDisplayMode,
-            showDineInBanner: kitchenBanners.dineIn,
-            showTakeoutBanner: kitchenBanners.takeout,
-          );
+          List<int> buildKitchenBytes(PrinterConfig printer) =>
+              PrintTicketService.generateKitchenTicket(
+                order: order,
+                items: itemsForArea,
+                tableName: tableName,
+                waiterName: waiterName,
+                cashierName: _resolveCashierName(),
+                customerName: localState.customerName,
+                businessName: resolvedBusinessName,
+                areaCode: areaCode,
+                receiptItemDisplayMode: receiptItemDisplayMode,
+                showDineInBanner: kitchenBanners.dineIn,
+                showTakeoutBanner: kitchenBanners.takeout,
+                paperWidth: printer.paperWidth,
+              ).escPosCommands;
           final dispatchId = _createLocalDispatchId(areaCode);
           createdJobs[areaCode] = dispatchId;
           await _dispatchKitchenTicket(
             printers: printers,
-            bytes: ticket.escPosCommands,
+            buildBytes: buildKitchenBytes,
             areaCode: areaCode,
             fallbackData: {
               'title': 'COMANDA $tableName',
@@ -1261,24 +1275,26 @@ class PrintingService {
 
         if (printers.isEmpty) continue;
 
-        final ticket = PrintTicketService.generateKitchenTicket(
-          order: order,
-          items: areaItems,
-          tableName: orderData['tableName']?.toString() ?? 'N/A',
-          waiterName: orderData['waiterName']?.toString(),
-          cashierName: _resolveCashierName(),
-          customerName: orderData['customerName']?.toString(),
-          businessName: businessName,
-          areaCode: areaCode,
-          isReprint: true,
-          receiptItemDisplayMode: receiptItemDisplayMode,
-          showDineInBanner: kitchenBanners.dineIn,
-          showTakeoutBanner: kitchenBanners.takeout,
-        );
+        List<int> buildKitchenBytes(PrinterConfig printer) =>
+            PrintTicketService.generateKitchenTicket(
+              order: order,
+              items: areaItems,
+              tableName: orderData['tableName']?.toString() ?? 'N/A',
+              waiterName: orderData['waiterName']?.toString(),
+              cashierName: _resolveCashierName(),
+              customerName: orderData['customerName']?.toString(),
+              businessName: businessName,
+              areaCode: areaCode,
+              isReprint: true,
+              receiptItemDisplayMode: receiptItemDisplayMode,
+              showDineInBanner: kitchenBanners.dineIn,
+              showTakeoutBanner: kitchenBanners.takeout,
+              paperWidth: printer.paperWidth,
+            ).escPosCommands;
 
         await _dispatchKitchenTicket(
           printers: printers,
-          bytes: ticket.escPosCommands,
+          buildBytes: buildKitchenBytes,
           areaCode: areaCode,
           fallbackData: {
             'title': 'REIMPRESIÓN ${orderData['tableName'] ?? 'COCINA'}',
@@ -1377,24 +1393,26 @@ class PrintingService {
           continue;
         }
 
-        final ticket = PrintTicketService.generateKitchenTicket(
-          order: order,
-          items: areaItems,
-          tableName: orderData['tableName']?.toString() ?? 'N/A',
-          waiterName: orderData['waiterName']?.toString(),
-          cashierName: _resolveCashierName(),
-          customerName: orderData['customerName']?.toString(),
-          businessName: businessName,
-          areaCode: areaCode,
-          isReprint: true,
-          receiptItemDisplayMode: receiptItemDisplayMode,
-          showDineInBanner: kitchenBanners.dineIn,
-          showTakeoutBanner: kitchenBanners.takeout,
-        );
+        List<int> buildKitchenBytes(PrinterConfig printer) =>
+            PrintTicketService.generateKitchenTicket(
+              order: order,
+              items: areaItems,
+              tableName: orderData['tableName']?.toString() ?? 'N/A',
+              waiterName: orderData['waiterName']?.toString(),
+              cashierName: _resolveCashierName(),
+              customerName: orderData['customerName']?.toString(),
+              businessName: businessName,
+              areaCode: areaCode,
+              isReprint: true,
+              receiptItemDisplayMode: receiptItemDisplayMode,
+              showDineInBanner: kitchenBanners.dineIn,
+              showTakeoutBanner: kitchenBanners.takeout,
+              paperWidth: printer.paperWidth,
+            ).escPosCommands;
 
         await _dispatchKitchenTicket(
           printers: printers,
-          bytes: ticket.escPosCommands,
+          buildBytes: buildKitchenBytes,
           areaCode: areaCode,
           fallbackData: {
             'title': 'LISTO ${orderData['tableName'] ?? 'COCINA'}',
@@ -1494,24 +1512,26 @@ class PrintingService {
             continue;
           }
 
-          final ticket = PrintTicketService.generateKitchenTicket(
-            order: order,
-            items: areaItems,
-            tableName: orderData['tableName']?.toString() ?? 'N/A',
-            waiterName: orderData['waiterName']?.toString(),
-            cashierName: _resolveCashierName(),
-            customerName: orderData['customerName']?.toString(),
-            businessName: businessName,
-            areaCode: areaCode,
-            isReprint: true,
-            receiptItemDisplayMode: receiptItemDisplayMode,
-            showDineInBanner: kitchenBanners.dineIn,
-            showTakeoutBanner: kitchenBanners.takeout,
-          );
+          List<int> buildKitchenBytes(PrinterConfig printer) =>
+              PrintTicketService.generateKitchenTicket(
+                order: order,
+                items: areaItems,
+                tableName: orderData['tableName']?.toString() ?? 'N/A',
+                waiterName: orderData['waiterName']?.toString(),
+                cashierName: _resolveCashierName(),
+                customerName: orderData['customerName']?.toString(),
+                businessName: businessName,
+                areaCode: areaCode,
+                isReprint: true,
+                receiptItemDisplayMode: receiptItemDisplayMode,
+                showDineInBanner: kitchenBanners.dineIn,
+                showTakeoutBanner: kitchenBanners.takeout,
+                paperWidth: printer.paperWidth,
+              ).escPosCommands;
 
           await _dispatchKitchenTicket(
             printers: printers,
-            bytes: ticket.escPosCommands,
+            buildBytes: buildKitchenBytes,
             areaCode: areaCode,
             fallbackData: {
               'title': 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}',

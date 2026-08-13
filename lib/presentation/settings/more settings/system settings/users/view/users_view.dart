@@ -31,6 +31,42 @@ bool _canAssignRole(String callerRole, String targetRole) {
   return targetRank < callerRank;
 }
 
+/// Permisos de la pantalla de Usuarios, resueltos una sola vez por build.
+///
+/// Hasta acá `settings.usuarios.acceso` era el único permiso con efecto real:
+/// quien entraba a la pantalla podía crear, editar y desactivar gente aunque
+/// esos permisos estuvieran desmarcados en su perfil. Como Usuarios es donde
+/// se reparten los permisos, eso permitía a un supervisor darse a sí mismo lo
+/// que quisiera.
+///
+/// El dueño conserva todo por definición (`isOwner`), igual que en el resto
+/// de los gates de la app.
+/// `settings.usuarios.ver` no se usa acá a propósito: la ruta ya exige
+/// `settings.usuarios.acceso`, así que un segundo gate sobre el mismo listado
+/// solo agregaría formas de quedarse afuera sin agregar protección.
+class UsersAccess {
+  final bool canCreate;
+  final bool canEdit;
+  final bool canDeactivate;
+
+  const UsersAccess({
+    required this.canCreate,
+    required this.canEdit,
+    required this.canDeactivate,
+  });
+
+  factory UsersAccess.of(WidgetRef ref) {
+    final isOwner = ref.watch(sessionProvider).isOwner;
+    final ctrl = ref.read(sessionProvider.notifier);
+    bool can(String code) => isOwner || ctrl.hasPermission(code);
+    return UsersAccess(
+      canCreate: can('settings.usuarios.crear'),
+      canEdit: can('settings.usuarios.editar'),
+      canDeactivate: can('settings.usuarios.desactivar'),
+    );
+  }
+}
+
 class SettingsUsersView extends ConsumerStatefulWidget {
   final String businessId;
   const SettingsUsersView({super.key, required this.businessId});
@@ -98,6 +134,7 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
 
   @override
   Widget build(BuildContext context) {
+    final access = UsersAccess.of(ref);
     final text = Theme.of(context).textTheme;
     final rolesOptions = [
       'Todos los roles',
@@ -156,7 +193,12 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
           ],
         ),
         actions: [
-          if (isCompact)
+          // Alta de usuarios bajo `settings.usuarios.crear`. Sin el permiso
+          // no mostramos el botón: quien solo puede consultar la lista no
+          // debería poder crear gente (ni asignarle rol).
+          if (!access.canCreate)
+            const SizedBox.shrink()
+          else if (isCompact)
             IconButton(
               tooltip: 'Nuevo usuario',
               onPressed: () => _openUserDialog(context),
@@ -690,7 +732,7 @@ class _HeaderCell extends StatelessWidget {
   }
 }
 
-class _UserRow extends StatelessWidget {
+class _UserRow extends ConsumerWidget {
   const _UserRow({
     required this.user,
     required this.onEdit,
@@ -708,7 +750,8 @@ class _UserRow extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final access = UsersAccess.of(ref);
     final text = Theme.of(context).textTheme;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -782,6 +825,12 @@ class _UserRow extends StatelessWidget {
               child: _StatusPill(status: user.status),
             ),
           ),
+          // Sin permiso de editar ni de desactivar, el menú quedaría vacío
+          // (y `PopupMenuButton` con itemBuilder vacío revienta en assert).
+          // Quien solo tiene `ver` mira la lista sin acciones.
+          if (!access.canEdit && !access.canDeactivate)
+            const SizedBox(width: 48)
+          else
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_horiz, color: Colors.grey),
             shape: RoundedRectangleBorder(
@@ -817,73 +866,85 @@ class _UserRow extends StatelessWidget {
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem<String>(
-                value: 'edit',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.edit_outlined,
-                      size: 20,
-                      color: Colors.grey[700],
-                    ),
-                    const SizedBox(width: 12),
-                    const Text('Editar Usuario'),
-                  ],
+              // Editar usuario, resetear contraseña y repartir permisos son
+              // todas variantes de editar: van bajo `settings.usuarios.editar`.
+              if (access.canEdit) ...[
+                PopupMenuItem<String>(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.edit_outlined,
+                        size: 20,
+                        color: Colors.grey[700],
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Editar Usuario'),
+                    ],
+                  ),
                 ),
-              ),
-              PopupMenuItem<String>(
-                value: 'reset_password',
-                child: Row(
-                  children: [
-                    Icon(Icons.key_outlined, size: 20, color: Colors.grey[700]),
-                    const SizedBox(width: 12),
-                    const Text('Resetear Contraseña'),
-                  ],
+                PopupMenuItem<String>(
+                  value: 'reset_password',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.key_outlined,
+                        size: 20,
+                        color: Colors.grey[700],
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Resetear Contraseña'),
+                    ],
+                  ),
                 ),
-              ),
-              PopupMenuItem<String>(
-                value: 'view_permissions',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.shield_outlined,
-                      size: 20,
-                      color: Colors.grey[700],
-                    ),
-                    const SizedBox(width: 12),
-                    const Text('Editar Permisos'),
-                  ],
+                PopupMenuItem<String>(
+                  value: 'view_permissions',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.shield_outlined,
+                        size: 20,
+                        color: Colors.grey[700],
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Editar Permisos'),
+                    ],
+                  ),
                 ),
-              ),
-              const PopupMenuDivider(),
-              PopupMenuItem<String>(
-                value: 'deactivate',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.person_off_outlined,
-                      size: 20,
-                      color: Colors.grey[700],
-                    ),
-                    const SizedBox(width: 12),
-                    const Text('Desactivar'),
-                  ],
+              ],
+              // Desactivar y eliminar comparten `settings.usuarios.desactivar`:
+              // ambas sacan al empleado de circulación.
+              if (access.canDeactivate) ...[
+                if (access.canEdit) const PopupMenuDivider(),
+                PopupMenuItem<String>(
+                  value: 'deactivate',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.person_off_outlined,
+                        size: 20,
+                        color: Colors.grey[700],
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('Desactivar'),
+                    ],
+                  ),
                 ),
-              ),
-              PopupMenuItem<String>(
-                value: 'delete',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.delete_outline,
-                      size: 20,
-                      color: Colors.red[600],
-                    ),
-                    const SizedBox(width: 12),
-                    Text('Eliminar', style: TextStyle(color: Colors.red[600])),
-                  ],
+                PopupMenuItem<String>(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.delete_outline,
+                        size: 20,
+                        color: Colors.red[600],
+                      ),
+                      const SizedBox(width: 12),
+                      Text('Eliminar', style: TextStyle(color: Colors.red[600])),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ],
@@ -972,7 +1033,7 @@ class _UserRow extends StatelessWidget {
 // son accesibles desde fuera, así que para móvil solo dejamos editar +
 // eliminar + permisos en el menú (el flujo más común). Resetear contraseña
 // y desactivar quedan accesibles abriendo el usuario y editándolo.
-class _UserCardMobile extends StatelessWidget {
+class _UserCardMobile extends ConsumerWidget {
   const _UserCardMobile({
     required this.user,
     required this.onEdit,
@@ -988,7 +1049,8 @@ class _UserCardMobile extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final access = UsersAccess.of(ref);
     return Card(
       color: Colors.white,
       elevation: 0.4,
@@ -998,7 +1060,9 @@ class _UserCardMobile extends StatelessWidget {
         side: BorderSide(color: Colors.grey.shade200),
       ),
       child: InkWell(
-        onTap: onEdit,
+        // Tap en la tarjeta = abrir para editar. Sin permiso, la tarjeta
+        // queda como lectura.
+        onTap: access.canEdit ? onEdit : null,
         borderRadius: BorderRadius.circular(14),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
@@ -1040,6 +1104,12 @@ class _UserCardMobile extends StatelessWidget {
                       ],
                     ),
                   ),
+                  // Igual que en la fila de escritorio: sin acciones
+                  // disponibles no montamos el menú (itemBuilder vacío
+                  // dispara un assert de Flutter).
+                  if (!access.canEdit && !access.canDeactivate)
+                    const SizedBox.shrink()
+                  else
                   PopupMenuButton<String>(
                     icon: const Icon(Icons.more_horiz, color: Colors.grey),
                     onSelected: (value) {
@@ -1093,43 +1163,47 @@ class _UserCardMobile extends StatelessWidget {
                       }
                     },
                     itemBuilder: (_) => [
-                      PopupMenuItem<String>(
-                        value: 'edit',
-                        child: Row(
-                          children: [
-                            Icon(Icons.edit_outlined,
-                                size: 18, color: Colors.grey[700]),
-                            const SizedBox(width: 10),
-                            const Text('Editar usuario'),
-                          ],
+                      if (access.canEdit) ...[
+                        PopupMenuItem<String>(
+                          value: 'edit',
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_outlined,
+                                  size: 18, color: Colors.grey[700]),
+                              const SizedBox(width: 10),
+                              const Text('Editar usuario'),
+                            ],
+                          ),
                         ),
-                      ),
-                      PopupMenuItem<String>(
-                        value: 'view_permissions',
-                        child: Row(
-                          children: [
-                            Icon(Icons.shield_outlined,
-                                size: 18, color: Colors.grey[700]),
-                            const SizedBox(width: 10),
-                            const Text('Editar permisos'),
-                          ],
+                        PopupMenuItem<String>(
+                          value: 'view_permissions',
+                          child: Row(
+                            children: [
+                              Icon(Icons.shield_outlined,
+                                  size: 18, color: Colors.grey[700]),
+                              const SizedBox(width: 10),
+                              const Text('Editar permisos'),
+                            ],
+                          ),
                         ),
-                      ),
-                      const PopupMenuDivider(),
-                      PopupMenuItem<String>(
-                        value: 'delete',
-                        child: Row(
-                          children: [
-                            Icon(Icons.delete_outline,
-                                size: 18, color: Colors.red[600]),
-                            const SizedBox(width: 10),
-                            Text(
-                              'Eliminar',
-                              style: TextStyle(color: Colors.red[600]),
-                            ),
-                          ],
+                      ],
+                      if (access.canDeactivate) ...[
+                        if (access.canEdit) const PopupMenuDivider(),
+                        PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline,
+                                  size: 18, color: Colors.red[600]),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Eliminar',
+                                style: TextStyle(color: Colors.red[600]),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ],

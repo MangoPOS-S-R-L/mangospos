@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../app/router/routes.dart';
+import '../../../services/session/session_controller.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
@@ -29,6 +30,16 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(purchasesViewModelProvider);
     final state = vm.state;
+    // `compras.acceso` gatea la ruta, pero hasta acá no había nada que
+    // separara consultar de comprar: cualquiera que abriera el módulo podía
+    // crear órdenes, recibir mercancía y dar de alta proveedores.
+    final sessionCtrl = ref.watch(sessionProvider.notifier);
+    final canCreateOrder = sessionCtrl.hasPermission('compras.ordenes.crear');
+    final canReceive = sessionCtrl.hasPermission('compras.ordenes.recibir');
+    // `compras.ordenes.anular` no se aplica acá: la pantalla filtra por
+    // estado "Cancelada" pero no expone ninguna acción para anular una orden.
+    final canEditSuppliers =
+        sessionCtrl.hasPermission('compras.proveedores.crear_editar');
     final currency = NumberFormat.currency(
       locale: 'en_US',
       symbol: 'RD\$',
@@ -73,18 +84,21 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                         spacing: 12,
                         runSpacing: 12,
                         children: [
-                          OutlinedButton.icon(
-                            onPressed: state.saving
-                                ? null
-                                : () => _showCreateSupplierDialog(context),
-                            icon: const Icon(Icons.group_add_outlined),
-                            label: const Text('Nuevo proveedor'),
-                          ),
-                          FilledButton.icon(
-                            onPressed: () => context.go(AppRoutes.purchasesRegister),
-                            icon: const Icon(Icons.add_shopping_cart),
-                            label: const Text('Nueva orden'),
-                          ),
+                          if (canEditSuppliers)
+                            OutlinedButton.icon(
+                              onPressed: state.saving
+                                  ? null
+                                  : () => _showCreateSupplierDialog(context),
+                              icon: const Icon(Icons.group_add_outlined),
+                              label: const Text('Nuevo proveedor'),
+                            ),
+                          if (canCreateOrder)
+                            FilledButton.icon(
+                              onPressed: () =>
+                                  context.go(AppRoutes.purchasesRegister),
+                              icon: const Icon(Icons.add_shopping_cart),
+                              label: const Text('Nueva orden'),
+                            ),
                         ],
                       ),
                     ],
@@ -240,7 +254,8 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                                           color: Color(0xFF64748B),
                                         ),
                                       ),
-                                      if (_canReceiveOrder(order.status)) ...[
+                                      if (canReceive &&
+                                          _canReceiveOrder(order.status)) ...[
                                         const SizedBox(height: 8),
                                         OutlinedButton(
                                           onPressed: state.saving

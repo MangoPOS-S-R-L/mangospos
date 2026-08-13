@@ -167,6 +167,19 @@ class _TransfersViewState extends ConsumerState<TransfersView>
   }
 
   Future<void> _openSendDialog(BuildContext context) async {
+    // Mismo patrón que `_confirmApprove`: validamos el permiso antes de
+    // abrir el diálogo. Aprobar ya estaba gateado; enviar y recibir no, así
+    // que cualquiera con acceso al módulo movía mercancía entre sucursales.
+    final canSend = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('inventario.transferencias.crear');
+    if (!canSend) {
+      AppToast.info(
+        context,
+        'No tienes permiso para crear transferencias.',
+      );
+      return;
+    }
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -178,6 +191,16 @@ class _TransfersViewState extends ConsumerState<TransfersView>
     BuildContext context,
     StockTransfer transfer,
   ) async {
+    final canReceive = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('inventario.transferencias.recibir');
+    if (!canReceive) {
+      AppToast.info(
+        context,
+        'No tienes permiso para recibir transferencias.',
+      );
+      return;
+    }
     await showDialog<void>(
       context: context,
       barrierDismissible: false,

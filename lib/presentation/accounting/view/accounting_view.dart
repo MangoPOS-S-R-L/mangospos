@@ -101,6 +101,9 @@ class _AccountingViewState extends ConsumerState<AccountingView>
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
+    final canSeeReports = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.reportes');
     final vm = ref.watch(accountingViewModelProvider);
     final currency = currentBusinessCurrencyOrFallback(ref);
 
@@ -141,9 +144,22 @@ class _AccountingViewState extends ConsumerState<AccountingView>
                     children: [
                       _EntriesTab(vm: vm, currency: currency),
                       _CatalogTab(vm: vm),
-                      _TrialBalanceTab(vm: vm, currency: currency),
-                      _IncomeStatementTab(vm: vm, currency: currency),
-                      _BalanceSheetTab(vm: vm, currency: currency),
+                      // Balanza, estado de resultados y balance general son
+                      // los estados financieros: `contabilidad.reportes`.
+                      // Mantenemos las 6 pestañas (el TabController es de
+                      // largo fijo) y sustituimos el contenido por un aviso.
+                      if (canSeeReports)
+                        _TrialBalanceTab(vm: vm, currency: currency)
+                      else
+                        const _NoReportAccess(),
+                      if (canSeeReports)
+                        _IncomeStatementTab(vm: vm, currency: currency)
+                      else
+                        const _NoReportAccess(),
+                      if (canSeeReports)
+                        _BalanceSheetTab(vm: vm, currency: currency)
+                      else
+                        const _NoReportAccess(),
                       _PeriodsTab(vm: vm),
                     ],
                   ),
@@ -158,6 +174,11 @@ class _AccountingViewState extends ConsumerState<AccountingView>
   // ── Encabezado: título + acciones + pestañas, todo en una card ────────────
 
   Widget _headerCard(AccountingViewModel vm, bool isNarrow) {
+    // `contabilidad.acceso` gatea la ruta; crear asientos es otra cosa.
+    // Antes cualquiera que abriera Contabilidad podía postear al libro mayor.
+    final canCreateEntries = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.asientos.crear');
     final df = DateFormat('dd/MM/yyyy');
     return AccountingCard(
       padding: const EdgeInsets.fromLTRB(
@@ -227,28 +248,31 @@ class _AccountingViewState extends ConsumerState<AccountingView>
                     if (vm.isCurrentRangeClosed)
                       const AccountingBadge(
                           text: 'MES CERRADO', color: AppColors.destructive),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.auto_awesome_rounded, size: 16),
-                      label: Text(
-                          isNarrow ? 'Generar' : 'Generar automáticos'),
-                      onPressed: vm.isBusy
-                          ? null
-                          : () async {
-                              final msg = await vm.generateAutomatic();
-                              if (!mounted || msg == null) return;
-                              _toast(msg, isError: vm.error != null);
-                            },
-                    ),
-                    FilledButton.tonalIcon(
-                      icon: const Icon(Icons.bolt_rounded, size: 16),
-                      label: Text(isNarrow ? 'Rápido' : 'Asiento rápido'),
-                      onPressed: vm.isBusy ? null : () => _quickEntry(vm),
-                    ),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.post_add_rounded, size: 16),
-                      label: Text(isNarrow ? 'Manual' : 'Asiento manual'),
-                      onPressed: vm.isBusy ? null : () => _newEntry(vm),
-                    ),
+                    if (canCreateEntries)
+                      FilledButton.icon(
+                        icon: const Icon(Icons.auto_awesome_rounded, size: 16),
+                        label: Text(
+                            isNarrow ? 'Generar' : 'Generar automáticos'),
+                        onPressed: vm.isBusy
+                            ? null
+                            : () async {
+                                final msg = await vm.generateAutomatic();
+                                if (!mounted || msg == null) return;
+                                _toast(msg, isError: vm.error != null);
+                              },
+                      ),
+                    if (canCreateEntries)
+                      FilledButton.tonalIcon(
+                        icon: const Icon(Icons.bolt_rounded, size: 16),
+                        label: Text(isNarrow ? 'Rápido' : 'Asiento rápido'),
+                        onPressed: vm.isBusy ? null : () => _quickEntry(vm),
+                      ),
+                    if (canCreateEntries)
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.post_add_rounded, size: 16),
+                        label: Text(isNarrow ? 'Manual' : 'Asiento manual'),
+                        onPressed: vm.isBusy ? null : () => _newEntry(vm),
+                      ),
                     IconButton(
                       tooltip: 'Actualizar',
                       icon: vm.isBusy || vm.isLoading
@@ -513,8 +537,26 @@ class _EntriesTab extends StatelessWidget {
   }
 }
 
+/// Sustituto de las pestañas de estados financieros para quien tiene acceso
+/// al módulo pero no `contabilidad.reportes`.
+class _NoReportAccess extends StatelessWidget {
+  const _NoReportAccess();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AccountingCard(
+      child: AccountingEmpty(
+        icon: Icons.lock_outline_rounded,
+        title: 'Sin acceso a los estados financieros',
+        subtitle: 'Necesitas el permiso "Reportes contables" para ver la '
+            'balanza, el estado de resultados y el balance general.',
+      ),
+    );
+  }
+}
+
 /// Detalle de líneas de un asiento, con la acción de revertir.
-class _EntryLines extends StatelessWidget {
+class _EntryLines extends ConsumerWidget {
   final AccountingEntry entry;
   final AccountingViewModel vm;
   final BusinessCurrency currency;
@@ -526,7 +568,7 @@ class _EntryLines extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: vm.entryLines(entry.id),
       builder: (context, snap) {
@@ -560,7 +602,13 @@ class _EntryLines extends StatelessWidget {
                       fontSize: 12, color: AppColors.mutedForeground),
                 ),
                 const Spacer(),
-                if (!entry.isReversed && !entry.isReversal)
+                // Revertir un asiento contrapartea el libro mayor:
+                // `contabilidad.asientos.anular`.
+                if (!entry.isReversed &&
+                    !entry.isReversal &&
+                    ref
+                        .read(sessionProvider.notifier)
+                        .hasPermission('contabilidad.asientos.anular'))
                   TextButton.icon(
                     icon: const Icon(Icons.undo_rounded, size: 16),
                     label: const Text('Revertir'),
@@ -684,6 +732,11 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
   @override
   Widget build(BuildContext context) {
     final vm = widget.vm;
+    // Alta/edición del catálogo de cuentas y centros de costo:
+    // `contabilidad.catalogo.gestionar`.
+    final canManageCatalog = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.catalogo.gestionar');
     return AccountingCard(
       padding: const EdgeInsets.fromLTRB(
           AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm),
@@ -704,19 +757,21 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
               _ => '${vm.accounts.length} cuentas · las de agrupación no '
                   'admiten asientos',
             },
-            trailing: switch (_section) {
-              0 => OutlinedButton.icon(
-                  icon: const Icon(Icons.add_rounded, size: 16),
-                  label: const Text('Nueva cuenta'),
-                  onPressed: () => _editAccount(null),
-                ),
-              1 => OutlinedButton.icon(
-                  icon: const Icon(Icons.add_rounded, size: 16),
-                  label: const Text('Nuevo centro'),
-                  onPressed: () => _editCostCenter(null),
-                ),
-              _ => null,
-            },
+            trailing: !canManageCatalog
+                ? null
+                : switch (_section) {
+                    0 => OutlinedButton.icon(
+                        icon: const Icon(Icons.add_rounded, size: 16),
+                        label: const Text('Nueva cuenta'),
+                        onPressed: () => _editAccount(null),
+                      ),
+                    1 => OutlinedButton.icon(
+                        icon: const Icon(Icons.add_rounded, size: 16),
+                        label: const Text('Nuevo centro'),
+                        onPressed: () => _editCostCenter(null),
+                      ),
+                    _ => null,
+                  },
           ),
           const SizedBox(height: AppSpacing.md),
           SingleChildScrollView(
@@ -748,6 +803,9 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
   }
 
   Widget _accounts() {
+    final canManageCatalog = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.catalogo.gestionar');
     final vm = widget.vm;
     if (vm.accounts.isEmpty) {
       return const AccountingEmpty(
@@ -813,12 +871,13 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
                   icon: const Icon(Icons.menu_book_rounded, size: 17),
                   onPressed: () => _showLedger(a),
                 ),
-              IconButton(
-                tooltip: 'Editar',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.edit_rounded, size: 17),
-                onPressed: () => _editAccount(a),
-              ),
+              if (canManageCatalog)
+                IconButton(
+                  tooltip: 'Editar',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.edit_rounded, size: 17),
+                  onPressed: () => _editAccount(a),
+                ),
               Switch(
                 value: a.isActive,
                 onChanged: (_) async {
@@ -835,6 +894,9 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
   }
 
   Widget _costCenters() {
+    final canManageCatalog = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.catalogo.gestionar');
     final vm = widget.vm;
     if (vm.costCenters.isEmpty) {
       return const AccountingEmpty(
@@ -870,11 +932,12 @@ class _CatalogTabState extends ConsumerState<_CatalogTab> {
               ),
               AccountingBadge(text: c.kindLabel),
               const SizedBox(width: AppSpacing.sm),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.edit_rounded, size: 17),
-                onPressed: () => _editCostCenter(c),
-              ),
+              if (canManageCatalog)
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.edit_rounded, size: 17),
+                  onPressed: () => _editCostCenter(c),
+                ),
             ],
           ),
         );
@@ -1664,12 +1727,16 @@ class _BalanceSheetTab extends StatelessWidget {
 // Pestaña: períodos
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _PeriodsTab extends StatelessWidget {
+class _PeriodsTab extends ConsumerWidget {
   final AccountingViewModel vm;
   const _PeriodsTab({required this.vm});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Cerrar o reabrir un mes contable es `contabilidad.periodos.cerrar`.
+    final canClosePeriods = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('contabilidad.periodos.cerrar');
     if (vm.periods.isEmpty) {
       return const AccountingCard(
         child: AccountingEmpty(
@@ -1753,19 +1820,20 @@ class _PeriodsTab extends StatelessWidget {
                           ],
                         ),
                       ),
-                      OutlinedButton(
-                        onPressed: () async {
-                          final msg = await vm.setPeriodStatus(
-                              p.year, p.month, p.isClosed ? 'open' : 'closed');
-                          if (!context.mounted || msg == null) return;
-                          if (vm.error != null) {
-                            AppToast.error(context, msg);
-                          } else {
-                            AppToast.success(context, msg);
-                          }
-                        },
-                        child: Text(p.isClosed ? 'Reabrir' : 'Cerrar mes'),
-                      ),
+                      if (canClosePeriods)
+                        OutlinedButton(
+                          onPressed: () async {
+                            final msg = await vm.setPeriodStatus(p.year, p.month,
+                                p.isClosed ? 'open' : 'closed');
+                            if (!context.mounted || msg == null) return;
+                            if (vm.error != null) {
+                              AppToast.error(context, msg);
+                            } else {
+                              AppToast.success(context, msg);
+                            }
+                          },
+                          child: Text(p.isClosed ? 'Reabrir' : 'Cerrar mes'),
+                        ),
                     ],
                   ),
                 );

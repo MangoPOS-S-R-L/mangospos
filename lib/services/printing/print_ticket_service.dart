@@ -203,8 +203,20 @@ class PrintTicketService {
     /// "AGREGADO A COMANDA" le avisa al cocinero que esto va JUNTO con lo que
     /// ya tiene en la barra, no que es un pedido nuevo.
     bool isAddition = false,
+
+    /// Ancho del papel de la impresora del área (58 u 80). Viene de
+    /// `printers.paper_width`. El caller genera un ticket POR impresora, así
+    /// que un área con una térmica de 58mm y otra de 80mm recibe cada una su
+    /// layout. Default 80 = comportamiento histórico.
+    int paperWidth = 80,
   }) {
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    // A 58mm el ancho útil es 32ch (16 a doble ancho): el título, las franjas
+    // y los nombres de plato NO entran en 2x. Bajamos solo el factor
+    // horizontal y dejamos la altura doble — cocina sigue leyendo grande y
+    // nada se trunca. A 80mm todo queda byte-idéntico a antes.
+    final narrow = gen.paperWidth <= 58;
+    void bigText() => gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     final printableItems = _buildPrintableItems(
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
@@ -231,9 +243,17 @@ class PrintTicketService {
     // como 1x2).
     final (titleMain, titleSub) = _kitchenTitleParts(areaCode);
     final titleSingle = isReprint ? 'REIMPRESIÓN' : '$titleMain $titleSub';
-    gen.setTextSize(width: 2, height: 2);
+    bigText();
     gen.setBold(true);
-    gen.textCentered(titleSingle);
+    // "COMANDA DE COCINA" son 17ch: entra en las 24 de 80mm y en las 32 de
+    // 58mm (que imprime a ancho simple). Si un área custom da un título más
+    // largo, se parte en dos líneas en vez de dejar que el firmware lo corte.
+    if (titleSingle.length <= gen.maxChars) {
+      gen.textCentered(titleSingle);
+    } else {
+      gen.textCentered(titleMain);
+      gen.textCentered(titleSub);
+    }
     gen.setBold(false);
     gen.setTextSize();
 
@@ -243,10 +263,10 @@ class PrintTicketService {
     // La reimpresión ya se anuncia sola en el titulo, no se duplica.
     if (isAddition && !isReprint) {
       gen.setInverse(true);
-      gen.setTextSize(width: 2, height: 2);
+      bigText();
       gen.setBold(true);
-      gen.text(_centerInWidth('AGREGADO A', 24));
-      gen.text(_centerInWidth('COMANDA', 24));
+      gen.text(_centerInWidth('AGREGADO A', gen.maxChars));
+      gen.text(_centerInWidth('COMANDA', gen.maxChars));
       gen.setBold(false);
       gen.setTextSize();
       gen.setInverse(false);
@@ -286,10 +306,20 @@ class PrintTicketService {
     final resolvedCustomer = customerName?.trim();
     final mesaLabel = 'MESA: ${tableName.isNotEmpty ? tableName : '-'}';
     gen.setBold(true);
-    if (resolvedCustomer != null && resolvedCustomer.isNotEmpty) {
-      gen.textRow('CLIENTE: ${resolvedCustomer.toUpperCase()}', mesaLabel);
-    } else {
+    if (resolvedCustomer == null || resolvedCustomer.isEmpty) {
       gen.text(mesaLabel);
+    } else if (narrow) {
+      // En 32 columnas cliente + mesa no caben juntos: el nombre se cortaba
+      // a la mitad ("CLIENTE: CLIENT   MESA: TERRAZA 12"). Cada dato va en
+      // su renglón, el nombre envuelto por palabras.
+      _writeWrappedLine(
+        gen,
+        'CLIENTE: ${resolvedCustomer.toUpperCase()}',
+        gen.maxChars,
+      );
+      gen.text(mesaLabel);
+    } else {
+      gen.textRow('CLIENTE: ${resolvedCustomer.toUpperCase()}', mesaLabel);
     }
     gen.setBold(false);
     gen.doubleSeparator();
@@ -331,16 +361,17 @@ class PrintTicketService {
     final mesaFooter = tableName.trim().isNotEmpty
         ? 'MESA ${tableName.trim().toUpperCase()}'
         : '';
-    gen.setTextSize(width: 2, height: 2);
+    bigText();
     gen.setBold(true);
     if (mesaFooter.isEmpty) {
       gen.textCentered(hms);
     } else {
-      // A width:2 el line max es 24ch. Si hora + mesa no entran juntas
-      // (nombres de mesa largos tipo "TERRAZA 12"), se parten en dos
-      // lineas grandes en vez de truncar la mesa.
+      // A width:2 el line max es 24ch (32 en 58mm, que va a ancho simple).
+      // Si hora + mesa no entran juntas (nombres de mesa largos tipo
+      // "TERRAZA 12"), se parten en dos lineas grandes en vez de truncar
+      // la mesa.
       final joined = '$hms  $mesaFooter';
-      if (joined.length <= 24) {
+      if (joined.length <= gen.maxChars) {
         gen.textCentered(joined);
       } else {
         gen.textCentered(hms);
@@ -373,7 +404,7 @@ class PrintTicketService {
   /// economicas. Sin linefeed extra — el wrapping de los items ya
   /// deja el espaciado correcto.
   static void _kitchenDashedSeparator(EscPosGenerator gen) {
-    gen.text('-' * 48);
+    gen.text('-' * gen.maxChars);
   }
 
   /// Mapea un areaCode a su titulo de comanda. Casos especiales que la
@@ -413,15 +444,21 @@ class PrintTicketService {
     required List<OrderItem> items,
     bool showBanner = true,
   }) {
+    // 58mm: mismo criterio que el resto de la comanda — altura doble, ancho
+    // simple. A 2x quedarían 16 columnas y "PARA COMER AQUI" (15ch) no
+    // dejaría aire para la banda ni entrarían los nombres de plato.
+    final narrow = gen.paperWidth <= 58;
+    void bigText() => gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+
     if (showBanner) {
-      // Banda inversa 2x2: padding a 24 chars (line max a width:2). El
-      // padding hace que el fondo negro se extienda full-ancho. Sin
-      // padding solo se invertiria sobre los chars del label dando una
-      // banda flaca.
+      // Banda inversa: padding al ancho de línea vigente (24 chars a 80mm,
+      // 32 a 58mm). El padding hace que el fondo negro se extienda
+      // full-ancho. Sin padding solo se invertiria sobre los chars del
+      // label dando una banda flaca.
       gen.setInverse(true);
-      gen.setTextSize(width: 2, height: 2);
+      bigText();
       gen.setBold(true);
-      gen.text(_centerInWidth(label.toUpperCase(), 24));
+      gen.text(_centerInWidth(label.toUpperCase(), gen.maxChars));
       gen.setBold(false);
       gen.setTextSize();
       gen.setInverse(false);
@@ -432,11 +469,11 @@ class PrintTicketService {
       final item = items[i];
       final qty = _formatQty(item.quantity);
 
-      // Items en width:2 height:2 (proporcional, no estirado como 1x2).
-      // Wrap width 24 (line max a 2x).
-      gen.setTextSize(width: 2, height: 2);
+      // Items grandes (2x2 a 80mm, 1x2 a 58mm). El wrap usa el ancho de
+      // línea vigente: 24 chars a 80mm, 32 a 58mm.
+      bigText();
       gen.setBold(true);
-      _writeWrappedLine(gen, '$qty  ${item.productName}', 24);
+      _writeWrappedLine(gen, '$qty  ${item.productName}', gen.maxChars);
       gen.setBold(false);
       gen.setTextSize();
 
@@ -451,14 +488,14 @@ class PrintTicketService {
               ? ' (+${_formatMoney(modTotal)})'
               : '';
           final prefix = isComboChoice ? '   • ' : '   + ';
-          _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', 48);
+          _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', gen.maxChars);
         }
       }
 
       final cleanNote = cleanOrderItemNote(item.notes);
       if (cleanNote.isNotEmpty) {
         gen.setBold(true);
-        _writeWrappedLine(gen, '   NOTA: $cleanNote', 48);
+        _writeWrappedLine(gen, '   NOTA: $cleanNote', gen.maxChars);
         gen.setBold(false);
       }
 
@@ -487,23 +524,33 @@ class PrintTicketService {
   }
 
   /// Word-wrap por espacios. Escribe cada linea via `gen.text` directamente.
+  ///
+  /// La sangría inicial (los espacios con que arrancan modificadores y notas)
+  /// se repite en cada linea continuada: sin esto el wrap las pegaba al
+  /// margen y en 58mm —donde casi todo se envuelve— dejaban de leerse como
+  /// sub-detalle del plato.
   static void _writeWrappedLine(EscPosGenerator gen, String text, int width) {
     if (text.length <= width) {
       gen.text(text);
       return;
     }
-    final words = text.split(' ');
+    final indent = text.substring(0, text.length - text.trimLeft().length);
+    // Sangría absurda para el ancho disponible: se ignora antes de dejar 0
+    // columnas útiles.
+    final prefix = indent.length < width ? indent : '';
+    final words = text.trimLeft().split(' ');
+    final available = width - prefix.length;
     var current = '';
     for (final w in words) {
       final candidate = current.isEmpty ? w : '$current $w';
-      if (candidate.length <= width) {
+      if (candidate.length <= available) {
         current = candidate;
       } else {
-        if (current.isNotEmpty) gen.text(current);
+        if (current.isNotEmpty) gen.text('$prefix$current');
         current = w;
       }
     }
-    if (current.isNotEmpty) gen.text(current);
+    if (current.isNotEmpty) gen.text('$prefix$current');
   }
 
   /// ============================================================
@@ -544,9 +591,15 @@ class PrintTicketService {
     String template = 'standard',
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+    /// Ancho del papel de la impresora destino (58 u 80). Viene de
+    /// `printers.paper_width`. Default 80 = comportamiento histórico.
+    int paperWidth = 80,
   }) {
     _currency = currency ?? BusinessCurrency.fallbackDop;
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    // 58mm = 32 columnas: título y TOTAL bajan a ancho simple (altura doble)
+    // y los textos largos se envuelven por palabras. Ver `generateInvoice`.
+    final narrow = gen.paperWidth <= 58;
     final consolidatedItems = _buildPrintableItems(
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
@@ -579,6 +632,7 @@ class PrintTicketService {
       phone: businessPhone,
       email: businessEmail,
       rnc: businessRnc,
+      wrapLongLines: narrow,
     );
 
     if (!compact) {
@@ -588,10 +642,13 @@ class PrintTicketService {
     }
 
     // ════════════════════════════════════════════
-    // TÍTULO DEL DOCUMENTO (en compacto sin asteriscos: "*** X ***" → "X")
+    // TÍTULO DEL DOCUMENTO (en compacto sin asteriscos: "*** X ***" → "X").
+    // En 58mm también: a 16 columnas los asteriscos no caben.
     // ════════════════════════════════════════════
-    final displayTitle = compact ? title.replaceAll('*', '').trim() : title;
-    gen.setTextSize(width: 2, height: 2);
+    final displayTitle = (compact || narrow)
+        ? title.replaceAll('*', '').trim()
+        : title;
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(displayTitle);
     gen.setBold(false);
@@ -729,9 +786,14 @@ class PrintTicketService {
         }
         gen.lineFeed(); // espacio entre ítems
       } else {
-        // Nombre del producto en negrita
+        // Nombre del producto en negrita. En 58mm (32 columnas) se envuelve
+        // por palabras en vez de dejar que el firmware lo parta.
         gen.setBold(true);
-        gen.text(item.productName);
+        if (narrow) {
+          _writeWrappedLine(gen, item.productName, gen.maxChars);
+        } else {
+          gen.text(item.productName);
+        }
         gen.setBold(false);
 
         // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
@@ -754,14 +816,23 @@ class PrintTicketService {
             final priceSuffix = modTotal > 0
                 ? ' (+${_formatMoney(modTotal)})'
                 : '';
-            gen.text('  + ${mod.name}$priceSuffix');
+            final modLine = '  + ${mod.name}$priceSuffix';
+            if (narrow) {
+              _writeWrappedLine(gen, modLine, gen.maxChars);
+            } else {
+              gen.text(modLine);
+            }
           }
         }
 
         // Notas especiales destacadas
         if (cleanNote.isNotEmpty) {
           gen.setBold(true);
-          gen.text('  NOTA: $cleanNote');
+          if (narrow) {
+            _writeWrappedLine(gen, '  NOTA: $cleanNote', gen.maxChars);
+          } else {
+            gen.text('  NOTA: $cleanNote');
+          }
           gen.setBold(false);
         }
 
@@ -878,7 +949,8 @@ class PrintTicketService {
     // ════════════════════════════════════════════
     if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
-    gen.setTextSize(width: 2, height: 2);
+    // A 58mm el doble ancho deja 16 columnas: "TOTAL:" + monto no caben.
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.textRow('TOTAL:', _formatMoney(printableGrandTotal));
     gen.setTextSize();
     gen.setBold(false);
@@ -894,9 +966,21 @@ class PrintTicketService {
     // DATOS DE COMPROBANTE FISCAL
     // ════════════════════════════════════════════
     gen.lineFeed();
-    gen.text('RNC/CÉDULA: ______________________');
+    // Renglones para llenar a mano. En 58mm el largo fijo (34 chars) se
+    // pasaba del papel: la raya se recorta al ancho disponible.
+    void blankFieldLine(String label) {
+      if (!narrow) {
+        gen.text(label);
+        return;
+      }
+      final prefix = label.replaceAll(RegExp(r'_+$'), '');
+      final fill = gen.maxChars - prefix.length;
+      gen.text(fill > 0 ? '$prefix${'_' * fill}' : prefix);
+    }
+
+    blankFieldLine('RNC/CÉDULA: ______________________');
     gen.lineFeed();
-    gen.text('RAZÓN SOCIAL: _____________________');
+    blankFieldLine('RAZÓN SOCIAL: _____________________');
     gen.lineFeed();
 
     // ════════════════════════════════════════════
@@ -1033,9 +1117,16 @@ class PrintTicketService {
     String template = 'standard',
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+    /// Ancho del papel de la impresora que va a recibir la factura (58 u 80).
+    /// Viene de `printers.paper_width`. Default 80 = comportamiento histórico.
+    int paperWidth = 80,
   }) {
     _currency = currency ?? BusinessCurrency.fallbackDop;
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    // 58mm = 32 columnas (16 a doble ancho). Los bloques que van en 2x
+    // (título y TOTAL) pasan a ancho simple con altura doble: siguen
+    // destacando pero ya no se salen del papel. A 80mm nada cambia.
+    final narrow = gen.paperWidth <= 58;
     // `compact` = familia de layout apretado (compact + simple): sin
     // asteriscos, espaciado mínimo, TOTAL con poco aire. `simple` además usa
     // el formato de ítem "# N:" con líneas seguidas (sin blanco entre ítems).
@@ -1065,6 +1156,7 @@ class PrintTicketService {
       phone: businessPhone,
       email: businessEmail,
       rnc: businessRnc,
+      wrapLongLines: narrow,
     );
 
     if (!compact) {
@@ -1074,9 +1166,12 @@ class PrintTicketService {
     }
 
     // Title. En compacto quitamos los asteriscos decorativos del título
-    // ("*** FACTURA ***" → "FACTURA").
-    final displayTitle = compact ? title.replaceAll('*', '').trim() : title;
-    gen.setTextSize(width: 2, height: 2);
+    // ("*** FACTURA ***" → "FACTURA"). En 58mm también: a 16 columnas los
+    // asteriscos se comen el ancho y "*** REIMPRESION ***" (19ch) se partía.
+    final displayTitle = (compact || narrow)
+        ? title.replaceAll('*', '').trim()
+        : title;
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(displayTitle);
     gen.setBold(false);
@@ -1135,7 +1230,11 @@ class PrintTicketService {
     // Dirección de entrega (delivery). Puede ser larga → etiqueta + valor
     // envuelto a ancho de papel (mismo patrón que las notas de item).
     if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
-      _writeWrappedLine(gen, 'DIRECCIÓN: ${deliveryAddress.trim()}', 48);
+      _writeWrappedLine(
+        gen,
+        'DIRECCIÓN: ${deliveryAddress.trim()}',
+        gen.maxChars,
+      );
     }
 
     if (tableName.isNotEmpty) {
@@ -1268,7 +1367,13 @@ class PrintTicketService {
         gen.lineFeed(); // espacio entre ítems
       } else {
         gen.setBold(true);
-        gen.text(item.productName);
+        // En 58mm (32 columnas) los nombres largos se partían a mitad de
+        // palabra por firmware; aquí se envuelven por espacios.
+        if (narrow) {
+          _writeWrappedLine(gen, item.productName, gen.maxChars);
+        } else {
+          gen.text(item.productName);
+        }
         gen.setBold(false);
 
         final leftPart = '$displayQty x ${_formatMoney(unitPrice)}';
@@ -1289,13 +1394,22 @@ class PrintTicketService {
             final priceSuffix = modTotal > 0
                 ? ' (+${_formatMoney(modTotal)})'
                 : '';
-            gen.text('  + ${mod.name}$priceSuffix');
+            final modLine = '  + ${mod.name}$priceSuffix';
+            if (narrow) {
+              _writeWrappedLine(gen, modLine, gen.maxChars);
+            } else {
+              gen.text(modLine);
+            }
           }
         }
 
         if (cleanNote.isNotEmpty) {
           gen.setBold(true);
-          gen.text('  NOTA: $cleanNote');
+          if (narrow) {
+            _writeWrappedLine(gen, '  NOTA: $cleanNote', gen.maxChars);
+          } else {
+            gen.text('  NOTA: $cleanNote');
+          }
           gen.setBold(false);
         }
 
@@ -1428,7 +1542,9 @@ class PrintTicketService {
 
     if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
     gen.setBold(true);
-    gen.setTextSize(width: 2, height: 2);
+    // A 58mm el 2x deja 16 columnas y "TOTAL:" + el monto no caben juntos
+    // (se truncaba la etiqueta). Ancho simple + altura doble = 32 columnas.
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.textRow('TOTAL:', _formatMoney(effectiveTotal));
     gen.setTextSize();
     gen.setBold(false);
@@ -1744,8 +1860,12 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+    /// Ancho del papel de la impresora destino (58 u 80). Viene de
+    /// `printers.paper_width`. Default 80 = comportamiento histórico.
+    int paperWidth = 80,
   }) {
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    final narrow = gen.paperWidth <= 58;
 
     gen.ticketHeader(
       businessName: businessName,
@@ -1754,7 +1874,7 @@ class PrintTicketService {
       rnc: businessRnc,
     );
 
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered('FACTURA');
     gen.setBold(false);
@@ -1865,7 +1985,7 @@ class PrintTicketService {
 
     gen.doubleSeparator();
     gen.setBold(true);
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.textRow('TOTAL:', _formatMoney(displayTotal));
     gen.setTextSize();
     gen.setBold(false);
@@ -2030,13 +2150,19 @@ class PrintTicketService {
     DateTime? when,
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+    /// Ancho del papel de la impresora destino (58 u 80). Viene de
+    /// `printers.paper_width`. Default 80 = comportamiento histórico.
+    int paperWidth = 80,
   }) {
     _currency = currency ?? BusinessCurrency.fallbackDop;
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    // 58mm = 32 columnas: lo que iba en doble ancho (nombre, título, MONTO)
+    // pasa a ancho simple con altura doble. Ver `generateInvoice`.
+    final narrow = gen.paperWidth <= 58;
     gen.initialize();
 
     gen.lineFeed();
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(businessName);
     gen.setBold(false);
@@ -2051,7 +2177,7 @@ class PrintTicketService {
       _            => ('MOVIMIENTO',      ''),
     };
 
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(title);
     gen.setBold(false);
@@ -2064,35 +2190,47 @@ class PrintTicketService {
     if (sessionId != null && sessionId.isNotEmpty) {
       gen.text('Sesión: ${sessionId.substring(0, 8).toUpperCase()}');
     }
+    // Texto libre (razón, nota, nombres): en 58mm se envuelve por palabras
+    // en vez de dejar que el firmware lo parta a mitad de palabra.
+    void freeText(String value) {
+      if (narrow) {
+        _writeWrappedLine(gen, value, gen.maxChars);
+      } else {
+        gen.text(value);
+      }
+    }
+
     if (cashierName != null && cashierName.isNotEmpty) {
-      gen.text('Cajero: ${cashierName.toUpperCase()}');
+      freeText('Cajero: ${cashierName.toUpperCase()}');
     }
     if (approvedByName != null && approvedByName.isNotEmpty) {
-      gen.text('Autorizado por: ${approvedByName.toUpperCase()}');
+      freeText('Autorizado por: ${approvedByName.toUpperCase()}');
     }
     gen.separator();
 
     gen.setBold(true);
     gen.text('RAZÓN:');
     gen.setBold(false);
-    gen.text(reasonLabel);
+    freeText(reasonLabel);
     if (description != null && description.isNotEmpty) {
       gen.lineFeed();
       gen.setBold(true);
       gen.text('Nota:');
       gen.setBold(false);
-      gen.text(description);
+      freeText(description);
     }
     gen.doubleSeparator();
 
     gen.setBold(true);
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.textRow('MONTO:', '$prefix ${_formatMoney(amount)}');
     gen.setTextSize();
     gen.setBold(false);
     gen.lineFeed();
 
-    gen.text('______________________________');
+    // Raya de firma al ancho del papel (30 chars en 80mm; en 58mm se
+    // recorta a las 32 columnas disponibles).
+    gen.text('_' * (narrow ? gen.maxChars : 30));
     gen.textCentered('Firma');
     gen.lineFeed();
 
@@ -2147,14 +2285,16 @@ class PrintTicketService {
     return _currency.formatAmount(amount);
   }
 
-  /// Separador delgado (líneas simples)
+  /// Separador delgado (líneas simples). El largo sale del ancho real del
+  /// papel (48 a 80mm, 32 a 58mm) — antes era 48 fijo y en 58mm se doblaba
+  /// a una segunda línea.
   static void _thinSeparator(EscPosGenerator gen) {
-    gen.textCentered('-' * 48);
+    gen.textCentered('-' * gen.maxChars);
   }
 
   /// Separador grueso (líneas dobles)
   static void _thickSeparator(EscPosGenerator gen) {
-    gen.textCentered('=' * 48);
+    gen.textCentered('=' * gen.maxChars);
   }
 
   /// PRD 6 — Renderiza el equivalente USD debajo del TOTAL.
@@ -2230,7 +2370,20 @@ class PrintTicketService {
     String? phone,
     String? email,
     String? rnc,
+    /// Envuelve por palabras las líneas que exceden el ancho de papel en vez
+    /// de dejar que el firmware las corte a la mitad. Se activa en 58mm,
+    /// donde nombre/dirección casi siempre pasan de 32 chars. En 80mm queda
+    /// en false para no alterar tickets que hoy salen bien.
+    bool wrapLongLines = false,
   }) {
+    void centered(String value) {
+      if (wrapLongLines) {
+        gen.textCenteredWrapped(value);
+      } else {
+        gen.textCentered(value);
+      }
+    }
+
     for (final block in blocks) {
       if (!block.enabled) continue;
       switch (block.key) {
@@ -2243,45 +2396,45 @@ class PrintTicketService {
         case 'business_name':
           if (businessName != null && businessName.isNotEmpty) {
             gen.setBold(true);
-            gen.textCentered(businessName.toUpperCase());
+            centered(businessName.toUpperCase());
             gen.setBold(false);
           }
           break;
         case 'slogan':
           if (slogan != null && slogan.isNotEmpty) {
-            gen.textCentered(slogan);
+            centered(slogan);
           }
           break;
         case 'legal_name':
           if (legalName != null &&
               legalName.isNotEmpty &&
               legalName != businessName) {
-            gen.textCentered(legalName);
+            centered(legalName);
           }
           break;
         case 'branch_name':
           if (branchName != null && branchName.isNotEmpty) {
-            gen.textCentered('Sucursal: $branchName');
+            centered('Sucursal: $branchName');
           }
           break;
         case 'address':
           if (address != null && address.isNotEmpty) {
-            gen.textCentered(address);
+            centered(address);
           }
           break;
         case 'phone':
           if (phone != null && phone.isNotEmpty) {
-            gen.textCentered('Tel: $phone');
+            centered('Tel: $phone');
           }
           break;
         case 'email':
           if (email != null && email.isNotEmpty) {
-            gen.textCentered(email);
+            centered(email);
           }
           break;
         case 'rnc':
           if (rnc != null && rnc.isNotEmpty) {
-            gen.textCentered('RNC: $rnc');
+            centered('RNC: $rnc');
           }
           break;
         // Keys desconocidas: skip. Defensivo para que clientes con

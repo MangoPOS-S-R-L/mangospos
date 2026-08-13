@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/viewmodel/category_viewmodel.dart';
 
 class CategoriesView extends ConsumerStatefulWidget {
@@ -30,6 +31,12 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(categoriesVmProvider);
+    // Crear, renombrar y borrar categorías tienen permisos propios en el
+    // catálogo, pero nada los consultaba: bastaba llegar a esta pantalla.
+    final sessionCtrl = ref.watch(sessionProvider.notifier);
+    final canCreate = sessionCtrl.hasPermission('categorias.crear');
+    final canEdit = sessionCtrl.hasPermission('categorias.editar');
+    final canDelete = sessionCtrl.hasPermission('categorias.eliminar');
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
@@ -51,7 +58,8 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                 .load(businessId: widget.businessId),
             icon: const Icon(Icons.refresh),
           ),
-          const SizedBox(width: 8),
+          if (canCreate) const SizedBox(width: 8),
+          if (canCreate)
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: MangoColors.primaryOrange,
@@ -206,7 +214,11 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                             ),
                           ],
                         ),
-                        trailing: PopupMenuButton<String>(
+                        // Sin editar ni eliminar el menú quedaría vacío, y
+                        // `PopupMenuButton` con itemBuilder vacío revienta.
+                        trailing: (!canEdit && !canDelete)
+                            ? null
+                            : PopupMenuButton<String>(
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -248,6 +260,7 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                             }
                           },
                           itemBuilder: (ctx) => [
+                            if (canEdit)
                             const PopupMenuItem(
                               value: 'rename',
                               child: Row(
@@ -262,6 +275,7 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                                 ],
                               ),
                             ),
+                            if (canEdit)
                             const PopupMenuItem(
                               value: 'color',
                               child: Row(
@@ -276,6 +290,7 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                                 ],
                               ),
                             ),
+                            if (canEdit)
                             PopupMenuItem(
                               value: 'toggle',
                               child: Row(
@@ -292,6 +307,7 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
                                 ],
                               ),
                             ),
+                            if (canDelete)
                             const PopupMenuItem(
                               value: 'delete',
                               child: Row(

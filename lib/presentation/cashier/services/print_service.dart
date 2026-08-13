@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
@@ -47,21 +48,21 @@ class CashClosePrintService {
         ? await _loadProductsByAreaIfEnabled(sessionId)
         : const <Map<String, dynamic>>[];
 
-    final ticket = _buildEscPos(
-      input: input,
-      result: result,
-      denominations: denominations,
-      printedAt: printedAt,
-      recountCount: recountCount,
-      salesByArea: salesByArea,
-      productsByArea: productsByArea,
-      reprint: reprint,
-    );
-
+    // El ticket se arma DESPUÉS de resolver la impresora: el layout depende
+    // de si el papel es de 58mm o de 80mm (`printers.paper_width`).
     await _printThermalOrThrow(
-      ticket.bytes,
+      (paperWidth) => buildEscPos(
+        input: input,
+        result: result,
+        denominations: denominations,
+        printedAt: printedAt,
+        recountCount: recountCount,
+        salesByArea: salesByArea,
+        productsByArea: productsByArea,
+        reprint: reprint,
+        paperWidth: paperWidth,
+      ),
       cashRegisterId: cashRegisterId,
-      plainText: ticket.plainText,
       presentOnScreen: presentOnScreen,
     );
   }
@@ -413,7 +414,10 @@ class CashClosePrintService {
     }
   }
 
-  ({List<int> bytes, String plainText}) _buildEscPos({
+  /// Público solo para pruebas: permite verificar el layout del cierre a
+  /// 58mm y 80mm sin tocar Supabase ni impresoras.
+  @visibleForTesting
+  ({List<int> bytes, String plainText}) buildEscPos({
     required CashCloseInput input,
     required CashCloseResult result,
     required List<DenominationCount> denominations,
@@ -422,10 +426,17 @@ class CashClosePrintService {
     List<Map<String, dynamic>> salesByArea = const [],
     List<Map<String, dynamic>> productsByArea = const [],
     bool reprint = false,
+    /// Ancho del papel de la impresora del cierre (58 u 80). Default 80 =
+    /// comportamiento histórico.
+    int paperWidth = 80,
   }) {
-    final gen = EscPosGenerator(paperWidth: 80);
+    final gen = EscPosGenerator(paperWidth: paperWidth);
+    // 58mm = 32 columnas. El nombre del negocio en doble ancho (16 chars) no
+    // entra, y la tabla de COMPARACION en 4 columnas tampoco: ambos tienen
+    // variante angosta más abajo.
+    final narrow = gen.paperWidth <= 58;
     gen.initialize();
-    gen.setTextSize(width: 2, height: 2);
+    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(input.businessName);
     gen.setTextSize();
@@ -456,13 +467,27 @@ class CashClosePrintService {
     gen.setBold(true);
     gen.text('COMPARACION');
     gen.setBold(false);
-    gen.text('Concepto   Esperado   Reportado   Dif.');
+    // La tabla de 4 columnas mide 38 chars: cabe en las 48 de 80mm, no en
+    // las 32 de 58mm. En papel angosto cada concepto se imprime como bloque
+    // (título + tres filas etiqueta/monto) en vez de truncar los montos.
+    if (!narrow) {
+      gen.text('Concepto   Esperado   Reportado   Dif.');
+    }
     gen.separator();
 
     void row(String concept, num expected, num reported) {
       final diff = reported - expected;
       final diffLabel =
           '${diff >= 0 ? '+' : '-'}${formatRD(diff.abs()).replaceFirst('RD\$ ', '')}';
+      if (narrow) {
+        gen.setBold(true);
+        gen.text(concept);
+        gen.setBold(false);
+        gen.textRow('  Esperado', _shortMoney(expected));
+        gen.textRow('  Reportado', _shortMoney(reported));
+        gen.textRow('  Diferencia', diffLabel);
+        return;
+      }
       final line =
           '${concept.padRight(10)} ${_shortMoney(expected).padLeft(8)} ${_shortMoney(reported).padLeft(9)} ${diffLabel.padLeft(8)}';
       gen.text(line);
@@ -558,10 +583,12 @@ class CashClosePrintService {
     return (bytes: gen.getCommands(), plainText: gen.getPlainText());
   }
 
+  /// [buildTicket] arma el cierre para un ancho de papel dado. Es una función
+  /// y no bytes fijos porque el layout depende de la impresora destino, que se
+  /// resuelve aquí: 48 columnas en 80mm, 32 en 58mm.
   Future<void> _printThermalOrThrow(
-    List<int> bytes, {
+    ({List<int> bytes, String plainText}) Function(int paperWidth) buildTicket, {
     String? cashRegisterId,
-    String? plainText,
     CashCloseScreenPresenter? presentOnScreen,
   }) async {
     final businessId = await resolveBusinessIdOrNull(_client, 'auto');
@@ -575,8 +602,10 @@ class CashClosePrintService {
     // PDF) en vez de exigir una térmica. El cierre en sí ya quedó guardado
     // — esto es solo el comprobante.
     if (await PrinterlessMode.isEnabled(businessId)) {
-      if (presentOnScreen != null && plainText != null) {
-        await presentOnScreen(plainText);
+      if (presentOnScreen != null) {
+        // Sin impresora destino no hay ancho que respetar: el ticket en
+        // pantalla/PDF usa el layout de 80mm.
+        await presentOnScreen(buildTicket(80).plainText);
       }
       return;
     }
@@ -633,11 +662,22 @@ class CashClosePrintService {
       );
     }
 
-    await _printingRepository.printEscPos(printer: printer, data: bytes);
+    await _printingRepository.printEscPos(
+      printer: printer,
+      data: buildTicket(printer.paperWidth).bytes,
+    );
   }
 
   String _shortMoney(num amount) {
     return formatRD(amount).replaceFirst('RD\$ ', '');
+  }
+
+  /// Acota una etiqueta para que quepa a la izquierda del monto: 28 chars en
+  /// 80mm (comportamiento histórico) y 16 en 58mm, donde la línea entera son
+  /// 32 columnas y el monto se come una docena.
+  String _capLabel(EscPosGenerator gen, String label) {
+    final cap = gen.paperWidth <= 58 ? 16 : 28;
+    return label.length > cap ? '${label.substring(0, cap - 3)}...' : label;
   }
 
   /// Sprint Caja Pro — Renderiza una sección de movimientos manuales
@@ -659,13 +699,15 @@ class CashClosePrintService {
       final label =
           (m.reasonLabel?.trim().isNotEmpty == true ? m.reasonLabel!.trim() : '—');
       // Línea con razón a la izquierda + monto con signo a la derecha.
-      // 28 chars máximo en el label para no romper papel de 80mm.
-      final shortLabel = label.length > 28 ? '${label.substring(0, 25)}...' : label;
+      final shortLabel = _capLabel(gen, label);
       gen.textRow(shortLabel, '$sign ${_shortMoney(m.amount)}');
     }
     gen.separator();
     gen.setBold(true);
-    gen.textRow('Subtotal $title', '$sign ${formatRD(total)}');
+    // "Subtotal GASTOS DEL TURNO" + monto no cabe en 32 columnas: en 58mm
+    // basta "Subtotal", que ya va debajo del título de la sección.
+    final subtotalLabel = gen.paperWidth <= 58 ? 'Subtotal' : 'Subtotal $title';
+    gen.textRow(subtotalLabel, '$sign ${formatRD(total)}');
     gen.setBold(false);
     gen.doubleSeparator();
   }
@@ -692,8 +734,7 @@ class CashClosePrintService {
       final count = (area['count'] as num?)?.toInt() ?? 0;
       total += amount;
 
-      final shortLabel =
-          label.length > 28 ? '${label.substring(0, 25)}...' : label;
+      final shortLabel = _capLabel(gen, label);
       gen.textRow(shortLabel, formatRD(amount));
       // Línea secundaria con unidades y órdenes (formato compacto).
       final qtyLabel = quantity == quantity.roundToDouble()
@@ -744,8 +785,8 @@ class CashClosePrintService {
         final qtyLabel = qty == qty.roundToDouble()
             ? qty.toStringAsFixed(0)
             : qty.toStringAsFixed(2);
-        // Nombre acotado a 28 chars para no romper el papel de 80mm.
-        final shortName = name.length > 28 ? '${name.substring(0, 25)}...' : name;
+        // Nombre acotado al ancho del papel para que no empuje la cantidad.
+        final shortName = _capLabel(gen, name);
         gen.textRow(shortName, '$qtyLabel unidades');
       }
     }

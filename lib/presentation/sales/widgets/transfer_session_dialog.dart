@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/utils/sorting_utils.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/zones_repository.dart';
+import '../../../core/multimesero/operator_permissions.dart';
 import '../../../services/session/session_controller.dart';
 import 'pin_verification_modal.dart';
 
@@ -152,14 +153,21 @@ class _TransferSessionDialogState
     if (!_canSubmit) return;
     final messenger = ScaffoldMessenger.of(context);
 
-    // Solo el owner del negocio se salta el PIN. Cualquier otro rol
-    // (admin, supervisor, cajero, mesero…) debe escribir PIN de
-    // supervisor/admin para transferir o unir cuentas. Este es el punto
-    // único de enforcement para ambos flujos de entrada (transferir desde
-    // la cuenta y unir mesas desde el grid de zonas).
-    final isOwner = ref.read(sessionProvider).isOwner;
+    // Orden de autorización (mismo criterio que el resto de acciones
+    // sensibles — ver `_authorizeWithPermissionOrPin` en
+    // table_order_screen.dart): el owner pasa directo; quien tenga
+    // `ventas.mesas.mover_unir` concedido en su perfil de acceso también
+    // pasa directo; cualquier otro escribe PIN de supervisor/admin como
+    // respaldo. Este es el punto único de enforcement para ambos flujos
+    // de entrada (transferir desde la cuenta y unir mesas desde el grid).
+    //
+    // Antes solo se eximía al owner, así que conceder el permiso a un
+    // mesero no cambiaba nada: seguía pidiendo PIN igual.
+    final isOwner = operatorIsOwner(ref);
+    final hasPermission =
+        operatorHasPermission(ref, 'ventas.mesas.mover_unir');
 
-    if (!isOwner) {
+    if (!isOwner && !hasPermission) {
       final pinOk = await showPinVerificationModal(
         context,
         ref,

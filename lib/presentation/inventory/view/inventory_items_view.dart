@@ -23,6 +23,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../services/session/session_controller.dart';
 import '../state/inventory_state.dart';
 import 'widgets/inventory_back_button.dart';
 
@@ -216,6 +217,11 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
 
   @override
   Widget build(BuildContext context) {
+    // Alta, edición y baja de insumos bajo `inventario.productos.crear_editar`.
+    // Antes bastaba con `inventario.acceso` para tocar el maestro de insumos.
+    final canEditItems = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('inventario.productos.crear_editar');
     final currency = NumberFormat.currency(
       locale: 'en_US',
       symbol: 'RD\$',
@@ -264,7 +270,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                           });
                           _loadItems();
                         },
-                        onCreate: () => _openForm(),
+                        onCreate: canEditItems ? () => _openForm() : null,
                         onSearch: _onSearch,
                       ),
                       const SizedBox(height: 20),
@@ -272,8 +278,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                         items: _items,
                         currency: currency,
                         loading: _loading,
-                        onEdit: (i) => _openForm(edit: i),
-                        onDelete: _confirmDelete,
+                        onEdit: canEditItems ? (i) => _openForm(edit: i) : null,
+                        onDelete: canEditItems ? _confirmDelete : null,
                       ),
                     ],
                   ),
@@ -286,7 +292,9 @@ class _Header extends StatelessWidget {
   final List<InventoryWarehouse> warehouses;
   final String? selectedId;
   final ValueChanged<String?> onSelect;
-  final VoidCallback onCreate;
+
+  /// `null` sin `inventario.productos.crear_editar`: se oculta el alta.
+  final VoidCallback? onCreate;
   final ValueChanged<String> onSearch;
 
   const _Header({
@@ -322,11 +330,15 @@ class _Header extends StatelessWidget {
       ],
     );
 
-    final createButton = FilledButton.icon(
-      onPressed: onCreate,
-      icon: const Icon(Icons.add),
-      label: Text(isCompact ? 'Nuevo' : 'Nuevo insumo'),
-    );
+    // Sin permiso de alta el botón no se arma: `SizedBox.shrink` mantiene
+    // el layout de ambos breakpoints sin dejar un hueco raro.
+    final Widget createButton = onCreate == null
+        ? const SizedBox.shrink()
+        : FilledButton.icon(
+            onPressed: onCreate,
+            icon: const Icon(Icons.add),
+            label: Text(isCompact ? 'Nuevo' : 'Nuevo insumo'),
+          );
 
     final warehouseDropdown = DropdownButtonFormField<String>(
       initialValue: selectedId,
@@ -370,8 +382,10 @@ class _Header extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          SizedBox(width: double.infinity, child: createButton),
-          const SizedBox(height: 16),
+          if (onCreate != null) ...[
+            SizedBox(width: double.infinity, child: createButton),
+            const SizedBox(height: 16),
+          ],
           warehouseDropdown,
           const SizedBox(height: 10),
           searchField,
@@ -407,8 +421,8 @@ class _ItemsTable extends StatelessWidget {
   final List<InventoryItemSummary> items;
   final NumberFormat currency;
   final bool loading;
-  final void Function(InventoryItemSummary) onEdit;
-  final void Function(InventoryItemSummary) onDelete;
+  final void Function(InventoryItemSummary)? onEdit;
+  final void Function(InventoryItemSummary)? onDelete;
 
   const _ItemsTable({
     required this.items,
@@ -517,8 +531,8 @@ class _ItemsTable extends StatelessWidget {
 class _ItemRow extends StatelessWidget {
   final InventoryItemSummary item;
   final NumberFormat currency;
-  final void Function(InventoryItemSummary) onEdit;
-  final void Function(InventoryItemSummary) onDelete;
+  final void Function(InventoryItemSummary)? onEdit;
+  final void Function(InventoryItemSummary)? onDelete;
   final bool isLast;
 
   const _ItemRow({
@@ -634,7 +648,7 @@ class _ItemRow extends StatelessWidget {
                 IconButton(
                   tooltip: 'Editar',
                   icon: const Icon(Icons.edit_outlined, size: 18),
-                  onPressed: () => onEdit(item),
+                  onPressed: onEdit == null ? null : () => onEdit!(item),
                 ),
                 IconButton(
                   tooltip: 'Eliminar',
@@ -643,7 +657,7 @@ class _ItemRow extends StatelessWidget {
                     size: 18,
                     color: AppColors.destructive,
                   ),
-                  onPressed: () => onDelete(item),
+                  onPressed: onDelete == null ? null : () => onDelete!(item),
                 ),
               ],
             ),
@@ -660,8 +674,8 @@ class _ItemRow extends StatelessWidget {
 class _InventoryItemCardMobile extends StatelessWidget {
   final InventoryItemSummary item;
   final NumberFormat currency;
-  final void Function(InventoryItemSummary) onEdit;
-  final void Function(InventoryItemSummary) onDelete;
+  final void Function(InventoryItemSummary)? onEdit;
+  final void Function(InventoryItemSummary)? onDelete;
 
   const _InventoryItemCardMobile({
     required this.item,
@@ -679,7 +693,7 @@ class _InventoryItemCardMobile extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppRadius.lg),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.lg),
-        onTap: () => onEdit(item),
+        onTap: onEdit == null ? null : () => onEdit!(item),
         child: Container(
           padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
           decoration: BoxDecoration(
@@ -728,7 +742,7 @@ class _InventoryItemCardMobile extends StatelessWidget {
                   ),
                   IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 18),
-                    onPressed: () => onEdit(item),
+                    onPressed: onEdit == null ? null : () => onEdit!(item),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(
                       minWidth: 28,
@@ -742,7 +756,7 @@ class _InventoryItemCardMobile extends StatelessWidget {
                       size: 18,
                       color: AppColors.destructive,
                     ),
-                    onPressed: () => onDelete(item),
+                    onPressed: onDelete == null ? null : () => onDelete!(item),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(
                       minWidth: 28,

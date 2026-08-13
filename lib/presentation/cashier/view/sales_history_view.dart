@@ -1165,6 +1165,9 @@ mixin _PaymentActionsMixin {
         ecfSignedAt: ecfSignedAt,
         discountDisplayMode: discountDisplayMode,
         template: invoiceTpl,
+        // Layout segun el papel de la impresora destino (58 u 80mm). Sin
+        // impresora (modo sin impresora) se arma a 80mm para pantalla/PDF.
+        paperWidth: assignedPrinter?.paperWidth ?? 80,
       );
 
       if (printerless) {

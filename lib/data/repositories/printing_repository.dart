@@ -14,6 +14,7 @@ import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
+import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
@@ -1531,6 +1532,12 @@ class PrintingRepository {
     // (_retryWithFreshConfig). Los callers externos no deben pasarlo.
     bool refreshOnFailure = true,
   }) async {
+    // Star TSP100 (StarGraphic): no interpreta ESC/POS — acepta los bytes y
+    // no imprime nada. El adaptador rasteriza el ticket antes de que salga
+    // por CUALQUIER transporte (directo, host remoto o cola). Para el resto
+    // de las impresoras devuelve los mismos bytes.
+    data = await StarPrintAdapter.adapt(printer: printer, escPosData: data);
+
     // PRD 5 F2.5: routing por host_device_id.
     // Si la impresora está vinculada a un device físico (USB/BT) que NO es
     // este device, mandamos el job al agent remoto del host vía LAN.
@@ -2096,6 +2103,12 @@ class PrintingRepository {
     // bumps transitorios de WMI / spooler.
     int attempts = 2,
   }) async {
+    // Igual que en `printEscPos`: la impresión de muestra y el path de
+    // cocina llaman aquí directo, así que la conversión a raster Star
+    // también tiene que pasar por este lado. Si ya viene rasterizado (o la
+    // impresora es ESC/POS) el adaptador devuelve los bytes intactos.
+    data = await StarPrintAdapter.adapt(printer: printer, escPosData: data);
+
     if (Platform.isWindows) {
       await _printRawDirectUsbWindows(
         printerName: printer.name,

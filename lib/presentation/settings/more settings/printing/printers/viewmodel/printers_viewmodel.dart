@@ -22,6 +22,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/network/android_net_lock.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
+import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
 @immutable
@@ -383,7 +384,14 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           10, 10, 10,
           27, 109, // cut
         ];
-        socket.add(commands);
+        // Star TSP100 en red: no entiende ESC/POS, hay que mandarle raster.
+        // Para el resto devuelve los mismos bytes.
+        socket.add(
+          await StarPrintAdapter.adapt(
+            printer: _toPrinterConfig(printer),
+            escPosData: commands,
+          ),
+        );
         await socket.flush();
         await socket.close();
         // Captura oportunista del MAC para auto-recovery futuro si la IP

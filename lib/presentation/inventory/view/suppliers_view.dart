@@ -19,6 +19,7 @@ import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../../../services/session/session_controller.dart';
 import '../state/inventory_state.dart';
 import 'widgets/inventory_back_button.dart';
 
@@ -104,6 +105,11 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
 
   @override
   Widget build(BuildContext context) {
+    // Dar de alta o editar proveedores es tocar a quién se le compra: va bajo
+    // `compras.proveedores.crear_editar`, no bajo el acceso al módulo.
+    final canEditSuppliers = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('compras.proveedores.crear_editar');
     return Scaffold(
       backgroundColor: AppColors.background,
       body: _loading
@@ -136,7 +142,7 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _Header(
-                        onCreate: () => _openForm(),
+                        onCreate: canEditSuppliers ? () => _openForm() : null,
                         onRefresh: _refresh,
                         onSearch: (v) => setState(() => _query = v),
                         query: _query,
@@ -144,7 +150,9 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
                       const SizedBox(height: 20),
                       _SuppliersTable(
                         suppliers: _filtered,
-                        onEdit: (s) => _openForm(edit: s),
+                        onEdit: canEditSuppliers
+                            ? (s) => _openForm(edit: s)
+                            : null,
                       ),
                     ],
                   ),
@@ -154,7 +162,9 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
 }
 
 class _Header extends StatelessWidget {
-  final VoidCallback onCreate;
+  /// `null` cuando el usuario no tiene `compras.proveedores.crear_editar`:
+  /// el botón de alta no se muestra.
+  final VoidCallback? onCreate;
   final VoidCallback onRefresh;
   final ValueChanged<String> onSearch;
   final String query;
@@ -211,11 +221,12 @@ class _Header extends StatelessWidget {
                   icon: const Icon(Icons.refresh),
                   label: const Text('Recargar'),
                 ),
-                FilledButton.icon(
-                  onPressed: onCreate,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Nuevo proveedor'),
-                ),
+                if (onCreate != null)
+                  FilledButton.icon(
+                    onPressed: onCreate,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Nuevo proveedor'),
+                  ),
               ],
             ),
           ],
@@ -239,7 +250,9 @@ class _Header extends StatelessWidget {
 
 class _SuppliersTable extends StatelessWidget {
   final List<InventorySupplierDetail> suppliers;
-  final void Function(InventorySupplierDetail) onEdit;
+
+  /// `null` sin `compras.proveedores.crear_editar`: la tabla queda de lectura.
+  final void Function(InventorySupplierDetail)? onEdit;
 
   const _SuppliersTable({required this.suppliers, required this.onEdit});
 
@@ -305,7 +318,7 @@ class _SuppliersTable extends StatelessWidget {
 
 class _SupplierRow extends StatelessWidget {
   final InventorySupplierDetail s;
-  final void Function(InventorySupplierDetail) onEdit;
+  final void Function(InventorySupplierDetail)? onEdit;
   final bool isLast;
   const _SupplierRow(
       {required this.s, required this.onEdit, required this.isLast});
@@ -393,7 +406,7 @@ class _SupplierRow extends StatelessWidget {
               child: IconButton(
                 tooltip: 'Editar',
                 icon: const Icon(Icons.edit_outlined, size: 18),
-                onPressed: () => onEdit(s),
+                onPressed: onEdit == null ? null : () => onEdit!(s),
               ),
             ),
           ),
