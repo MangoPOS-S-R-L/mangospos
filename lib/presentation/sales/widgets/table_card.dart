@@ -60,6 +60,7 @@ class _TableCardState extends State<TableCard> {
     final isOwnTable = widget.currentUserId != null
         ? widget.table.isOwnTable(widget.currentUserId!)
         : false;
+    final palette = tableStatusPalette(widget.table.status);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
@@ -86,7 +87,8 @@ class _TableCardState extends State<TableCard> {
                 minWidth: kTableCardMinWidth,
               ),
               decoration: BoxDecoration(
-                color: AppColors.card,
+                // Solo cambia el color: el fondo va tintado según el estado.
+                color: palette.surface,
                 borderRadius: BorderRadius.circular(12), // rounded-xl
                 boxShadow: [
                   BoxShadow(
@@ -104,28 +106,52 @@ class _TableCardState extends State<TableCard> {
                   left: BorderSide(color: _getBorderColor(), width: 6),
                 ),
               ),
+              // El borde de 1px del estado va como decoración DELANTERA: con
+              // borderRadius, Flutter lanza assert si un mismo Border mezcla
+              // colores por lado, y la barra de 6px de arriba tiene que
+              // seguir siendo el BorderSide izquierdo de siempre.
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: palette.border),
+              ),
               child: Padding(
-                padding: const EdgeInsets.all(
-                  12,
-                ), // Reducido de 16 a 12 para evitar overflow
+                padding: const EdgeInsets.all(14),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  // `max` + Spacer, no `min`: el card mide 140 dp fijos y con
+                  // `min` la columna se apretaba arriba dejando el hueco
+                  // debajo, así que la hora y el "Toca para asignar" quedaban
+                  // pegados al estado. Ahora la identidad se ancla arriba, el
+                  // contexto abajo, y el aire sobrante queda en medio.
+                  mainAxisSize: MainAxisSize.max,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // SECCIÓN SUPERIOR
+                    // BANDA 1 - Identidad y dinero
                     _buildTopSection(isOwnTable),
 
-                    // SECCIÓN MEDIA - Divisor con espaciado fijo
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 1,
-                      width: double.infinity,
-                      color: AppColors.borderDivider,
-                    ),
-                    const SizedBox(height: 8),
+                    // La holgura del card se reparte 3:1 — tres cuartas partes
+                    // arriba y una cuarta abajo. El contexto baja respecto al
+                    // estado sin llegar a pegarse al borde inferior.
+                    //
+                    // Son Spacer y no un alto fijo porque si el usuario sube el
+                    // tamaño de texto del sistema, ambos se encogen a cero
+                    // antes que desbordar.
+                    const Spacer(flex: 3),
 
-                    // SECCIÓN INFERIOR
+                    // BANDA 2 - Separador. Solo cuando hay dinero arriba:
+                    // la mesa disponible no lo lleva.
+                    if (widget.table.hasActiveSession) ...[
+                      Container(
+                        height: 1,
+                        width: double.infinity,
+                        color: AppColors.cardDivider,
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+
+                    // BANDA 3 - Contexto
                     _buildBottomSection(isOwnTable),
+
+                    const Spacer(flex: 1),
                   ],
                 ),
               ),
@@ -173,35 +199,21 @@ class _TableCardState extends State<TableCard> {
         // que el cliente debe aunque ya se imprimió la precuenta.
         if (widget.table.hasActiveSession && widget.table.total != null)
           Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Consumer(
-                  builder: (context, ref, _) {
-                    final currency = currentBusinessCurrencyOrFallback(ref);
-                    return Text(
-                      _formatCurrency(currency, widget.table.total!),
-                      style: AppTextStyles.tableTotal.copyWith(
-                        color: AppColors.foreground,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    );
-                  },
-                ),
-                if (widget.table.customerName?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    widget.table.customerName!.trim(),
-                    style: AppTextStyles.tableWaiter.copyWith(
-                      color: AppColors.foreground,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
+            child: Consumer(
+              builder: (context, ref, _) {
+                final currency = currentBusinessCurrencyOrFallback(ref);
+                return Text(
+                  _formatCurrency(currency, widget.table.total!),
+                  // Spec: el total va a 16px/700. El token compartido
+                  // se queda en 14 porque lo reusa Delivery Express.
+                  style: AppTextStyles.tableTotal.copyWith(
+                    fontSize: 16,
+                    color: AppColors.foreground,
                   ),
-                ],
-              ],
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                );
+              },
             ),
           ),
       ],
@@ -235,95 +247,49 @@ class _TableCardState extends State<TableCard> {
     }
 
     if (widget.table.hasActiveSession) {
+      // Banda 3 del diseño: UNA sola línea de contexto separada por "·"
+      // («4 · 00:45 · Luis Gómez»), con la marca "Tu mesa" al otro extremo.
+      // Los iconos de comensales/reloj/mesero salieron: a 14px el punto medio
+      // separa igual y deja la línea entera para el nombre del mesero.
+      final waiter = widget.table.waiterName?.trim();
+      final contextLine = <String>[
+        if (widget.table.guests != null) '${widget.table.guests}',
+        if (widget.table.time != null) widget.table.time!,
+        (waiter != null && waiter.isNotEmpty) ? waiter : 'Sin mesero',
+      ].join(' · ');
+
+      final customer = widget.table.customerName?.trim();
+
       return Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Métricas: Invitados y Tiempo
           Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              if (widget.table.guests != null) ...[
-                Icon(
-                  Icons.people_outline,
-                  size: 16,
-                  color: AppColors.mutedForeground,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '${widget.table.guests}',
+              Expanded(
+                child: Text(
+                  contextLine,
                   style: AppTextStyles.tableMetrics.copyWith(
                     color: AppColors.mutedForeground,
                   ),
-                ),
-                const SizedBox(width: 12), // Reducido de 16 a 12
-              ],
-              if (widget.table.time != null) ...[
-                Icon(
-                  Icons.access_time,
-                  size: 16,
-                  color: AppColors.mutedForeground,
-                ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(
-                    widget.table.time!,
-                    style: AppTextStyles.tableMetrics.copyWith(
-                      color: AppColors.mutedForeground,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 8), // Reducido para evitar overflow
-          // Mesero y badge "Tu mesa"
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.person_outline,
-                          size: 14,
-                          color: AppColors.mutedForeground,
-                        ),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            (widget.table.waiterName != null &&
-                                    widget.table.waiterName!.trim().isNotEmpty)
-                                ? widget.table.waiterName!
-                                : 'Sin mesero',
-                            style: AppTextStyles.tableWaiter.copyWith(
-                              color: AppColors.mutedForeground,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
 
               // Badge "Tu mesa"
-              if (isOwnTable)
+              if (isOwnTable) ...[
+                const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
                     vertical: 2,
                   ),
                   decoration: BoxDecoration(
-                    color:
-                        AppColors.successBackground, // success con 10% opacidad
+                    // success con 10% opacidad
+                    color: AppColors.successBackground,
                     borderRadius: BorderRadius.circular(9999), // rounded-full
                   ),
                   child: Text(
@@ -333,8 +299,23 @@ class _TableCardState extends State<TableCard> {
                     ),
                   ),
                 ),
+              ],
             ],
           ),
+
+          // El cliente va DEBAJO del mesero y la hora, cerrando la card.
+          if (customer != null && customer.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              customer,
+              style: AppTextStyles.tableWaiter.copyWith(
+                color: AppColors.foreground,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ],
       );
     }
@@ -343,13 +324,10 @@ class _TableCardState extends State<TableCard> {
     // permisos) el texto activo "Toca para asignar" engaña al cajero.
     // Mostramos un placeholder neutro que coincida con la accion real.
     final emptyText = widget.enabled ? 'Toca para asignar' : 'Caja cerrada';
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Text(
-        emptyText,
-        style: AppTextStyles.tableEmptyPrompt.copyWith(
-          color: AppColors.foregroundMuted, // foreground con 60% opacidad
-        ),
+    return Text(
+      emptyText,
+      style: AppTextStyles.tableEmptyPrompt.copyWith(
+        color: AppColors.foregroundMuted, // foreground con 60% opacidad
       ),
     );
   }

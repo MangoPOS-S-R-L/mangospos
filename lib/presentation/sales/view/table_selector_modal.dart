@@ -18,6 +18,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/data/models/dining_table.dart';
 import 'package:mangopos/data/models/zone.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
@@ -382,14 +383,18 @@ class _TableCard extends StatelessWidget {
     }
   }
 
+  /// Mismos colores de estado que las cards del salón (ver
+  /// `table_status_style.dart`): verde libre, ámbar ocupada, violeta
+  /// reservada. Gris queda solo para la mesa bloqueada, que no es un
+  /// estado del salón.
   Color _stateColor(TableState s) {
     switch (s) {
       case TableState.available:
-        return const Color(0xFF22C55E);
+        return AppColors.success;
       case TableState.occupied:
-        return const Color(0xFFEF4444);
+        return AppColors.warning;
       case TableState.reserved:
-        return const Color(0xFFF97316);
+        return AppColors.reserved;
       case TableState.blocked:
         return const Color(0xFF6B7280);
     }

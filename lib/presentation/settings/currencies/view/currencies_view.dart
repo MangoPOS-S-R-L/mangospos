@@ -7,6 +7,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 
 import '../widgets/business_currency_settings_card.dart';
 import '../widgets/usd_display_settings_card.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class CurrenciesView extends ConsumerStatefulWidget {
   const CurrenciesView({super.key});
@@ -42,7 +43,7 @@ class _CurrenciesViewState extends ConsumerState<CurrenciesView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

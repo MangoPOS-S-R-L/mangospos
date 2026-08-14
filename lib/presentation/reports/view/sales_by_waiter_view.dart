@@ -24,6 +24,7 @@ import 'package:mangopos/data/repositories/sales_by_waiter_repository.dart';
 import 'package:mangopos/presentation/reports/services/sales_by_waiter_export_service.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 /// Resultado combinado del reporte: resumen por mesero + desglose de
 /// productos. El desglose viene de una RPC aparte (mig 20260728_0002);
@@ -387,7 +388,7 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
     final dateFormat = DateFormat('dd MMM yyyy');
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),

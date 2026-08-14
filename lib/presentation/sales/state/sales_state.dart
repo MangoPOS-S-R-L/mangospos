@@ -35,6 +35,12 @@ class CurrentOrderState extends Equatable {
   /// "no hay secuencias configuradas" de "fallo de red/RLS/auth".
   final String? fiscalSequencesLoadError;
 
+  /// `taxes.id` de los impuestos que el cajero quitó a mano para ESTA orden
+  /// desde el bloque de impuestos del carrito. Espejo de
+  /// `order_excluded_taxes`: quien manda es el backend (que recalcula tasas y
+  /// desglose), esto existe para que la UI no parpadee esperando el round-trip.
+  final Set<String> excludedTaxIds;
+
   const CurrentOrderState({
     this.loading = false,
     this.error,
@@ -61,6 +67,7 @@ class CurrentOrderState extends Equatable {
     this.customerTaxId,
     this.taxConfigError,
     this.fiscalSequencesLoadError,
+    this.excludedTaxIds = const {},
   });
 
   CurrentOrderState copyWith({
@@ -98,6 +105,7 @@ class CurrentOrderState extends Equatable {
     bool clearTaxConfigError = false,
     String? fiscalSequencesLoadError,
     bool clearFiscalSequencesLoadError = false,
+    Set<String>? excludedTaxIds,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -140,6 +148,7 @@ class CurrentOrderState extends Equatable {
       fiscalSequencesLoadError: clearFiscalSequencesLoadError
           ? null
           : (fiscalSequencesLoadError ?? this.fiscalSequencesLoadError),
+      excludedTaxIds: excludedTaxIds ?? this.excludedTaxIds,
     );
   }
 
@@ -170,5 +179,6 @@ class CurrentOrderState extends Equatable {
     customerTaxId,
     taxConfigError,
     fiscalSequencesLoadError,
+    excludedTaxIds,
   ];
 }

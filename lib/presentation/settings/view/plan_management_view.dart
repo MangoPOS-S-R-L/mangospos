@@ -5,6 +5,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PlanManagementView extends ConsumerWidget {
   const PlanManagementView({super.key});
@@ -17,7 +18,7 @@ class PlanManagementView extends ConsumerWidget {
         : 'Tu negocio';
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

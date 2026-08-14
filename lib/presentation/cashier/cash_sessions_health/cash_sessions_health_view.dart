@@ -20,6 +20,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class CashSessionsHealthView extends ConsumerStatefulWidget {
   const CashSessionsHealthView({super.key});
@@ -126,7 +127,7 @@ class _CashSessionsHealthViewState
     );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: MangoColors.darkGray,

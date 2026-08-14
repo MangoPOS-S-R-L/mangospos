@@ -14,6 +14,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../data/models/printing.dart';
+import 'esc_pos_raster_encoder.dart';
 import 'escpos_parser.dart';
 import 'printer_emulation.dart';
 import 'star_raster_encoder.dart';
@@ -26,25 +27,52 @@ class StarPrintAdapter {
     required PrinterConfig printer,
     required List<int> escPosData,
   }) async {
-    if (!resolvePrinterEmulation(printer).isStarRaster) return escPosData;
     if (escPosData.isEmpty) return escPosData;
+
+    final isStar = resolvePrinterEmulation(printer).isStarRaster;
+    // "Modo calidad" opt-in para ESC/POS: mismo pipeline, otro encoder y
+    // dibujado con tipografía real (ver `printerWantsEscPosRaster`).
+    final wantsEscPosRaster = !isStar && printerWantsEscPosRaster(printer);
+    if (!isStar && !wantsEscPosRaster) return escPosData;
+
     // Ya viene rasterizado (p.ej. un job que rebota por la cola).
     if (StarRasterEncoder.looksLikeStarRaster(escPosData)) return escPosData;
+    if (EscPosRasterEncoder.looksLikeEscPosRaster(escPosData)) {
+      return escPosData;
+    }
 
+    final label = isStar ? 'Star' : 'Raster';
     try {
       final parsed = EscPosParser.parse(escPosData);
       if (parsed.ops.isEmpty) return escPosData;
-      final dots = StarRasterEncoder.dotsForPaperWidth(printer.paperWidth);
-      final bitmap = await TicketRasterizer.render(parsed, dots);
+      final dots = isStar
+          ? StarRasterEncoder.dotsForPaperWidth(printer.paperWidth)
+          : EscPosRasterEncoder.dotsForPaperWidth(printer.paperWidth);
+      final bitmap = await TicketRasterizer.render(
+        parsed,
+        dots,
+        // Solo el modo calidad usa tipografía proporcional. Las Star llevan
+        // tiempo saliendo con celdas fijas y no se les cambia el acabado
+        // sin que alguien lo pida.
+        proportional: wantsEscPosRaster,
+      );
       if (bitmap.height == 0) return escPosData;
-      final bytes = StarRasterEncoder.encode(bitmap, cut: parsed.cut);
+      final bytes = isStar
+          ? StarRasterEncoder.encode(bitmap, cut: parsed.cut)
+          : EscPosRasterEncoder.encode(
+              bitmap,
+              cut: parsed.cut,
+              openCashDrawer: parsed.openCashDrawer,
+            );
       debugPrint(
-        '[Star] ${printer.name}: ESC/POS ${escPosData.length}B → raster '
+        '[$label] ${printer.name}: ESC/POS ${escPosData.length}B → raster '
         '${bytes.length}B (${dots}x${bitmap.height} puntos)',
       );
       return bytes;
     } catch (e, st) {
-      debugPrint('[Star] no se pudo rasterizar para ${printer.name}: $e\n$st');
+      debugPrint(
+        '[$label] no se pudo rasterizar para ${printer.name}: $e\n$st',
+      );
       return escPosData;
     }
   }

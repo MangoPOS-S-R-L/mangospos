@@ -9,6 +9,7 @@ import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
 import 'purchase_receive_dialog.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PurchasesListView extends ConsumerStatefulWidget {
   const PurchasesListView({super.key});
@@ -48,7 +49,7 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
     final dateFormat = DateFormat('dd/MM/yyyy');
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body: state.loading && state.orders.isEmpty && state.suppliers.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(

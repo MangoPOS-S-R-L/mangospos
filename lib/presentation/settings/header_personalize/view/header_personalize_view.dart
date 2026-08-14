@@ -22,6 +22,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/shell/shell_destinations.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class HeaderPersonalizeView extends ConsumerStatefulWidget {
   const HeaderPersonalizeView({super.key});
@@ -105,7 +106,7 @@ class _HeaderPersonalizeViewState extends ConsumerState<HeaderPersonalizeView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),

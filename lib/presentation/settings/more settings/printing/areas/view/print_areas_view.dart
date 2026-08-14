@@ -4,6 +4,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/area_assignments_page.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingAreasView extends StatelessWidget {
   const PrintingAreasView({super.key, this.businessId = 'auto'});
@@ -13,7 +14,7 @@ class PrintingAreasView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

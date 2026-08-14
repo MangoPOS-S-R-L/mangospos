@@ -5,6 +5,7 @@ import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import '../viewmodel/fiscal_viewmodel.dart';
 import '../../../../../../data/models/fiscal_models.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class FiscalReceiptsView extends ConsumerStatefulWidget {
   final String businessId;
@@ -40,7 +41,7 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     });
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Configuración Fiscal (DR)'),
         backgroundColor: MangoColors.white,

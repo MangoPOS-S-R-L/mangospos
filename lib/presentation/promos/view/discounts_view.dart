@@ -6,6 +6,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/promos_state.dart';
 import '../viewmodel/promos_viewmodel.dart';
+import '../../../core/theme/app_colors.dart';
 
 class DiscountsView extends ConsumerStatefulWidget {
   /// Modo "solo ofertas": muestra únicamente Promociones (crear/listar ofertas
@@ -59,7 +60,7 @@ class _DiscountsViewState extends ConsumerState<DiscountsView> {
         .fold<double>(0, (sum, item) => sum + item.currentBalance);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body:
           state.loading &&
               state.promotions.isEmpty &&

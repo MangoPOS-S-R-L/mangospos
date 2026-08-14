@@ -9,6 +9,7 @@ import 'package:mangopos/data/repositories/permissions_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class SettingsRolesView extends ConsumerStatefulWidget {
   final String businessId;
@@ -175,7 +176,7 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
     final hPad = isMobile ? 10.0 : 16.0;
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),

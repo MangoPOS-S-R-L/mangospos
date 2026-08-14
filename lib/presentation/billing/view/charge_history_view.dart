@@ -16,6 +16,7 @@ import '../../../core/utils/app_toast.dart';
 import '../../../data/models/billing_charge.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
+import '../../../core/theme/app_colors.dart';
 
 class ChargeHistoryView extends ConsumerWidget {
   const ChargeHistoryView({super.key});
@@ -33,7 +34,7 @@ class ChargeHistoryView extends ConsumerWidget {
     final chargesAsync = ref.watch(chargesProvider(businessId));
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

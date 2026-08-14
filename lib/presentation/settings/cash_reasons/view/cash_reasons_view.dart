@@ -13,6 +13,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/settings/cash_reasons/viewmodel/cash_reasons_viewmodel.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class CashReasonsView extends ConsumerStatefulWidget {
   /// 'auto' o un UUID concreto del negocio. El VM lo resuelve antes de
@@ -50,7 +51,7 @@ class _CashReasonsViewState extends ConsumerState<CashReasonsView> {
             .toList(growable: false);
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),

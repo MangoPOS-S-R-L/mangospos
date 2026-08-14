@@ -34,6 +34,7 @@ import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
+import '../../core/theme/app_colors.dart';
 
 class MainShell extends ConsumerStatefulWidget {
   /// El shell de navegación con estado del `StatefulShellRoute.indexedStack`.
@@ -117,7 +118,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     const navGap = 16.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFBFAF9),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Column(
           children: [

@@ -14,6 +14,7 @@ import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/inventory/view/physical_count_detail_view.dart';
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PhysicalCountView extends ConsumerStatefulWidget {
   const PhysicalCountView({super.key});
@@ -103,7 +104,7 @@ class _PhysicalCountViewState extends ConsumerState<PhysicalCountView> {
     final sessionCtrl = ref.watch(sessionProvider.notifier);
     final canCreate = sessionCtrl.hasPermission('inventario.conteo.crear');
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),

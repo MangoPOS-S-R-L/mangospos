@@ -23,6 +23,7 @@ import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
+import '../../core/theme/app_colors.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
   /// Shell de navegación con estado del `StatefulShellRoute.indexedStack`
@@ -84,7 +85,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
 
     return Scaffold(
       key: _scaffoldKey,
-      backgroundColor: const Color(0xFFFBFAF9),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.white,
         foregroundColor: MangoColors.darkGray,

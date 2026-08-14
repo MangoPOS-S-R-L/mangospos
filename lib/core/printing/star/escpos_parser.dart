@@ -37,6 +37,7 @@ class TicketTextOp {
     this.underline = false,
     this.widthFactor = 1,
     this.heightFactor = 1,
+    this.fontB = false,
   });
 
   final String text;
@@ -44,6 +45,13 @@ class TicketTextOp {
   final bool bold;
   final bool inverse;
   final bool underline;
+
+  /// `ESC M 1` vigente: la línea se compuso con la fuente B (9x17 puntos en
+  /// vez de 12x24), o sea 64 columnas a 80mm en lugar de 48. El
+  /// rasterizador TIENE que saberlo: si dibuja una línea de 64 caracteres
+  /// en celdas de 12 puntos, se sale del papel y las columnas de montos
+  /// quedan corridas. Lo usa el modelo de factura moderno.
+  final bool fontB;
 
   /// Factores de `GS !` (1 = normal, 2 = doble). Se respetan tal cual: una
   /// línea en 2x ocupa el doble de celda a lo ancho y/o alto.
@@ -53,7 +61,7 @@ class TicketTextOp {
   @override
   String toString() =>
       'TicketTextOp("$text", ${align.name}, b:$bold, i:$inverse, '
-      'w:$widthFactor, h:$heightFactor)';
+      'w:$widthFactor, h:$heightFactor, fB:$fontB)';
 }
 
 /// Un bloque de imagen ya decodificado a píxeles (1 = punto negro).
@@ -75,10 +83,20 @@ class TicketImageOp {
 
 /// Resultado del parseo: las operaciones en orden + si el ticket pedía corte.
 class ParsedTicket {
-  const ParsedTicket({required this.ops, required this.cut});
+  const ParsedTicket({
+    required this.ops,
+    required this.cut,
+    this.openCashDrawer = false,
+  });
 
   final List<Object> ops; // TicketTextOp | TicketImageOp
   final bool cut;
+
+  /// El ticket traía `ESC p` (apertura de gaveta). En el camino de texto el
+  /// comando viaja con el resto de los bytes; en el de raster ese flujo se
+  /// DESCARTA, así que hay que reemitirlo o la gaveta deja de abrirse al
+  /// cobrar en efectivo.
+  final bool openCashDrawer;
 }
 
 /// Deshace el ESC/POS de un ticket de MangoPOS.
@@ -99,6 +117,8 @@ class EscPosParser {
     var underline = false;
     var widthFactor = 1;
     var heightFactor = 1;
+    var fontB = false;
+    var drawer = false;
 
     // Buffer de la línea en curso. Se vacía en cada LF.
     final line = <int>[];
@@ -129,6 +149,7 @@ class EscPosParser {
           underline: underline,
           widthFactor: widthFactor,
           heightFactor: heightFactor,
+          fontB: fontB,
         ),
       );
     }
@@ -143,6 +164,7 @@ class EscPosParser {
             align: align,
             widthFactor: widthFactor,
             heightFactor: heightFactor,
+            fontB: fontB,
           ),
         );
         return;
@@ -158,6 +180,7 @@ class EscPosParser {
           underline: underline,
           widthFactor: widthFactor,
           heightFactor: heightFactor,
+          fontB: fontB,
         ),
       );
     }
@@ -177,10 +200,11 @@ class EscPosParser {
             underline = false;
             widthFactor = 1;
             heightFactor = 1;
+            fontB = false;
             i += 2;
             continue;
           case 0x61: // ESC a n — alineación
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             flushImage();
             align = switch (data[i + 2]) {
               1 => TicketAlign.center,
@@ -190,21 +214,27 @@ class EscPosParser {
             i += 3;
             continue;
           case 0x45: // ESC E n — negrita
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             bold = data[i + 2] != 0;
             i += 3;
             continue;
           case 0x2D: // ESC - n — subrayado
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             underline = data[i + 2] != 0;
+            i += 3;
+            continue;
+          case 0x4D: // ESC M n — fuente A/B
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
+            // Cambia el ancho de celda, así que a diferencia del resto de
+            // los comandos de estilo el raster no puede ignorarlo.
+            fontB = data[i + 2] == 1;
             i += 3;
             continue;
           case 0x74: // ESC t n — code table (irrelevante: decodificamos Latin-1)
           case 0x47: // ESC G n — double strike (el raster ya sale nítido)
-          case 0x4D: // ESC M n — fuente A/B
           case 0x33: // ESC 3 n — interlineado
           case 0x64: // ESC d n — avanzar n líneas
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             if (cmd == 0x64) {
               flushLine();
               final n = data[i + 2];
@@ -217,11 +247,14 @@ class EscPosParser {
           case 0x32: // ESC 2 — interlineado default
             i += 2;
             continue;
-          case 0x70: // ESC p m t1 t2 — gaveta (no aplica al papel)
+          case 0x70: // ESC p m t1 t2 — gaveta
+            // No pinta nada en el papel, pero hay que recordarlo: el encoder
+            // raster lo vuelve a emitir después del corte.
+            drawer = true;
             i += 5;
             continue;
           case 0x2A: // ESC * m nL nH data — bit image (logo / QR)
-            if (i + 4 >= data.length) return _done(ops, cut);
+            if (i + 4 >= data.length) return _done(ops, cut, drawer);
             final m = data[i + 2];
             final n = data[i + 3] | (data[i + 4] << 8);
             // m 0/1 = 8 puntos de alto (1 byte por columna); 32/33 = 24 (3).
@@ -229,7 +262,7 @@ class EscPosParser {
             final len = n * bytesPerCol;
             final start = i + 5;
             final end = start + len;
-            if (end > data.length) return _done(ops, cut);
+            if (end > data.length) return _done(ops, cut, drawer);
             flushPending();
             (pendingBlobs ??= <_ImageBlob>[]).add(
               _ImageBlob(
@@ -255,29 +288,29 @@ class EscPosParser {
         final cmd = data[i + 1];
         switch (cmd) {
           case 0x21: // GS ! n — tamaño
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             final n = data[i + 2];
             widthFactor = ((n >> 4) & 0x07) + 1;
             heightFactor = (n & 0x07) + 1;
             i += 3;
             continue;
           case 0x42: // GS B n — inverso
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             inverse = data[i + 2] != 0;
             i += 3;
             continue;
           case 0x56: // GS V — corte (formas: GS V m | GS V B n)
-            if (i + 2 >= data.length) return _done(ops, cut);
+            if (i + 2 >= data.length) return _done(ops, cut, drawer);
             cut = true;
             i += (data[i + 2] == 0x42) ? 4 : 3;
             continue;
           case 0x76: // GS v 0 m xL xH yL yH — raster bit image
-            if (i + 7 >= data.length) return _done(ops, cut);
+            if (i + 7 >= data.length) return _done(ops, cut, drawer);
             final xBytes = data[i + 4] | (data[i + 5] << 8);
             final yDots = data[i + 6] | (data[i + 7] << 8);
             final start = i + 8;
             final end = start + xBytes * yDots;
-            if (end > data.length) return _done(ops, cut);
+            if (end > data.length) return _done(ops, cut, drawer);
             flushPending();
             flushImage();
             ops.add(
@@ -320,11 +353,13 @@ class EscPosParser {
 
     flushPending();
     flushImage();
-    return ParsedTicket(ops: ops, cut: cut);
+    return ParsedTicket(ops: ops, cut: cut, openCashDrawer: drawer);
   }
 
-  static ParsedTicket _done(List<Object> ops, bool cut) =>
-      ParsedTicket(ops: ops, cut: cut);
+  /// Salida temprana cuando el flujo viene truncado. Arrastra igual el flag
+  /// de gaveta: si el `ESC p` ya se había visto, no se pierde.
+  static ParsedTicket _done(List<Object> ops, bool cut, bool drawer) =>
+      ParsedTicket(ops: ops, cut: cut, openCashDrawer: drawer);
 
   /// Apila los blobs de `ESC *` (24 filas cada uno) en una sola imagen.
   static TicketImageOp _mergeBlobs(List<_ImageBlob> blobs, TicketAlign align) {

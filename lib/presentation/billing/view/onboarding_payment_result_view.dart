@@ -12,6 +12,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
+import '../../../core/theme/app_colors.dart';
 
 class OnboardingPaymentResultView extends StatelessWidget {
   final String? result;
@@ -87,7 +88,7 @@ class OnboardingPaymentResultView extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = _presentation;
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

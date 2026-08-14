@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/inventory/view/production_order_detail_view.dart';
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class ProductionOrdersView extends ConsumerStatefulWidget {
   const ProductionOrdersView({super.key});
@@ -110,7 +111,7 @@ class _ProductionOrdersViewState extends ConsumerState<ProductionOrdersView> {
     final canCreate = sessionCtrl.hasPermission('produccion.crear');
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),

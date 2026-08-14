@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/app_time.dart';
 import '../../../../data/models/table_status.dart';
 import '../../../../domain/models/ventas_table.dart' as ventas;
 
@@ -18,18 +20,66 @@ bool isTableEffectivelyEmpty(TableStatus ts) {
   return ts.sessionId == null || (ts.itemsCount == 0 && ts.ordersCount == 0);
 }
 
-/// Color autoritativo por estado de mesa (misma paleta que el grid):
-/// verde = disponible, naranja = ocupada, azul = pre-cuenta/pagando.
-Color tableStatusColor(ventas.TableStatus status) {
+/// Paleta de una card de mesa: los tres colores que definen el estado.
+///
+///  Estado      | Barra y texto | Fondo    | Borde
+///  ------------|---------------|----------|-----------------------
+///  Disponible  | #22C55E       | #F4FCF7  | rgba(34,197,94,.3)
+///  Ocupado     | #F59E0B       | #FFFBF4  | rgba(245,158,11,.3)
+///  Por Cobrar  | #3B82F6       | #F6FAFF  | rgba(59,130,246,.3)
+///  Reservado   | #8B5CF6       | #FAF7FF  | rgba(139,92,246,.3)
+class TableStatusPalette {
+  /// Barra lateral de 6px y texto del estado.
+  final Color accent;
+
+  /// Relleno de la card.
+  final Color surface;
+
+  /// Borde de 1px (el accent al 30%).
+  final Color border;
+
+  const TableStatusPalette({
+    required this.accent,
+    required this.surface,
+    required this.border,
+  });
+}
+
+/// Paleta autoritativa por estado de mesa. La usan el grid ([TableCard]) y el
+/// floor map ([ZoneFloorMap]) para que las dos representaciones no diverjan.
+TableStatusPalette tableStatusPalette(ventas.TableStatus status) {
   switch (status) {
     case ventas.TableStatus.disponible:
-      return AppColors.success; // verde
+      return TableStatusPalette(
+        accent: AppColors.success, // verde
+        surface: AppColors.successSurface,
+        border: AppColors.success.withValues(alpha: 0.3),
+      );
     case ventas.TableStatus.ocupado:
-      return AppColors.warning; // naranja
+      return TableStatusPalette(
+        accent: AppColors.warning, // ámbar
+        surface: AppColors.warningSurface,
+        border: AppColors.warning.withValues(alpha: 0.3),
+      );
     case ventas.TableStatus.pagando:
-      return AppColors.info; // azul
+      return TableStatusPalette(
+        accent: AppColors.info, // azul
+        surface: AppColors.infoSurface,
+        border: AppColors.info.withValues(alpha: 0.3),
+      );
+    case ventas.TableStatus.reservado:
+      return TableStatusPalette(
+        accent: AppColors.reserved, // violeta
+        surface: AppColors.reservedSurface,
+        border: AppColors.reserved.withValues(alpha: 0.3),
+      );
   }
 }
+
+/// Color autoritativo por estado de mesa (barra y texto). Atajo sobre
+/// [tableStatusPalette] para los sitios que solo necesitan el acento.
+Color tableStatusColor(ventas.TableStatus status) =>
+    tableStatusPalette(status).accent;
 
 /// Convierte el [TableStatus] crudo de `v_zone_table_status` en el
 /// modelo de UI [ventas.VentasTable] que consumen las tarjetas y nodos
@@ -38,7 +88,12 @@ Color tableStatusColor(ventas.TableStatus status) {
 ventas.VentasTable ventasTableFromStatus(TableStatus ts) {
   final ventas.TableStatus status;
   if (isTableEffectivelyEmpty(ts)) {
-    status = ventas.TableStatus.disponible;
+    // Sin consumo: la mesa apartada se pinta RESERVADA (violeta); el resto
+    // queda disponible. `dining_tables.state` es la única fuente de la
+    // reserva — si la vista no trae la columna, cae en disponible.
+    status = (ts.tableState ?? '').toLowerCase() == 'reserved'
+        ? ventas.TableStatus.reservado
+        : ventas.TableStatus.disponible;
   } else {
     final statusRaw = (ts.status ?? '').toLowerCase();
     if (statusRaw == 'paying' ||
@@ -50,13 +105,17 @@ ventas.VentasTable ventasTableFromStatus(TableStatus ts) {
     }
   }
 
-  String? time;
-  if (ts.minutesOpen != null && ts.minutesOpen! > 0) {
-    final hours = ts.minutesOpen! ~/ 60;
-    final mins = ts.minutesOpen! % 60;
-    time =
-        '${hours.toString().padLeft(2, '0')}:${mins.toString().padLeft(2, '0')}';
+  // La tarjeta muestra LA HORA a la que se abrió la mesa (08:15 p. m.), no
+  // los minutos que lleva abierta. Si la fila no trae `opened_at` — overlay
+  // offline, snapshot viejo — se reconstruye restando los minutos abiertos,
+  // que da la misma hora de pared.
+  DateTime? openedAt = ts.openedAt;
+  if (openedAt == null && ts.minutesOpen != null && ts.minutesOpen! >= 0) {
+    openedAt = AppTime.nowAst().subtract(Duration(minutes: ts.minutesOpen!));
   }
+  final time = openedAt == null
+      ? null
+      : DateFormat('hh:mm a').format(openedAt);
 
   return ventas.VentasTable(
     id: ts.tableId,

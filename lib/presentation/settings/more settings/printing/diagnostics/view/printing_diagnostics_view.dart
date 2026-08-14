@@ -24,6 +24,7 @@ import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/services/print_agent_detector.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingDiagnosticsView extends ConsumerStatefulWidget {
   const PrintingDiagnosticsView({super.key, this.businessId = 'auto'});
@@ -253,7 +254,7 @@ class _PrintingDiagnosticsViewState
   Widget build(BuildContext context) {
     final printers = ref.watch(printingPrintersViewModelProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

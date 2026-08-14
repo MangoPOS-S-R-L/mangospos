@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_colors.dart';
 import '../../../../../../../data/repositories/combos_repository.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 final combosRepositoryProvider = Provider<CombosRepository>((ref) {
   return CombosRepository(Supabase.instance.client);
@@ -227,7 +228,7 @@ class _CombosViewState extends ConsumerState<CombosView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

@@ -14,6 +14,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/bank_account.dart';
 import 'package:mangopos/presentation/settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class PaymentMethodsView extends ConsumerStatefulWidget {
   /// 'auto' o un UUID concreto del negocio. El VM lo resuelve antes de
@@ -42,7 +43,7 @@ class _PaymentMethodsViewState extends ConsumerState<PaymentMethodsView> {
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),

@@ -23,6 +23,7 @@ import 'package:mangopos/presentation/cashier/detailed_wizard/cash_close_detaile
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
+import '../../../core/theme/app_colors.dart';
 
 class CashierView extends ConsumerStatefulWidget {
   const CashierView({super.key});
@@ -100,7 +101,7 @@ class _CashierViewState extends ConsumerState<CashierView>
     final canViewMovements = sessionCtrl.hasPermission('caja.movimientos_ver');
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF2F2F2),
+      backgroundColor: AppColors.background,
       body: RefreshIndicator(
         onRefresh: _handleRefresh,
         color: MangoColors.primaryOrange,

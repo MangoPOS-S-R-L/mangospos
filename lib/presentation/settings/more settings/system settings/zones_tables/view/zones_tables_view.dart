@@ -9,6 +9,7 @@ import 'package:mangopos/data/models/dining_table.dart';
 import 'package:mangopos/data/models/zone.dart';
 import '../viewmodel/zones_tables_viewmodel.dart';
 import 'zone_floor_editor.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class ZonesTablesView extends ConsumerStatefulWidget {
   /// Puede venir 'auto' o un UUID real. El VM lo resuelve antes de consultar.
@@ -37,7 +38,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA), // Light gray background
+      backgroundColor: AppColors.background, // Light gray background
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),

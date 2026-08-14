@@ -7,8 +7,13 @@ class AppColors {
   // BACKGROUNDS
   // ============================================================================
 
-  /// Background - hsl(30, 20%, 98%) - Crema muy suave
-  static const Color background = Color(0xFFFAF9F7);
+  /// Background - #FBFCFE - Blanco azulado.
+  ///
+  /// Fuente única del fondo de pantalla de toda la app. `SalesTheme.background`,
+  /// `MangoTokens.background`, `MangoColors.appBackground` y el
+  /// `scaffoldBackgroundColor` del tema global apuntan aquí: si cambia el
+  /// estilo, se cambia en este punto y no en 100 Scaffolds.
+  static const Color background = Color(0xFFFBFCFE);
 
   /// Card - hsl(0, 0%, 100%) - Blanco puro
   static const Color card = Color(0xFFFFFFFF);
@@ -65,6 +70,28 @@ class AppColors {
   /// Destructive - hsl(0, 84%, 60%) - Rojo
   static const Color destructive = Color(0xFFEF4444);
 
+  /// Reserved - #8B5CF6 - Violeta (mesa reservada)
+  static const Color reserved = Color(0xFF8B5CF6);
+
+  // ============================================================================
+  // SUPERFICIES POR ESTADO (fondo tintado de las cards de mesa)
+  // ============================================================================
+  // Tintes muy claros del color de estado. Se declaran como literales (y no
+  // como `success.withOpacity(...)` sobre el fondo) para que el valor sea
+  // exacto al del diseño y no dependa de sobre qué fondo se pinte la card.
+
+  /// Fondo de card en estado Disponible - #F4FCF7
+  static const Color successSurface = Color(0xFFF4FCF7);
+
+  /// Fondo de card en estado Ocupado - #FFFBF4
+  static const Color warningSurface = Color(0xFFFFFBF4);
+
+  /// Fondo de card en estado Por Cobrar - #F6FAFF
+  static const Color infoSurface = Color(0xFFF6FAFF);
+
+  /// Fondo de card en estado Reservado - #FAF7FF
+  static const Color reservedSurface = Color(0xFFFAF7FF);
+
   // ============================================================================
   // OPACIDADES DE ESTADO (para fondos)
   // ============================================================================
@@ -89,6 +116,10 @@ class AppColors {
 
   /// Divisor interno de la card (border con 40% opacidad)
   static Color get borderDivider => border.withOpacity(0.4);
+
+  /// Divisor de la card de mesa - rgba(230,235,242,.4). Gris azulado que
+  /// hace juego con el fondo #FBFCFE, en vez del gris cálido de [border].
+  static const Color cardDivider = Color(0x66E6EBF2);
 
   /// Texto "Toca para asignar" (foreground con 60% opacidad)
   static Color get foregroundMuted => foreground.withOpacity(0.6);

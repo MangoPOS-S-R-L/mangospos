@@ -6,6 +6,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/settings/more%20settings/menus/categories/viewmodel/category_viewmodel.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class CategoriesView extends ConsumerStatefulWidget {
   /// Puede venir 'auto' o un UUID real. El VM lo resuelve antes de consultar.
@@ -40,7 +41,7 @@ class _CategoriesViewState extends ConsumerState<CategoriesView> {
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),

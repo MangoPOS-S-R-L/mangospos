@@ -11,6 +11,7 @@ import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/theme/app_colors.dart';
 
 class CashClosuresView extends ConsumerStatefulWidget {
   const CashClosuresView({super.key});
@@ -487,7 +488,7 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Gestión de Cierres'),
         backgroundColor: Colors.white,

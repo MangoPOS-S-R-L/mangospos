@@ -9,6 +9,7 @@ import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class CashRegistersView extends ConsumerStatefulWidget {
   const CashRegistersView({super.key});
@@ -85,7 +86,7 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

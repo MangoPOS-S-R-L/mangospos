@@ -42,6 +42,11 @@ SaleOrigin parseSaleOrigin(String? raw) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class TaxDef {
+  /// `taxes.id`. Vacío para las definiciones sintéticas que arma el motor en
+  /// tests o para filas legacy que no lo traían: quien lo necesite (excluir
+  /// un impuesto de una orden puntual) debe ignorar las que vengan sin id.
+  final String id;
+
   final String name;
 
   /// Percentage rate, e.g. 18.0 for 18%.
@@ -69,6 +74,7 @@ class TaxDef {
   final bool includeInEcf;
 
   const TaxDef({
+    this.id = '',
     required this.name,
     required this.rate,
     this.isActive = true,
@@ -82,6 +88,7 @@ class TaxDef {
   });
 
   factory TaxDef.fromMap(Map<String, dynamic> m) => TaxDef(
+        id: m['id']?.toString() ?? '',
         name: m['name']?.toString() ?? '',
         rate: (m['rate'] as num?)?.toDouble() ?? 0,
         isActive: m['is_active'] as bool? ?? true,

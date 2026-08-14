@@ -26,6 +26,7 @@ import '../../app/theme/mango_colors.dart';
 import '../../services/session/session_controller.dart';
 import 'pending_approval_provider.dart';
 import 'pending_approval_screen.dart';
+import '../../core/theme/app_colors.dart';
 
 class PendingApprovalGuard extends ConsumerWidget {
   final Widget child;
@@ -69,7 +70,7 @@ class _PendingBootstrapLoading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFBFAF9),
+      backgroundColor: AppColors.background,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

@@ -9,6 +9,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/services/mall_sales_export_service.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/mall_sales_export_repository.dart';
+import '../../../core/theme/app_colors.dart';
 
 /// Configuración del envío de ventas por hora al servidor SFTP de la plaza
 /// comercial (ej. Ágora Santiago Center). Accesible desde Configuración →
@@ -217,7 +218,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),

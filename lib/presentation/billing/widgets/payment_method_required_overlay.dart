@@ -18,6 +18,7 @@ import 'package:intl/intl.dart';
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_colors.dart';
 import '../../../data/models/billing_state.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PaymentMethodRequiredOverlay extends StatelessWidget {
   final BillingState? state;
@@ -30,7 +31,7 @@ class PaymentMethodRequiredOverlay extends StatelessWidget {
     final daysLeft = state?.trialDaysRemaining;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

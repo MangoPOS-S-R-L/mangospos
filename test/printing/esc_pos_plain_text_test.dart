@@ -57,6 +57,30 @@ void main() {
       expect(gen.getPlainText().length, 24);
     });
 
+    test('una línea ampliada se centra por celdas, no por caracteres', () {
+      // A doble ancho cada carácter ocupa dos celdas del papel: "TOTAL" (5
+      // chars = 10 celdas) queda centrado a 19 celdas del borde, no a 9.
+      // Antes el espejo lo corría a la izquierda y el PDF del modo sin
+      // impresora no coincidía con lo que salía impreso.
+      final gen = EscPosGenerator(paperWidth: 80);
+      gen.setTextSize(width: 2, height: 2);
+      gen.textCentered('TOTAL');
+
+      expect(gen.getPlainText().indexOf('T'), (48 - 10) ~/ 2);
+    });
+
+    test('fuente B reporta 64 columnas a 80mm y 42 a 58mm', () {
+      final ancho = EscPosGenerator(paperWidth: 80)..setFont(Font.b);
+      final angosto = EscPosGenerator(paperWidth: 58)..setFont(Font.b);
+
+      expect(ancho.maxChars, 64);
+      expect(angosto.maxChars, 42);
+      // `initialize` (ESC @) devuelve la impresora a fuente A: el estado
+      // que rastreamos tiene que seguirlo o `maxChars` mentiría.
+      ancho.initialize();
+      expect(ancho.maxChars, 48);
+    });
+
     test('58mm usa 32 columnas', () {
       final gen = EscPosGenerator(paperWidth: 58);
       gen.textRow('Total:', '100.00');

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../core/theme/app_colors.dart';
+
 class SalesTheme {
   // 🎨 Paleta de Colores (segun especificaciones)
   static const Color primary = Color(0xFFF97316);
   static const Color primaryForeground = Colors.white;
 
-  static const Color background = Color(0xFFFAF9F7);
+  /// Fondo de pantalla: blanco azulado #FBFCFE (ver [AppColors.background]).
+  static const Color background = AppColors.background;
   static const Color cardBackground = Color(0xFFFFFFFF);
   static const Color secondary = Color(0xFFF3F1EF);
   static const Color secondaryForeground = Color(0xFF231F1D);
@@ -27,6 +30,9 @@ class SalesTheme {
   static const double statusBorderWidth = 6.0;
   static const double cardBorderRadius = 12.0;
   static const double gridGap = 24.0;
+
+  /// Separación del mosaico de mesas (diseño: gap 16 entre cards de 140).
+  static const double tableGridGap = 16.0;
   static const EdgeInsets cardPadding = EdgeInsets.all(16.0);
 
   // 🧱 Sombras (sm / md)

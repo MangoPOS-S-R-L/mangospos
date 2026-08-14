@@ -66,7 +66,7 @@ BEGIN
   -- Access check: service_role salta, authenticated valida pertenencia.
   IF auth.role() <> 'service_role' THEN
     IF NOT EXISTS (
-      SELECT 1 FROM public.current_user_business_ids() c
+      SELECT 1 FROM public.current_user_business_ids() AS c(business_id)
       WHERE c.business_id = v_business_id
     ) THEN
       RAISE EXCEPTION 'access denied' USING ERRCODE = '42501';

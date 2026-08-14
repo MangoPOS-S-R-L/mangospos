@@ -202,7 +202,8 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
     final pos = floorTablePosition(t, index);
     final ts = _statusFor(t);
     final vt = ventasTableFromStatus(ts);
-    final color = tableStatusColor(vt.status);
+    final palette = tableStatusPalette(vt.status);
+    final color = palette.accent;
     final isOpening = widget.openingTableIds.contains(t.id);
 
     // Sillas "ocupadas" = comensales reales; el resto en gris. En mesas
@@ -249,7 +250,7 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
                     child: _TableCard(
                       table: t,
                       vt: vt,
-                      color: color,
+                      palette: palette,
                       isOpening: isOpening,
                       isCircle: t.shape == TableShape.circle,
                     ),
@@ -311,23 +312,25 @@ class _ZoomControls extends StatelessWidget {
   }
 }
 
-/// La "mesa" propiamente: tarjeta blanca con barra de color a la
-/// izquierda y la info (código, estado, hora, mesero/cliente). En mesas
-/// redondas se dibuja como círculo con la info centrada.
+/// La "mesa" propiamente: tarjeta tintada según el estado, con barra de
+/// color a la izquierda y la info (código, estado, hora, mesero/cliente).
+/// En mesas redondas se dibuja como círculo con la info centrada.
 class _TableCard extends StatelessWidget {
   final DiningTable table;
   final VentasTable vt;
-  final Color color;
+  final TableStatusPalette palette;
   final bool isOpening;
   final bool isCircle;
 
   const _TableCard({
     required this.table,
     required this.vt,
-    required this.color,
+    required this.palette,
     required this.isOpening,
     required this.isCircle,
   });
+
+  Color get color => palette.accent;
 
   String _money(BusinessCurrency currency, double v) =>
       '${currency.symbol} ${NumberFormat('#,##0', 'en_US').format(v)}';
@@ -342,10 +345,15 @@ class _TableCard extends StatelessWidget {
     final statusLabel = vt.status.label;
 
     final decoration = BoxDecoration(
-      color: AppColors.card,
+      // Fondo y borde tintados con el color del estado (misma paleta que
+      // las cards del grid). El círculo carga el acento en su borde de 3px
+      // porque no tiene barra lateral donde mostrarlo.
+      color: palette.surface,
       shape: isCircle ? BoxShape.circle : BoxShape.rectangle,
       borderRadius: isCircle ? null : BorderRadius.circular(14),
-      border: isCircle ? Border.all(color: color, width: 3) : null,
+      border: isCircle
+          ? Border.all(color: color, width: 3)
+          : Border.all(color: palette.border),
       boxShadow: [
         BoxShadow(
           color: Colors.black.withValues(alpha: 0.08),
@@ -389,10 +397,10 @@ class _TableCard extends StatelessWidget {
                 statusLabel,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.mutedForeground,
+                  fontWeight: FontWeight.w600,
+                  color: color, // el estado se lee en su propio color
                 ),
               ),
               if (time != null)

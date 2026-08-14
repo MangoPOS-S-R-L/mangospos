@@ -29,6 +29,7 @@ import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/theme/app_colors.dart';
 
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
@@ -170,7 +171,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Historial de venta'),
         backgroundColor: Colors.white,

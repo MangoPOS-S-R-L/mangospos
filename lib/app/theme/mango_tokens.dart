@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../core/theme/app_colors.dart';
+
 class MangoTokens {
   const MangoTokens._();
 
   // Colors
-  static const background = Color(0xFFFBFAF9);
+  /// Fondo de pantalla: blanco azulado #FBFCFE (ver [AppColors.background]).
+  static const background = AppColors.background;
   static const foreground = Color(0xFF231D1A);
   static const card = Color(0xFFFFFFFF);
   static const primary = Color(0xFFF97415);

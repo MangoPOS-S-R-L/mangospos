@@ -14,6 +14,7 @@ class EscPosGenerator {
   final int codeTable;
   final List<int> _buffer = [];
   int _textWidthFactor = 1; // Factor de ampliación horizontal actual
+  Font _font = Font.a; // Fuente vigente (cambia el ancho de celda)
 
   // ── Espejo en texto plano ────────────────────────────────────────────
   // Se llena en paralelo al buffer de bytes y NUNCA lo altera. Lo consume
@@ -82,6 +83,11 @@ class EscPosGenerator {
   /// Inicializar impresora
   void initialize() {
     _buffer.addAll([ESC, 0x40]); // ESC @
+    // ESC @ deja la impresora en fuente A, tamaño 1x e interlineado de
+    // fábrica: el estado que rastreamos aquí tiene que seguirlo o `maxChars`
+    // quedaría mintiendo tras un reset a mitad de ticket.
+    _font = Font.a;
+    _textWidthFactor = 1;
     // Seleccionar tabla de caracteres para acentos/ñ
     _buffer.addAll([ESC, 0x74, codeTable]); // ESC t n
   }
@@ -145,6 +151,27 @@ class EscPosGenerator {
       text(line);
     }
     setAlignment(Alignment.left);
+  }
+
+  /// Texto alineado a la izquierda con wrap automático por palabras al ancho
+  /// disponible. El firmware, si la línea se pasa, la corta en el carácter
+  /// exacto donde se acaba el papel — a mitad de palabra. Esto la parte por
+  /// espacios.
+  ///
+  /// La sangría inicial (si la hay) se conserva y se repite en cada línea
+  /// del envoltorio, para que un sub-detalle indentado no se "desangre" al
+  /// llegar a la segunda línea.
+  void textWrapped(String value) {
+    final indentLength = value.length - value.trimLeft().length;
+    final indent = value.substring(0, indentLength);
+    final width = _getMaxChars() - indentLength;
+    if (width < 1) {
+      text(value);
+      return;
+    }
+    for (final line in _wrapText(value, width)) {
+      text('$indent$line');
+    }
   }
 
   /// Texto a la derecha
@@ -274,11 +301,60 @@ class EscPosGenerator {
     _buffer.addAll([ESC, 0x47, enabled ? 1 : 0]); // ESC G
   }
 
-  /// Seleccionar fuente (A = más grande, B = más densa/nítida)
+  /// Seleccionar fuente (A = 12x24 puntos, B = 9x17: más pequeña y fina).
+  ///
+  /// Cambiar de fuente cambia el ancho de celda y por lo tanto las columnas
+  /// disponibles: a 80mm son 48 en A y 64 en B; a 58mm, 32 y 42. Por eso
+  /// [maxChars] tiene que saber cuál está vigente — si no, los `textRow` de
+  /// un ticket en fuente B saldrían alineados a 48 columnas dejando un
+  /// hueco de 16 a la derecha.
   void setFont(Font font) {
     final value = font == Font.a ? 0 : 1; // ESC M n (0=A, 1=B)
     _buffer.addAll([ESC, 0x4D, value]);
+    _font = font;
   }
+
+  /// Interlineado en puntos (ESC 3 n). El default de fábrica es 1/6" (~30-34
+  /// puntos según el modelo) pensado para la fuente A de 24 puntos de alto:
+  /// deja ~25% de aire vertical en CADA línea. Bajarlo es la palanca más
+  /// directa para que el ticket salga más corto sin quitarle información.
+  ///
+  /// Ojo: el avance de papel es el que se fije aquí, así que una línea en
+  /// doble altura (48 puntos) con interlineado 24 se solapa con la siguiente.
+  /// Antes de un bloque en `setTextSize(height: 2)` hay que subir el valor o
+  /// volver al default con [resetLineSpacing].
+  ///
+  /// Las impresoras que no soportan el comando lo ignoran y siguen con su
+  /// interlineado de fábrica: el ticket sale como hoy, nunca roto.
+  void setLineSpacing(int dots) {
+    final safe = dots.clamp(0, 255);
+    _buffer.addAll([ESC, 0x33, safe]); // ESC 3 n
+  }
+
+  /// Volver al interlineado de fábrica (ESC 2).
+  void resetLineSpacing() {
+    _buffer.addAll([ESC, 0x32]); // ESC 2
+  }
+
+  /// Interlineado de los modelos de ticket "apretados" (compacto, simple y
+  /// moderno), en puntos.
+  ///
+  /// La fuente A mide 24 puntos de alto y el default de fábrica es 1/6"
+  /// (~34): sobra aire. 32 deja 8 puntos de separación — algo más ajustado
+  /// que de fábrica y todavía cómodo de leer.
+  ///
+  /// NO BAJARLO "para que quepa más". Ya se probó con 26 y el resultado en
+  /// papel fueron renglones pegados que hubo que revertir. El ahorro de
+  /// estos modelos viene del layout (menos renglones), no de exprimir el
+  /// interlineado.
+  static const int tightLineSpacing = 32;
+
+  /// Interlineado para las líneas en doble altura (48 puntos de glifo).
+  ///
+  /// El avance de papel es SIEMPRE el interlineado vigente: dejar el del
+  /// cuerpo en una línea 2x hace que se solape con la siguiente. Hay que
+  /// subirlo antes del bloque grande y devolverlo después.
+  static const int doubleHeightLineSpacing = 60;
 
   /// Cambiar tabla de caracteres en caliente (ESC t n)
   void setCodeTable(int table) {
@@ -401,6 +477,7 @@ class EscPosGenerator {
     double? serviceFee,
     double? tax,
     required double total,
+
     /// Etiqueta del subtotal. Default 'Subtotal:'. Para e-CF DGII se debe
     /// pasar 'Subtotal Gravado:' (estandar Norma General 01-2020).
     String subtotalLabel = 'Subtotal:',
@@ -537,26 +614,40 @@ class EscPosGenerator {
   /// líneas de doble tamaño quedan en su ancho real de columnas.
   String _alignPlain(String content) {
     if (_alignment == Alignment.left) return content;
-    final width = _getMaxChars();
+    final cols = _getMaxChars();
     final trimmed = content.trimRight();
-    if (trimmed.length >= width) return trimmed;
+    if (trimmed.length >= cols) return trimmed;
+    // El hueco se mide en CELDAS del papel, no en caracteres de la línea:
+    // con `setTextSize(width: 2)` cada carácter ocupa dos celdas, así que un
+    // título centrado en 24 columnas arranca a 9 celdas del borde, no a 4.
+    // Sin esta corrección el espejo (modo sin impresora, PDF) mostraba las
+    // líneas grandes corridas a la izquierda respecto del papel.
+    final padCells = (cols - trimmed.length) * _textWidthFactor;
     if (_alignment == Alignment.right) {
-      return trimmed.padLeft(width);
+      return (' ' * padCells) + trimmed;
     }
-    final left = ((width - trimmed.length) / 2).floor();
-    return (' ' * left) + trimmed;
+    return (' ' * (padCells ~/ 2)) + trimmed;
   }
 
-  /// Columnas disponibles en la línea AHORA mismo, ya descontado el factor
-  /// de ampliación horizontal vigente (`setTextSize`). A 80mm son 48 en
-  /// tamaño normal y 24 a doble ancho; a 58mm, 32 y 16.
+  /// Columnas disponibles en la línea AHORA mismo, ya descontados el factor
+  /// de ampliación horizontal (`setTextSize`) y la fuente vigente
+  /// (`setFont`). A 80mm son 48 en fuente A y 64 en fuente B (24 y 32 a
+  /// doble ancho); a 58mm, 32 y 42.
   ///
   /// Los builders de tickets lo usan para no hardcodear 48/24: así el mismo
-  /// layout sirve para 58mm sin duplicar código.
+  /// layout sirve para 58mm y para fuente B sin duplicar código.
   int get maxChars => _getMaxChars();
 
+  /// Fuente vigente. La usan los builders que necesitan decidir métricas
+  /// (p.ej. cuánto sangrar un sub-detalle) sin volver a leer el buffer.
+  Font get font => _font;
+
   int _getMaxChars() {
-    final base = paperWidth == 80 ? 48 : 32;
+    // Cabezal de 576 puntos a 80mm y 384 a 58mm. Fuente A ocupa 12 puntos
+    // por celda; fuente B, 9 (576/9 = 64, 384/9 = 42).
+    final base = _font == Font.b
+        ? (paperWidth == 80 ? 64 : 42)
+        : (paperWidth == 80 ? 48 : 32);
     final cols = (base / _textWidthFactor).floor();
     return cols > 0 ? cols : 1;
   }

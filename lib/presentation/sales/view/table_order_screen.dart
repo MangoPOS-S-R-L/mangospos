@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -34,6 +35,9 @@ import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
+import 'package:mangopos/presentation/sales/state/catalog_view_prefs.dart';
+import 'package:mangopos/presentation/sales/widgets/catalog_product_list.dart';
+import 'package:mangopos/presentation/sales/widgets/catalog_view_controls.dart';
 import 'package:mangopos/presentation/sales/widgets/sales_zoom_control.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -63,6 +67,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
+import 'package:mangopos/presentation/sales/widgets/order_taxes_dialog.dart';
 import 'payment_split_screen.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
 
@@ -410,10 +415,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       final repo = _salesRepoRef ?? SalesRepository(Supabase.instance.client);
       final orderId = _activeOrderId!;
       final businessId = _activeBusinessId;
-      unawaited(
-        repo
-            .releaseEmptyTableIfNeeded(orderId, businessId: businessId)
-            .catchError((_) => false),
+      // Programada, no inmediata. Cuando la ruta se REEMPLAZA, este dispose y
+      // el initState de la instancia nueva caen en frames contiguos: liberar
+      // aquí mismo mataba la mesa que la pantalla entrante acababa de abrir
+      // (caso MESA9 del 2026-08-13, 73 ms entre una cosa y la otra). La
+      // reapertura cancela esta liberación; ver
+      // SalesRepository.emptyTableReleaseDelay.
+      repo.scheduleEmptyTableRelease(
+        orderId,
+        tableId: widget.tableId,
+        businessId: businessId,
       );
     }
     super.dispose();
@@ -464,28 +475,42 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     // 2. Cleanup in background — release empty table + refresh zone.
     if (hasEmptyOrder) {
-      unawaited(
-        Future.microtask(() async {
-          try {
-            await salesRepo.releaseEmptyTableIfNeeded(
-              order.id,
-              businessId: businessId,
-            );
-          } catch (_) {
+      Future<void> refreshZone() async {
+        // Refresh zone status so tables update via realtime fallback.
+        try {
+          if (zoneId != null && zoneId.isNotEmpty) {
+            await zoneVm.loadZoneStatus(zoneId, emitError: false);
+          } else if (businessId != null && businessId.isNotEmpty) {
+            await zoneVm.load(businessId);
+          }
+        } catch (_) {}
+      }
+
+      if (order.id.startsWith('local-order-')) {
+        // Offline: no hay nada que liberar en el servidor (la orden ni existe
+        // allá), así que se purga la local. Antes se llegaba aquí de rebote,
+        // porque `releaseEmptyTableIfNeeded` reventaba con el id no-uuid.
+        unawaited(
+          Future.microtask(() async {
             try {
               await orderNotifier.cancelCurrentOrder();
             } catch (_) {}
-          }
-          // Refresh zone status so tables update via realtime fallback.
-          try {
-            if (zoneId != null && zoneId.isNotEmpty) {
-              await zoneVm.loadZoneStatus(zoneId, emitError: false);
-            } else if (businessId != null && businessId.isNotEmpty) {
-              await zoneVm.load(businessId);
-            }
-          } catch (_) {}
-        }),
-      );
+            await refreshZone();
+          }),
+        );
+      } else {
+        // Misma clave (la mesa) que la liberación del dispose(): se deduplican
+        // en vez de dispararse dos veces como antes. El refresco del salón va
+        // en `onReleased`, o sea en el instante EXACTO en que la mesa quedó
+        // libre — antes salía en paralelo con la liberación y a veces repintaba
+        // la mesa todavía ocupada, que es por qué parecía tardar en soltarse.
+        salesRepo.scheduleEmptyTableRelease(
+          order.id,
+          tableId: widget.tableId,
+          businessId: businessId,
+          onReleased: () => unawaited(refreshZone()),
+        );
+      }
     }
   }
 
@@ -866,8 +891,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // cada ítem con el toggle por-ítem cuando aplique.
     final orderTakeout =
         ref.read(currentOrderProvider.notifier).defaultTakeoutForNewItem();
+    // Multiplicador de cantidad: se arma tocando «N×» en la barra del
+    // catálogo y se consume acá — vuelve a 1 para que no arrastre al
+    // siguiente producto. Las ofertas no pasan por aquí: traen su propia
+    // cantidad de línea y multiplicarla rompería la matemática del deal.
+    final qty = ref.read(quantityMultiplierProvider.notifier).consume();
     await vm.addItem(
       menuItemId: product.id,
+      qty: qty.toDouble(),
       productName: product.name,
       productPrice: product.price,
       productTaxMode: product.taxMode,
@@ -1070,6 +1101,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   void _initializeOrder() {
     final notifier = ref.read(currentOrderProvider.notifier);
+    // Primero de todo: si la instancia anterior de esta pantalla dejó una
+    // liberación programada para ESTA mesa, cancelarla ya. Se hace aquí,
+    // síncrono y antes de cualquier RPC, para que la ventana de gracia solo
+    // tenga que cubrir el salto entre frames (ver emptyTableReleaseDelay).
+    SalesRepository.cancelPendingEmptyTableRelease(widget.tableId);
     if (widget.origin == OrderOrigin.table && widget.tableId != null) {
       notifier.openTable(
         widget.tableId!,
@@ -4361,13 +4397,27 @@ class _CartView extends ConsumerWidget {
                 label: 'Subtotal',
                 value: currency.format(displaySubtotal),
               ),
-              for (final entry in reconciledBreakdown) ...[
-                const SizedBox(height: 8),
-                _SummaryRow(
-                  label: entry.label,
-                  value: currency.format(entry.amount),
-                ),
-              ],
+              // Bloque de impuestos: clicable para quitar los que no
+              // apliquen a ESTA orden (estilo Square). Se envuelve el grupo
+              // entero —y no cada línea— porque la acción es sobre el
+              // conjunto: el modal muestra todos y el cajero decide cuáles
+              // deja. Cuando no queda ninguno hay que seguir mostrando la
+              // fila, o el cajero se queda sin forma de volver a activarlos.
+              //
+              // SOLO para productos con impuesto EXCLUSIVO. En un producto
+              // inclusivo el impuesto ya está dentro del precio de venta:
+              // quitarlo no es una rebaja del cargo sino una reescritura de
+              // lo que vale el producto, y el cajero no tiene forma de saber
+              // cuál de las dos cosas está pidiendo. Si la orden no tiene ni
+              // un item exclusivo, el bloque se muestra pero no se toca.
+              _TaxSummaryBlock(
+                entries: reconciledBreakdown,
+                currency: currency,
+                subtotal: displaySubtotal,
+                onTap: allItems.any((i) => i.taxMode != 'inclusive')
+                    ? () => _editOrderTaxes(context, ref, displaySubtotal)
+                    : null,
+              ),
               if (displayDiscounts > 0) ...[
                 const SizedBox(height: 8),
                 _SummaryRow(
@@ -6982,6 +7032,176 @@ class _DeliveryFeeDialogState extends State<_DeliveryFeeDialog> {
   }
 }
 
+/// Abre el modal de impuestos de la orden y aplica el resultado.
+///
+/// El modal se abre en solo-lectura cuando la orden ya no admite cambios
+/// (cobrada, o con comprobante fiscal emitido). Se prefiere eso a esconder el
+/// botón: el cajero igual quiere VER qué impuestos se cobraron.
+Future<void> _editOrderTaxes(
+  BuildContext context,
+  WidgetRef ref,
+  double subtotal,
+) async {
+  final vm = ref.read(currentOrderProvider.notifier);
+  final messenger = ScaffoldMessenger.of(context);
+
+  // Estado real de la BD: se lee acá y no en cada carga de orden para no
+  // gastarle un round-trip a la apertura de mesa, que es el camino caliente.
+  await vm.loadExcludedTaxes();
+  if (!context.mounted) return;
+
+  final orderState = ref.read(currentOrderProvider);
+  final order = orderState.order;
+  final isPaid =
+      order == null ||
+      const {'paid', 'void', 'cancelled'}.contains(order.status);
+  final isOffline = orderState.isOfflineMode;
+
+  final result = await showOrderTaxesDialog(
+    context: context,
+    taxes: vm.availableTaxesForOrigin(),
+    excludedTaxIds: orderState.excludedTaxIds,
+    subtotal: subtotal,
+    currency: currentBusinessCurrencyOrFallback(ref).formatter,
+    readOnly: isPaid || isOffline,
+    readOnlyReason: isOffline
+        ? 'Los impuestos se recalculan en el servidor: hace falta conexión '
+              'para cambiarlos.'
+        : 'La orden ya está cerrada; sus impuestos no se pueden cambiar.',
+  );
+  if (result == null) return;
+  if (setEquals(result, orderState.excludedTaxIds)) return;
+
+  final error = await vm.setExcludedTaxes(result);
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(error ?? 'Impuestos actualizados.'),
+      backgroundColor: error == null ? null : Colors.red.shade700,
+    ),
+  );
+}
+
+/// Bloque de impuestos del resumen del carrito, clicable para abrir el modal
+/// que decide cuáles se cobran en esta orden.
+///
+/// Cuando [entries] está vacío puede ser por dos motivos distintos: el negocio
+/// no tiene impuestos, o el cajero los quitó todos. En ambos casos hay que
+/// renderizar la fila igual — si desaparece, el cajero pierde el único punto
+/// de entrada para volver a activarlos.
+class _TaxSummaryBlock extends StatelessWidget {
+  const _TaxSummaryBlock({
+    required this.entries,
+    required this.currency,
+    required this.subtotal,
+    required this.onTap,
+  });
+
+  final List<({String label, double amount})> entries;
+  final NumberFormat currency;
+  final double subtotal;
+
+  /// Null = la orden no admite quitar impuestos (todos sus productos son de
+  /// impuesto inclusivo). El bloque sigue mostrando el desglose, pero sin
+  /// InkWell: nada de un tap que abre un modal donde no hay nada que hacer.
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          children: [
+            if (entries.isEmpty)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      const Text(
+                        'Impuestos',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _salesTextPrimary,
+                        ),
+                      ),
+                      // El icono solo aparece si de verdad se puede editar.
+                      if (onTap != null) ...[
+                        const SizedBox(width: 6),
+                        const Icon(
+                          Icons.tune,
+                          size: 14,
+                          color: _salesTextSecondary,
+                        ),
+                      ],
+                    ],
+                  ),
+                  const Text(
+                    'Ninguno',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _salesTextSecondary,
+                    ),
+                  ),
+                ],
+              )
+            else
+              for (var i = 0; i < entries.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              entries[i].label,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: _salesTextPrimary,
+                              ),
+                            ),
+                          ),
+                          // El lápiz va solo en la primera línea: marca el
+                          // grupo como editable sin repetir el icono N veces.
+                          // Y solo si la orden admite quitar impuestos.
+                          if (i == 0 && onTap != null) ...[
+                            const SizedBox(width: 6),
+                            const Icon(
+                              Icons.tune,
+                              size: 14,
+                              color: _salesTextSecondary,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Text(
+                      currency.format(entries[i].amount),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: _salesTextPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SummaryRow extends StatelessWidget {
   final String label;
   final String value;
@@ -7917,6 +8137,12 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
                   },
                 ),
               ),
+              // Controles de captura rápida. Van pegados a la búsqueda porque
+              // el multiplicador se toca JUSTO antes del producto y el pulgar
+              // ya está arriba; mandarlos al menú de opciones los mataría.
+              SizedBox(width: isCompact ? 4 : 8),
+              CatalogViewToggle(compact: isCompact),
+              QuantityMultiplierButton(compact: isCompact),
               if (!isCompact) ...[
                 const SizedBox(width: 12),
                 const SalesZoomControl(),
@@ -9632,6 +9858,31 @@ class _ProductsGrid extends ConsumerWidget {
     }
     if (products.isEmpty) {
       return Center(child: Text(emptyText));
+    }
+
+    // Modo lista: mismo set de productos y misma regla de bloqueo por stock,
+    // otra densidad. Se decide acá y no en el padre para que las cuatro
+    // pantallas que montan el catálogo lo hereden sin tocarlas.
+    if (ref.watch(catalogViewModeProvider) == CatalogViewMode.list) {
+      return Stack(
+        children: [
+          CatalogProductList(
+            products: products,
+            stockByProductId: state.stockByProductId,
+            onProductTap: onProductTap,
+          ),
+          if (state.loading)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                color: _salesTotalColor,
+              ),
+            ),
+        ],
+      );
     }
 
     final textScale = MediaQuery.textScalerOf(context).scale(1);

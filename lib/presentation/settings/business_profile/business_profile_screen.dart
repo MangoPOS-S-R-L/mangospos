@@ -20,6 +20,7 @@ import '../../../core/business/business_resolver.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../data/models/business_profile.dart';
 import '../../../data/repositories/business_profile_repository.dart';
+import '../../../core/theme/app_colors.dart';
 
 class BusinessProfileScreen extends ConsumerStatefulWidget {
   final String businessId;
@@ -274,7 +275,7 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Datos del Negocio'),
         backgroundColor: MangoColors.white,

@@ -13,6 +13,7 @@ import '../state/purchases_state.dart';
 import '../utils/discount_input.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
+import '../../../core/theme/app_colors.dart';
 
 /// Cómo trae el ITBIS cada línea de la factura del proveedor.
 /// - [included]: el costo digitado YA trae el ITBIS → se desglosa con el %
@@ -151,7 +152,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     final state = vm.state;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body: state.loading && state.suppliers.isEmpty && state.warehouses.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(

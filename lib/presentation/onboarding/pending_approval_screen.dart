@@ -20,6 +20,7 @@ import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
 import '../../core/utils/app_toast.dart';
 import '../../services/session/session_controller.dart';
+import '../../core/theme/app_colors.dart';
 
 const String _kSupportEmail = 'soporte@mangopos.do';
 
@@ -48,7 +49,7 @@ class _PendingApprovalScreenState
             : 'tu negocio';
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFBFAF9),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

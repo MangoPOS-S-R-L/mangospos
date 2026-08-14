@@ -17,6 +17,7 @@ import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
 import 'package:mangopos/presentation/purchases/state/purchases_state.dart';
 import 'package:mangopos/presentation/purchases/viewmodel/purchases_viewmodel.dart';
+import '../../../core/theme/app_colors.dart';
 
 class InventoryReorderView extends ConsumerStatefulWidget {
   const InventoryReorderView({super.key});
@@ -265,7 +266,7 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

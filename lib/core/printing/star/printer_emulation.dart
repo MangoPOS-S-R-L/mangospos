@@ -78,3 +78,26 @@ int? _parseVendorId(String? raw) {
   // Sin prefijo el alta lo guarda en decimal.
   return int.tryParse(head);
 }
+
+/// ¿Esta impresora ESC/POS debe recibir el ticket como IMAGEN en vez de texto?
+///
+/// Es el "modo calidad": en vez de mandar texto para que lo dibuje la fuente
+/// de matriz de puntos del firmware, se rasteriza con tipografía real y se
+/// manda con `GS v 0`. Es lo que hace Square, y la única forma de igualar su
+/// acabado — ningún ajuste de layout suple la fuente interna.
+///
+/// OPT-IN por impresora (`printers.connection_config.render = 'raster'`) y
+/// no por negocio, porque el coste depende del transporte: un ticket en texto
+/// son ~2 KB y en raster 40–150 KB. Por USB o red no se nota; por Bluetooth
+/// SPP son varios segundos de espera con el cliente delante.
+///
+/// No aplica a las Star: esas YA van en raster obligatoriamente porque no
+/// hablan ESC/POS (ver [resolvePrinterEmulation]).
+bool printerWantsEscPosRaster(PrinterConfig printer) {
+  if (resolvePrinterEmulation(printer).isStarRaster) return false;
+  final mode = printer.connectionConfig['render']
+      ?.toString()
+      .trim()
+      .toLowerCase();
+  return mode == 'raster' || mode == 'image' || mode == 'grafico';
+}

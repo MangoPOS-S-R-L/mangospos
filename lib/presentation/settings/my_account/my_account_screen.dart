@@ -22,6 +22,7 @@ import '../../../core/utils/app_toast.dart';
 import '../../../data/models/owner_profile.dart';
 import '../../../data/repositories/owner_profile_repository.dart';
 import '../../../services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class MyAccountScreen extends ConsumerStatefulWidget {
   const MyAccountScreen({super.key});
@@ -69,7 +70,7 @@ class _MyAccountScreenState extends ConsumerState<MyAccountScreen> {
     }
 
     return Scaffold(
-      backgroundColor: MangoColors.bgLight,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Mi cuenta'),
         backgroundColor: MangoColors.white,

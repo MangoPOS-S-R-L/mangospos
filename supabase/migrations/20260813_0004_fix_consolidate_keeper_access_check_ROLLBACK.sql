@@ -1,0 +1,9 @@
+-- =============================================================================
+-- ROLLBACK de 20260813_0004
+-- =============================================================================
+-- Devolver el access check a `current_user_business_ids() c` (sin alias de
+-- columna) restaura el 42703: "Aplicar división" vuelve a fallar para
+-- cualquier usuario que no sea service_role. No hay motivo operativo para
+-- revertir; si el reemplazo rompió otra cosa, lo correcto es copiar el cuerpo
+-- vivo previo y cambiarle SOLO la línea del access check.
+-- =============================================================================

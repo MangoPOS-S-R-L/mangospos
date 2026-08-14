@@ -23,6 +23,7 @@ import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingProductsView extends ConsumerStatefulWidget {
   const PrintingProductsView({super.key, this.businessId = 'auto'});
@@ -182,7 +183,7 @@ class _PrintingProductsViewState extends ConsumerState<PrintingProductsView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

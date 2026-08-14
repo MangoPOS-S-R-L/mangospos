@@ -839,9 +839,18 @@ class FiscalDocument extends Equatable {
         // Si ecfSecurityCode esta vacio aun no llego respuesta de Alanube.
         return 'En proceso DGII (esperando confirmacion)';
       case 'rejected':
-        return lastError?.isNotEmpty == true
-            ? 'Rechazado DGII: ${lastError!.substring(0, lastError!.length.clamp(0, 80))}'
-            : 'Rechazado por DGII';
+        // NUNCA el payload crudo. `lastError` trae la respuesta de Alanube
+        // tal cual — vista en un ticket real de un cliente:
+        //   Rechazado DGII: Alanube 400 on POST /invoices | {"errors":
+        //   ["instance.idDoc.encf does not meet mi...
+        // Eso es basura técnica en un documento que se le entrega al cliente,
+        // y encima cortada a 80 caracteres.
+        //
+        // OJO: el detalle queda SOLO en `fiscal_documents.last_error` (y en
+        // este campo `lastError`); hoy no lo pinta ninguna pantalla. Si hace
+        // falta diagnosticar un rechazo hay que consultarlo en BD. Exponerlo
+        // en el detalle de Historial de ventas es pendiente.
+        return 'Comprobante rechazado por DGII';
       default:
         return null;
     }

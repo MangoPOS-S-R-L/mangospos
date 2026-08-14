@@ -15,6 +15,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_colors.dart';
 import 'mango_colors.dart';
 import 'mango_styles.dart';
 
@@ -44,7 +45,9 @@ ThemeData buildMangoTheme() {
     useMaterial3: true,
     colorScheme: colorScheme,
     primaryColor: primary,
-    scaffoldBackgroundColor: surface,
+    // Fondo de pantalla: blanco azulado. Las tarjetas/paneles siguen en
+    // blanco puro (`surface`) para que se despeguen del fondo.
+    scaffoldBackgroundColor: AppColors.background,
     canvasColor: surface,
     splashFactory: InkRipple.splashFactory,
 

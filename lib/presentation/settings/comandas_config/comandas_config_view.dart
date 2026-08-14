@@ -18,6 +18,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import '../../../core/theme/app_colors.dart';
 
 class ComandasConfigView extends ConsumerStatefulWidget {
   const ComandasConfigView({super.key, this.businessId = 'auto'});
@@ -125,7 +126,7 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),

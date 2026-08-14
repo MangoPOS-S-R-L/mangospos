@@ -795,17 +795,20 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               // mesa por fila. Con el margen estrecho caben dos de 242.
               final isNarrow = constraints.maxWidth < 600;
 
+              // Desktop: 20px vertical / 24px horizontal y separación de 16,
+              // como el diseño. Los otros dos buckets conservan los valores
+              // afinados en el PRD responsive para que quepan 2 mesas.
               final padding = isNarrow
                   ? const EdgeInsets.fromLTRB(12, 6, 12, 12)
                   : isCompactDesk
                       ? const EdgeInsets.fromLTRB(14, 4, 14, 14)
-                      : const EdgeInsets.fromLTRB(24, 4, 24, 24);
+                      : const EdgeInsets.fromLTRB(24, 20, 24, 20);
               final horizontalPad = isNarrow
                   ? 24.0
                   : isCompactDesk
                       ? 28.0
                       : 48.0;
-              final gap = isCompactDesk ? 12.0 : SalesTheme.gridGap;
+              final gap = isCompactDesk ? 12.0 : SalesTheme.tableGridGap;
               // compactDesk usaba 110px, pero el TableCard internamente se
               // dibuja a 140 (SalesTheme.tableCardHeight). El delta de 30px
               // hacía que el nombre del mesero/cliente se desbordara por

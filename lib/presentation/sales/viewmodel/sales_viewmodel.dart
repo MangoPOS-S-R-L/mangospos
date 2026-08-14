@@ -645,7 +645,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         final taxRows = await Supabase.instance.client
             .from('taxes')
             .select(
-              'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
+              'id,name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
             )
             .eq('business_id', businessId)
             .eq('is_active', true)
@@ -735,6 +735,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     for (final tx in _taxDefs) {
       if (!tx.isActive || tx.rate <= 0) continue;
       if (!tx.appliesTo(origin)) continue;
+      // Quitado a mano para esta orden desde el bloque de impuestos.
+      if (tx.id.isNotEmpty && state.excludedTaxIds.contains(tx.id)) continue;
 
       final pctLabel = tx.rate.truncateToDouble() == tx.rate
           ? '${tx.rate.toInt()}%'
@@ -744,6 +746,115 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     return result;
+  }
+
+  // ── Quitar impuestos de una orden puntual ────────────────────────────────
+  //
+  // Estilo Square: el cajero abre el bloque de impuestos del carrito y
+  // desmarca los que no quiere cobrar. La verdad la escribe el backend
+  // (`fn_set_order_excluded_taxes`), que recalcula tasa y desglose de CADA
+  // item; acá solo se refleja el estado para que la UI no parpadee.
+  //
+  // A propósito NO se filtran los `tax_lines` que ya vinieron del servidor:
+  // si el RPC falló, la app tiene que mostrar lo que realmente se va a
+  // cobrar, no lo que el cajero quiso. Una sola fuente de verdad.
+
+  /// Impuestos del negocio que aplican al origen de venta actual. Es lo que
+  /// lista el modal; los que no aplican a este origen ni siquiera se cobran,
+  /// así que no tiene sentido ofrecerlos para quitar.
+  List<TaxDef> availableTaxesForOrigin() {
+    final origin = parseSaleOrigin(state.origin);
+    return _taxDefs
+        .where((tx) => tx.isActive && tx.rate > 0 && tx.appliesTo(origin))
+        .where((tx) => tx.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  /// Lee las exclusiones vigentes de la orden y las mete en el state.
+  ///
+  /// Se llama al ABRIR el modal, no en `_loadOrderDetail`: abrir mesa es el
+  /// camino caliente que ya se optimizó y no vale gastarle un round-trip a
+  /// cada apertura por una función que casi nunca se usa. Mientras el modal
+  /// no se abra, el desglose que ve el cajero sale de los `tax_lines` reales
+  /// del servidor, que ya vienen con la exclusión aplicada.
+  Future<void> loadExcludedTaxes() async {
+    final orderId = state.order?.id;
+    if (orderId == null || orderId.startsWith('local-order-')) return;
+    if (!_connectivity.isConnected) return;
+    try {
+      final rows = await Supabase.instance.client
+          .from('order_excluded_taxes')
+          .select('tax_id')
+          .eq('order_id', orderId)
+          .timeout(const Duration(seconds: 6));
+      final ids = <String>{
+        for (final row in rows)
+          if (row['tax_id'] != null) row['tax_id'].toString(),
+      };
+      if (state.order?.id != orderId) return; // cambió de orden mientras tanto
+      state = state.copyWith(excludedTaxIds: ids);
+    } catch (e) {
+      debugPrint('No se pudieron leer los impuestos excluidos: $e');
+    }
+  }
+
+  /// Fija el conjunto COMPLETO de impuestos excluidos de la orden.
+  ///
+  /// Se manda el estado final de los checkboxes (no un toggle) para que dos
+  /// cajas tocando la misma orden converjan al último envío en vez de
+  /// acumular toggles cruzados.
+  ///
+  /// Devuelve null si salió bien, o el mensaje de error para mostrar.
+  Future<String?> setExcludedTaxes(Set<String> taxIds) async {
+    final orderId = state.order?.id;
+    if (orderId == null || orderId.startsWith('local-order-')) {
+      return 'Guarda la orden antes de cambiar los impuestos.';
+    }
+    // El motor de impuestos vive entero en el servidor: sin conexión no hay
+    // forma de recalcular sin duplicar la fórmula fiscal en el cliente, que
+    // es justo como nacen las divergencias de centavos.
+    if (!_connectivity.isConnected) {
+      return 'Se necesita conexión para cambiar los impuestos de la orden.';
+    }
+
+    final previous = state.excludedTaxIds;
+    state = state.copyWith(excludedTaxIds: taxIds);
+    try {
+      final employeeId = await _resolveItemEmployeeId();
+      await Supabase.instance.client.rpc(
+        'fn_set_order_excluded_taxes',
+        params: {
+          'p_order_id': orderId,
+          'p_tax_ids': taxIds.toList(growable: false),
+          'p_employee_id': employeeId,
+        },
+      );
+      // El RPC ya reescribió tasas, tax_lines y totales: hay que releer para
+      // que el carrito muestre los números del servidor y no la predicción.
+      await reloadOrderNow();
+      return null;
+    } catch (e) {
+      state = state.copyWith(excludedTaxIds: previous);
+      debugPrint('fn_set_order_excluded_taxes falló: $e');
+      return _humanizeExcludedTaxError(e);
+    }
+  }
+
+  String _humanizeExcludedTaxError(Object e) {
+    final raw = e.toString();
+    if (raw.contains('comprobante fiscal')) {
+      return 'Esta orden ya tiene comprobante fiscal emitido; sus impuestos '
+          'no se pueden cambiar.';
+    }
+    if (raw.contains('No se pueden cambiar los impuestos')) {
+      return 'La orden ya está cobrada o anulada.';
+    }
+    if (raw.contains('fn_set_order_excluded_taxes') ||
+        raw.contains('PGRST202')) {
+      return 'Falta aplicar la migración de impuestos por orden en la base '
+          'de datos.';
+    }
+    return 'No se pudieron cambiar los impuestos: $raw';
   }
 
   /// Defensa client-side: filtra `tax_lines` de items takeout sacando los

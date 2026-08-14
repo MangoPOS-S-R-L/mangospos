@@ -26,6 +26,7 @@ import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
 import 'payment_method_required_overlay.dart';
 import 'suspended_overlay.dart';
+import '../../../core/theme/app_colors.dart';
 
 class BillingGuard extends ConsumerWidget {
   final Widget child;
@@ -77,7 +78,7 @@ class BillingGuard extends ConsumerWidget {
         // Suspendido: prioridad máxima.
         if (state.isSuspended) {
           return Scaffold(
-            backgroundColor: const Color(0xFFFBFAF9),
+            backgroundColor: AppColors.background,
             body: SafeArea(child: SuspendedOverlay(state: state)),
           );
         }
@@ -115,7 +116,7 @@ class _BillingBootstrapLoading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFBFAF9),
+      backgroundColor: AppColors.background,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

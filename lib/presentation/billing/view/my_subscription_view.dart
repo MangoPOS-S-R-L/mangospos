@@ -17,6 +17,7 @@ import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
 import '../widgets/pay_now_button.dart';
 import '../widgets/suspended_overlay.dart';
+import '../../../core/theme/app_colors.dart';
 
 class MySubscriptionView extends ConsumerWidget {
   const MySubscriptionView({super.key});
@@ -36,7 +37,7 @@ class MySubscriptionView extends ConsumerWidget {
     );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/utils/app_time.dart';
@@ -612,6 +613,11 @@ class SalesRepository {
     int peopleCount = 1,
     String? openedByEmployeeId,
   }) async {
+    // ANTES del RPC: la mesa está en uso otra vez, así que una liberación
+    // pendiente de la visita anterior ya no aplica. Cancelar aquí y no al
+    // recibir la respuesta es lo que saca el viaje de red de la ventana de
+    // gracia (ver emptyTableReleaseDelay).
+    cancelPendingEmptyTableRelease(tableId);
     try {
       final response = await _client.rpc(
         SalesQueries.rpcOpenTable,
@@ -651,6 +657,8 @@ class SalesRepository {
     int peopleCount = 1,
     String? openedByEmployeeId,
   }) async {
+    // Ver nota en openTable: se cancela ANTES del RPC.
+    cancelPendingEmptyTableRelease(tableId);
     final response = await _client.rpc(
       'fn_open_table_and_load',
       params: {
@@ -681,6 +689,8 @@ class SalesRepository {
     int peopleCount = 1,
     String? openedByEmployeeId,
   }) async {
+    // Ver nota en openTable: se cancela ANTES de salir al Hub.
+    cancelPendingEmptyTableRelease(tableId);
     final raw = await HubClient().proxyOpenTable(
       hubBaseUrl,
       tableId: tableId,
@@ -921,74 +931,109 @@ class SalesRepository {
     }
   }
 
+  // ── Liberación de mesa vacía ────────────────────────────────────────────
+  // Timers de liberación pendientes, indexados por **tableId** (con fallback a
+  // orderId si no hay mesa). Por mesa y no por orden a propósito: así la
+  // cancelación puede dispararse al EMPEZAR la apertura, cuando todavía no se
+  // sabe qué orden va a devolver el RPC. Eso saca la latencia de red de la
+  // ecuación y es lo que permite que la ventana sea de milisegundos.
+  //
+  // Static porque el `dispose()` de la pantalla de mesa construye su propio
+  // SalesRepository (no puede tocar `ref` durante el teardown), así que la
+  // cancelación tiene que vivir fuera de cualquier instancia.
+  static final Map<String, Timer> _pendingEmptyTableReleases = {};
+
+  /// Gracia antes de liberar una mesa vacía.
+  ///
+  /// Existe por una razón medida: cuando la ruta de la mesa se REEMPLAZA, el
+  /// `dispose()` de la instancia vieja y el `initState()` de la nueva caen en
+  /// frames contiguos. En el caso real de MESA9 (2026-08-13) la orden nueva
+  /// nació **73 ms** después de que la limpieza anulara la vieja, y la sesión
+  /// se cerró encima de ella. Con esta ventana la reapertura llega primero y
+  /// cancela la liberación; como la orden nunca se anula, `fn_open_table` la
+  /// reusa y ni siquiera se crea una segunda orden.
+  ///
+  /// Por qué 400 ms y no 3 s: la cancelación ocurre al ARRANCAR la apertura
+  /// (`cancelPendingEmptyTableRelease(tableId)` antes del RPC), no cuando el
+  /// RPC responde. Así la ventana solo tiene que cubrir el salto entre el
+  /// `dispose()` y el `initState()` de la pantalla entrante — un frame, ~16 ms
+  /// — en vez del viaje de red. 400 ms son 25× ese salto, y aguantan un
+  /// rebuild con jank a 10 fps. Subirlo NO da más protección: si en 400 ms no
+  /// hubo reapertura, no la va a haber.
+  static const Duration emptyTableReleaseDelay = Duration(milliseconds: 400);
+
+  /// Programa la liberación de una mesa vacía tras [emptyTableReleaseDelay].
+  ///
+  /// Reprograma si ya había una pendiente para la misma mesa (el `_handleBack`
+  /// y el `dispose()` disparan los dos: antes eso eran dos liberaciones, ahora
+  /// es una). [onReleased] corre justo cuando la liberación TERMINA — es para
+  /// refrescar el salón en ese instante y no antes, que era por qué la mesa
+  /// parecía tardar en ponerse verde.
+  void scheduleEmptyTableRelease(
+    String orderId, {
+    String? tableId,
+    String? businessId,
+    void Function()? onReleased,
+  }) {
+    if (orderId.isEmpty || orderId.startsWith('local-order-')) return;
+
+    final key = (tableId != null && tableId.isNotEmpty) ? tableId : orderId;
+    _pendingEmptyTableReleases.remove(key)?.cancel();
+    _pendingEmptyTableReleases[key] = Timer(emptyTableReleaseDelay, () async {
+      _pendingEmptyTableReleases.remove(key);
+      try {
+        await releaseEmptyTableIfNeeded(orderId, businessId: businessId);
+      } catch (_) {
+        // Best-effort: si falla, el barrido de fn_release_empty_tables la
+        // recoge más tarde. Nunca debe tumbar la navegación.
+      }
+      onReleased?.call();
+    });
+  }
+
+  /// Cancela la liberación pendiente de [tableId] (o de un orderId, si se
+  /// programó sin mesa). La llaman TODOS los caminos de apertura, **antes** de
+  /// mandar el RPC: si el mesero volvió a entrar, la mesa está en uso y la
+  /// limpieza de la visita anterior ya no aplica.
+  static void cancelPendingEmptyTableRelease(String? key) {
+    if (key == null || key.isEmpty) return;
+    _pendingEmptyTableReleases.remove(key)?.cancel();
+  }
+
+  /// Liberaciones de mesa pendientes. Solo para tests: es lo único observable
+  /// de la ventana de gracia sin llegar a la red.
+  @visibleForTesting
+  static int get pendingEmptyTableReleaseCount =>
+      _pendingEmptyTableReleases.length;
+
   /// Libera defensivamente una mesa si la orden ya no tiene productos vigentes.
+  ///
+  /// Un solo RPC. La versión anterior hacía cuatro viajes sueltos sin
+  /// transacción ni lock, y entre el chequeo de "¿hay otras órdenes abiertas?"
+  /// y el cierre de la sesión cabía un `fn_open_table` concurrente: la orden
+  /// que ese abría quedaba viva colgando de una sesión ya cerrada — invisible
+  /// en el salón, nunca cobrada, y con los insumos ya descontados por su
+  /// comanda. `fn_release_empty_table` hace lo mismo en una transacción,
+  /// tomando FOR UPDATE sobre la fila de la mesa (ver migración
+  /// 20260814_0001). Como cierra con `now()` del servidor, también acaba con
+  /// las sesiones guardadas 4 h en el pasado.
   Future<bool> releaseEmptyTableIfNeeded(
     String orderId, {
     String? businessId,
   }) async {
+    if (orderId.isEmpty || orderId.startsWith('local-order-')) return false;
     try {
       await _assertOrderInBusinessScope(orderId, businessId: businessId);
 
-      final orderRow = await _client
-          .from('orders')
-          .select('id, session_id, closed_at')
-          .eq('id', orderId)
-          .maybeSingle();
-      if (orderRow == null) return false;
+      final response = await _client.rpc(
+        'fn_release_empty_table',
+        params: {'p_order_id': orderId},
+      );
 
-      final sessionId = orderRow['session_id']?.toString();
-      if (sessionId == null || sessionId.isEmpty) return false;
-
-      final liveItems = await _client
-          .from('order_items')
-          .select('id')
-          .eq('order_id', orderId)
-          .neq('status', 'void')
-          .limit(1);
-      if ((liveItems as List).isNotEmpty) {
-        return false;
+      if (response is Map) {
+        return response['released'] == true;
       }
-
-      final sessionRow = await _client
-          .from('table_sessions')
-          .select('id, table_id, closed_at')
-          .eq('id', sessionId)
-          .maybeSingle();
-      final tableId = sessionRow?['table_id']?.toString();
-
-      await _client
-          .from('orders')
-          .update({
-            'status_ext': 'void',
-            'closed_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', orderId)
-          .isFilter('closed_at', null);
-
-      final otherOpenOrders = await _client
-          .from('orders')
-          .select('id')
-          .eq('session_id', sessionId)
-          .isFilter('closed_at', null)
-          .not('status_ext', 'in', '(paid,void)')
-          .limit(1);
-
-      if ((otherOpenOrders as List).isEmpty) {
-        await _client
-            .from('table_sessions')
-            .update({'closed_at': DateTime.now().toIso8601String()})
-            .eq('id', sessionId)
-            .isFilter('closed_at', null);
-
-        if (tableId != null && tableId.isNotEmpty) {
-          await _client
-              .from('dining_tables')
-              .update({'state': 'available'})
-              .eq('id', tableId);
-        }
-      }
-
-      return true;
+      return false;
     } catch (e) {
       throw Exception('Error al liberar mesa vacia: $e');
     }
@@ -1980,7 +2025,11 @@ class SalesRepository {
           .from('order_checks')
           .update({
             'is_closed': true,
-            'closed_at': DateTime.now().toIso8601String(),
+            // .toUtc() obligatorio: sin él se manda la hora LOCAL sin offset y
+            // Postgres la interpreta como UTC — el check queda cerrado 4 h en
+            // el pasado. Era el mismo bug que dejaba sesiones "cerradas antes
+            // de abrirse" (ver migración 20260814_0001).
+            'closed_at': DateTime.now().toUtc().toIso8601String(),
           })
           .eq('id', checkId);
       return true;

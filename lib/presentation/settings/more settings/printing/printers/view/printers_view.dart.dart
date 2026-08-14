@@ -15,6 +15,7 @@ import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printing_ui.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingPrintersView extends ConsumerStatefulWidget {
   const PrintingPrintersView({super.key, this.businessId = 'auto'});
@@ -127,7 +128,7 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
 
   Widget _scaffold(BuildContext context, Widget body) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

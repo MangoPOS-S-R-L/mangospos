@@ -1,0 +1,15 @@
+-- =============================================================================
+-- ROLLBACK de 20260813_0003
+-- =============================================================================
+-- Devuelve la función a la versión con el bug del enum. Solo tiene sentido si
+-- el reemplazo rompió algo distinto: tal cual estaba, la función FALLABA
+-- siempre con 22P02, así que volver atrás deja "quitar impuestos" inservible.
+--
+-- Para revertir de verdad, re-aplicar el bloque de
+-- `20260813_0002_order_excluded_taxes.sql` correspondiente a
+-- `fn_set_order_excluded_taxes` tal como estaba antes del fix, cambiando
+--
+--     AND status IS DISTINCT FROM 'void'
+-- por
+--     AND coalesce(status, '') <> 'void'
+-- =============================================================================

@@ -43,6 +43,7 @@ import 'core/agent/windows_firewall.dart';
 import 'core/services/local_print_service.dart';
 import 'core/utils/logger.dart';
 import 'env/env.dart';
+import 'core/theme/app_colors.dart';
 
 /// Global mobile print agent instance (Android/iOS only).
 final MobilePrintAgent _mobileAgent = MobilePrintAgent();
@@ -1020,7 +1021,7 @@ class StartupFailureApp extends StatelessWidget {
       title: 'MangoPOS',
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        backgroundColor: const Color(0xFFF8F5F1),
+        backgroundColor: AppColors.background,
         body: SafeArea(
           child: Center(
             child: ConstrainedBox(

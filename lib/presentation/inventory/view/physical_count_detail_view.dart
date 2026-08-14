@@ -20,6 +20,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/export/report_exporter.dart';
 import 'package:mangopos/data/repositories/physical_count_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PhysicalCountDetailView extends ConsumerStatefulWidget {
   final String sessionId;
@@ -532,7 +533,7 @@ class _PhysicalCountDetailViewState
         Navigator.of(context).pop(_dirty);
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF7F7F7),
+        backgroundColor: AppColors.background,
         appBar: AppBar(
           title: Text(_detail?.header.code ?? 'Conteo físico'),
           backgroundColor: Colors.white,

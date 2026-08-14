@@ -334,6 +334,12 @@ class PosSettingsRepository {
   /// columnas. Detallado pero corrido. Mantiene los datos fiscales.
   static const String invoiceTemplateSimple = 'simple';
 
+  /// Modelo de factura MODERNO (estilo Square): fuente B a 64 columnas,
+  /// interlineado apretado, sin reglas `=====` ni etiquetas en mayúsculas.
+  /// Mantiene los mismos datos fiscales que los demás — solo cambia la
+  /// presentación. Ver `services/printing/modern_invoice_layout.dart`.
+  static const String invoiceTemplateModern = 'modern';
+
   final SupabaseClient _client;
   final BusinessSettingsOfflineCache _settingsCache =
       BusinessSettingsOfflineCache();
@@ -441,6 +447,7 @@ class PosSettingsRepository {
       final raw = row?['invoice_print_template']?.toString();
       if (raw == invoiceTemplateCompact) return invoiceTemplateCompact;
       if (raw == invoiceTemplateSimple) return invoiceTemplateSimple;
+      if (raw == invoiceTemplateModern) return invoiceTemplateModern;
       return invoiceTemplateStandard;
     }
 
@@ -457,7 +464,8 @@ class PosSettingsRepository {
   }) async {
     final normalized =
         (template == invoiceTemplateCompact ||
-            template == invoiceTemplateSimple)
+            template == invoiceTemplateSimple ||
+            template == invoiceTemplateModern)
         ? template
         : invoiceTemplateStandard;
 

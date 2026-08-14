@@ -1,9 +1,21 @@
+import '../../core/utils/app_time.dart';
+
 class TableStatus {
   final String tableId, zoneId, code;
   final String? sessionId;
   final String? status;
+
+  /// Estado propio de la mesa en `dining_tables.state`
+  /// ('available' | 'occupied' | 'reserved' | 'blocked'), independiente de si
+  /// hay sesión abierta. Solo se usa para pintar la mesa RESERVADA cuando no
+  /// tiene sesión; con sesión abierta manda el consumo.
+  final String? tableState;
   final int ordersCount;
   final int? minutesOpen;
+
+  /// Hora AST en que se abrió la sesión (`table_sessions.opened_at`). La card
+  /// muestra LA HORA de apertura, no los minutos transcurridos.
+  final DateTime? openedAt;
   final int itemsCount;
   final double total;
   final int peopleCount;
@@ -23,10 +35,12 @@ class TableStatus {
     required this.sessionId,
     required this.ordersCount,
     required this.minutesOpen,
+    this.openedAt,
     this.itemsCount = 0,
     this.total = 0,
     this.peopleCount = 0,
     this.status,
+    this.tableState,
     this.waiterName,
     this.customerName,
     this.isOwn = false,
@@ -39,10 +53,12 @@ class TableStatus {
     sessionId: r['session_id'],
     ordersCount: r['orders_count'] ?? 0,
     minutesOpen: r['minutes_open'],
+    openedAt: AppTime.tryParseServerToAst(r['opened_at']),
     itemsCount: r['items_count'] ?? 0,
     total: (r['total'] ?? 0).toDouble(),
     peopleCount: r['people_count'] ?? 0,
     status: r['status'],
+    tableState: r['state']?.toString(),
     waiterName: r['waiter_name'] ?? r['server_name'],
     customerName: r['customer_name'],
     isOwn: r['is_own'] ?? false,

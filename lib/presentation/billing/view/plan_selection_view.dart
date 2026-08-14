@@ -20,6 +20,7 @@ import '../../../data/models/billing_state.dart';
 import '../../../data/repositories/billing_repository.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
+import '../../../core/theme/app_colors.dart';
 
 class PlanSelectionView extends ConsumerWidget {
   const PlanSelectionView({super.key});
@@ -33,7 +34,7 @@ class PlanSelectionView extends ConsumerWidget {
         : const AsyncValue<BillingState?>.data(null);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

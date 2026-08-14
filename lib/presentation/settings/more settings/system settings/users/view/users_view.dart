@@ -11,6 +11,7 @@ import 'package:mangopos/data/repositories/employee_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 const _roleHierarchy = <String, int>{
   'owner': 4,
@@ -161,7 +162,7 @@ class _SettingsUsersViewState extends ConsumerState<SettingsUsersView> {
 
     final isCompact = ResponsiveHelper.useCompactShell(context);
     return Scaffold(
-      backgroundColor: const Color(0xFFFAF8F6),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

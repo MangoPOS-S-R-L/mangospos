@@ -25,6 +25,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/theme/app_colors.dart';
 
 class BusinessFeaturesView extends ConsumerStatefulWidget {
   const BusinessFeaturesView({super.key, this.businessId = 'auto'});
@@ -173,7 +174,7 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       body: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
         child: Column(

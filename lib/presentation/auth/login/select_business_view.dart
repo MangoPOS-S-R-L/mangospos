@@ -13,6 +13,7 @@ import '../../../core/business/business_resolver.dart';
 import '../../../core/network/supabase_config.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class SelectBusinessView extends ConsumerStatefulWidget {
   const SelectBusinessView({super.key});
@@ -288,7 +289,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   Widget build(BuildContext context) {
     final isCompact = ResponsiveHelper.useCompactShell(context);
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFA),
+      backgroundColor: AppColors.background,
       body: Center(
         child: SingleChildScrollView(
           padding: isCompact

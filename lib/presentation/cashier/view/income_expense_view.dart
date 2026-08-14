@@ -17,6 +17,7 @@ import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart'
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../core/theme/app_colors.dart';
 
 class IncomeExpenseView extends ConsumerStatefulWidget {
   const IncomeExpenseView({super.key});
@@ -284,7 +285,7 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Ingresos y Egresos'),
         backgroundColor: Colors.white,

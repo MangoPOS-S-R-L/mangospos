@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../viewmodel/menu_items_viewmodel.dart';
 import '../../../../../../data/models/menu_item.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class MenuItemsView extends ConsumerStatefulWidget {
   final String businessId; // puede ser 'auto'
@@ -46,7 +47,7 @@ class _MenuItemsViewState extends ConsumerState<MenuItemsView> {
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Elementos del menú'),
         backgroundColor: MangoColors.white,

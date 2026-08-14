@@ -12,6 +12,7 @@ import '../../core/currency/usd_conversion.dart';
 import '../../core/currency/usd_display_settings.dart';
 import '../../data/utils/order_pricing_utils.dart';
 import 'esc_pos_generator.dart';
+import 'modern_invoice_layout.dart';
 
 /// 🖨️ Servicio de generación de tickets
 class PrintTicketService {
@@ -20,6 +21,7 @@ class PrintTicketService {
   /// el set y su uso, así que no hay carrera dentro de una misma generación).
   /// Default DOP preserva el comportamiento legacy (`RD$`).
   static BusinessCurrency _currency = BusinessCurrency.fallbackDop;
+
   /// Total base de la línea (sin impuestos) para impresión de tickets.
   /// Usar este en lugar de `itemDisplayTotal` para que la suma de líneas
   /// coincida con el SUBTOTAL y el desglose de impuestos aparezca una sola
@@ -84,16 +86,13 @@ class PrintTicketService {
     for (final entry in taxBreakdown) {
       lineRates.add(_parseInvoiceRatePercent(entry.label));
     }
-    final allRatesKnown =
-        taxBreakdown.isNotEmpty && !lineRates.contains(null);
+    final allRatesKnown = taxBreakdown.isNotEmpty && !lineRates.contains(null);
     final declaredRate = allRatesKnown
         ? lineRates.fold<double>(0, (s, r) => s + (r ?? 0)) / 100.0
         : 0.0;
-    final actualRate =
-        subtotal > 0.005 ? (tax + serviceFee) / subtotal : 0.0;
+    final actualRate = subtotal > 0.005 ? (tax + serviceFee) / subtotal : 0.0;
     final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
-    final canRecompute =
-        allRatesKnown && declaredRate > 0 && ratesAreUniform;
+    final canRecompute = allRatesKnown && declaredRate > 0 && ratesAreUniform;
     return _RecomputeContext(
       isPostDiscountMode: isPostDiscountMode,
       lineRates: lineRates,
@@ -187,6 +186,7 @@ class PrintTicketService {
     String? areaCode,
     bool isReprint = false,
     String receiptItemDisplayMode = 'grouped',
+
     /// Flags de franjas (banners inversos) por sección. Cada uno
     /// controla si SU sección lleva la franja arriba:
     ///   - [showDineInBanner]  → franja "PARA COMER AQUI" para items dine-in.
@@ -488,7 +488,11 @@ class PrintTicketService {
               ? ' (+${_formatMoney(modTotal)})'
               : '';
           final prefix = isComboChoice ? '   • ' : '   + ';
-          _writeWrappedLine(gen, '$prefix${mod.name}$priceSuffix', gen.maxChars);
+          _writeWrappedLine(
+            gen,
+            '$prefix${mod.name}$priceSuffix',
+            gen.maxChars,
+          );
         }
       }
 
@@ -573,6 +577,7 @@ class PrintTicketService {
     String title = 'PRECUENTA',
     String receiptItemDisplayMode = 'grouped',
     List<({String label, double amount})> taxBreakdown = const [],
+
     /// Branding compartido con la factura (mismas listas de bloques).
     List<int>? logoBytes,
     String? slogan,
@@ -581,16 +586,20 @@ class PrintTicketService {
     String? footerMessage,
     List<TicketBlock>? headerBlocks,
     List<TicketBlock>? footerBlocks,
+
     /// Modo de presentación del descuento. Ver `generateInvoice` para
     /// la semántica completa de `'pre_discount'` vs `'post_discount'`.
     /// Default `'pre_discount'` (comportamiento histórico).
     String discountDisplayMode = 'pre_discount',
+
     /// Modelo de impresión (mismo setting `invoice_print_template` que la
     /// factura): 'standard', 'compact' (1 línea + blanco) o 'simple' (estilo
     /// KAELUS: "# N:" con líneas seguidas). La pre-cuenta sigue el modo elegido.
     String template = 'standard',
+
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+
     /// Ancho del papel de la impresora destino (58 u 80). Viene de
     /// `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
@@ -608,6 +617,23 @@ class PrintTicketService {
     final simple = template == 'simple';
 
     gen.initialize();
+    // Mismo criterio que la factura: la familia compacta aprieta el
+    // interlineado. La pre-cuenta se rige por el MISMO ajuste
+    // (`invoice_print_template`), así que tiene que verse igual — si no, el
+    // cajero elige "Compacta" y recibe una pre-cuenta con el aire de fábrica
+    // y una factura sin él.
+    if (compact) gen.setLineSpacing(EscPosGenerator.tightLineSpacing);
+
+    // El avance de papel ES el interlineado vigente: una línea en doble
+    // altura (48 puntos de glifo) con el del cuerpo se solapa con la
+    // siguiente. Ver `generateInvoice`.
+    void beginBigText() {
+      if (compact) gen.setLineSpacing(EscPosGenerator.doubleHeightLineSpacing);
+    }
+
+    void endBigText() {
+      if (compact) gen.setLineSpacing(EscPosGenerator.tightLineSpacing);
+    }
 
     // En compacto se omiten los saltos en blanco decorativos (los separadores
     // se conservan) para que la pre-cuenta salga tan apretada como la factura.
@@ -648,11 +674,13 @@ class PrintTicketService {
     final displayTitle = (compact || narrow)
         ? title.replaceAll('*', '').trim()
         : title;
+    beginBigText();
     gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
     gen.textCentered(displayTitle);
     gen.setBold(false);
     gen.setTextSize();
+    endBigText();
 
     gap();
     _thickSeparator(gen);
@@ -751,10 +779,7 @@ class PrintTicketService {
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow(
-            '   Modificador: ${mod.name}',
-            _formatMoney(modTotal),
-          );
+          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
         if (cleanNote.isNotEmpty) {
           gen.text('   NOTA: $cleanNote');
@@ -776,10 +801,7 @@ class PrintTicketService {
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow(
-            '   Modificador: ${mod.name}',
-            _formatMoney(modTotal),
-          );
+          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
         if (cleanNote.isNotEmpty) {
           gen.text('   NOTA: $cleanNote');
@@ -873,24 +895,18 @@ class PrintTicketService {
       // El fee de delivery es EXENTO: fuera de la base gravable.
       final subtotalBase =
           (printableGrandTotal -
-                  printableSummary.deliveryFee +
-                  discountForBase) /
-              (1 + declaredRate);
+              printableSummary.deliveryFee +
+              discountForBase) /
+          (1 + declaredRate);
       gen.textRow('SUBTOTAL:', _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
         final amount = subtotalBase * (rate / 100);
         if (amount.abs() < 0.005) continue;
-        gen.textRow(
-          '${taxBreakdown[i].label}:',
-          _formatMoney(amount),
-        );
+        gen.textRow('${taxBreakdown[i].label}:', _formatMoney(amount));
       }
       if (!isPostDiscountMode && printableDiscounts > 0) {
-        gen.textRow(
-          'DESCUENTO:',
-          '-${_formatMoney(printableDiscounts)}',
-        );
+        gen.textRow('DESCUENTO:', '-${_formatMoney(printableDiscounts)}');
       }
     } else {
       // Fallback legacy (sin tasa parseable o sin tax breakdown).
@@ -899,10 +915,7 @@ class PrintTicketService {
       if (taxBreakdown.isNotEmpty) {
         for (final entry in taxBreakdown) {
           if (entry.amount.abs() < 0.005) continue;
-          gen.textRow(
-            '${entry.label}:',
-            _formatMoney(entry.amount),
-          );
+          gen.textRow('${entry.label}:', _formatMoney(entry.amount));
         }
       } else {
         final printableTax = printableSummary.tax;
@@ -922,10 +935,7 @@ class PrintTicketService {
         }
       }
       if (printableDiscounts > 0) {
-        gen.textRow(
-          'DESCUENTO:',
-          '-${_formatMoney(printableDiscounts)}',
-        );
+        gen.textRow('DESCUENTO:', '-${_formatMoney(printableDiscounts)}');
       }
     }
 
@@ -948,19 +958,26 @@ class PrintTicketService {
     // TOTAL FINAL - Tamaño grande
     // ════════════════════════════════════════════
     if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
+    beginBigText();
     gen.setBold(true);
     // A 58mm el doble ancho deja 16 columnas: "TOTAL:" + monto no caben.
     gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.textRow('TOTAL:', _formatMoney(printableGrandTotal));
     gen.setTextSize();
     gen.setBold(false);
+    endBigText();
     if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
 
     // PRD 6: equivalente USD debajo del TOTAL si está activo.
     // Decisión del cliente: la tasa NO sale en ningún ticket (ni
     // pre-cuenta ni factura). El cliente ve solo el equivalente USD
     // como referencia.
-    _renderUsdEquivalent(gen, printableGrandTotal, usdSettings, showRate: false);
+    _renderUsdEquivalent(
+      gen,
+      printableGrandTotal,
+      usdSettings,
+      showRate: false,
+    );
 
     // ════════════════════════════════════════════
     // DATOS DE COMPROBANTE FISCAL
@@ -1010,6 +1027,9 @@ class PrintTicketService {
     gen.textCentered('Por favor verifique los datos');
     gen.textCentered('antes de proceder al pago');
 
+    // Restaurar ANTES de avanzar: si no, los renglones de avance miden lo
+    // apretado y la cuchilla llega a morder el pie del ticket.
+    if (compact) gen.resetLineSpacing();
     gen.lineFeed(compact ? 2 : 4);
     gen.cut();
 
@@ -1039,6 +1059,7 @@ class PrintTicketService {
     String? customerName,
     String? customerLegalName,
     String? customerTaxId,
+
     /// Dirección de entrega (delivery). Si viene non-null/no-vacía se
     /// imprime una línea "DIRECCIÓN:" debajo del cliente. Solo aplica a
     /// pedidos de delivery con dirección capturada.
@@ -1052,49 +1073,63 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+
     /// Bytes ESC/POS pre-generados del QR del e-CF (centrados). Cuando es
     /// non-null se imprimen después de la sección de pagos. Generar con
     /// `QrEscPosBuilder.build(data: fiscalDoc.publicUrl!)`.
     List<int>? qrBytes,
+
     /// Mensaje de estado del e-CF a imprimir cuando aún no hay QR
     /// (ej. "Pendiente de aprobacion DGII", "Rechazado por DGII: ...").
     /// Solo aplica para e-CF; ignorado en NCF físico.
     String? ecfStatusMessage,
+
     /// `true` si el documento es e-CF (Exx). Cambia las etiquetas a
     /// formato DGII: "Factura de Consumo Electrónica", "e-NCF:", etc.
     bool isElectronicCf = false,
+
     /// Código de seguridad alfanumérico DGII (campo `ecf_security_code`).
     /// Se imprime debajo del QR en e-CF aceptados.
     String? ecfSecurityCode,
+
     /// Fecha de firma digital DGII (campo `ecf_signed_at`).
     /// Se imprime debajo del Código de Seguridad en e-CF aceptados.
     DateTime? ecfSignedAt,
+
     /// Bytes ESC/POS pre-generados del logo (centrados). Se imprimen al
     /// inicio del header si vienen non-null. Generar con
     /// `LogoEscPosBuilder.build(bytes: <pngOrJpgBytes>)`. El caller decide
     /// si carga o no el logo segun `BusinessProfile.printLogoOnInvoice`
     /// y `BusinessProfile.logoUrl`.
     List<int>? logoBytes,
+
     /// Eslogan del negocio. Se imprime via el bloque `slogan` del header
     /// (orden controlado por [headerBlocks]).
     String? slogan,
+
     /// Nombre de la sucursal. Se imprime via el bloque `branch_name`.
     String? branchName,
+
     /// Email del negocio. Bloque `email`, off por default.
     String? businessEmail,
+
     /// Mensaje opcional al pie del ticket. Se imprime via el bloque
     /// `footer_message` del footer.
     String? footerMessage,
+
     /// Lista ordenada + on/off de los bloques del header. Si null usa
     /// [TicketBlocks.defaultHeader] (orden canonico legacy).
     List<TicketBlock>? headerBlocks,
+
     /// Idem para el footer. Si null usa [TicketBlocks.defaultFooter].
     List<TicketBlock>? footerBlocks,
+
     /// Mapa opcional `payment.id → BankAccount` para imprimir el banco
     /// destino cuando el pago fue por transferencia. Si no se pasa o
     /// no contiene el id, simplemente se omite la línea — el ticket
     /// sigue funcionando como antes (graceful degradation).
     Map<String, BankAccount>? bankAccountsByPaymentId,
+
     /// Modo de presentación del descuento en el bloque de totales del
     /// ticket. `'pre_discount'` (default, comportamiento histórico):
     /// subtotal pre-descuento, ITBIS al % real, descuento como línea
@@ -1103,20 +1138,24 @@ class PrintTicketService {
     /// debajo del TOTAL. Match exacto con el modal del historial cuando
     /// ambos leen el mismo `business_settings.discount_display_mode`.
     String discountDisplayMode = 'pre_discount',
+
     /// Si `true`, después del corte de papel se apenda el comando
     /// ESC/POS de apertura de gaveta (`ESC p 0 25 250`). El caller debe
     /// pasar `true` solo cuando el método de pago fue efectivo Y el
     /// business tiene `open_drawer_on_cash = true`. Si la impresora no
     /// tiene gaveta RJ-11 conectada, el comando se ignora silenciosamente.
     bool openCashDrawer = false,
+
     /// Modelo de impresión: 'standard' (detallado, espaciado amplio),
     /// 'compact' (1 línea por ítem "1x Nombre …… precio" + renglón en blanco
     /// entre ítems) o 'simple' (estilo KAELUS: "# N: Nombre qty X precio ……
     /// total" con líneas seguidas, sin blanco). Las tres conservan TODOS los
     /// datos fiscales (NCF/e-NCF, RNC, desglose de impuestos, QR).
     String template = 'standard',
+
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+
     /// Ancho del papel de la impresora que va a recibir la factura (58 u 80).
     /// Viene de `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
@@ -1127,13 +1166,35 @@ class PrintTicketService {
     // (título y TOTAL) pasan a ancho simple con altura doble: siguen
     // destacando pero ya no se salen del papel. A 80mm nada cambia.
     final narrow = gen.paperWidth <= 58;
+    // `modern` = modelo estilo Square: fuente B, interlineado apretado y
+    // layout sin reglas `====` (ver `modern_invoice_layout.dart`). Va por
+    // fuera de la familia compact/simple porque no comparte ni métricas ni
+    // separadores con ellos.
+    final modern = template == 'modern';
     // `compact` = familia de layout apretado (compact + simple): sin
     // asteriscos, espaciado mínimo, TOTAL con poco aire. `simple` además usa
     // el formato de ítem "# N:" con líneas seguidas (sin blanco entre ítems).
-    final compact = template != 'standard';
+    final compact = !modern && template != 'standard';
     final simple = template == 'simple';
 
     gen.initialize();
+    if (modern) ModernInvoiceLayout.begin(gen);
+    // La familia compacta (compact + simple) usa el MISMO interlineado que el
+    // moderno. Su descripción en Ajustes siempre prometió "espaciado mínimo"
+    // pero el código solo quitaba renglones en blanco: el aire de fábrica
+    // seguía intacto. Con esto la promesa se cumple.
+    if (compact) gen.setLineSpacing(EscPosGenerator.tightLineSpacing);
+
+    // El avance de papel ES el interlineado vigente, así que una línea en
+    // doble altura (48 puntos de glifo) con el del cuerpo se solapa con la
+    // siguiente. Estas dos envuelven los bloques grandes del layout clásico.
+    void beginBigText() {
+      if (compact) gen.setLineSpacing(EscPosGenerator.doubleHeightLineSpacing);
+    }
+
+    void endBigText() {
+      if (compact) gen.setLineSpacing(EscPosGenerator.tightLineSpacing);
+    }
 
     // En el modelo compacto, los saltos en blanco puramente decorativos se
     // omiten (las líneas separadoras se conservan, pero sin espacio alrededor)
@@ -1142,7 +1203,7 @@ class PrintTicketService {
       if (!compact) gen.lineFeed(n);
     }
 
-    gen.lineFeed(compact ? 1 : 2);
+    gen.lineFeed(compact || modern ? 1 : 2);
 
     _renderHeaderBlocks(
       gen,
@@ -1156,10 +1217,13 @@ class PrintTicketService {
       phone: businessPhone,
       email: businessEmail,
       rnc: businessRnc,
-      wrapLongLines: narrow,
+      // A 64 columnas (fuente B) el envoltorio por palabras vale igual que
+      // a 58mm: sin él, una dirección larga se parte a mitad de palabra.
+      wrapLongLines: narrow || modern,
+      modern: modern,
     );
 
-    if (!compact) {
+    if (!compact && !modern) {
       gen.lineFeed();
       _thinSeparator(gen);
       gen.lineFeed();
@@ -1168,94 +1232,117 @@ class PrintTicketService {
     // Title. En compacto quitamos los asteriscos decorativos del título
     // ("*** FACTURA ***" → "FACTURA"). En 58mm también: a 16 columnas los
     // asteriscos se comen el ancho y "*** REIMPRESION ***" (19ch) se partía.
-    final displayTitle = (compact || narrow)
+    final displayTitle = (compact || narrow || modern)
         ? title.replaceAll('*', '').trim()
         : title;
-    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.setBold(true);
-    gen.textCentered(displayTitle);
-    gen.setBold(false);
-    gen.setTextSize();
-
-    gap();
-    _thickSeparator(gen);
-    gap();
-
-    // Bloque del comprobante fiscal:
-    // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
-    //   Titulo descriptivo centrado en negrita + "e-NCF:" + separador.
-    //   Despues va el ORDEN como dato interno secundario.
-    // - NCF fisico (Bxx): TIPO/NCF van DESPUES del ORDEN (formato tradicional).
-    if (isElectronicCf &&
-        fiscalNcf != null &&
-        fiscalNcf.isNotEmpty &&
-        fiscalType != null) {
-      gen.setBold(true);
-      gen.textCentered(_getNcfTypeName(fiscalType));
-      gen.textRow('e-NCF:', fiscalNcf);
-      gen.setBold(false);
-      // Sin lineFeed extra: ORDEN queda inmediatamente debajo de e-NCF, con
-      // el mismo espaciado que el resto de filas de datos (MESA, FECHA...).
-    }
-
-    // Order Info
-    gen.setBold(true);
-    gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
-    gen.setBold(false);
-
-    // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
-    if (!isElectronicCf) {
-      if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
-        if (fiscalType != null) {
-          gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
-        }
-        gen.textRow('NCF:', fiscalNcf);
-      } else if (fiscalType != null) {
-        gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
-      }
-    }
-
-    if (customerName != null && customerName != 'Cliente') {
-      gen.textRow('CLIENTE:', customerName.toUpperCase());
-    }
-    if (customerLegalName != null &&
-        customerLegalName.isNotEmpty &&
-        customerLegalName != customerName) {
-      gen.textRow('RAZÓN SOCIAL:', customerLegalName.toUpperCase());
-    }
-    if (customerTaxId != null && customerTaxId.isNotEmpty) {
-      gen.textRow('RNC/CÉDULA:', customerTaxId);
-    }
-
-    // Dirección de entrega (delivery). Puede ser larga → etiqueta + valor
-    // envuelto a ancho de papel (mismo patrón que las notas de item).
-    if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
-      _writeWrappedLine(
-        gen,
-        'DIRECCIÓN: ${deliveryAddress.trim()}',
-        gen.maxChars,
-      );
-    }
-
-    if (tableName.isNotEmpty) {
-      gen.textRow('MESA:', tableName);
-    }
 
     final effectiveIssuedAt = issuedAt ?? DateTime.now();
     final dateStr = _formatDate(effectiveIssuedAt);
     final timeStr = _formatTime(effectiveIssuedAt);
-    gen.textRow('FECHA:', dateStr);
-    gen.textRow('HORA:', timeStr);
 
-    if (waiterName != null && waiterName.isNotEmpty) {
-      gen.textRow('MESERO:', waiterName);
+    if (modern) {
+      _renderModernDocumentBlock(
+        gen,
+        order: order,
+        displayTitle: displayTitle,
+        fiscalNcf: fiscalNcf,
+        fiscalType: fiscalType,
+        isElectronicCf: isElectronicCf,
+        customerName: customerName,
+        customerLegalName: customerLegalName,
+        customerTaxId: customerTaxId,
+        deliveryAddress: deliveryAddress,
+        tableName: tableName,
+        waiterName: waiterName,
+        dateStr: dateStr,
+        timeStr: timeStr,
+      );
+    } else {
+      beginBigText();
+      gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+      gen.setBold(true);
+      gen.textCentered(displayTitle);
+      gen.setBold(false);
+      gen.setTextSize();
+      endBigText();
+
+      gap();
+      _thickSeparator(gen);
+      gap();
+
+      // Bloque del comprobante fiscal:
+      // - e-CF (Exx): VA PRIMERO (estandar DGII Norma General 01-2020).
+      //   Titulo descriptivo centrado en negrita + "e-NCF:" + separador.
+      //   Despues va el ORDEN como dato interno secundario.
+      // - NCF fisico (Bxx): TIPO/NCF van DESPUES del ORDEN (formato tradicional).
+      if (isElectronicCf &&
+          fiscalNcf != null &&
+          fiscalNcf.isNotEmpty &&
+          fiscalType != null) {
+        gen.setBold(true);
+        gen.textCentered(_getNcfTypeName(fiscalType));
+        gen.textRow('e-NCF:', fiscalNcf);
+        gen.setBold(false);
+        // Sin lineFeed extra: ORDEN queda inmediatamente debajo de e-NCF, con
+        // el mismo espaciado que el resto de filas de datos (MESA, FECHA...).
+      }
+
+      // Order Info
+      gen.setBold(true);
+      gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
+      gen.setBold(false);
+
+      // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
+      if (!isElectronicCf) {
+        if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
+          if (fiscalType != null) {
+            gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+          }
+          gen.textRow('NCF:', fiscalNcf);
+        } else if (fiscalType != null) {
+          gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
+        }
+      }
+
+      if (customerName != null && customerName != 'Cliente') {
+        gen.textRow('CLIENTE:', customerName.toUpperCase());
+      }
+      if (customerLegalName != null &&
+          customerLegalName.isNotEmpty &&
+          customerLegalName != customerName) {
+        gen.textRow('RAZÓN SOCIAL:', customerLegalName.toUpperCase());
+      }
+      if (customerTaxId != null && customerTaxId.isNotEmpty) {
+        gen.textRow('RNC/CÉDULA:', customerTaxId);
+      }
+
+      // Dirección de entrega (delivery). Puede ser larga → etiqueta + valor
+      // envuelto a ancho de papel (mismo patrón que las notas de item).
+      if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
+        _writeWrappedLine(
+          gen,
+          'DIRECCIÓN: ${deliveryAddress.trim()}',
+          gen.maxChars,
+        );
+      }
+
+      if (tableName.isNotEmpty) {
+        gen.textRow('MESA:', tableName);
+      }
+
+      gen.textRow('FECHA:', dateStr);
+      gen.textRow('HORA:', timeStr);
+
+      if (waiterName != null && waiterName.isNotEmpty) {
+        gen.textRow('MESERO:', waiterName);
+      }
+
+      gap();
+      _thinSeparator(gen);
     }
 
-    gap();
-    _thinSeparator(gen);
-
     // Items
-    if (!simple) {
+    if (!simple && !modern) {
       gen.setBold(true);
       gen.textRow(
         compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
@@ -1316,7 +1403,30 @@ class PrintTicketService {
             );
       final cleanNote = cleanOrderItemNote(item.notes);
 
-      if (compact && simple) {
+      if (modern) {
+        // El precio unitario solo cuando aporta: en una línea de 1 unidad,
+        // repetir el mismo número debajo del total es ruido.
+        final showUnit = (item.quantity - 1).abs() > 0.001;
+        final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+        ModernInvoiceLayout.item(
+          gen,
+          qty: displayQty,
+          name: item.productName,
+          amount: _formatMoney(lineTotal),
+          unitPrice: showUnit ? _formatMoney(unitPrice) : null,
+          isTakeout: item.isTakeout,
+          modifiers: [
+            for (final mod in item.modifiers)
+              (
+                name: mod.name,
+                amount: mod.price * itemQty * mod.qty > 0
+                    ? _formatMoney(mod.price * itemQty * mod.qty)
+                    : '',
+              ),
+          ],
+          note: cleanNote,
+        );
+      } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
         // líneas SEGUIDAS (sin blanco entre ítems), modificadores con precio.
         gen.dotRow(
@@ -1331,10 +1441,7 @@ class PrintTicketService {
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow(
-            '   Modificador: ${mod.name}',
-            _formatMoney(modTotal),
-          );
+          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
         if (cleanNote.isNotEmpty) {
           gen.text('   NOTA: $cleanNote');
@@ -1356,10 +1463,7 @@ class PrintTicketService {
         for (final mod in item.modifiers) {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow(
-            '   Modificador: ${mod.name}',
-            _formatMoney(modTotal),
-          );
+          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
         if (cleanNote.isNotEmpty) {
           gen.text('   NOTA: $cleanNote');
@@ -1419,8 +1523,12 @@ class PrintTicketService {
       }
     }
 
-    _thinSeparator(gen);
-    gap();
+    if (modern) {
+      ModernInvoiceLayout.rule(gen);
+    } else {
+      _thinSeparator(gen);
+      gap();
+    }
 
     // Totals
     // Ver comentario en generatePrecheck: usamos los items ORIGINALES para
@@ -1451,7 +1559,24 @@ class PrintTicketService {
     // Etiquetas DGII para e-CF (Norma General 01-2020):
     // - "Subtotal Gravado" en lugar de "SUBTOTAL"
     // - "Total ITBIS" en lugar de "ITBIS (18%)"
-    final subtotalLabel = isElectronicCf ? 'Subtotal Gravado:' : 'SUBTOTAL:';
+    final subtotalLabel = isElectronicCf
+        ? 'Subtotal Gravado'
+        : (modern ? 'Subtotal' : 'SUBTOTAL');
+    final discountLabel = modern ? 'Descuento' : 'DESCUENTO';
+
+    // Una sola puerta para las filas de monto. En el modelo moderno van en
+    // un bloque pegado al margen derecho (a 64 columnas, etiqueta a la
+    // izquierda y cifra a la derecha quedan demasiado separadas para que el
+    // ojo las asocie); en el resto, a lo ancho del papel como siempre.
+    void amountRow(String label, String value, {bool bold = false}) {
+      if (modern) {
+        ModernInvoiceLayout.amountRow(gen, label, value, bold: bold);
+        return;
+      }
+      if (bold) gen.setBold(true);
+      gen.textRow('$label:', value);
+      if (bold) gen.setBold(false);
+    }
 
     if (canRecompute) {
       final discountForBase = isPostDiscountMode ? 0.0 : effectiveDiscounts;
@@ -1459,7 +1584,7 @@ class PrintTicketService {
       final subtotalBase =
           (effectiveTotal - effectiveTotals.deliveryFee + discountForBase) /
           (1 + declaredRate);
-      gen.textRow(subtotalLabel, _formatMoney(subtotalBase));
+      amountRow(subtotalLabel, _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
         final amount = subtotalBase * (rate / 100);
@@ -1468,19 +1593,16 @@ class PrintTicketService {
         if (isElectronicCf && label.toLowerCase().contains('itbis')) {
           label = 'Total ITBIS';
         }
-        gen.textRow('$label:', _formatMoney(amount));
+        amountRow(label, _formatMoney(amount));
       }
       if (!isPostDiscountMode && effectiveDiscounts > 0) {
-        gen.textRow(
-          'DESCUENTO:',
-          '-${_formatMoney(effectiveDiscounts)}',
-        );
+        amountRow(discountLabel, '-${_formatMoney(effectiveDiscounts)}');
       }
     } else {
       // Fallback legacy: imprimimos los valores del summary directo,
       // como antes. Aplica cuando no hay tax_lines parseables.
       final double effectiveSubtotal = effectiveTotals.subtotal;
-      gen.textRow(subtotalLabel, _formatMoney(effectiveSubtotal));
+      amountRow(subtotalLabel, _formatMoney(effectiveSubtotal));
       if (taxBreakdown.isNotEmpty) {
         for (final entry in taxBreakdown) {
           if (entry.amount.abs() < 0.005) continue;
@@ -1488,7 +1610,7 @@ class PrintTicketService {
           if (isElectronicCf && label.toLowerCase().contains('itbis')) {
             label = 'Total ITBIS';
           }
-          gen.textRow('$label:', _formatMoney(entry.amount));
+          amountRow(label, _formatMoney(entry.amount));
         }
       } else {
         final effectiveTax = effectiveTotals.tax;
@@ -1498,57 +1620,69 @@ class PrintTicketService {
               ? ((effectiveServiceFee / effectiveSubtotal) * 100)
                     .toStringAsFixed(0)
               : '0';
-          gen.textRow(
-            'SERVICIO ($servicePct%):',
+          amountRow(
+            modern ? 'Servicio ($servicePct%)' : 'SERVICIO ($servicePct%)',
             _formatMoney(effectiveServiceFee),
           );
         }
         if (effectiveTax > 0.005) {
           if (isElectronicCf) {
-            gen.textRow('Total ITBIS:', _formatMoney(effectiveTax));
+            amountRow('Total ITBIS', _formatMoney(effectiveTax));
           } else {
             final taxPct = effectiveSubtotal > 0
                 ? ((effectiveTax / effectiveSubtotal) * 100).toStringAsFixed(0)
                 : '18';
-            gen.textRow(
-              'ITBIS ($taxPct%):',
-              _formatMoney(effectiveTax),
-            );
+            amountRow('ITBIS ($taxPct%)', _formatMoney(effectiveTax));
           }
         }
       }
       if (effectiveDiscounts > 0) {
-        gen.textRow(
-          'DESCUENTO:',
-          '-${_formatMoney(effectiveDiscounts)}',
-        );
+        amountRow(discountLabel, '-${_formatMoney(effectiveDiscounts)}');
       }
     }
 
     // Post-discount mode: el descuento se muestra como línea informativa
     // justo debajo de los impuestos (no sustractiva: el total ya lo incluye).
     if (canRecompute && isPostDiscountMode && effectiveDiscounts > 0) {
-      gen.textRow('Descuento :', _formatMoney(effectiveDiscounts));
+      amountRow(
+        modern ? 'Descuento' : 'Descuento ',
+        _formatMoney(effectiveDiscounts),
+      );
     }
 
     // Fee de delivery propio: cargo exento, parte del total.
     if (effectiveTotals.deliveryFee > 0) {
-      gen.textRow('DELIVERY:', _formatMoney(effectiveTotals.deliveryFee));
+      amountRow(
+        modern ? 'Delivery' : 'DELIVERY',
+        _formatMoney(effectiveTotals.deliveryFee),
+      );
     }
 
-    gap();
-    _thickSeparator(gen);
-    gap();
+    if (modern) {
+      ModernInvoiceLayout.amountRule(gen);
+      ModernInvoiceLayout.total(
+        gen,
+        'TOTAL',
+        _formatMoney(effectiveTotal),
+        narrow: narrow,
+      );
+    } else {
+      gap();
+      _thickSeparator(gen);
+      gap();
 
-    if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
-    gen.setBold(true);
-    // A 58mm el 2x deja 16 columnas y "TOTAL:" + el monto no caben juntos
-    // (se truncaba la etiqueta). Ancho simple + altura doble = 32 columnas.
-    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.textRow('TOTAL:', _formatMoney(effectiveTotal));
-    gen.setTextSize();
-    gen.setBold(false);
-    if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
+      if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
+      beginBigText();
+      gen.setBold(true);
+      // A 58mm el 2x deja 16 columnas y "TOTAL:" + el monto no caben juntos
+      // (se truncaba la etiqueta). Ancho simple + altura doble = 32 columnas.
+      gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+      gen.textRow('TOTAL:', _formatMoney(effectiveTotal));
+      gen.setTextSize();
+      gen.setBold(false);
+      endBigText();
+      if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
+    }
 
     // PRD 6: equivalente USD debajo del TOTAL si toggle está activo.
     // En la factura NO mostramos la tasa (showRate=false): el cliente
@@ -1556,21 +1690,37 @@ class PrintTicketService {
     // tasa sí sale en pre-cuenta para transparencia previa al pago.
     _renderUsdEquivalent(gen, effectiveTotal, usdSettings, showRate: false);
 
-    gap();
-    _thickSeparator(gen);
-    gap();
+    if (modern) {
+      gen.lineFeed();
+    } else {
+      gap();
+      _thickSeparator(gen);
+      gap();
+    }
 
     // Payments
     if (payments.isNotEmpty) {
-      gen.setBold(true);
-      gen.text('PAGOS REALIZADOS:');
-      gen.setBold(false);
+      if (!modern) {
+        gen.setBold(true);
+        gen.text('PAGOS REALIZADOS:');
+        gen.setBold(false);
+      }
 
       double totalChange = 0;
 
       for (final p in payments) {
         final method = _getPaymentMethodName(p);
-        gen.textRow(method, _formatMoney(p.amount));
+        if (modern) {
+          // Los pagos comparten el bloque derecho con los totales: el ojo
+          // sigue UNA columna de cifras de arriba a abajo del ticket.
+          ModernInvoiceLayout.amountRow(
+            gen,
+            _titleCase(method),
+            _formatMoney(p.amount),
+          );
+        } else {
+          gen.textRow(method, _formatMoney(p.amount));
+        }
         // Línea adicional cuando es transferencia y tenemos info del
         // banco destino — útil para que el cliente confirme y el
         // contador audite. Indentado 2 espacios para que se note como
@@ -1593,10 +1743,19 @@ class PrintTicketService {
       }
 
       if (totalChange > 0) {
-        gen.lineFeed();
-        gen.setBold(true);
-        gen.textRow('CAMBIO:', _formatMoney(totalChange));
-        gen.setBold(false);
+        if (modern) {
+          ModernInvoiceLayout.amountRow(
+            gen,
+            'Cambio',
+            _formatMoney(totalChange),
+            bold: true,
+          );
+        } else {
+          gen.lineFeed();
+          gen.setBold(true);
+          gen.textRow('CAMBIO:', _formatMoney(totalChange));
+          gen.setBold(false);
+        }
       }
     }
 
@@ -1650,13 +1809,30 @@ class PrintTicketService {
 
     // Footer: bloques en orden segun footerBlocks (o defaults canonicos
     // si null). El renderer skipea bloques sin contenido.
-    gen.lineFeed(compact ? 1 : 2);
+    gen.lineFeed(compact || modern ? 1 : 2);
     _renderFooterBlocks(
       gen,
       blocks: footerBlocks ?? TicketBlocks.defaultFooter,
       footerMessage: footerMessage,
+      // Sin gritar: el resto del ticket moderno tampoco está en mayúsculas.
+      thankYouText: modern
+          ? 'Gracias por su preferencia'
+          : 'GRACIAS POR SU PREFERENCIA',
     );
-    gen.lineFeed(compact ? 2 : 4);
+    if (modern) {
+      // Devolver la métrica de fábrica ANTES del avance final: con el
+      // interlineado apretado las líneas de avance miden menos y la cuchilla
+      // llegaría a morder el pie del ticket.
+      ModernInvoiceLayout.end(gen);
+      gen.lineFeed(EscPosGenerator.safeCutFeedLines);
+    } else {
+      // Mismo motivo en el compacto: se restaura ANTES de avanzar, así los
+      // renglones de avance vuelven a medir lo de fábrica y el margen de
+      // corte no se encoge por haber apretado el cuerpo. Se conserva el
+      // número de líneas de cada modelo para no cambiarles el consumo.
+      if (compact) gen.resetLineSpacing();
+      gen.lineFeed(compact ? 2 : 4);
+    }
     gen.cut();
     // Drawer kick va DESPUÉS del corte para que el cajero saque el
     // recibo y la gaveta se abra simultáneamente. Si la impresora no
@@ -1670,6 +1846,100 @@ class PrintTicketService {
       escPosCommands: gen.getCommands(),
       rawText: gen.getPlainText(),
     );
+  }
+
+  /// `EFECTIVO` → `Efectivo`. Los nombres de método de pago llegan en
+  /// mayúsculas desde `_getPaymentMethodName` (formato del ticket clásico);
+  /// el modelo moderno no grita.
+  static String _titleCase(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return trimmed;
+    return trimmed
+        .split(' ')
+        .map(
+          (w) => w.isEmpty
+              ? w
+              : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}',
+        )
+        .join(' ');
+  }
+
+  /// Encabezado de documento del modelo moderno: qué comprobante es, su
+  /// número, y los metadatos de la orden agrupados en pocas líneas.
+  ///
+  /// Frente al modelo clásico cambia la PRESENTACIÓN, no el contenido: se
+  /// imprimen exactamente los mismos campos fiscales (tipo de comprobante,
+  /// NCF/e-NCF, cliente, razón social, RNC/cédula, dirección de entrega),
+  /// solo que sin la columna de etiquetas en mayúsculas que a 64 columnas
+  /// deja tres cuartos del renglón vacío.
+  static void _renderModernDocumentBlock(
+    EscPosGenerator gen, {
+    required Order order,
+    required String displayTitle,
+    required String? fiscalNcf,
+    required String? fiscalType,
+    required bool isElectronicCf,
+    required String? customerName,
+    required String? customerLegalName,
+    required String? customerTaxId,
+    required String? deliveryAddress,
+    required String tableName,
+    required String? waiterName,
+    required String dateStr,
+    required String timeStr,
+  }) {
+    gen.lineFeed();
+    ModernInvoiceLayout.rule(gen);
+
+    final hasNcf = fiscalNcf != null && fiscalNcf.isNotEmpty;
+
+    // El nombre del comprobante ES el título del documento fiscal (DGII
+    // Norma General 01-2020). Solo cuando no hay comprobante cae al título
+    // genérico que pasó el caller ("FACTURA").
+    if (fiscalType != null) {
+      ModernInvoiceLayout.emphasisCentered(gen, _getNcfTypeName(fiscalType));
+    } else if (displayTitle.isNotEmpty) {
+      ModernInvoiceLayout.emphasisCentered(gen, displayTitle);
+    }
+    if (hasNcf) {
+      ModernInvoiceLayout.centered(
+        gen,
+        '${isElectronicCf ? 'e-NCF' : 'NCF'} $fiscalNcf',
+      );
+    }
+    // "REIMPRESIÓN" / "COPIA" no puede perderse detrás del nombre del
+    // comprobante: es lo que distingue el original de un duplicado.
+    final isPlainInvoiceTitle =
+        displayTitle.isEmpty || displayTitle.toUpperCase() == 'FACTURA';
+    if (fiscalType != null && !isPlainInvoiceTitle) {
+      ModernInvoiceLayout.emphasisCentered(gen, displayTitle);
+    }
+
+    gen.lineFeed();
+
+    ModernInvoiceLayout.metaLine(gen, [
+      'Orden ${order.id.substring(0, 8).toUpperCase()}',
+      if (tableName.isNotEmpty) 'Mesa $tableName',
+      if (waiterName != null && waiterName.trim().isNotEmpty) waiterName.trim(),
+    ]);
+    ModernInvoiceLayout.metaLine(gen, ['$dateStr $timeStr']);
+
+    if (customerName != null && customerName != 'Cliente') {
+      ModernInvoiceLayout.field(gen, 'Cliente', customerName);
+    }
+    if (customerLegalName != null &&
+        customerLegalName.isNotEmpty &&
+        customerLegalName != customerName) {
+      ModernInvoiceLayout.field(gen, 'Razón social', customerLegalName);
+    }
+    if (customerTaxId != null && customerTaxId.isNotEmpty) {
+      ModernInvoiceLayout.field(gen, 'RNC/Cédula', customerTaxId);
+    }
+    if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
+      ModernInvoiceLayout.field(gen, 'Dirección', deliveryAddress);
+    }
+
+    ModernInvoiceLayout.rule(gen);
   }
 
   static List<OrderItem> _buildPrintableItems(
@@ -1860,6 +2130,7 @@ class PrintTicketService {
     List<({String label, double amount})> taxBreakdown = const [],
     bool preferStoredOrderTotals = false,
     bool preferStoredItemTotals = false,
+
     /// Ancho del papel de la impresora destino (58 u 80). Viene de
     /// `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
@@ -1962,18 +2233,12 @@ class PrintTicketService {
         final taxPct = displaySubtotal > 0
             ? ((effectiveTotals.tax / displaySubtotal) * 100).toStringAsFixed(0)
             : '18';
-        gen.textRow(
-          'ITBIS ($taxPct%):',
-          _formatMoney(effectiveTotals.tax),
-        );
+        gen.textRow('ITBIS ($taxPct%):', _formatMoney(effectiveTotals.tax));
       }
     }
 
     if (effectiveTotals.discounts > 0) {
-      gen.textRow(
-        'Descuentos:',
-        '-${_formatMoney(effectiveTotals.discounts)}',
-      );
+      gen.textRow('Descuentos:', '-${_formatMoney(effectiveTotals.discounts)}');
     }
 
     // Fee de delivery propio: cargo exento, parte del total.
@@ -2049,10 +2314,7 @@ class PrintTicketService {
     gen.setBold(false);
     gen.lineFeed();
 
-    gen.textRow(
-      'Monto inicial:',
-      _formatMoney(summary['start_amount']!),
-    );
+    gen.textRow('Monto inicial:', _formatMoney(summary['start_amount']!));
     gen.textRow('Ventas:', _formatMoney(summary['sales']!));
     gen.textRow('Depósitos:', _formatMoney(summary['deposits']!));
     gen.textRow('Gastos:', '-${_formatMoney(summary['expenses']!)}');
@@ -2148,8 +2410,10 @@ class PrintTicketService {
     String? approvedByName,
     String? sessionId,
     DateTime? when,
+
     /// Moneda base del negocio. Default DOP preserva el formato `RD$` legacy.
     BusinessCurrency? currency,
+
     /// Ancho del papel de la impresora destino (58 u 80). Viene de
     /// `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
@@ -2171,10 +2435,10 @@ class PrintTicketService {
     gen.doubleSeparator();
 
     final (title, prefix) = switch (movementType) {
-      'deposit'    => ('INGRESO A CAJA', '+ '),
+      'deposit' => ('INGRESO A CAJA', '+ '),
       'withdrawal' => ('RETIRO DE CAJA', '- '),
-      'expense'    => ('GASTO DE CAJA',  '- '),
-      _            => ('MOVIMIENTO',      ''),
+      'expense' => ('GASTO DE CAJA', '- '),
+      _ => ('MOVIMIENTO', ''),
     };
 
     gen.setTextSize(width: narrow ? 1 : 2, height: 2);
@@ -2266,9 +2530,7 @@ class PrintTicketService {
   /// Regex compartido para extraer el porcentaje de una label tipo
   /// "ITBIS (18%)" / "Propina Ley (10%)" / "ITBIS (16.5%)". Si la label
   /// no encaja, el caller cae al path heurístico legacy.
-  static final RegExp _invoiceRateRegex = RegExp(
-    r'\((\d+(?:[.,]\d+)?)\s*%\)',
-  );
+  static final RegExp _invoiceRateRegex = RegExp(r'\((\d+(?:[.,]\d+)?)\s*%\)');
 
   static double? _parseInvoiceRatePercent(String label) {
     final match = _invoiceRateRegex.firstMatch(label);
@@ -2370,12 +2632,24 @@ class PrintTicketService {
     String? phone,
     String? email,
     String? rnc,
+
     /// Envuelve por palabras las líneas que exceden el ancho de papel en vez
     /// de dejar que el firmware las corte a la mitad. Se activa en 58mm,
     /// donde nombre/dirección casi siempre pasan de 32 chars. En 80mm queda
     /// en false para no alterar tickets que hoy salen bien.
     bool wrapLongLines = false,
+
+    /// Modelo `modern`: el nombre del negocio sale en doble tamaño con doble
+    /// golpe (única línea grande del encabezado) y SIN pasarlo a mayúsculas
+    /// — se imprime tal como el dueño lo escribió. El resto de los bloques
+    /// van igual que siempre. La lista de bloques y su orden se respetan sin
+    /// cambios, así que la configuración del negocio sigue mandando.
+    bool modern = false,
   }) {
+    // A doble ancho el papel da la mitad de columnas, así que a 58mm el
+    // nombre del negocio se queda en ancho simple (igual que el TOTAL).
+    final narrow = gen.paperWidth <= 58;
+
     void centered(String value) {
       if (wrapLongLines) {
         gen.textCenteredWrapped(value);
@@ -2395,9 +2669,17 @@ class PrintTicketService {
           break;
         case 'business_name':
           if (businessName != null && businessName.isNotEmpty) {
-            gen.setBold(true);
-            centered(businessName.toUpperCase());
-            gen.setBold(false);
+            if (modern) {
+              ModernInvoiceLayout.businessName(
+                gen,
+                businessName,
+                narrow: narrow,
+              );
+            } else {
+              gen.setBold(true);
+              centered(businessName.toUpperCase());
+              gen.setBold(false);
+            }
           }
           break;
         case 'slogan':

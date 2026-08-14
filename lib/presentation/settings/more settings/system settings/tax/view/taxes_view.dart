@@ -4,6 +4,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/tax.dart';
 import '../viewmodel/taxes_viewmodel.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class TaxesView extends ConsumerStatefulWidget {
   final String businessId; // puede ser 'auto'
@@ -30,7 +31,7 @@ class _TaxesViewState extends ConsumerState<TaxesView> {
     final text = Theme.of(context).textTheme;
 
     return Scaffold(
-      backgroundColor: MangoColors.sidebarBg,
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Impuestos'),
         backgroundColor: MangoColors.white,

@@ -11,6 +11,7 @@ import 'package:mangopos/presentation/settings/more%20settings/printing/printers
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printer_configuration_dialog.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/widgets/printing_ui.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingReceiptsView extends ConsumerStatefulWidget {
   const PrintingReceiptsView({super.key, this.businessId = 'auto'});
@@ -378,7 +379,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final closurePrinters = resolve(_closurePrinterIds);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
@@ -689,6 +690,7 @@ class _InvoiceTemplateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isCompact = value == PosSettingsRepository.invoiceTemplateCompact;
     final isSimple = value == PosSettingsRepository.invoiceTemplateSimple;
+    final isModern = value == PosSettingsRepository.invoiceTemplateModern;
     return PrintingCardFrame(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -725,6 +727,11 @@ class _InvoiceTemplateCard extends StatelessWidget {
                 label: Text('Simple'),
                 icon: Icon(Icons.notes_outlined),
               ),
+              ButtonSegment<String>(
+                value: PosSettingsRepository.invoiceTemplateModern,
+                label: Text('Moderna'),
+                icon: Icon(Icons.auto_awesome_outlined),
+              ),
             ],
             selected: {value},
             onSelectionChanged: busy
@@ -737,11 +744,16 @@ class _InvoiceTemplateCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            isSimple
+            isModern
+                ? 'Usa la fuente pequeña de la impresora (64 columnas en vez '
+                      'de 48) e interlineado apretado: letra más fina, nombres '
+                      'de producto completos y ~35% menos papel. Sin líneas '
+                      'de "=====" ni etiquetas en mayúsculas.'
+                : isSimple
                 ? 'Líneas seguidas, sin encabezado de columnas: "# 1: Producto '
                       '2 X 100 ... 200". La más corta posible en papel.'
                 : isCompact
-                ? 'Ítems en una sola línea, fuente y espaciado mínimos, total '
+                ? 'Ítems en una sola línea, espaciado mínimo, total '
                       'condensado. Mucho más corta en papel.'
                 : 'Layout detallado: nombre y precio por ítem, TOTAL grande.',
             style: const TextStyle(fontSize: 13, color: MangoColors.muted),

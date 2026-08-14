@@ -1,0 +1,35 @@
+-- =============================================================================
+-- ROLLBACK de 20260813_0005
+-- =============================================================================
+--
+-- NO HAY ROLLBACK AUTOMÁTICO, y no debería hacer falta.
+--
+-- El barrido solo cambió alias de columna en los access checks. Revertirlo
+-- significa devolver el `42703 column c.<x> does not exist` a cada función
+-- tocada — es decir, volver a romper reportes, cierre de caja y división de
+-- cuentas para todo usuario que no sea service_role. El estado "anterior" era
+-- el estado roto.
+--
+-- Si aun así hay que revertir UNA función concreta (porque el barrido tocó
+-- algo que no debía), el camino es:
+--
+--   1. Recuperar su definición previa. Si el barrido ya corrió, el cuerpo
+--      anterior no queda guardado en ningún lado, así que hay que sacarlo de
+--      la migración del repo que la creó:
+--
+--        grep -rln "nombre_de_la_funcion" supabase/migrations/
+--
+--   2. Re-aplicar ESA migración tal cual, sin el alias de columna.
+--
+-- Antes de nada, comprobar qué cambió realmente:
+--
+--   SELECT p.proname, pg_get_functiondef(p.oid)
+--     FROM pg_proc p
+--     JOIN pg_namespace n ON n.oid = p.pronamespace
+--    WHERE n.nspname = 'public'
+--      AND pg_get_functiondef(p.oid) LIKE '%AS %(business_id)%'
+--    ORDER BY p.proname;
+--
+-- RECOMENDACIÓN: en vez de revertir el barrido entero, corregir a mano la
+-- función puntual que haya quedado mal. El resto de los arreglos son buenos.
+-- =============================================================================

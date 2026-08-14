@@ -9,6 +9,7 @@ import 'package:mangopos/data/models/dining_table.dart';
 import 'package:mangopos/presentation/sales/widgets/floor_map_geometry.dart';
 import 'package:mangopos/presentation/sales/widgets/floor_seats.dart';
 import '../viewmodel/zones_tables_viewmodel.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 /// Editor visual del plano (floor map) de una zona. Vive en Ajustes →
 /// Zonas y mesas y permite arrastrar las mesas a su posición física y
@@ -127,7 +128,7 @@ class _ZoneFloorEditorViewState extends ConsumerState<ZoneFloorEditorView> {
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F7FA),
+        backgroundColor: AppColors.background,
         appBar: AppBar(
           backgroundColor: Colors.white,
           elevation: 0,

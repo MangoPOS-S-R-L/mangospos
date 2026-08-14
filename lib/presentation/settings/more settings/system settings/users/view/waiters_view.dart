@@ -10,6 +10,7 @@ import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class SettingsWaitersView extends StatefulWidget {
   final String businessId;
@@ -285,7 +286,7 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
     final topWaiter = filtered.isEmpty ? (_waiters.isEmpty ? null : _waiters.first) : filtered.first;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFAF8F6),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,

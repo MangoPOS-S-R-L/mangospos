@@ -1,5 +1,5 @@
 /// Estados posibles de una mesa
-enum TableStatus { disponible, ocupado, pagando }
+enum TableStatus { disponible, ocupado, pagando, reservado }
 
 /// Extensión para conversiones de TableStatus
 extension TableStatusX on TableStatus {
@@ -12,6 +12,8 @@ extension TableStatusX on TableStatus {
         return 'occupied';
       case TableStatus.pagando:
         return 'paying';
+      case TableStatus.reservado:
+        return 'reserved';
     }
   }
 
@@ -23,7 +25,9 @@ extension TableStatusX on TableStatus {
       case TableStatus.ocupado:
         return 'Ocupado';
       case TableStatus.pagando:
-        return 'En Pre-Cuenta';
+        return 'Por Cobrar';
+      case TableStatus.reservado:
+        return 'Reservado';
     }
   }
 
@@ -36,6 +40,10 @@ extension TableStatusX on TableStatus {
       case 'checkout':
       case 'payment':
         return TableStatus.pagando;
+      case 'reserved':
+      case 'reservada':
+      case 'reservado':
+        return TableStatus.reservado;
       case 'available':
       default:
         return TableStatus.disponible;
@@ -84,6 +92,11 @@ class VentasTable {
 
   /// Verifica si la mesa está en proceso de pago
   bool get isPaying => status == TableStatus.pagando;
+
+  /// Verifica si la mesa está reservada. Es una mesa SIN sesión abierta:
+  /// no tiene consumo, solo está apartada — por eso no cuenta como
+  /// [hasActiveSession] y el card la deja tocable para abrirla.
+  bool get isReserved => status == TableStatus.reservado;
 
   /// True si la mesa tiene una sesión abierta (ocupada o pagando). El
   /// estado "pagando" sigue siendo una sesión activa — el cliente puede

@@ -23,6 +23,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/printing_health_state.dart';
 import '../viewmodel/printing_health_viewmodel.dart';
+import '../../../../../../core/theme/app_colors.dart';
 
 class PrintingHealthView extends ConsumerStatefulWidget {
   const PrintingHealthView({super.key, this.businessId = 'auto'});
@@ -193,7 +194,7 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
     );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F7),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: MangoColors.white,
         foregroundColor: MangoColors.darkGray,
