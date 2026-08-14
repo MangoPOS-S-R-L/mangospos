@@ -5,11 +5,38 @@ import '../../presentation/settings/more settings/menus/recipes/state/recipes_st
 class RecipesRepository {
   final SupabaseClient _client;
 
+  // PostgREST manda el `in.(...)` en la query string: con muchas recetas la URL
+  // pasa del limite del proxy y devuelve 414 (URI Too Long).
+  static const int _inFilterBatchSize = 150;
+
   RecipesRepository(this._client);
 
   double _toDouble(dynamic value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> _selectInBatches({
+    required String table,
+    required String select,
+    required String column,
+    required List<String> values,
+  }) async {
+    if (values.isEmpty) return <Map<String, dynamic>>[];
+
+    final rows = <Map<String, dynamic>>[];
+    for (var start = 0; start < values.length; start += _inFilterBatchSize) {
+      final end = (start + _inFilterBatchSize > values.length)
+          ? values.length
+          : start + _inFilterBatchSize;
+      final chunk = values.sublist(start, end);
+      final chunkRows = await _client
+          .from(table)
+          .select(select)
+          .inFilter(column, chunk);
+      rows.addAll(List<Map<String, dynamic>>.from(chunkRows));
+    }
+    return rows;
   }
 
   Future<List<RecipeMenuProduct>> getMenuProducts(String businessId) async {
@@ -54,12 +81,13 @@ class RecipesRepository {
         .whereType<String>()
         .toList(growable: false);
 
-    final ingredientsResponse = await _client
-        .from('recipe_ingredients')
-        .select('id, recipe_id, inventory_item_id, quantity, unit')
-        .inFilter('recipe_id', recipeIds);
+    final ingredientsRaw = await _selectInBatches(
+      table: 'recipe_ingredients',
+      select: 'id, recipe_id, inventory_item_id, quantity, unit',
+      column: 'recipe_id',
+      values: recipeIds,
+    );
 
-    final ingredientsRaw = List<Map<String, dynamic>>.from(ingredientsResponse);
     final inventoryIds = ingredientsRaw
         .map((row) => row['inventory_item_id']?.toString())
         .whereType<String>()
@@ -68,14 +96,14 @@ class RecipesRepository {
 
     final inventoryById = <String, RecipeInventoryItem>{};
     if (inventoryIds.isNotEmpty) {
-      final inventoryResponse = await _client
-          .from('inventory_items')
-          .select(
-            'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
-          )
-          .inFilter('id', inventoryIds);
+      final inventoryRows = await _selectInBatches(
+        table: 'inventory_items',
+        select: 'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
+        column: 'id',
+        values: inventoryIds,
+      );
 
-      for (final row in List<Map<String, dynamic>>.from(inventoryResponse)) {
+      for (final row in inventoryRows) {
         final item = RecipeInventoryItem.fromMap(row);
         inventoryById[item.id] = item;
       }

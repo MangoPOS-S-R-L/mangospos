@@ -721,13 +721,17 @@ class ReportsRepository {
     final cancelledOrderIds = <String>{};
     if (saleOrderIds.isNotEmpty) {
       try {
-        final cancelledRows = await _client
-            .from('payments')
-            .select('order_id')
-            .inFilter('order_id', saleOrderIds)
-            .inFilter('status', ['cancelled', 'void']);
-        for (final row in cancelledRows as List) {
-          final id = (row as Map)['order_id']?.toString();
+        // En lotes: `in.(...)` viaja en la query string y con un rango
+        // largo saleOrderIds llega a miles de UUIDs → 414 URI Too Long.
+        final cancelledRows = await _selectInBatches(
+          table: 'payments',
+          select: 'order_id',
+          column: 'order_id',
+          values: saleOrderIds,
+          transform: (query) => query.inFilter('status', ['cancelled', 'void']),
+        );
+        for (final row in cancelledRows) {
+          final id = row['order_id']?.toString();
           if (id != null && id.isNotEmpty) cancelledOrderIds.add(id);
         }
       } catch (_) {

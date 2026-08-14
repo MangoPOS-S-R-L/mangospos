@@ -22,6 +22,33 @@ class CashierRepository {
   final SupabaseClient _client;
   CashierRepository(this._client);
 
+  // PostgREST manda el `in.(...)` en la query string: un turno con muchos
+  // pagos arma una URL de varios KB y el proxy responde 414 (URI Too Long).
+  static const int _inFilterBatchSize = 150;
+
+  Future<List<Map<String, dynamic>>> _selectInBatches({
+    required String table,
+    required String select,
+    required String column,
+    required List<String> values,
+  }) async {
+    if (values.isEmpty) return <Map<String, dynamic>>[];
+
+    final rows = <Map<String, dynamic>>[];
+    for (var start = 0; start < values.length; start += _inFilterBatchSize) {
+      final end = (start + _inFilterBatchSize > values.length)
+          ? values.length
+          : start + _inFilterBatchSize;
+      final chunk = values.sublist(start, end);
+      final chunkRows = await _client
+          .from(table)
+          .select(select)
+          .inFilter(column, chunk);
+      rows.addAll(List<Map<String, dynamic>>.from(chunkRows));
+    }
+    return rows;
+  }
+
   Future<List<PaymentMethod>> getPaymentMethods(String businessId) async {
     final data = await _client
         .from('payment_methods')
@@ -466,24 +493,20 @@ class CashierRepository {
           );
     final methodsById = {for (final m in methods) m['id']?.toString() ?? '': m};
 
-    final orders = orderIds.isEmpty
-        ? const <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from('orders')
-                .select('id, session_id')
-                .inFilter('id', orderIds),
-          );
+    final orders = await _selectInBatches(
+      table: 'orders',
+      select: 'id, session_id',
+      column: 'id',
+      values: orderIds,
+    );
     final ordersById = {for (final o in orders) o['id']?.toString() ?? '': o};
 
-    final checks = checkIds.isEmpty
-        ? const <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from('order_checks')
-                .select('id, label, position')
-                .inFilter('id', checkIds),
-          );
+    final checks = await _selectInBatches(
+      table: 'order_checks',
+      select: 'id, label, position',
+      column: 'id',
+      values: checkIds,
+    );
     final checksById = {for (final c in checks) c['id']?.toString() ?? '': c};
 
     final tableSessionIds = orders
@@ -492,16 +515,13 @@ class CashierRepository {
         .toSet()
         .toList(growable: false);
 
-    final tableSessions = tableSessionIds.isEmpty
-        ? const <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from('table_sessions')
-                .select(
-                  'id, customer_name, table_id, business_id, opened_by, waiter:profiles!opened_by(full_name)',
-                )
-                .inFilter('id', tableSessionIds),
-          );
+    final tableSessions = await _selectInBatches(
+      table: 'table_sessions',
+      select:
+          'id, customer_name, table_id, business_id, opened_by, waiter:profiles!opened_by(full_name)',
+      column: 'id',
+      values: tableSessionIds,
+    );
     final tableSessionsById = {
       for (final s in tableSessions) s['id']?.toString() ?? '': s,
     };
@@ -538,14 +558,12 @@ class CashierRepository {
             preferredDisplayName(firstName: employee['first_name']?.toString()),
     };
 
-    final tables = tableIds.isEmpty
-        ? const <Map<String, dynamic>>[]
-        : List<Map<String, dynamic>>.from(
-            await _client
-                .from('dining_tables')
-                .select('id, code')
-                .inFilter('id', tableIds),
-          );
+    final tables = await _selectInBatches(
+      table: 'dining_tables',
+      select: 'id, code',
+      column: 'id',
+      values: tableIds,
+    );
     final tablesById = {for (final t in tables) t['id']?.toString() ?? '': t};
 
     return payments
