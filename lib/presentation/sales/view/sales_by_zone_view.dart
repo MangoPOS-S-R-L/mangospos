@@ -10,8 +10,11 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/cashier/widgets/open_cash_dialog.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
+import 'package:mangopos/presentation/sales/state/sales_table_columns_provider.dart';
 import 'package:mangopos/presentation/sales/state/sales_view_mode_provider.dart';
+import 'package:mangopos/presentation/sales/state/sales_zone_selector_provider.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
+import 'package:mangopos/presentation/sales/widgets/sales_columns_control.dart';
 import 'package:mangopos/presentation/sales/widgets/sales_zoom_control.dart';
 import 'package:mangopos/presentation/sales/widgets/zone_floor_map.dart';
 import 'package:mangopos/presentation/sales/view/theme/table_status_style.dart';
@@ -53,6 +56,29 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   TabController? _tabController;
   int _previousZoneCount = 0;
   Timer? _autoRefreshTimer;
+
+  /// Una key por zona para poder desplazar la fila de pestañas hasta la
+  /// activa. Sin esto, al volver desde una mesa de la zona 7 de 9 la
+  /// pestaña marcada quedaba fuera de vista y parecía que no había
+  /// selección.
+  final Map<String, GlobalKey> _zoneTabKeys = {};
+  String? _lastScrolledZoneId;
+
+  void _ensureActiveZoneTabVisible(String zoneId) {
+    if (_lastScrolledZoneId == zoneId) return;
+    _lastScrolledZoneId = zoneId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _zoneTabKeys[zoneId]?.currentContext;
+      if (ctx == null) return;
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
 
   // Configuración de actualización automática
   static const Duration _refreshInterval = Duration(seconds: 30);
@@ -236,17 +262,55 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
     final isCompact = ResponsiveHelper.isMobile(context);
 
-    // Selector de zona como BOTÓN DESPLEGABLE.
+    // Presentación del selector de zona. La elige el usuario desde el botón
+    // de la barra (persistida por dispositivo en `salesZoneSelectorProvider`):
     //
-    // Antes era una fila de pestañas dentro de un `Expanded`. En la tablet de
-    // 600 dp los indicadores + zoom + mapa ocupan ~490 dp, así que al Expanded
-    // no le quedaban ni 100: las zonas se dibujaban como una franja vertical
-    // ilegible. Un desplegable ocupa lo que mide su etiqueta y NO se puede
-    // aplastar, así que el mismo widget sirve de 480 a 1366 dp sin ramas.
+    // - CARRUSEL: switch segmentado con las zonas una al lado de la otra,
+    //   dentro de un scroll horizontal — muchas zonas se deslizan en vez de
+    //   aplastarse o desbordar.
+    // - DESPLEGABLE: botón con la zona activa; ocupa lo que mide su etiqueta,
+    //   útil cuando el ancho aprieta o hay muchísimas zonas.
     //
-    // El `TabController` sigue siendo la fuente de verdad de la zona activa:
-    // el menú solo llama a `animateTo`, y el resto de la vista no se entera
-    // del cambio de presentación.
+    // En ambos casos el `TabController` sigue siendo la fuente de verdad de
+    // la zona activa: carrusel y menú solo llaman a `animateTo`.
+    final zoneSelectorStyle = ref.watch(salesZoneSelectorProvider);
+    final useZoneTabs =
+        zoneSelectorStyle == SalesZoneSelectorStyle.carousel;
+
+    Widget buildZoneTabs() {
+      final activeIndex =
+          (_tabController?.index ?? 0).clamp(0, zones.length - 1);
+      _ensureActiveZoneTabVisible(zones[activeIndex].id);
+      // Carcasa del switch: un solo contenedor con fondo suave y los
+      // segmentos dentro. El segmento activo es el que se pinta lleno, como
+      // el pulgar de un switch.
+      return Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: SalesTheme.secondary,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: SalesTheme.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < zones.length; i++) ...[
+              if (i > 0) const SizedBox(width: 2),
+              _ZoneTab(
+                key: _zoneTabKeys.putIfAbsent(
+                  zones[i].id,
+                  () => GlobalKey(debugLabel: 'zoneTab-${zones[i].id}'),
+                ),
+                label: zones[i].name,
+                selected: i == activeIndex,
+                onTap: () => _tabController?.animateTo(i),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
     Widget buildZoneSelector() {
       final activeIndex =
           (_tabController?.index ?? 0).clamp(0, zones.length - 1);
@@ -379,12 +443,40 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
             label: isCompact ? '' : 'ocupada',
             color: SalesTheme.warning,
           ),
+          // Mesas por fila. Solo tiene sentido sobre la cuadrícula: el plano
+          // del salón dibuja las mesas en su posición física.
+          if (viewMode == SalesZoneViewMode.grid) ...[
+            SizedBox(width: isCompact ? 8 : 16),
+            SalesColumnsControl(compact: isCompact),
+          ],
           if (!isCompact) ...[
-            const SizedBox(width: 16),
+            const SizedBox(width: 12),
             const SalesZoomControl(),
             const SizedBox(width: 12),
           ] else
             const SizedBox(width: 8),
+          // Toggle carrusel ↔ desplegable para el selector de zonas.
+          // Solo tiene sentido con más de una zona.
+          if (zones.length > 1)
+            IconButton(
+              onPressed: () =>
+                  ref.read(salesZoneSelectorProvider.notifier).toggle(),
+              icon: Icon(
+                useZoneTabs
+                    ? Icons.arrow_drop_down_circle_outlined
+                    : Icons.view_carousel_outlined,
+                size: 20,
+                color: SalesTheme.mutedForeground,
+              ),
+              tooltip: useZoneTabs
+                  ? 'Zonas en desplegable'
+                  : 'Zonas en carrusel',
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 36,
+              ),
+            ),
           // Toggle cuadrícula ↔ floor map. Mantiene el grid histórico y
           // permite ver las mesas en su posición física del salón.
           IconButton(
@@ -456,7 +548,13 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  buildZoneSelector(),
+                  if (useZoneTabs)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: buildZoneTabs(),
+                    )
+                  else
+                    buildZoneSelector(),
                   const SizedBox(height: 8),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
@@ -490,24 +588,39 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Sin `Expanded`: el desplegable pide solo lo que mide su
-                // etiqueta. Es lo que evita que los indicadores lo aplasten
-                // cuando el ancho aprieta.
-                buildZoneSelector(),
-                const SizedBox(width: 12),
-                // Los indicadores se quedan a la derecha, pero pueden hacer
-                // scroll si un nombre de zona largo les come el sitio: antes
-                // que recortar texto o reventar, se deslizan.
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerRight,
+                // El carrusel toma el espacio que sobre y hace scroll
+                // horizontal cuando hay muchas zonas: nunca empuja a los
+                // indicadores ni desborda. El desplegable, en cambio, pide
+                // solo lo que mide su etiqueta.
+                if (useZoneTabs) ...[
+                  Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
-                      reverse: true,
-                      child: buildIndicators(),
+                      child: buildZoneTabs(),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  // Los indicadores se quedan fijos a la derecha con su ancho
+                  // natural — son el bloque que no se puede aplastar.
+                  buildIndicators(),
+                ] else ...[
+                  buildZoneSelector(),
+                  const SizedBox(width: 12),
+                  // Con desplegable el selector es ancho fijo (hasta 260 dp),
+                  // así que los indicadores necesitan poder deslizarse: en
+                  // 900 dp justos la suma de ambos no entra y sin el scroll
+                  // reventaba con RenderFlex overflow.
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        reverse: true,
+                        child: buildIndicators(),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -618,6 +731,68 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Segmento del switch de zonas. 32 dp de alto; el activo se pinta lleno
+/// (como el pulgar de un switch) y los demás quedan transparentes sobre la
+/// carcasa. Vive fuera del `TabBar` de Material a propósito: necesitamos que
+/// la fila sea desplazable y que cada etiqueta pida su ancho natural sin
+/// repartirse el espacio en partes iguales.
+class _ZoneTab extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ZoneTab({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          constraints: const BoxConstraints(minHeight: 32, maxWidth: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? SalesTheme.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: SalesTheme.primary.withValues(alpha: 0.28),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Text(
+            label,
+            maxLines: 1,
+            // §3 del PRD: ninguna etiqueta se parte a mitad de palabra.
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+              letterSpacing: -0.1,
+              color: selected ? Colors.white : SalesTheme.mutedForeground,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -818,31 +993,53 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
               final baseCardWidth = isCompactDesk ? 180.0 : 220.0;
               final availableWidth = constraints.maxWidth - horizontalPad;
 
-              int columns;
-              if (isCompact) {
-                columns = 2;
-              } else {
-                columns =
-                    ((availableWidth + gap) /
-                            ((baseCardWidth * zoom) + gap))
-                        .floor()
-                        .clamp(1, 10);
-              }
+              // Preferencia explícita de "mesas por fila" (persistida por
+              // dispositivo). En automático se mantiene el cálculo histórico.
+              final fixedColumns = ref.watch(salesTableColumnsProvider);
 
-              // Ningún mosaico por debajo del mínimo que el propio card
-              // declara (PRD responsive, criterio §11.2). El cálculo de
-              // arriba parte de un ancho OBJETIVO (220, o 180 en compactDesk)
-              // y rendía celdas de 227 dp en horizontal y 234 en vertical:
-              // como TableCard tiene BoxConstraints(minWidth: 240) no puede
-              // encogerse, y lo que se recortaba era el texto. Bajamos
-              // columnas hasta que la celda respete el mínimo.
-              //
-              // El zoom del cajero puede AGRANDAR la celda, no encogerla por
-              // debajo de este piso: ahí el card se rompe, no se adapta.
-              while (columns > 1 &&
-                  (availableWidth - ((columns - 1) * gap)) / columns <
-                      kTableCardMinWidth) {
-                columns--;
+              int columns;
+              if (fixedColumns != salesTableColumnsAuto) {
+                columns = fixedColumns.clamp(
+                  salesTableColumnsMin,
+                  salesTableColumnsMax,
+                );
+                // Piso de seguridad: por debajo de ~110 dp por celda el card
+                // deja de ser legible incluso truncando. Solo se activa en
+                // pantallas muy angostas con un valor alto guardado desde
+                // otro equipo.
+                while (columns > 1 &&
+                    (availableWidth - ((columns - 1) * gap)) / columns < 110) {
+                  columns--;
+                }
+              } else {
+                if (isCompact) {
+                  columns = 2;
+                } else {
+                  columns =
+                      ((availableWidth + gap) /
+                              ((baseCardWidth * zoom) + gap))
+                          .floor()
+                          .clamp(1, 10);
+                }
+
+                // Ningún mosaico por debajo del mínimo que el propio card
+                // declara (PRD responsive, criterio §11.2). El cálculo de
+                // arriba parte de un ancho OBJETIVO (220, o 180 en
+                // compactDesk) y rendía celdas de 227 dp en horizontal y 234
+                // en vertical: como TableCard tiene BoxConstraints(minWidth:
+                // 240) no puede encogerse, y lo que se recortaba era el
+                // texto. Bajamos columnas hasta que la celda respete el
+                // mínimo.
+                //
+                // El zoom del cajero puede AGRANDAR la celda, no encogerla
+                // por debajo de este piso: ahí el card se rompe, no se
+                // adapta. Con columnas FIJAS el usuario pidió lo contrario
+                // explícitamente, por eso ese caso no pasa por aquí.
+                while (columns > 1 &&
+                    (availableWidth - ((columns - 1) * gap)) / columns <
+                        kTableCardMinWidth) {
+                  columns--;
+                }
               }
 
               // Calcular el ancho REAL de cada card
