@@ -17,6 +17,7 @@ class MallSalesExportConfig {
     this.clientCode = '',
     this.filePrefix = 'Ventas',
     this.exchangeRate = 1.0,
+    this.sendHourLocal = 1,
     this.lastSentAt,
     this.lastError,
   });
@@ -40,6 +41,12 @@ class MallSalesExportConfig {
 
   /// Campo TASA del archivo (tasa cambiaria), manual.
   final double exchangeRate;
+
+  /// Hora LOCAL del negocio (0-23) a la que el cron del servidor sube el
+  /// archivo del DÍA ANTERIOR. No la usa la app: la lee la Edge Function
+  /// `mall-sales-export`. Default 1 = 1:00 AM.
+  final int sendHourLocal;
+
   final DateTime? lastSentAt;
   final String? lastError;
 
@@ -61,6 +68,7 @@ class MallSalesExportConfig {
       clientCode: (map['client_code'] as String?) ?? '',
       filePrefix: (map['file_prefix'] as String?) ?? 'Ventas',
       exchangeRate: _toDouble(map['exchange_rate']) ?? 1.0,
+      sendHourLocal: ((map['send_hour_local'] as num?)?.toInt() ?? 1).clamp(0, 23),
       lastSentAt: map['last_sent_at'] != null
           ? DateTime.tryParse(map['last_sent_at'] as String)?.toLocal()
           : null,
@@ -81,6 +89,7 @@ class MallSalesExportConfig {
       'client_code': clientCode.trim(),
       'file_prefix': filePrefix.trim().isEmpty ? 'Ventas' : filePrefix.trim(),
       'exchange_rate': exchangeRate,
+      'send_hour_local': sendHourLocal.clamp(0, 23),
     };
   }
 }

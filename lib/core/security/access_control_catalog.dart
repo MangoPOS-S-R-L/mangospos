@@ -610,6 +610,17 @@ const accessPermissions = <AccessPermission>[
     description: 'Permite generar ordenes de compra.',
   ),
   AccessPermission(
+    code: 'compras.ordenes.credito',
+    label: 'Comprar a credito',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Permite registrar una compra a crédito, que genera una '
+        'cuenta por pagar. Comprometer dinero futuro no es la misma facultad '
+        'que registrar una compra ya pagada: sin este permiso la pantalla no '
+        'dibuja el selector y toda compra se registra al contado. No viene '
+        'asignado a ningún rol; se otorga a mano.',
+  ),
+  AccessPermission(
     code: 'compras.ordenes.recibir',
     label: 'Recibir ordenes de compra',
     categoryId: 'inventory',

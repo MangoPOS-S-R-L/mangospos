@@ -5,6 +5,7 @@
 // Inventario → Proveedores (`suppliers_view.dart`).
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/purchases_state.dart';
@@ -39,6 +40,10 @@ class _CreateSupplierDialogState extends State<_CreateSupplierDialog> {
   final _emailCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
   final _termsCtrl = TextEditingController();
+  // Días de plazo (mig 20260814_0003). Convive con el texto libre: el número
+  // alimenta el vencimiento por defecto de la cuenta por pagar y el texto
+  // cubre los casos que no son un plazo simple («50% anticipo»).
+  final _termsDaysCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
   bool _saving = false;
   String? _error;
@@ -52,6 +57,7 @@ class _CreateSupplierDialogState extends State<_CreateSupplierDialog> {
     _emailCtrl.dispose();
     _addressCtrl.dispose();
     _termsCtrl.dispose();
+    _termsDaysCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -78,6 +84,7 @@ class _CreateSupplierDialogState extends State<_CreateSupplierDialog> {
                 email: _orNull(_emailCtrl.text),
                 address: _orNull(_addressCtrl.text),
                 paymentTerms: _orNull(_termsCtrl.text),
+                paymentTermsDays: int.tryParse(_termsDaysCtrl.text.trim()),
                 notes: _orNull(_notesCtrl.text),
               );
       if (!mounted) return;
@@ -153,12 +160,37 @@ class _CreateSupplierDialogState extends State<_CreateSupplierDialog> {
                 maxLines: 2,
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _termsCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Condiciones de pago',
-                  hintText: 'Ej: 30 días, contado, 50% anticipo',
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _termsCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Condiciones de pago',
+                        hintText: 'Ej: 30 días, contado, 50% anticipo',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 150,
+                    child: TextField(
+                      controller: _termsDaysCtrl,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(3),
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'Días de plazo',
+                        hintText: '30',
+                        helperText: 'Opcional · alimenta el vencimiento',
+                        helperMaxLines: 2,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
               TextField(

@@ -205,3 +205,31 @@ curl -X POST https://supabase.tudominio.com/functions/v1/azul-create-tokenizatio
 2. **Tabla `azul_webhook_events`** — todo lo que llegó de Azul, válido o no, queda ahí. `processed=false` con `processing_error` no nulo es la pista.
 3. **Tabla `azul_payment_sessions`** — `status='tampered'` significa AuthKey mal configurada (server ≠ Azul).
 4. **Smoke tests del psql** arriba para confirmar que la migración aplicó.
+
+---
+
+## Apéndice — `mall-sales-export` (no es de Azul)
+
+Function añadida el 2026-08-16 para el envío diario del reporte de ventas al SFTP
+de la plaza comercial. Se despliega igual que las `azul-*` (misma carpeta, mismo
+container `functions`), con dos diferencias:
+
+- **No usa ninguna variable `AZUL_*`.** Solo necesita `SUPABASE_URL` y
+  `SUPABASE_SERVICE_ROLE_KEY`, que el stack ya define para las functions de Azul.
+  Por eso crea su propio cliente en vez de usar `_shared/supabase.ts`, que
+  arrastra `getAzulEnv()` y fallaría si falta config de Azul.
+- **Habla SFTP** vía `npm:ssh2-sftp-client`. Verificado el 2026-08-16 dentro de
+  la imagen `supabase/edge-runtime:v1.74.3`: conecta, sube y lee de vuelta sin
+  necesitar los módulos nativos de `ssh2` (usa el fallback en JS puro).
+
+Pasos propios tras desplegarla — están detallados al final de
+`supabase/migrations/20260816_0001_mall_export_cron.sql`:
+
+1. Aplicar esa migración (crea bitácora, config del cron y agenda el job horario).
+2. Cargar `private.mall_export_cron_config` con la base URL y el service_role.
+3. **Apagar `send_on_cash_close`** en las configs habilitadas, o quedan dos
+   generadores del mismo archivo (la app y el servidor) que se pisan.
+4. Probar con `select private.fn_mall_export_run_daily();`
+
+Diagnóstico: `public.mall_sales_export_log` guarda cada intento, incluidos los
+fallidos, con el error. Es lo primero que hay que mirar si la plaza reclama.

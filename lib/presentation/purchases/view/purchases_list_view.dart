@@ -47,6 +47,8 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
       decimalDigits: 2,
     );
     final dateFormat = DateFormat('dd/MM/yyyy');
+    final pendingPayables =
+        state.orders.where((o) => o.payablePending).length;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -141,6 +143,15 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                         value: currency.format(state.totalsByStatus['received'] ?? 0),
                         color: const Color(0xFF059669),
                       ),
+                      // Cola de atrasadas: compras a crédito cuya deuda no
+                      // llegó a registrarse. Solo aparece si hay alguna, para
+                      // que su presencia signifique algo.
+                      if (pendingPayables > 0)
+                        _SummaryCard(
+                          title: 'CxP pendientes de registrar',
+                          value: '$pendingPayables',
+                          color: const Color(0xFFDC2626),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 20),
@@ -227,13 +238,51 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                             itemBuilder: (context, index) {
                               final order = state.orders[index];
                               return ListTile(
-                                isThreeLine: _canReceiveOrder(order.status),
-                                title: Text(
-                                  '${order.orderNumber} · ${order.supplierName}',
+                                isThreeLine: true,
+                                title: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        '${order.orderNumber} · ${order.supplierName}',
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    // §6.4 — La compra se guardó a crédito
+                                    // pero la deuda no nació. Un estado
+                                    // partido solo se descubre cuando el
+                                    // proveedor viene a cobrar: aquí se ve.
+                                    if (order.payablePending) ...[
+                                      const SizedBox(width: 8),
+                                      const _PendingPayableChip(),
+                                    ],
+                                  ],
                                 ),
-                                subtitle: Text(
-                                  '${order.warehouseName} · ${_statusLabel(order.status)}'
-                                  '${order.expectedDate == null ? '' : ' · Esperada ${dateFormat.format(order.expectedDate!)}'}',
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${order.warehouseName} · ${_statusLabel(order.status)}'
+                                      '${order.expectedDate == null ? '' : ' · Esperada ${dateFormat.format(order.expectedDate!)}'}',
+                                    ),
+                                    // Factura y NCF en su propio renglón: son
+                                    // identificadores distintos y ambos hacen
+                                    // falta para conciliar contra el papel.
+                                    Text(
+                                      [
+                                        if (order.invoiceNumber.isNotEmpty)
+                                          'Factura ${order.invoiceNumber}',
+                                        if (order.ncf.isNotEmpty)
+                                          'NCF ${order.ncf}',
+                                        if (order.invoiceNumber.isEmpty &&
+                                            order.ncf.isEmpty)
+                                          'Sin factura registrada',
+                                      ].join(' · '),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF94A3B8),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 trailing: SizedBox(
                                   width: 160,
@@ -408,6 +457,31 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
       context: context,
       barrierDismissible: false,
       builder: (_) => PurchaseReceiveDialog(order: order),
+    );
+  }
+}
+
+/// Marca de la orden cuya cuenta por pagar no llegó a nacer (§6.4 del PRD).
+class _PendingPayableChip extends StatelessWidget {
+  const _PendingPayableChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFFECACA)),
+      ),
+      child: const Text(
+        'CxP pendiente de registrar',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF991B1B),
+        ),
+      ),
     );
   }
 }

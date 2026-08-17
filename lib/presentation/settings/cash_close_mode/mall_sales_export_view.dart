@@ -34,6 +34,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
 
   bool _enabled = false;
   bool _sendOnCashClose = true;
+  int _sendHourLocal = 1;
   DateTime? _lastSentAt;
   String? _lastError;
   bool _obscurePassword = true;
@@ -88,6 +89,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
               config.exchangeRate == config.exchangeRate.roundToDouble()
                   ? config.exchangeRate.toStringAsFixed(0)
                   : config.exchangeRate.toString();
+          _sendHourLocal = config.sendHourLocal;
           _lastSentAt = config.lastSentAt;
           _lastError = config.lastError;
         }
@@ -116,6 +118,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
       filePrefix: _prefixCtrl.text.trim(),
       exchangeRate:
           double.tryParse(_rateCtrl.text.trim().replaceAll(',', '.')) ?? 1.0,
+      sendHourLocal: _sendHourLocal,
     );
   }
 
@@ -294,6 +297,8 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
           value: _sendOnCashClose,
           onChanged: busy ? null : (v) => setState(() => _sendOnCashClose = v),
         ),
+        const SizedBox(height: 12),
+        _sendHourTile(enabled: !busy),
         const SizedBox(height: 24),
         _sectionLabel('Servidor SFTP'),
         const SizedBox(height: 8),
@@ -536,6 +541,93 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
         suffixIcon: suffix,
         isDense: true,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
+
+  /// Hora en formato 12h para el desplegable ("1:00 AM", "12:00 PM").
+  static String _hourLabel(int hour) {
+    final suffix = hour < 12 ? 'AM' : 'PM';
+    final h12 = hour % 12 == 0 ? 12 : hour % 12;
+    return '$h12:00 $suffix';
+  }
+
+  /// Hora local a la que el SERVIDOR sube el archivo del día anterior.
+  /// No depende de que la app esté abierta: lo ejecuta el cron de Supabase.
+  Widget _sendHourTile({required bool enabled}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _enabled ? MangoColors.primaryOrange : MangoColors.cardBorder,
+          width: _enabled ? 1.5 : 1,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color:
+                  _enabled ? const Color(0xFFFFEDD5) : const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.schedule_outlined,
+              color: _enabled ? MangoColors.primaryOrange : MangoColors.muted,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Hora del envío automático diario',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'A esta hora el servidor sube el archivo del día anterior, '
+                  'ya completo. Funciona aunque la tablet esté apagada. '
+                  'Elige una hora después de que cierren.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.black54,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          DropdownButton<int>(
+            value: _sendHourLocal,
+            underline: const SizedBox.shrink(),
+            borderRadius: BorderRadius.circular(8),
+            onChanged: enabled
+                ? (v) => setState(() => _sendHourLocal = v ?? 1)
+                : null,
+            items: [
+              for (var h = 0; h < 24; h++)
+                DropdownMenuItem<int>(
+                  value: h,
+                  child: Text(
+                    _hourLabel(h),
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+            ],
+          ),
+        ],
       ),
     );
   }

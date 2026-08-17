@@ -14,7 +14,17 @@ class CreditsQueries {
       'id, credit_id, amount, reference, session_id, created_at, '
       'payment_methods(name, code)';
 
+  // `ncf` (mig 20260814_0003) y el embed de la orden que originó la deuda:
+  // desde la CxP se puede volver al documento que la creó, y el comprobante
+  // fiscal se consulta sin abrir la compra.
   static const selectPayables =
+      'id, business_id, supplier_id, purchase_order_id, invoice_number, ncf, '
+      'original_amount, balance, due_date, status, notes, created_at, '
+      'suppliers(name, phone), purchase_orders(order_number)';
+
+  /// Selección sin las columnas de 20260814_0003, para ambientes donde la
+  /// migración todavía no se aplicó.
+  static const selectPayablesLegacy =
       'id, business_id, supplier_id, purchase_order_id, invoice_number, '
       'original_amount, balance, due_date, status, notes, created_at, '
       'suppliers(name, phone)';

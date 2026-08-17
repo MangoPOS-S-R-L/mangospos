@@ -142,15 +142,26 @@ class CreditsRepository {
     String businessId, {
     bool onlyOpen = false,
   }) async {
-    var query = _client
-        .from(CreditsQueries.tableSupplierCredits)
-        .select(CreditsQueries.selectPayables)
-        .eq('business_id', businessId);
-    if (onlyOpen) {
-      query = query.inFilter('status', ['pending', 'partial', 'overdue']);
+    Future<List<Map<String, dynamic>>> fetch(String columns) async {
+      var query = _client
+          .from(CreditsQueries.tableSupplierCredits)
+          .select(columns)
+          .eq('business_id', businessId);
+      if (onlyOpen) {
+        query = query.inFilter('status', ['pending', 'partial', 'overdue']);
+      }
+      final response = await query.order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(response);
     }
-    final response = await query.order('created_at', ascending: false);
-    return List<Map<String, dynamic>>.from(response);
+
+    try {
+      return await fetch(CreditsQueries.selectPayables);
+    } on PostgrestException catch (e) {
+      // Sin la migración 20260814_0003 no existe `ncf`: la pantalla de
+      // Créditos no puede quedarse en blanco por una columna opcional.
+      if (e.code != '42703' && e.code != 'PGRST200') rethrow;
+      return fetch(CreditsQueries.selectPayablesLegacy);
+    }
   }
 
   Future<List<Map<String, dynamic>>> getPayablePayments(
@@ -164,31 +175,54 @@ class CreditsRepository {
     return List<Map<String, dynamic>>.from(response);
   }
 
+  /// Crea la cuenta por pagar. [ncf] es el comprobante fiscal de la factura
+  /// que la originó: se copia aquí para que la deuda sea consultable sin
+  /// volver a la compra (mig 20260814_0003).
   Future<Map<String, dynamic>> createPayable({
     required String businessId,
     required String supplierId,
     required double amount,
     String? purchaseOrderId,
     String? invoiceNumber,
+    String? ncf,
     DateTime? dueDate,
     String? notes,
   }) async {
-    final response = await _client
-        .from(CreditsQueries.tableSupplierCredits)
-        .insert({
-          'business_id': businessId,
-          'supplier_id': supplierId,
-          'purchase_order_id': purchaseOrderId,
-          'invoice_number': invoiceNumber,
-          'original_amount': amount,
-          'balance': amount,
-          'due_date': dueDate?.toIso8601String().substring(0, 10),
-          'notes': notes,
-          'created_by': _client.auth.currentUser?.id,
-        })
-        .select(CreditsQueries.selectPayables)
-        .single();
-    return Map<String, dynamic>.from(response);
+    final payload = <String, dynamic>{
+      'business_id': businessId,
+      'supplier_id': supplierId,
+      'purchase_order_id': purchaseOrderId,
+      'invoice_number': invoiceNumber,
+      'original_amount': amount,
+      'balance': amount,
+      'due_date': dueDate?.toIso8601String().substring(0, 10),
+      'notes': notes,
+      'created_by': _client.auth.currentUser?.id,
+    };
+    final hasNcf = ncf != null && ncf.trim().isNotEmpty;
+
+    try {
+      final response = await _client
+          .from(CreditsQueries.tableSupplierCredits)
+          .insert({
+            ...payload,
+            if (hasNcf) 'ncf': ncf.trim(),
+          })
+          .select(CreditsQueries.selectPayables)
+          .single();
+      return Map<String, dynamic>.from(response);
+    } on PostgrestException catch (e) {
+      // Sin la migración aplicada, perder la copia del NCF es mucho menos
+      // grave que perder la deuda: se reintenta sin él. El NCF sigue vivo en
+      // la orden de compra, que es su origen.
+      if (e.code != '42703') rethrow;
+      final response = await _client
+          .from(CreditsQueries.tableSupplierCredits)
+          .insert(payload)
+          .select(CreditsQueries.selectPayablesLegacy)
+          .single();
+      return Map<String, dynamic>.from(response);
+    }
   }
 
   Future<Map<String, dynamic>> registerPayablePayment({

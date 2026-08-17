@@ -555,6 +555,14 @@ class _CreditCard extends ConsumerWidget {
     final balance = ((credit['balance'] as num?) ?? 0).toDouble();
     final original = ((credit['original_amount'] as num?) ?? 0).toDouble();
     final invoice = credit['invoice_number'] as String?;
+    // Factura y NCF viajan en columnas distintas: el primero identifica el
+    // documento del proveedor, el segundo sustenta el ITBIS ante la DGII.
+    final ncf = credit['ncf'] as String?;
+    // Orden que originó la deuda: permite volver al documento desde la CxP.
+    final orderRel = credit['purchase_orders'];
+    final orderNumber = orderRel is Map
+        ? orderRel['order_number']?.toString()
+        : null;
     final createdAt = DateTime.tryParse(credit['created_at'] as String? ?? '');
     final dueDate = DateTime.tryParse(credit['due_date'] as String? ?? '');
     final dateFmt = DateFormat('dd/MM/yyyy');
@@ -589,7 +597,10 @@ class _CreditCard extends ConsumerWidget {
                 Text(
                   [
                     if (invoice != null && invoice.isNotEmpty)
-                      'Factura $invoice',
+                      'Fact. $invoice',
+                    if (ncf != null && ncf.isNotEmpty) ncf,
+                    if (orderNumber != null && orderNumber.isNotEmpty)
+                      orderNumber,
                     if (createdAt != null) dateFmt.format(createdAt.toLocal()),
                   ].join(' · '),
                   style: const TextStyle(

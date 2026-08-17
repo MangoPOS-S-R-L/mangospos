@@ -14,15 +14,34 @@ class PurchasesRepository {
   }
 
   Future<List<PurchaseSupplier>> getSuppliers(String businessId) async {
-    final response = await _client
-        .from(PurchasesQueries.tableSuppliers)
-        .select('id, name, contact_name, phone, email, is_active')
-        .eq('business_id', businessId)
-        .order('name');
+    // `payment_terms_days` llega con la migración 20260814_0003. Si el
+    // ambiente todavía no la aplicó, PostgREST responde 42703 y el módulo de
+    // compras entero se quedaría en blanco: caemos a la selección legacy en
+    // vez de tumbar la pantalla por un campo opcional.
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = List<Map<String, dynamic>>.from(
+        await _client
+            .from(PurchasesQueries.tableSuppliers)
+            .select(
+              'id, name, contact_name, phone, email, is_active, '
+              'payment_terms, payment_terms_days',
+            )
+            .eq('business_id', businessId)
+            .order('name'),
+      );
+    } on PostgrestException catch (e) {
+      if (e.code != '42703') rethrow;
+      rows = List<Map<String, dynamic>>.from(
+        await _client
+            .from(PurchasesQueries.tableSuppliers)
+            .select('id, name, contact_name, phone, email, is_active, payment_terms')
+            .eq('business_id', businessId)
+            .order('name'),
+      );
+    }
 
-    return List<Map<String, dynamic>>.from(
-      response,
-    ).map(PurchaseSupplier.fromMap).toList(growable: false);
+    return rows.map(PurchaseSupplier.fromMap).toList(growable: false);
   }
 
   Future<List<PurchaseWarehouse>> getWarehouses(String businessId) async {
@@ -39,10 +58,13 @@ class PurchasesRepository {
     ).map(PurchaseWarehouse.fromMap).toList(growable: false);
   }
 
+  static const _inventoryItemColumns =
+      'id, name, sku, barcode, unit, cost, is_active, purchase_unit, pack_size';
+
   Future<List<PurchaseInventoryItem>> getInventoryItems(String businessId) async {
     final response = await _client
         .from(PurchasesQueries.tableInventoryItems)
-        .select('id, name, sku, unit, cost, is_active, purchase_unit, pack_size')
+        .select(_inventoryItemColumns)
         .eq('business_id', businessId)
         .eq('is_active', true)
         .order('name');
@@ -52,32 +74,83 @@ class PurchasesRepository {
     ).map(PurchaseInventoryItem.fromMap).toList(growable: false);
   }
 
+  /// Resuelve un código leído por la pistola contra el catálogo de INSUMOS:
+  /// primero `barcode` exacto, luego `sku` — el mismo criterio del buscador
+  /// manual, para que escanear y teclear resuelvan igual.
+  ///
+  /// La consulta es EN LÍNEA: el snapshot offline solo trae `menu_items`, no
+  /// insumos de inventario. Sin conexión esto lanza y la vista lo informa, en
+  /// lugar de fallar sin explicación.
+  ///
+  /// Devuelve la lista de coincidencias (ordenada por prioridad) para que la
+  /// vista pueda avisar cuando un mismo código vive en dos insumos: se toma
+  /// el primero, pero la ambigüedad se resuelve en el catálogo, no aquí.
+  Future<List<PurchaseInventoryItem>> findInventoryItemsByCode({
+    required String businessId,
+    required String code,
+  }) async {
+    final clean = code.trim();
+    if (clean.isEmpty) return const [];
+
+    Future<List<PurchaseInventoryItem>> queryBy(String column) async {
+      final rows = await _client
+          .from(PurchasesQueries.tableInventoryItems)
+          .select(_inventoryItemColumns)
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .eq(column, clean)
+          .order('name');
+      return List<Map<String, dynamic>>.from(rows)
+          .map(PurchaseInventoryItem.fromMap)
+          .toList(growable: false);
+    }
+
+    final byBarcode = await queryBy('barcode');
+    if (byBarcode.isNotEmpty) return byBarcode;
+    return queryBy('sku');
+  }
+
+  static const _orderColumns =
+      'id, supplier_id, warehouse_id, order_number, invoice_number, ncf, '
+      'status, total, expected_date, received_date, created_at, notes';
+
+  static const _orderColumnsLegacy =
+      'id, supplier_id, warehouse_id, order_number, invoice_number, '
+      'status, total, expected_date, received_date, created_at, notes';
+
   Future<List<PurchaseOrderSummary>> getOrders({
     required String businessId,
     String? status,
     int limit = 50,
     int offset = 0,
   }) async {
-    final ordersResponse = status != null && status.isNotEmpty
-        ? await _client
-              .from(PurchasesQueries.tablePurchaseOrders)
-              .select(
-                'id, supplier_id, warehouse_id, order_number, invoice_number, status, total, expected_date, received_date, created_at, notes',
-              )
-              .eq('business_id', businessId)
-              .eq('status', status)
-              .order('created_at', ascending: false)
-              .range(offset, offset + limit - 1)
-        : await _client
-              .from(PurchasesQueries.tablePurchaseOrders)
-              .select(
-                'id, supplier_id, warehouse_id, order_number, invoice_number, status, total, expected_date, received_date, created_at, notes',
-              )
-              .eq('business_id', businessId)
-              .order('created_at', ascending: false)
-              .range(offset, offset + limit - 1);
+    // Igual que en `getSuppliers`: `ncf` llega con 20260814_0003 y su ausencia
+    // no puede dejar el listado en blanco.
+    Future<List<Map<String, dynamic>>> fetch(String columns) async {
+      final response = status != null && status.isNotEmpty
+          ? await _client
+                .from(PurchasesQueries.tablePurchaseOrders)
+                .select(columns)
+                .eq('business_id', businessId)
+                .eq('status', status)
+                .order('created_at', ascending: false)
+                .range(offset, offset + limit - 1)
+          : await _client
+                .from(PurchasesQueries.tablePurchaseOrders)
+                .select(columns)
+                .eq('business_id', businessId)
+                .order('created_at', ascending: false)
+                .range(offset, offset + limit - 1);
+      return List<Map<String, dynamic>>.from(response);
+    }
 
-    final orders = List<Map<String, dynamic>>.from(ordersResponse);
+    List<Map<String, dynamic>> orders;
+    try {
+      orders = await fetch(_orderColumns);
+    } on PostgrestException catch (e) {
+      if (e.code != '42703') rethrow;
+      orders = await fetch(_orderColumnsLegacy);
+    }
     if (orders.isEmpty) return const [];
 
     final supplierIds = orders
@@ -138,25 +211,53 @@ class PurchasesRepository {
     String? rnc,
     String? address,
     String? paymentTerms,
+    int? paymentTermsDays,
     String? notes,
   }) async {
-    final row = await _client
-        .from(PurchasesQueries.tableSuppliers)
-        .insert({
-          'business_id': businessId,
-          'name': name,
-          'contact_name': contactName,
-          'phone': phone,
-          'email': email,
-          'rnc': rnc,
-          'address': address,
-          'payment_terms': paymentTerms,
-          'notes': notes,
-          'is_active': true,
-        }..removeWhere((key, value) => value == null || value == ''))
-        .select('id, name, contact_name, phone, email, is_active')
-        .single();
-    return PurchaseSupplier.fromMap(Map<String, dynamic>.from(row));
+    final payload = <String, dynamic>{
+      'business_id': businessId,
+      'name': name,
+      'contact_name': contactName,
+      'phone': phone,
+      'email': email,
+      'rnc': rnc,
+      'address': address,
+      'payment_terms': paymentTerms,
+      'notes': notes,
+      'is_active': true,
+    }..removeWhere((key, value) => value == null || value == '');
+
+    // En la BD viva `payment_terms_days` es integer NOT NULL con default 0
+    // (la columna precedía a la migración 20260814_0003, que por eso no la
+    // tocó). Se manda SIEMPRE —0 cuando no hay plazo— para no depender de que
+    // ese default exista: 0 es "sin configurar", no "pago a 0 días", y así lo
+    // lee `PaymentTerms.resolve`. Si el ambiente no tiene la columna, el 42703
+    // de abajo reintenta sin ella.
+    final days = (paymentTermsDays ?? 0) > 0 ? paymentTermsDays! : 0;
+
+    Future<Map<String, dynamic>> insert(Map<String, dynamic> body) async {
+      final row = await _client
+          .from(PurchasesQueries.tableSuppliers)
+          .insert(body)
+          .select(
+            'id, name, contact_name, phone, email, is_active, payment_terms',
+          )
+          .single();
+      return Map<String, dynamic>.from(row);
+    }
+
+    Map<String, dynamic> row;
+    try {
+      row = await insert({...payload, 'payment_terms_days': days});
+    } on PostgrestException catch (e) {
+      if (e.code != '42703') rethrow;
+      row = await insert(payload);
+    }
+    final map = Map<String, dynamic>.from(row);
+    // El select legacy no trae la columna nueva; devolvemos lo que ya sabemos
+    // para que la vista pueda usar el plazo del proveedor recién creado.
+    map['payment_terms_days'] ??= paymentTermsDays;
+    return PurchaseSupplier.fromMap(map);
   }
 
   /// Crea un almacén para el registro de compra sin salir del flujo. Si se
@@ -198,6 +299,9 @@ class PurchasesRepository {
     required DateTime expectedDate,
     String? notes,
     String? invoiceNumber,
+    /// Comprobante fiscal de la factura. Va en su PROPIA columna: el número
+    /// de factura y el NCF son identificadores distintos con dueños distintos.
+    String? ncf,
     required List<PurchaseDraftItem> items,
     // Cuando es true, el costo de cada línea vinculada actualiza el costo
     // maestro del insumo (inventory_items.cost). El costo ya viene en unidad
@@ -228,27 +332,44 @@ class PurchasesRepository {
     final bool receiveNow = status == 'received';
     final String insertStatus = receiveNow ? 'sent' : status;
 
-    final createdOrder = await _client
-        .from(PurchasesQueries.tablePurchaseOrders)
-        .insert({
-          'business_id': businessId,
-          'supplier_id': supplierId,
-          'warehouse_id': warehouseId,
-          'order_number': orderNumber,
-          'invoice_number': invoiceNumber,
-          'status': insertStatus,
-          'subtotal': subtotal,
-          'tax': tax,
-          // Solo se manda la columna cuando hay descuento: así las compras
-          // sin descuento siguen funcionando aunque la migración
-          // 20260725_0001 (columna discount) no esté aplicada todavía.
-          if (orderDiscount > 0) 'discount': orderDiscount,
-          'total': total,
-          'expected_date': expectedDate.toIso8601String().split('T').first,
-          'notes': notes,
-        }..removeWhere((key, value) => value == null || value == ''))
-        .select('id')
-        .single();
+    final Map<String, dynamic> createdOrder;
+    try {
+      createdOrder = await _client
+          .from(PurchasesQueries.tablePurchaseOrders)
+          .insert({
+            'business_id': businessId,
+            'supplier_id': supplierId,
+            'warehouse_id': warehouseId,
+            'order_number': orderNumber,
+            'invoice_number': invoiceNumber,
+            // Igual que `discount`: solo viaja cuando hay valor, para no
+            // depender de la migración en negocios que no la aplicaron. Con
+            // NCF digitado y columna ausente el guardado FALLA con motivo —
+            // perder el comprobante en silencio sería peor.
+            if (ncf != null && ncf.trim().isNotEmpty) 'ncf': ncf.trim(),
+            'status': insertStatus,
+            'subtotal': subtotal,
+            'tax': tax,
+            // Solo se manda la columna cuando hay descuento: así las compras
+            // sin descuento siguen funcionando aunque la migración
+            // 20260725_0001 (columna discount) no esté aplicada todavía.
+            if (orderDiscount > 0) 'discount': orderDiscount,
+            'total': total,
+            'expected_date': expectedDate.toIso8601String().split('T').first,
+            'notes': notes,
+          }..removeWhere((key, value) => value == null || value == ''))
+          .select('id')
+          .single();
+    } on PostgrestException catch (e) {
+      if (e.code == '42703' && (e.message).contains('ncf')) {
+        throw Exception(
+          'La columna `ncf` no existe todavía en purchase_orders. Aplica la '
+          'migración 20260814_0003_purchase_ncf_and_payment_terms.sql o deja '
+          'el NCF vacío para guardar esta compra.',
+        );
+      }
+      rethrow;
+    }
 
     final orderId = createdOrder['id']?.toString();
     if (orderId == null || orderId.isEmpty) {
@@ -322,6 +443,33 @@ class PurchasesRepository {
     }
 
     return orderId;
+  }
+
+  /// §6.4 — La compra se guardó a crédito pero la CxP no llegó a nacer.
+  ///
+  /// Mientras orden y CxP no sean una sola operación atómica, ese estado
+  /// partido (mercancía dentro, deuda sin registrar) tiene que quedar VISIBLE
+  /// en el listado y no solo en un aviso que se va a los dos segundos. La
+  /// marca vive en `notes` para no añadir columnas fuera del modelo del PRD.
+  ///
+  /// Best-effort a propósito: si esto falla, el aviso al usuario sigue siendo
+  /// el respaldo — no tiene sentido tumbar una compra ya guardada.
+  Future<void> markPayablePending({
+    required String orderId,
+    required String currentNotes,
+  }) async {
+    if (currentNotes.contains(kPendingPayableTag)) return;
+    final merged = currentNotes.trim().isEmpty
+        ? kPendingPayableTag
+        : '${currentNotes.trim()} $kPendingPayableTag';
+    try {
+      await _client
+          .from(PurchasesQueries.tablePurchaseOrders)
+          .update({'notes': merged})
+          .eq('id', orderId);
+    } catch (_) {
+      // Sin red o sin permiso de update: el snackbar del registro ya avisó.
+    }
   }
 
   Future<void> receivePurchaseOrder(String orderId, {String? notes}) async {

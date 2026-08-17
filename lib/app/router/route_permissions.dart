@@ -68,6 +68,10 @@ const Map<String, String> routePermissions = <String, String>{
 
   // --- Compras ---
   '/settings/purchases': 'compras.acceso',
+  // Consultar órdenes no es lo mismo que registrar una compra: la pantalla
+  // de registro pide `compras.ordenes.crear`, el mismo permiso que decide si
+  // el listado ofrece el botón "Nueva orden".
+  '/settings/purchases/register': 'compras.ordenes.crear',
 
   // --- Créditos (CxC / CxP) ---
   '/credits': 'creditos.acceso',

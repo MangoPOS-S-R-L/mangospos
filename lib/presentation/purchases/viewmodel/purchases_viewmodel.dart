@@ -110,6 +110,7 @@ class PurchasesViewModel extends ChangeNotifier {
     String? rnc,
     String? address,
     String? paymentTerms,
+    int? paymentTermsDays,
     String? notes,
   }) async {
     final businessId = _state.businessId;
@@ -130,6 +131,7 @@ class PurchasesViewModel extends ChangeNotifier {
         rnc: rnc,
         address: address,
         paymentTerms: paymentTerms,
+        paymentTermsDays: paymentTermsDays,
         notes: notes,
       );
       _state = _state.copyWith(saving: false);
@@ -224,6 +226,7 @@ class PurchasesViewModel extends ChangeNotifier {
     required DateTime expectedDate,
     String? notes,
     String? invoiceNumber,
+    String? ncf,
     required List<PurchaseDraftItem> items,
     bool updateItemCost = false,
     double discount = 0,
@@ -246,6 +249,7 @@ class PurchasesViewModel extends ChangeNotifier {
         expectedDate: expectedDate,
         notes: notes,
         invoiceNumber: invoiceNumber,
+        ncf: ncf,
         items: items,
         updateItemCost: updateItemCost,
         discount: discount,
@@ -261,6 +265,32 @@ class PurchasesViewModel extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  /// Resuelve un código de barras (o SKU) contra el catálogo de insumos.
+  /// Devuelve todas las coincidencias: la vista toma la primera y avisa si
+  /// hay más de una. Lanza si no hay conexión — la vista lo informa.
+  Future<List<PurchaseInventoryItem>> findItemsByCode(String code) async {
+    final businessId = _state.businessId;
+    if (businessId == null) {
+      throw Exception('No hay negocio activo.');
+    }
+    return _repository.findInventoryItemsByCode(
+      businessId: businessId,
+      code: code,
+    );
+  }
+
+  /// Marca la orden como «CxP pendiente de registrar» (§6.4). No toca el
+  /// estado de guardado: la compra ya quedó registrada.
+  Future<void> markPayablePending({
+    required String orderId,
+    required String currentNotes,
+  }) {
+    return _repository.markPayablePending(
+      orderId: orderId,
+      currentNotes: currentNotes,
+    );
   }
 
   Future<void> receiveOrder(String orderId, {String? notes}) async {

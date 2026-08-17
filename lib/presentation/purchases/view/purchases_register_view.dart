@@ -7,10 +7,15 @@ import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_styles.dart';
+import '../../../core/business/business_features_provider.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../data/repositories/credits_repository.dart';
+import '../../../services/session/session_controller.dart';
+import '../../sales/widgets/pos_barcode_scanner.dart' show BarcodeScanListener;
 import '../state/purchases_state.dart';
 import '../utils/discount_input.dart';
+import '../utils/ncf_format.dart';
+import '../utils/payment_terms.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
 import '../../../core/theme/app_colors.dart';
@@ -49,6 +54,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   final _notesCtrl = TextEditingController();
   final _orderNumberCtrl = TextEditingController();
   final _invoiceNumberCtrl = TextEditingController();
+  // NCF: comprobante fiscal. Vive en su PROPIA columna porque el número de
+  // factura y el comprobante son identificadores distintos con dueños
+  // distintos — meterlos juntos obliga a elegir cuál se pierde.
+  final _ncfCtrl = TextEditingController();
+  final _orderNumberFocus = FocusNode();
+  final _invoiceNumberFocus = FocusNode();
+  final _ncfFocus = FocusNode();
+  final _notesFocus = FocusNode();
   String? _supplierId;
   String? _warehouseId;
   // Por defecto la compra se registra ya "Recibida": el caso común es que la
@@ -57,13 +70,33 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   String _status = 'received';
   DateTime _expectedDate = DateTime.now().add(const Duration(days: 3));
 
-  // Condición de pago: al contado (default) o a crédito. A crédito se crea
-  // una cuenta por pagar (supplier_credits) vinculada a la orden, visible
-  // en Créditos → Cuentas por Pagar. La UI para elegir crédito está APAGADA
-  // por ahora (decisión 2026-07-14); el flujo en _submit queda listo para
-  // cuando se reactive.
-  final bool _isCredit = false;
-  final DateTime _creditDueDate = DateTime.now().add(const Duration(days: 30));
+  // Condición de pago: al contado (default) o a crédito. Contado es el valor
+  // por defecto porque es el caso mayoritario y porque es el que no
+  // compromete dinero futuro. A crédito se crea una cuenta por pagar
+  // (supplier_credits) vinculada a la orden, visible en Créditos → Cuentas
+  // por Pagar. El selector solo se dibuja con `compras.ordenes.credito`.
+  bool _isCredit = false;
+  // Vencimiento de la CxP. `null` = no hay plazo defendible todavía; guardar
+  // a crédito exige elegirlo (§6.3: nunca se adivina una fecha).
+  DateTime? _creditDueDate;
+  // Ficha de plazo activa (15/30/45/60) o null si la fecha se eligió a mano.
+  int? _creditTermDays;
+
+  /// Momento del último escaneo procesado. El `BarcodeScanListener` no
+  /// consume los caracteres, así que el código también se teclea en el campo
+  /// enfocado; esta marca evita que el `onSubmitted` del buscador reaccione
+  /// al mismo Enter que ya cerró un escaneo.
+  DateTime? _lastScanAt;
+  bool _scanBusy = false;
+
+  /// Campo de costo al que el PROPIO escaneo mandó el foco.
+  ///
+  /// Un disparo que cae en un campo numérico se descarta (un EAN convertido
+  /// en costo es un error caro y silencioso), pero el costo de la última
+  /// línea escaneada es la excepción: ahí lo dejó la pistola, y volver a
+  /// disparar es el flujo normal de contar cajas. Se acepta el escaneo y se
+  /// le devuelve al campo lo que tuviera —incluido el costo recién tecleado.
+  FocusNode? _scanCostFocus;
 
   /// Productos ya agregados a la factura (la lista de abajo). Empieza vacía;
   /// se llena con el flujo rápido de teclado o con el buscador multi-selección.
@@ -85,6 +118,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   final _qtyFocus = FocusNode();
   final _costFocus = FocusNode();
   final _paidFocus = FocusNode();
+  final _taxPctFocus = FocusNode();
+  final _entryDiscountFocus = FocusNode();
+  final _orderDiscountFocus = FocusNode();
   PurchaseInventoryItem? _entrySelected;
   _TaxMode _entryTaxMode = _TaxMode.included;
   // Snapshot de empaque del insumo seleccionado en el renglón de captura.
@@ -96,6 +132,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   // fieldViewBuilder para poder limpiar y devolver el foco tras cada alta).
   TextEditingController? _productFieldCtrl;
   FocusNode? _productFocus;
+  /// Callback del Autocomplete para confirmar la opción resaltada. Se guarda
+  /// para poder reproducir el flujo manual cuando un Enter que el lector ya
+  /// cerró resulta ser tecleo humano.
+  VoidCallback? _productOnFieldSubmitted;
 
   bool get _entryHasPack =>
       _entryPackSize > 1 && _entryPurchaseUnit.trim().isNotEmpty;
@@ -123,6 +163,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       setState(() {
         _orderNumberCtrl.text = nextNumber;
       });
+      _syncCreditTermsWithSupplier();
     });
   }
 
@@ -131,95 +172,154 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     _notesCtrl.dispose();
     _orderNumberCtrl.dispose();
     _invoiceNumberCtrl.dispose();
+    _ncfCtrl.dispose();
     _orderDiscountCtrl.dispose();
     _entryQtyCtrl.dispose();
     _entryCostCtrl.dispose();
     _entryPaidCtrl.dispose();
     _entryDiscountCtrl.dispose();
     _entryTaxPctCtrl.dispose();
+    _orderNumberFocus.dispose();
+    _invoiceNumberFocus.dispose();
+    _ncfFocus.dispose();
+    _notesFocus.dispose();
     _qtyFocus.dispose();
     _costFocus.dispose();
     _paidFocus.dispose();
+    _taxPctFocus.dispose();
+    _entryDiscountFocus.dispose();
+    _orderDiscountFocus.dispose();
     for (final line in _lines) {
       line.dispose();
     }
     super.dispose();
   }
 
+  // ───────────────────────────────── Condiciones del proveedor / plazo ──
+
+  PurchaseSupplier? _selectedSupplier(PurchasesState state) {
+    final id = _supplierId;
+    if (id == null) return null;
+    for (final supplier in state.suppliers) {
+      if (supplier.id == id) return supplier;
+    }
+    return null;
+  }
+
+  PaymentTermsSuggestion _termsSuggestion(PurchasesState state) {
+    final supplier = _selectedSupplier(state);
+    return PaymentTerms.resolve(
+      days: supplier?.paymentTermsDays,
+      freeText: supplier?.paymentTerms,
+    );
+  }
+
+  /// Preselecciona la ficha de plazo del proveedor, si hay una que la
+  /// respalde. Nunca deduce en silencio: sin número inequívoco deja el
+  /// vencimiento vacío y obliga a elegirlo a mano (§6.3).
+  void _syncCreditTermsWithSupplier() {
+    if (!mounted) return;
+    final suggestion =
+        _termsSuggestion(ref.read(purchasesViewModelProvider).state);
+    setState(() {
+      _creditTermDays = suggestion.days;
+      _creditDueDate = suggestion.days == null
+          ? null
+          : _dueDateFromTerm(suggestion.days!);
+    });
+  }
+
+  /// El vencimiento se cuenta sobre la fecha de la FACTURA (la fecha de
+  /// entrega/documento que trae la cabecera), no sobre la de captura: una
+  /// factura que se registra tres días tarde no gana tres días de plazo.
+  DateTime _dueDateFromTerm(int days) =>
+      DateTime(_expectedDate.year, _expectedDate.month, _expectedDate.day)
+          .add(Duration(days: days));
+
   @override
   Widget build(BuildContext context) {
     final vm = ref.watch(purchasesViewModelProvider);
     final state = vm.state;
+    final barcodeEnabled =
+        ref.watch(businessFeaturesProvider).value?.barcodeEnabled ?? false;
+    // El shell mantiene VIVAS las ramas que no están al frente
+    // (StatefulShellRoute.indexedStack). `TickerMode` es false en las ramas
+    // inactivas: sin este guard, esta pantalla seguiría siendo el suscriptor
+    // de arriba del despachador y se comería los escaneos de la caja al
+    // volver a ventas.
+    final scannerEnabled =
+        barcodeEnabled && TickerMode.valuesOf(context).enabled;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: state.loading && state.suppliers.isEmpty && state.warehouses.isEmpty
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      IconButton(
-                        onPressed: () => context.go(AppRoutes.purchasesList),
-                        icon: const Icon(Icons.arrow_back),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Registro de compra',
-                              style: TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF0F172A),
+    return BarcodeScanListener(
+      enabled: scannerEnabled,
+      onScan: _handleScan,
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        body:
+            state.loading && state.suppliers.isEmpty && state.warehouses.isEmpty
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => context.go(AppRoutes.purchasesList),
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Registro de compra',
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF0F172A),
+                                ),
                               ),
-                            ),
-                            SizedBox(height: 6),
-                            Text(
-                              'Registra la factura del proveedor y agrega sus productos',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Color(0xFF64748B),
+                              SizedBox(height: 6),
+                              Text(
+                                'Registra la factura del proveedor y agrega sus productos',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF64748B),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
+                        ),
+                        _ScannerBadge(enabled: barcodeEnabled),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    if (state.error != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFECACA)),
+                        ),
+                        child: Text(
+                          state.error!,
+                          style: const TextStyle(color: Color(0xFF991B1B)),
                         ),
                       ),
-                      FilledButton.icon(
-                        onPressed: state.saving ? null : _submit,
-                        icon: const Icon(Icons.save_outlined),
-                        label: const Text('Guardar orden'),
-                      ),
+                      const SizedBox(height: 16),
                     ],
-                  ),
-                  const SizedBox(height: 20),
-                  if (state.error != null) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFEF2F2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFFECACA)),
-                      ),
-                      child: Text(
-                        state.error!,
-                        style: const TextStyle(color: Color(0xFF991B1B)),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
+                    _card(child: _buildHeaderCard(state)),
+                    const SizedBox(height: 20),
+                    _card(child: _buildProductsCard(state)),
                   ],
-                  _card(child: _buildHeaderCard(state)),
-                  const SizedBox(height: 20),
-                  _card(child: _buildProductsCard(state)),
-                ],
+                ),
               ),
-            ),
+      ),
     );
   }
 
@@ -247,10 +347,12 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         ),
         const SizedBox(height: 16),
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               child: TextField(
                 controller: _orderNumberCtrl,
+                focusNode: _orderNumberFocus,
                 decoration: const InputDecoration(labelText: 'Número de orden'),
               ),
             ),
@@ -258,11 +360,33 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             Expanded(
               child: TextField(
                 controller: _invoiceNumberCtrl,
+                focusNode: _invoiceNumberFocus,
                 textCapitalization: TextCapitalization.characters,
                 decoration: const InputDecoration(
-                  labelText: 'Número de factura',
-                  hintText: 'Ej. B0100000284',
+                  labelText: 'Número de factura *',
+                  hintText: 'Ej. 0004521',
+                  helperText: 'El que asigna el proveedor',
                 ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: TextField(
+                controller: _ncfCtrl,
+                focusNode: _ncfFocus,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  labelText: 'NCF (opcional)',
+                  hintText: 'Ej. B0100000284',
+                  helperText: 'Comprobante fiscal',
+                  // Se valida SOLO si trae contenido: no toda compra legítima
+                  // tiene comprobante, pero el que viene tiene que ser válido.
+                  errorText: NcfFormat.isValid(_ncfCtrl.text) ||
+                          _ncfCtrl.text.trim().isEmpty
+                      ? null
+                      : 'Formato de NCF inválido',
+                ),
+                onChanged: (_) => setState(() {}),
               ),
             ),
             const SizedBox(width: 12),
@@ -303,7 +427,12 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       ),
                     )
                     .toList(growable: false),
-                onChanged: (value) => setState(() => _supplierId = value),
+                onChanged: (value) {
+                  setState(() => _supplierId = value);
+                  // Cambiar de proveedor cambia las condiciones de pago: se
+                  // repropone el plazo (o se borra si el nuevo no tiene uno).
+                  _syncCreditTermsWithSupplier();
+                },
               ),
             ),
             const SizedBox(width: 6),
@@ -355,7 +484,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                     );
                     if (picked == null) return;
-                    setState(() => _expectedDate = picked);
+                    setState(() {
+                      _expectedDate = picked;
+                      // El vencimiento cuelga de la fecha del documento, no de
+                      // la de captura: si cambia la fecha, la ficha de plazo
+                      // recalcula sobre la nueva.
+                      final term = _creditTermDays;
+                      if (term != null) _creditDueDate = _dueDateFromTerm(term);
+                    });
                   },
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -379,6 +515,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         const SizedBox(height: 12),
         TextField(
           controller: _notesCtrl,
+          focusNode: _notesFocus,
           maxLines: 2,
           decoration: const InputDecoration(
             labelText: 'Notas',
@@ -404,6 +541,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         _lines.fold<double>(0, (sum, l) => sum + l.lineDiscountNet);
     final orderDiscount = DiscountInput.parse(_orderDiscountCtrl.text)
         .amountOn(subtotal + estimatedTax);
+    // Lo realmente adeudado: total menos el descuento global. Es el monto con
+    // el que nace la cuenta por pagar, no el bruto.
+    final total = subtotal + estimatedTax - orderDiscount;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -425,7 +565,8 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         ),
         const SizedBox(height: 6),
         const Text(
-          'Escribe el producto y presiona Enter, luego cantidad · Enter, luego costo · Enter.',
+          'Dispara la pistola o escribe el producto y presiona Enter, luego '
+          'cantidad · Enter, luego costo · Enter.',
           style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
         ),
         const SizedBox(height: 14),
@@ -446,13 +587,13 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               style: TextStyle(color: Color(0xFF64748B)),
             ),
           )
-        else ...[
+        else
           _buildLinesTable(),
-          const SizedBox(height: 20),
-          Align(
+        const SizedBox(height: 20),
+        Align(
             alignment: Alignment.centerRight,
             child: Container(
-              width: 320,
+              width: 340,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: const Color(0xFFF8FAFC),
@@ -471,11 +612,6 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  _SummaryRow(
-                    label: 'Líneas',
-                    value: '${_lines.length}',
-                  ),
-                  const SizedBox(height: 8),
                   _SummaryRow(
                     label: 'Subtotal (neto)',
                     value: currency.format(subtotal),
@@ -508,6 +644,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                         width: 110,
                         child: _MiniField(
                           controller: _orderDiscountCtrl,
+                          focusNode: _orderDiscountFocus,
                           hint: '0 ó 5%',
                           allowPercent: true,
                           onChanged: () => setState(() {}),
@@ -518,18 +655,252 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                   const Divider(height: 20),
                   _SummaryRow(
                     label: 'Total',
-                    value: currency.format(
-                      subtotal + estimatedTax - orderDiscount,
-                    ),
+                    value: currency.format(total),
                     bold: true,
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_lines.length} líneas · ${_trimNum(totalUnits)} unidades',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF64748B),
+                    ),
+                  ),
+                  ..._buildPaymentConditionSection(state, total, currency),
                 ],
               ),
             ),
           ),
-        ],
       ],
     );
+  }
+
+  // ─────────────────────────────────── Condición de pago / vencimiento ──
+
+  /// Selector Contado / A crédito, vencimiento y botón de guardar (§6).
+  ///
+  /// El permiso se comprueba ANTES de construir el control: sin
+  /// `compras.ordenes.credito` el selector no existe en el árbol y la compra
+  /// es al contado — no aparece deshabilitado.
+  List<Widget> _buildPaymentConditionSection(
+    PurchasesState state,
+    double total,
+    NumberFormat currency,
+  ) {
+    final canBuyOnCredit = ref
+        .watch(sessionProvider.notifier)
+        .hasPermission('compras.ordenes.credito');
+    final suggestion = _termsSuggestion(state);
+    final supplier = _selectedSupplier(state);
+    final warehouseName = state.warehouses
+        .where((w) => w.id == _warehouseId)
+        .map((w) => w.name)
+        .firstOrNull;
+    final dateFormat = DateFormat('dd/MM/yyyy');
+    // Lo que va a pasar de verdad al guardar, escrito debajo del botón.
+    final consequences = <String>[
+      if (_status == 'received')
+        '${_trimNum(totalUnits)} unidades a ${warehouseName ?? 'el almacén'}',
+      if (_isCredit && canBuyOnCredit) 'CxP en Créditos',
+    ];
+
+    return [
+      if (canBuyOnCredit) ...[
+        const Divider(height: 24),
+        const Text(
+          'CONDICIÓN DE PAGO',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: Color(0xFF64748B),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _ConditionChip(
+                label: 'Contado',
+                selected: !_isCredit,
+                onTap: () => setState(() => _isCredit = false),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _ConditionChip(
+                label: 'A crédito',
+                selected: _isCredit,
+                onTap: () {
+                  setState(() => _isCredit = true);
+                  _syncCreditTermsWithSupplier();
+                },
+              ),
+            ),
+          ],
+        ),
+        if (_isCredit) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Text(
+                'Vence',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF64748B),
+                  fontSize: 13,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                _creditDueDate == null
+                    ? 'Elige la fecha'
+                    : dateFormat.format(_creditDueDate!),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: _creditDueDate == null
+                      ? const Color(0xFFB45309)
+                      : const Color(0xFF0F172A),
+                ),
+              ),
+              if (_creditTermDays != null) ...[
+                const SizedBox(width: 6),
+                Text(
+                  '${_creditTermDays}d',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              for (final days in PaymentTerms.offeredDays) ...[
+                Expanded(
+                  child: _TermChip(
+                    days: days,
+                    selected: _creditTermDays == days,
+                    onTap: () => setState(() {
+                      _creditTermDays = days;
+                      _creditDueDate = _dueDateFromTerm(days);
+                    }),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              IconButton.outlined(
+                tooltip: 'Elegir fecha',
+                onPressed: _pickCreditDueDate,
+                icon: const Icon(Icons.event_outlined, size: 18),
+                style: IconButton.styleFrom(
+                  minimumSize: const Size(38, 38),
+                  maximumSize: const Size(38, 38),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
+          if (suggestion.hasText) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Condiciones del proveedor: «${suggestion.text}»'
+              '${suggestion.fromNumber ? '' : ' · sugerencia, no dato'}',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+            ),
+          ] else ...[
+            const SizedBox(height: 6),
+            const Text(
+              'El proveedor no tiene condiciones registradas: elige el '
+              'vencimiento a mano.',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFBFDBFE)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.account_balance_wallet_outlined,
+                  size: 16,
+                  color: Color(0xFF1D4ED8),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Nace una cuenta por pagar de ${currency.format(total)} a '
+                    '${supplier?.name ?? 'este proveedor'}, con la factura, '
+                    'el NCF y esta orden vinculados.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF1E3A8A),
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+      const SizedBox(height: 14),
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: state.saving ? null : _submit,
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: Text(_saveButtonLabel),
+        ),
+      ),
+      if (consequences.isNotEmpty) ...[
+        const SizedBox(height: 6),
+        Text(
+          consequences.join(' · '),
+          style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+        ),
+      ],
+    ];
+  }
+
+  /// El botón nombra sus consecuencias reales: un botón que promete algo que
+  /// no ocurre erosiona la confianza más rápido que uno escueto.
+  String get _saveButtonLabel {
+    final entersStock = _status == 'received';
+    if (_isCredit) {
+      return entersStock ? 'Guardar, stock y CxP' : 'Guardar orden y CxP';
+    }
+    return entersStock ? 'Guardar e ingresar stock' : 'Guardar orden';
+  }
+
+  /// Unidades digitadas (en unidad de COMPRA, que es como se cuentan las
+  /// cajas contra el papel).
+  double get totalUnits =>
+      _lines.fold<double>(0, (sum, l) => sum + l.enteredQty);
+
+  Future<void> _pickCreditDueDate() async {
+    final base = _creditDueDate ?? _dueDateFromTerm(30);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime.now().subtract(const Duration(days: 90)),
+      lastDate: DateTime.now().add(const Duration(days: 730)),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _creditDueDate = picked;
+      // Fecha a mano: ninguna ficha queda activa, porque ya no representa el
+      // plazo elegido.
+      _creditTermDays = null;
+    });
   }
 
   Widget _buildEntryRow(PurchasesState state) {
@@ -648,6 +1019,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                   width: 90,
                   child: TextField(
                     controller: _entryTaxPctCtrl,
+                    focusNode: _taxPctFocus,
                     enabled: selected != null,
                     textInputAction: TextInputAction.done,
                     keyboardType: const TextInputType.numberWithOptions(
@@ -703,6 +1075,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                 width: 120,
                 child: TextField(
                   controller: _entryDiscountCtrl,
+                  focusNode: _entryDiscountFocus,
                   enabled: selected != null,
                   textInputAction: TextInputAction.done,
                   keyboardType: const TextInputType.numberWithOptions(
@@ -756,13 +1129,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       optionsBuilder: (TextEditingValue value) {
         final raw = value.text.trim();
         if (raw.isEmpty) return const Iterable<_ProductOption>.empty();
-        final q = raw.toLowerCase();
+        // Nombre, SKU o CÓDIGO DE BARRAS: escribir el código completo a mano
+        // encuentra el insumo lo mismo que dispararle la pistola.
         final matches = state.inventoryItems
-            .where(
-              (it) =>
-                  it.name.toLowerCase().contains(q) ||
-                  it.sku.toLowerCase().contains(q),
-            )
+            .where((it) => it.matchesQuery(raw))
             .take(20)
             .map(_ProductOption.item)
             .toList();
@@ -773,32 +1143,23 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
         _productFieldCtrl = textController;
         _productFocus = focusNode;
+        _productOnFieldSubmitted = onFieldSubmitted;
         return TextField(
           controller: textController,
           focusNode: focusNode,
           decoration: const InputDecoration(
             labelText: 'Producto',
-            hintText: 'Busca por nombre o SKU…',
+            hintText: 'Nombre, SKU o código de barras…',
             prefixIcon: Icon(Icons.search),
             filled: true,
             fillColor: Colors.white,
           ),
           onSubmitted: (value) {
-            final query = value.trim().toLowerCase();
-            if (query.isNotEmpty) {
-              PurchaseInventoryItem? match;
-              for (final it in state.inventoryItems) {
-                if (it.sku.trim().toLowerCase() == query) {
-                  match = it;
-                  break;
-                }
-              }
-              if (match != null) {
-                _addSkuProductDirectly(match);
-                return;
-              }
-            }
-            onFieldSubmitted();
+            // El lector no consume las teclas: el mismo Enter que cerró un
+            // escaneo puede llegar hasta acá. Sin este guard, un disparo
+            // dispararía además la selección del autocompletado.
+            if (_justScanned) return;
+            _submitProductField(value, state);
           },
         );
       },
@@ -937,32 +1298,253 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   }
 
   void _addSkuProductDirectly(PurchaseInventoryItem item) {
+    _addOrIncrementLine(item);
+    _resetEntry();
+  }
+
+  /// Costo a prefijar en una línea nueva, en la moneda que espera el campo
+  /// según el modo de ITBIS vigente en el renglón de captura.
+  double _prefillCostFor(PurchaseInventoryItem item) {
     final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
     final netPurchaseUnit = hasPack ? item.cost * item.packSize : item.cost;
-    final cost = _entryTaxMode == _TaxMode.included
+    return _entryTaxMode == _TaxMode.included
         ? netPurchaseUnit * (1 + _entryTaxPct / 100)
         : netPurchaseUnit;
+  }
 
+  /// Agrega el insumo a la factura o, si ya está, sube su cantidad en 1.
+  /// Devuelve la línea afectada. NO se crea una segunda línea del mismo
+  /// insumo: veinte cajas del mismo producto tienen que dar una línea de
+  /// veinte, no veinte líneas de una.
+  _DraftItemControllers _addOrIncrementLine(
+    PurchaseInventoryItem item, {
+    String scannedCode = '',
+  }) {
+    late _DraftItemControllers line;
     setState(() {
-      final existingIndex = _lines.indexWhere((l) => l.inventoryItemId == item.id);
+      final existingIndex =
+          _lines.indexWhere((l) => l.inventoryItemId == item.id);
       if (existingIndex != -1) {
-        final currentQty = double.tryParse(_lines[existingIndex].quantity.text.trim()) ?? 0;
-        _lines[existingIndex].quantity.text = _trimNum(currentQty + 1);
+        line = _lines[existingIndex];
+        if (scannedCode.isEmpty) {
+          line.quantity.text = _DraftItemControllers._fmt(line.enteredQty + 1);
+        } else {
+          line.registerScanHit(scannedCode);
+        }
       } else {
-        _lines.add(
-          _DraftItemControllers.fromItem(
-            item,
-            qty: 1,
-            cost: cost,
-            taxMode: _entryTaxMode,
-            paid: 0,
-            taxPct: _entryTaxPct,
-          ),
+        line = _DraftItemControllers.fromItem(
+          item,
+          qty: 1,
+          cost: _prefillCostFor(item),
+          taxMode: _entryTaxMode,
+          paid: 0,
+          taxPct: _entryTaxPct,
+          scannedCode: scannedCode,
         );
+        _lines.add(line);
       }
     });
+    return line;
+  }
 
-    _resetEntry();
+  /// Devuelve el foco al buscador de producto, que es la puerta por la que
+  /// entran tanto el tecleo como el escaneo.
+  void _focusProductSearch() {
+    _scanCostFocus = null;
+    _productFocus?.requestFocus();
+  }
+
+  // ──────────────────────────────────────────── Lector de código de barras ──
+
+  /// Ventana en la que un Enter se considera parte del escaneo recién
+  /// procesado y no una confirmación del buscador.
+  bool get _justScanned {
+    final last = _lastScanAt;
+    if (last == null) return false;
+    return DateTime.now().difference(last) < const Duration(milliseconds: 400);
+  }
+
+  /// Campos de texto de ESTA pantalla, por foco. Sirve para saber si un
+  /// escaneo cayó donde no debía y para devolverle su valor anterior.
+  Map<FocusNode, TextEditingController> get _fieldsByFocus {
+    final map = <FocusNode, TextEditingController>{
+      _orderNumberFocus: _orderNumberCtrl,
+      _invoiceNumberFocus: _invoiceNumberCtrl,
+      _ncfFocus: _ncfCtrl,
+      _notesFocus: _notesCtrl,
+      _qtyFocus: _entryQtyCtrl,
+      _costFocus: _entryCostCtrl,
+      _paidFocus: _entryPaidCtrl,
+      _taxPctFocus: _entryTaxPctCtrl,
+      _entryDiscountFocus: _entryDiscountCtrl,
+      _orderDiscountFocus: _orderDiscountCtrl,
+    };
+    for (final line in _lines) {
+      map[line.quantityFocus] = line.quantity;
+      map[line.unitCostFocus] = line.unitCost;
+      map[line.paidFocus] = line.paid;
+      map[line.taxPctFocus] = line.taxPct;
+      map[line.discountFocus] = line.discount;
+    }
+    return map;
+  }
+
+  /// Un lector HID escribe como un teclado: los caracteres ya entraron en el
+  /// campo enfocado. Si ese campo no era el buscador, hay que sacarlos —
+  /// el campo conserva su valor anterior. Los formatters filtran caracteres,
+  /// así que se prueba también la proyección numérica del código.
+  void _undoTypedCode(TextEditingController controller, String code) {
+    final text = controller.text;
+    final candidates = <String>{
+      code,
+      code.replaceAll(RegExp(r'[^0-9.]'), ''),
+      code.replaceAll(RegExp(r'[^0-9.%]'), ''),
+    };
+    for (final candidate in candidates) {
+      if (candidate.isEmpty || !text.endsWith(candidate)) continue;
+      final restored = text.substring(0, text.length - candidate.length);
+      controller.value = TextEditingValue(
+        text: restored,
+        selection: TextSelection.collapsed(offset: restored.length),
+      );
+      return;
+    }
+  }
+
+  /// Un código de pistola: solo dígitos y suficientemente largo (EAN/UPC).
+  /// Sirve para no gritar «código no encontrado» cuando lo que hubo fue
+  /// tecleo humano cerrado con Enter, que es un flujo legítimo del registro.
+  static final RegExp _scannedCodeShape = RegExp(r'^\d{8,}$');
+
+  /// Reproduce el Enter del buscador: SKU exacto agrega directo; cualquier
+  /// otra cosa cae en la selección del autocompletado, como siempre.
+  void _submitProductField(String value, PurchasesState state) {
+    final query = value.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      for (final it in state.inventoryItems) {
+        if (it.sku.trim().toLowerCase() == query) {
+          _addSkuProductDirectly(it);
+          return;
+        }
+      }
+    }
+    _productOnFieldSubmitted?.call();
+  }
+
+  Future<void> _handleScan(String rawCode) async {
+    final code = rawCode.trim();
+    if (code.isEmpty || _scanBusy) return;
+    _lastScanAt = DateTime.now();
+
+    // ① ¿Dónde cayó el código? El lector escribe como un teclado, así que los
+    //    caracteres ya entraron en el campo enfocado: hay que sacarlos SIEMPRE
+    //    —un EAN convertido en costo es un error caro y silencioso— y decidir
+    //    si el escaneo se atiende o se descarta.
+    final focused = FocusManager.instance.primaryFocus;
+    if (focused != null && focused != _productFocus) {
+      final controller = _fieldsByFocus[focused];
+      if (controller != null) {
+        _undoTypedCode(controller, code);
+        // Única excepción: el costo donde el escaneo anterior dejó el foco.
+        if (focused != _scanCostFocus) {
+          setState(() {});
+          _snack(
+            'Escaneo descartado: el foco no estaba en el buscador de '
+            'producto. El campo conserva su valor.',
+          );
+          return;
+        }
+      }
+    }
+
+    _scanBusy = true;
+    try {
+      final vm = ref.read(purchasesViewModelProvider);
+      final state = vm.state;
+
+      // ② Catálogo ya cargado: barcode exacto y, si no, SKU — el mismo
+      //    criterio del buscador manual.
+      var matches = state.inventoryItems
+          .where((it) => it.barcode.trim().toLowerCase() == code.toLowerCase())
+          .toList(growable: false);
+      if (matches.isEmpty) {
+        matches = state.inventoryItems
+            .where((it) => it.sku.trim().toLowerCase() == code.toLowerCase())
+            .toList(growable: false);
+      }
+
+      // ③ Consulta en línea, por si el insumo se dio de alta después de
+      //    cargar la pantalla. El snapshot offline solo trae menu_items, no
+      //    insumos: sin conexión hay que decirlo, no fallar sin mensaje.
+      if (matches.isEmpty) {
+        try {
+          matches = await vm.findItemsByCode(code);
+        } catch (_) {
+          if (!mounted) return;
+          // El buscador recibió los caracteres del lector: se limpia para que
+          // el próximo disparo no se concatene con este.
+          _productFieldCtrl?.clear();
+          _snack(
+            'Sin conexión: escanear insumos requiere conexión. Puedes '
+            'agregarlos por nombre si ya están en la lista.',
+          );
+          return;
+        }
+      }
+      if (!mounted) return;
+
+      if (matches.isEmpty) {
+        if (_scannedCodeShape.hasMatch(code)) {
+          // La factura en curso queda como estaba: no se crea insumo ni línea.
+          _productFieldCtrl?.clear();
+          _snack('Código no encontrado: $code');
+        } else {
+          // No vino de la pistola: era tecleo cerrado con Enter.
+          _submitProductField(_productFieldCtrl?.text ?? code, state);
+        }
+        return;
+      }
+
+      // Un mismo código en dos insumos: se toma el primero y se avisa. La
+      // ambigüedad se resuelve en el catálogo, no en la captura.
+      final ambiguous = matches.length > 1;
+      _applyScanHit(
+        matches.first,
+        code,
+        warning: ambiguous
+            ? 'Código repetido en ${matches.length} insumos · '
+            : null,
+      );
+    } finally {
+      _scanBusy = false;
+    }
+  }
+
+  void _applyScanHit(
+    PurchaseInventoryItem item,
+    String code, {
+    String? warning,
+  }) {
+    final line = _addOrIncrementLine(item, scannedCode: code);
+    // El buscador recibió los caracteres del lector: se limpia para que la
+    // próxima ráfaga empiece de cero.
+    _productFieldCtrl?.clear();
+
+    final qty = _trimNum(line.enteredQty);
+    final unit = line.hasPack ? ' ${line.purchaseUnit}' : '';
+    _snack('${warning ?? ''}${item.name} · cantidad $qty$unit');
+
+    // El foco salta al costo, que es el único dato que la pistola no puede
+    // leer, con el valor seleccionado para que teclearlo lo reemplace.
+    _scanCostFocus = line.unitCostFocus;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      line.unitCostFocus.requestFocus();
+      line.unitCost.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: line.unitCost.text.length,
+      );
+    });
   }
 
   Widget _buildLinesTable() {
@@ -1010,8 +1592,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             line: _lines[i],
             currency: currency,
             onChanged: () => setState(() {}),
+            onCostSubmitted: _focusProductSearch,
             onRemove: () => setState(() {
               final removed = _lines.removeAt(i);
+              // La línea se va con su foco: no puede quedar como destino
+              // válido de escaneo un nodo que ya no existe.
+              if (identical(_scanCostFocus, removed.unitCostFocus)) {
+                _scanCostFocus = null;
+              }
               removed.dispose();
             }),
           ),
@@ -1029,14 +1617,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setLocal) {
-            final q = searchCtrl.text.trim().toLowerCase();
+            final q = searchCtrl.text.trim();
             final items = state.inventoryItems
-                .where(
-                  (it) =>
-                      q.isEmpty ||
-                      it.name.toLowerCase().contains(q) ||
-                      it.sku.toLowerCase().contains(q),
-                )
+                .where((it) => q.isEmpty || it.matchesQuery(q))
                 .toList(growable: false);
             final currency = NumberFormat.currency(
               locale: 'en_US',
@@ -1054,7 +1637,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       controller: searchCtrl,
                       autofocus: true,
                       decoration: const InputDecoration(
-                        labelText: 'Buscar por nombre o SKU',
+                        labelText: 'Buscar por nombre, SKU o código de barras',
                         prefixIcon: Icon(Icons.search),
                       ),
                       onChanged: (_) => setLocal(() {}),
@@ -1234,6 +1817,39 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       return;
     }
 
+    // El número de factura es el identificador con el que se le reclama al
+    // proveedor: se pide siempre.
+    final invoiceNumber = _invoiceNumberCtrl.text.trim();
+    if (invoiceNumber.isEmpty) {
+      _snack('Escribe el número de factura del proveedor.');
+      _invoiceNumberFocus.requestFocus();
+      return;
+    }
+
+    // El NCF es opcional, pero si viene tiene que ser válido: un NCF mal
+    // escrito no sirve para nada y solo se descubre meses después.
+    final ncfError = NcfFormat.validate(_ncfCtrl.text);
+    if (ncfError != null) {
+      _snack(ncfError);
+      _ncfFocus.requestFocus();
+      return;
+    }
+    final ncf = NcfFormat.normalize(_ncfCtrl.text);
+
+    // Comprometer dinero futuro exige el permiso, aunque el selector ya no se
+    // dibuje sin él.
+    final canBuyOnCredit = ref
+        .read(sessionProvider.notifier)
+        .hasPermission('compras.ordenes.credito');
+    final isCredit = _isCredit && canBuyOnCredit;
+    if (isCredit && _creditDueDate == null) {
+      _snack(
+        'Elige el vencimiento de la cuenta por pagar: las condiciones del '
+        'proveedor no permiten deducir una fecha.',
+      );
+      return;
+    }
+
     // Descuento global de la orden (monto o %) sobre subtotal + ITBIS.
     final grossTotal = items.fold<double>(
       0,
@@ -1242,28 +1858,39 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     final orderDiscount =
         DiscountInput.parse(_orderDiscountCtrl.text).amountOn(grossTotal);
 
-    final orderId = await ref
-        .read(purchasesViewModelProvider)
-        .createPurchaseOrder(
-          supplierId: _supplierId!,
-          warehouseId: _warehouseId!,
-          orderNumber: _orderNumberCtrl.text.trim(),
-          status: _status,
-          expectedDate: _expectedDate,
-          notes: _notesCtrl.text.trim(),
-          invoiceNumber: _invoiceNumberCtrl.text.trim(),
-          items: items,
-          updateItemCost: true,
-          discount: orderDiscount,
-        );
+    final notes = _notesCtrl.text.trim();
+    final orderNumber = _orderNumberCtrl.text.trim();
+
+    final String orderId;
+    try {
+      orderId = await ref
+          .read(purchasesViewModelProvider)
+          .createPurchaseOrder(
+            supplierId: _supplierId!,
+            warehouseId: _warehouseId!,
+            orderNumber: orderNumber,
+            status: _status,
+            expectedDate: _expectedDate,
+            notes: notes,
+            invoiceNumber: invoiceNumber,
+            ncf: ncf.isEmpty ? null : ncf,
+            items: items,
+            updateItemCost: true,
+            discount: orderDiscount,
+          );
+    } catch (_) {
+      // El motivo ya quedó en state.error, que la pantalla pinta arriba.
+      return;
+    }
 
     if (!mounted) return;
     if (ref.read(purchasesViewModelProvider).state.error != null) return;
 
     // Compra a crédito → cuenta por pagar vinculada a la orden. La orden ya
-    // quedó registrada; si la CxP falla, avisamos para registrarla manual en
-    // Créditos → Cuentas por Pagar (no se revierte la compra).
-    if (_isCredit) {
+    // quedó registrada; si la CxP falla queda un estado partido (mercancía
+    // dentro, deuda sin registrar) que NO puede ser silencioso: se marca la
+    // orden para que el listado lo muestre.
+    if (isCredit) {
       // La CxP nace por lo realmente adeudado: total menos descuento global.
       final total = grossTotal - orderDiscount;
       try {
@@ -1277,22 +1904,50 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
           supplierId: _supplierId!,
           amount: double.parse(total.toStringAsFixed(2)),
           purchaseOrderId: orderId,
-          invoiceNumber: _invoiceNumberCtrl.text.trim().isEmpty
-              ? null
-              : _invoiceNumberCtrl.text.trim(),
+          invoiceNumber: invoiceNumber,
+          ncf: ncf.isEmpty ? null : ncf,
           dueDate: _creditDueDate,
-          notes: 'Compra a crédito ${_orderNumberCtrl.text.trim()}',
+          notes: 'Compra a crédito $orderNumber',
         );
+        if (!mounted) return;
+        _announcePayableCreated();
       } catch (e) {
+        await ref
+            .read(purchasesViewModelProvider)
+            .markPayablePending(orderId: orderId, currentNotes: notes);
+        if (!mounted) return;
         _snack(
-          'Compra registrada, pero no se pudo crear la cuenta por pagar: $e. '
-          'Regístrala manualmente en Créditos → Cuentas por Pagar.',
+          'Compra registrada, pero NO se creó la cuenta por pagar: $e. '
+          'La orden quedó marcada como «CxP pendiente de registrar» en el '
+          'listado; regístrala en Créditos → Cuentas por Pagar.',
         );
       }
     }
 
     if (!mounted) return;
     context.go(AppRoutes.purchasesList);
+  }
+
+  /// Avisa que la deuda nació y ofrece ir a verla. Si el rol no tiene
+  /// `creditos.acceso`, informa igual pero no ofrece navegar.
+  void _announcePayableCreated() {
+    final canSeeCredits =
+        ref.read(sessionProvider.notifier).hasPermission('creditos.acceso');
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Cuenta por pagar creada y vinculada a la orden.'),
+          duration: const Duration(seconds: 4),
+          action: canSeeCredits
+              ? SnackBarAction(
+                  label: 'Ver en Créditos',
+                  onPressed: () => context.go(AppRoutes.credits),
+                )
+              : null,
+        ),
+      );
   }
 
   void _snack(String message) {
@@ -1408,6 +2063,9 @@ class _LineRow extends StatelessWidget {
   final NumberFormat currency;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
+  /// Enter en el costo devuelve el foco al buscador, para que el ciclo
+  /// disparar → costo → disparar no obligue a tocar el ratón.
+  final VoidCallback onCostSubmitted;
 
   const _LineRow({
     super.key,
@@ -1415,6 +2073,7 @@ class _LineRow extends StatelessWidget {
     required this.currency,
     required this.onChanged,
     required this.onRemove,
+    required this.onCostSubmitted,
   });
 
   @override
@@ -1433,13 +2092,29 @@ class _LineRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  line.description.text,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        line.description.text,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    // Marca de origen: distinguir lo escaneado de lo tecleado
+                    // es lo que permite auditar contra el papel.
+                    if (line.scanCount > 0) ...[
+                      const SizedBox(width: 6),
+                      _ScannedTag(count: line.scanCount),
+                    ],
+                  ],
                 ),
-                if (line.hasPack)
+                if (line.scannedCode.isNotEmpty || line.hasPack)
                   Text(
-                    '1 ${line.purchaseUnit} = ${_trimNum(line.packSize)} ${line.baseUnit}',
+                    [
+                      if (line.scannedCode.isNotEmpty) line.scannedCode,
+                      if (line.hasPack)
+                        '1 ${line.purchaseUnit} = ${_trimNum(line.packSize)} ${line.baseUnit}',
+                    ].join(' · '),
                     style: const TextStyle(
                       fontSize: 11,
                       color: Color(0xFF94A3B8),
@@ -1453,6 +2128,7 @@ class _LineRow extends StatelessWidget {
             flex: 2,
             child: _MiniField(
               controller: line.quantity,
+              focusNode: line.quantityFocus,
               suffix: line.hasPack ? line.purchaseUnit : null,
               onChanged: onChanged,
             ),
@@ -1460,13 +2136,19 @@ class _LineRow extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             flex: 2,
-            child: _MiniField(controller: line.unitCost, onChanged: onChanged),
+            child: _MiniField(
+              controller: line.unitCost,
+              focusNode: line.unitCostFocus,
+              onChanged: onChanged,
+              onSubmitted: onCostSubmitted,
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
             flex: 2,
             child: _MiniField(
               controller: line.discount,
+              focusNode: line.discountFocus,
               hint: '0 ó %',
               allowPercent: true,
               onChanged: () {
@@ -1495,6 +2177,7 @@ class _LineRow extends StatelessWidget {
                   Expanded(
                     child: _MiniField(
                       controller: line.taxPct,
+                      focusNode: line.taxPctFocus,
                       suffix: '%',
                       onChanged: () {
                         // % y pagado son alternativas: digitar el % descarta
@@ -1514,6 +2197,7 @@ class _LineRow extends StatelessWidget {
             child: isSeparate
                 ? _MiniField(
                     controller: line.paid,
+                    focusNode: line.paidFocus,
                     hint: 'Pagado/und.',
                     onChanged: () {
                       // El pagado real ya trae el descuento: digitarlo
@@ -1564,26 +2248,179 @@ class _LineRow extends StatelessWidget {
   }
 }
 
+/// Marca de origen de una línea creada o incrementada por la pistola.
+class _ScannedTag extends StatelessWidget {
+  final int count;
+
+  const _ScannedTag({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFFA7F3D0)),
+      ),
+      child: Text(
+        count > 1 ? 'escaneado ×$count' : 'escaneado',
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF047857),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chip del selector de condición de pago (Contado / A crédito).
+class _ConditionChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ConditionChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? primary.withValues(alpha: 0.10) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? primary : const Color(0xFFE2E8F0),
+            width: selected ? 1.6 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            color: selected ? primary : const Color(0xFF64748B),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Ficha de plazo (15 / 30 / 45 / 60 días).
+class _TermChip extends StatelessWidget {
+  final int days;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TermChip({
+    required this.days,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 38,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? primary.withValues(alpha: 0.10) : Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? primary : const Color(0xFFE2E8F0),
+            width: selected ? 1.6 : 1,
+          ),
+        ),
+        child: Text(
+          '$days',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+            color: selected ? primary : const Color(0xFF64748B),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Estado del lector HID, que refleja el flag `barcodeEnabled` del negocio.
+class _ScannerBadge extends StatelessWidget {
+  final bool enabled;
+
+  const _ScannerBadge({required this.enabled});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enabled ? const Color(0xFF059669) : const Color(0xFF94A3B8);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: enabled ? const Color(0xFFECFDF5) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: enabled ? const Color(0xFFA7F3D0) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.qr_code_scanner, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            enabled ? 'Pistola lista' : 'Pistola desactivada',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MiniField extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode? focusNode;
   final String? suffix;
   final String? hint;
   // Permite el carácter '%' (campos de descuento: monto RD$ o porcentaje).
   final bool allowPercent;
   final VoidCallback onChanged;
+  final VoidCallback? onSubmitted;
 
   const _MiniField({
     required this.controller,
     required this.onChanged,
+    this.focusNode,
     this.suffix,
     this.hint,
     this.allowPercent = false,
+    this.onSubmitted,
   });
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [
         FilteringTextInputFormatter.allow(
@@ -1592,6 +2429,7 @@ class _MiniField extends StatelessWidget {
       ],
       textAlign: TextAlign.center,
       style: const TextStyle(fontSize: 14),
+      onSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
       decoration: InputDecoration(
         isDense: true,
         hintText: hint,
@@ -1693,6 +2531,21 @@ class _DraftItemControllers {
   // neto, ITBIS, costo maestro y kardex salen del costo real pagado.
   // Descuento y pagado son alternativas: la UI limpia uno al digitar el otro.
   final TextEditingController discount;
+  // Foco de cada campo editable de la línea. Existen por dos razones: el
+  // escaneo devuelve el foco al COSTO de la línea que acaba de tocar (es el
+  // único dato que la pistola no puede leer), y saber qué campo estaba
+  // enfocado permite descartar un código que se coló en un campo numérico.
+  final FocusNode quantityFocus = FocusNode();
+  final FocusNode unitCostFocus = FocusNode();
+  final FocusNode paidFocus = FocusNode();
+  final FocusNode taxPctFocus = FocusNode();
+  final FocusNode discountFocus = FocusNode();
+  /// Código leído que dio origen a la línea (vacío si se tecleó). Se conserva
+  /// para poder auditar contra el papel cuando el total no cuadra:
+  /// distinguir lo escaneado de lo tecleado señala dónde buscar.
+  String scannedCode;
+  /// Cuántos disparos de pistola cayeron sobre esta línea.
+  int scanCount;
   String? inventoryItemId;
   _TaxMode taxMode;
   // Snapshot del empaque del insumo seleccionado. La cantidad/costo se
@@ -1708,6 +2561,8 @@ class _DraftItemControllers {
     double paid = 0,
     double taxPct = 18,
     String discountText = '',
+    this.scannedCode = '',
+    this.scanCount = 0,
     this.inventoryItemId,
     this.taxMode = _TaxMode.included,
     this.purchaseUnit = '',
@@ -1728,6 +2583,7 @@ class _DraftItemControllers {
     required double paid,
     double taxPct = 18,
     String discountText = '',
+    String scannedCode = '',
   }) {
     final hasPack = item.packSize > 1 && item.purchaseUnit.trim().isNotEmpty;
     return _DraftItemControllers(
@@ -1737,6 +2593,8 @@ class _DraftItemControllers {
       paid: paid,
       taxPct: taxPct,
       discountText: discountText,
+      scannedCode: scannedCode,
+      scanCount: scannedCode.isEmpty ? 0 : 1,
       inventoryItemId: item.id,
       taxMode: taxMode,
       purchaseUnit: hasPack ? item.purchaseUnit : '',
@@ -1751,6 +2609,19 @@ class _DraftItemControllers {
   }
 
   bool get hasPack => packSize > 1 && purchaseUnit.trim().isNotEmpty;
+
+  /// Cantidad digitada, en unidad de COMPRA.
+  double get enteredQty => _enteredQty;
+
+  /// Un disparo más de la pistola sobre esta misma línea: sube la cantidad en
+  /// 1 en vez de crear una segunda línea del mismo insumo. Contar veinte
+  /// cajas de un producto tiene que dar una línea de veinte, no veinte líneas
+  /// de una; sin eso el cuadre contra el papel se vuelve imposible.
+  void registerScanHit(String code) {
+    scannedCode = code;
+    scanCount += 1;
+    quantity.text = _fmt(_enteredQty + 1);
+  }
 
   double get _enteredQty => double.tryParse(quantity.text.trim()) ?? 0;
   double get _enteredCost => double.tryParse(unitCost.text.trim()) ?? 0;
@@ -1856,5 +2727,10 @@ class _DraftItemControllers {
     paid.dispose();
     taxPct.dispose();
     discount.dispose();
+    quantityFocus.dispose();
+    unitCostFocus.dispose();
+    paidFocus.dispose();
+    taxPctFocus.dispose();
+    discountFocus.dispose();
   }
 }

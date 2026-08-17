@@ -5,6 +5,12 @@ class PurchaseSupplier {
   final String phone;
   final String email;
   final bool isActive;
+  /// Condiciones de pago tal como las escribió el negocio («30 días»,
+  /// «contado», «50% anticipo»). Se muestran literales; no se interpretan.
+  final String paymentTerms;
+  /// Días de plazo (mig 20260814_0003). Cuando existe, alimenta el
+  /// vencimiento por defecto de la cuenta por pagar. `null` = sin dato.
+  final int? paymentTermsDays;
 
   const PurchaseSupplier({
     required this.id,
@@ -13,6 +19,8 @@ class PurchaseSupplier {
     required this.phone,
     required this.email,
     required this.isActive,
+    this.paymentTerms = '',
+    this.paymentTermsDays,
   });
 
   factory PurchaseSupplier.fromMap(Map<String, dynamic> map) {
@@ -23,6 +31,12 @@ class PurchaseSupplier {
       phone: map['phone']?.toString() ?? '',
       email: map['email']?.toString() ?? '',
       isActive: map['is_active'] != false,
+      paymentTerms: map['payment_terms']?.toString() ?? '',
+      paymentTermsDays: () {
+        final raw = map['payment_terms_days'];
+        if (raw is num) return raw.toInt();
+        return int.tryParse(raw?.toString() ?? '');
+      }(),
     );
   }
 }
@@ -54,6 +68,9 @@ class PurchaseInventoryItem {
   final String unit; // unidad BASE de stock
   final double cost;
   final bool isActive;
+  /// Código de barras del insumo. La columna ya existía; el buscador del
+  /// registro de compra no la consultaba (solo nombre y SKU).
+  final String barcode;
   // Conversión de empaque: se compra en purchaseUnit (ej. botella) que
   // contiene packSize unidades base (ej. 750 ml). '' / 1 = sin empaque.
   final String purchaseUnit;
@@ -66,9 +83,30 @@ class PurchaseInventoryItem {
     required this.unit,
     required this.cost,
     required this.isActive,
+    this.barcode = '',
     this.purchaseUnit = '',
     this.packSize = 1,
   });
+
+  /// Criterio ÚNICO del buscador manual del registro de compra: nombre, SKU o
+  /// código de barras. Escanear y teclear tienen que resolver igual, así que
+  /// el código completo escrito a mano encuentra el insumo lo mismo que la
+  /// pistola.
+  bool matchesQuery(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return false;
+    return name.toLowerCase().contains(q) ||
+        sku.toLowerCase().contains(q) ||
+        barcode.toLowerCase().contains(q);
+  }
+
+  /// Coincidencia EXACTA por código de barras o SKU, en ese orden de
+  /// prioridad — es lo que resuelve un escaneo (§5.2 del PRD).
+  bool matchesCode(String code) {
+    final c = code.trim().toLowerCase();
+    if (c.isEmpty) return false;
+    return barcode.trim().toLowerCase() == c || sku.trim().toLowerCase() == c;
+  }
 
   factory PurchaseInventoryItem.fromMap(Map<String, dynamic> map) {
     double toDouble(dynamic value) {
@@ -83,6 +121,7 @@ class PurchaseInventoryItem {
       unit: map['unit']?.toString() ?? 'unidad',
       cost: toDouble(map['cost']),
       isActive: map['is_active'] != false,
+      barcode: map['barcode']?.toString() ?? '',
       purchaseUnit: map['purchase_unit']?.toString() ?? '',
       packSize: () {
         final v = toDouble(map['pack_size']);
@@ -92,6 +131,15 @@ class PurchaseInventoryItem {
   }
 }
 
+/// Marca que se deja en las notas de la orden cuando la compra se registró a
+/// crédito pero la cuenta por pagar NO llegó a nacer (§6.4 del PRD).
+///
+/// Mientras la orden y la CxP no se guarden como una sola operación atómica
+/// (F6), ese estado partido —mercancía ingresada, deuda sin registrar— tiene
+/// que ser VISIBLE en el listado y no un aviso que desaparece a los dos
+/// segundos: solo se descubre cuando el proveedor viene a cobrar.
+const kPendingPayableTag = '[CxP pendiente de registrar]';
+
 class PurchaseOrderSummary {
   final String id;
   final String supplierId;
@@ -99,8 +147,11 @@ class PurchaseOrderSummary {
   final String warehouseId;
   final String warehouseName;
   final String orderNumber;
-  /// Número de factura/NCF físico del proveedor (distinto del folio interno).
+  /// Número propio de la factura del proveedor — el identificador con el que
+  /// se le reclama. El comprobante fiscal viaja aparte, en [ncf].
   final String invoiceNumber;
+  /// Comprobante fiscal (NCF/e-CF) de la factura. Vacío es legítimo.
+  final String ncf;
   final String status;
   final double total;
   final String notes;
@@ -116,6 +167,7 @@ class PurchaseOrderSummary {
     required this.warehouseName,
     required this.orderNumber,
     required this.invoiceNumber,
+    this.ncf = '',
     required this.status,
     required this.total,
     required this.notes,
@@ -123,6 +175,9 @@ class PurchaseOrderSummary {
     required this.receivedDate,
     required this.createdAt,
   });
+
+  /// La compra se guardó a crédito pero la deuda no quedó registrada.
+  bool get payablePending => notes.contains(kPendingPayableTag);
 
   factory PurchaseOrderSummary.fromMap(
     Map<String, dynamic> map, {
@@ -147,6 +202,7 @@ class PurchaseOrderSummary {
       warehouseName: warehouseName,
       orderNumber: map['order_number']?.toString() ?? 'PO-00000',
       invoiceNumber: map['invoice_number']?.toString() ?? '',
+      ncf: map['ncf']?.toString() ?? '',
       status: map['status']?.toString() ?? 'draft',
       total: toDouble(map['total']),
       notes: map['notes']?.toString() ?? '',
