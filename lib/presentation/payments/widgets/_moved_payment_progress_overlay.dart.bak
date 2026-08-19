@@ -1,0 +1,260 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../state/payment_state.dart';
+
+/// Overlay de progreso del cobro, con las etapas nombradas.
+///
+/// Reemplaza al spinner mudo con "Procesando pago...". Ese texto alcanzaba
+/// cuando el cobro era un solo RPC de milisegundos, pero con la emisión e-CF
+/// el flujo pasó a bloquear hasta 8 segundos esperando a la DGII. Sin decir
+/// qué se está esperando, esos segundos se leen como app colgada y el cajero
+/// vuelve a tocar Cobrar.
+///
+/// Las etapas se pintan como una lista vertical: la cumplida con check, la
+/// activa con spinner y en negrita, la pendiente en gris. Es la misma lectura
+/// que un envío de paquete — se ve de un vistazo dónde va y cuánto falta.
+class PaymentProgressOverlay extends StatelessWidget {
+  const PaymentProgressOverlay({
+    super.key,
+    required this.stage,
+    required this.isElectronic,
+  });
+
+  /// Etapa en curso.
+  final PaymentStage stage;
+
+  /// Si el comprobante es electrónico. Cuando es NCF de papel la etapa de
+  /// DGII no se dibuja: no existe esa espera y listarla como "pendiente"
+  /// haría creer que el cobro va a tardar más de lo que tarda.
+  final bool isElectronic;
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = <_Step>[
+      const _Step(PaymentStage.registrando, 'Registrando el cobro'),
+      if (isElectronic)
+        const _Step(PaymentStage.dgii, 'Consultando con la DGII'),
+      const _Step(PaymentStage.imprimiendo, 'Imprimiendo comprobante'),
+    ];
+
+    final activeIdx = steps.indexWhere((s) => s.stage == stage);
+
+    return Positioned.fill(
+      child: ColoredBox(
+        color: AppColors.background.withValues(alpha: 0.92),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: 44,
+                    bottom: AppSpacing.xl,
+                  ),
+                  child: Text(
+                    'Cobrando',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.foreground,
+                    ),
+                  ),
+                ),
+                for (var i = 0; i < steps.length; i++)
+                  _StepRow(
+                    label: steps[i].label,
+                    // activeIdx es -1 mientras stage sigue en idle (el frame
+                    // entre el tap y el primer copyWith): ahí nada va hecho.
+                    done: activeIdx >= 0 && i < activeIdx,
+                    active: i == activeIdx,
+                    isLast: i == steps.length - 1,
+                  ),
+                if (isElectronic && stage == PaymentStage.dgii)
+                  const Padding(
+                    padding: EdgeInsets.only(left: 44, top: AppSpacing.lg),
+                    child: _DgiiHint(),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Step {
+  const _Step(this.stage, this.label);
+  final PaymentStage stage;
+  final String label;
+}
+
+/// Una fila: indicador + etiqueta + el riel que la une con la siguiente.
+class _StepRow extends StatelessWidget {
+  const _StepRow({
+    required this.label,
+    required this.done,
+    required this.active,
+    required this.isLast,
+  });
+
+  final String label;
+  final bool done;
+  final bool active;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = done || active
+        ? AppColors.primary
+        : AppColors.mutedForeground;
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: _StepIndicator(done: done, active: active),
+              ),
+              if (!isLast)
+                Expanded(
+                  child: Container(
+                    width: 2,
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    color: done
+                        ? AppColors.primary.withValues(alpha: 0.35)
+                        : AppColors.mutedForeground.withValues(alpha: 0.2),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: 4,
+                bottom: isLast ? 0 : AppSpacing.lg,
+              ),
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 200),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                  color: color,
+                ),
+                child: Text(label),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Círculo de estado: check si ya pasó, spinner si está en curso, punto
+/// hueco si falta.
+class _StepIndicator extends StatelessWidget {
+  const _StepIndicator({required this.done, required this.active});
+
+  final bool done;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    if (done) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: AppColors.primary,
+          shape: BoxShape.circle,
+        ),
+        child: const Center(
+          child: Icon(Icons.check, size: 16, color: Colors.white),
+        ),
+      );
+    }
+
+    if (active) {
+      return Padding(
+        padding: const EdgeInsets.all(2),
+        child: CircularProgressIndicator(
+          strokeWidth: 2.5,
+          color: AppColors.primary,
+        ),
+      );
+    }
+
+    return Center(
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: AppColors.mutedForeground.withValues(alpha: 0.45),
+            width: 2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Nota bajo la etapa de DGII. Aparece a los 2 segundos, no de una: en la
+/// mayoría de los cobros Alanube responde en 1-3s y mostrarla siempre
+/// sugeriría que la espera es larga cuando no lo es.
+class _DgiiHint extends StatefulWidget {
+  const _DgiiHint();
+
+  @override
+  State<_DgiiHint> createState() => _DgiiHintState();
+}
+
+class _DgiiHintState extends State<_DgiiHint> {
+  bool _visible = false;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Timer cancelable, no Future.delayed: el cobro suele resolverse antes de
+    // los 2s y el overlay se desmonta. Un delayed sin cancelar sigue vivo
+    // hasta que dispara, lo que deja timers colgando por cada cobro.
+    _timer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _visible = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: _visible ? 1 : 0,
+      duration: const Duration(milliseconds: 300),
+      child: Text(
+        'Estamos firmando la factura electrónica.\nNo cierres esta ventana.',
+        style: TextStyle(
+          fontSize: 12.5,
+          height: 1.45,
+          color: AppColors.mutedForeground,
+        ),
+      ),
+    );
+  }
+}

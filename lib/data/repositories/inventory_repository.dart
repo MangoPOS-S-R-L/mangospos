@@ -266,10 +266,133 @@ class InventoryRepository {
     }
   }
 
-  /// Filtro case-insensitive contra name/sku/description. Compartido por
-  /// el branch online (post-fetch, antes de mapear) y por el branch
-  /// offline (sobre el snapshot del cache). Mantenerlo en un solo punto
-  /// evita drift entre los dos paths.
+  /// Insumos del negocio con el stock DESGLOSADO por bodega (Insumos v2).
+  ///
+  /// A diferencia de [getItems] —que devuelve lo PRESENTE en una bodega—
+  /// acá se trae el maestro completo del negocio más la matriz
+  /// (insumo × bodega) en dos lecturas. La pantalla necesita las dos cosas:
+  /// una fila por insumo y una columna por bodega, incluyendo los ceros
+  /// ("acá no hay") y los insumos que todavía no tienen fila en ninguna.
+  ///
+  /// [warehouseIds] son las bodegas VISIBLES (activas, sin `__IN_TRANSIT__`).
+  /// El total de cada insumo es la suma de esas bodegas, así que la mercancía
+  /// en tránsito no infla el stock del negocio.
+  Future<InventoryStockMatrix> getItemsMatrix({
+    required String businessId,
+    required List<String> warehouseIds,
+    String? query,
+  }) async {
+    const columns =
+        'id, sku, name, description, unit, cost, min_stock, max_stock, '
+        'is_active, costing_method, barcode, tracks_lots, item_classification, '
+        'purchase_unit, pack_size';
+    final normalized = query?.trim();
+
+    double toQty(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '') ?? 0;
+    }
+
+    InventoryStockMatrix build(
+      List<Map<String, dynamic>> itemsRaw,
+      Map<String, Map<String, double>> matrix, {
+      required bool fromCache,
+    }) {
+      final filtered = (normalized == null || normalized.isEmpty)
+          ? itemsRaw
+          : _filterRawItems(itemsRaw, normalized);
+      return InventoryStockMatrix(
+        items: filtered.map((item) {
+          final id = item['id']?.toString() ?? '';
+          final row = matrix[id];
+          final total = row == null
+              ? 0.0
+              : row.values.fold<double>(0, (acc, qty) => acc + qty);
+          return InventoryItemSummary.fromMap(item, stock: total);
+        }).toList(growable: false),
+        byWarehouse: matrix,
+        fromCache: fromCache,
+      );
+    }
+
+    try {
+      final itemsResponse = await _client
+          .from(InventoryQueries.tableInventoryItems)
+          .select(columns)
+          .eq('business_id', businessId)
+          .order('name');
+      final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
+
+      final matrix = <String, Map<String, double>>{};
+      final byWarehouse = <String, Map<String, double>>{
+        for (final id in warehouseIds) id: <String, double>{},
+      };
+
+      if (warehouseIds.isNotEmpty) {
+        final stockResponse = await _client
+            .from(InventoryQueries.tableInventoryStock)
+            .select('item_id, warehouse_id, quantity')
+            .inFilter('warehouse_id', warehouseIds);
+        for (final row in List<Map<String, dynamic>>.from(stockResponse)) {
+          final itemId = row['item_id']?.toString();
+          final warehouseId = row['warehouse_id']?.toString();
+          if (itemId == null || itemId.isEmpty) continue;
+          if (warehouseId == null || warehouseId.isEmpty) continue;
+          final qty = toQty(row['quantity']);
+          (matrix[itemId] ??= <String, double>{})[warehouseId] = qty;
+          byWarehouse[warehouseId]?[itemId] = qty;
+        }
+      }
+
+      // Hidratamos el cache offline con el MISMO formato por bodega que usa
+      // `getItems`: así Insumos y el cuadre de stock comparten snapshot en
+      // vez de mantener dos representaciones que se desincronizan.
+      for (final entry in byWarehouse.entries) {
+        unawaited(
+          _cache.saveItemsSnapshot(
+            businessId: businessId,
+            warehouseId: entry.key,
+            itemsRaw: itemsRaw,
+            stockByItem: entry.value,
+          ),
+        );
+      }
+      _lastReadFromCache = false;
+      return build(itemsRaw, matrix, fromCache: false);
+    } catch (e) {
+      if (!_isConnectivityError(e)) rethrow;
+
+      // Offline: reconstruimos la matriz desde los snapshots por bodega.
+      // El maestro de insumos es el mismo en todos, así que basta el primero
+      // que exista; si no hay ninguno, propagamos el error original.
+      List<Map<String, dynamic>>? itemsRaw;
+      final matrix = <String, Map<String, double>>{};
+      for (final warehouseId in warehouseIds) {
+        final snapshot = await _cache.loadItemsSnapshot(
+          businessId: businessId,
+          warehouseId: warehouseId,
+        );
+        if (snapshot == null) continue;
+        itemsRaw ??= snapshot.items;
+        snapshot.stock.forEach((itemId, qty) {
+          (matrix[itemId] ??= <String, double>{})[warehouseId] = qty;
+        });
+      }
+      if (itemsRaw == null) rethrow;
+      debugPrint('[inventory] getItemsMatrix cayó al cache local: $e');
+      _lastReadFromCache = true;
+      return build(itemsRaw, matrix, fromCache: true);
+    }
+  }
+
+  /// Filtro case-insensitive contra name/sku/description/barcode.
+  /// Compartido por el branch online (post-fetch, antes de mapear) y por el
+  /// branch offline (sobre el snapshot del cache). Mantenerlo en un solo
+  /// punto evita drift entre los dos paths.
+  ///
+  /// El barcode entra al filtro porque la barra de búsqueda de Insumos
+  /// acepta el disparo de la pistola: lo escaneado llega como texto y tiene
+  /// que resolver al insumo, no quedar en "sin coincidencias".
   List<Map<String, dynamic>> _filterRawItems(
     List<Map<String, dynamic>> items,
     String query,
@@ -279,9 +402,11 @@ class InventoryRepository {
       final name = item['name']?.toString().toLowerCase() ?? '';
       final sku = item['sku']?.toString().toLowerCase() ?? '';
       final desc = item['description']?.toString().toLowerCase() ?? '';
+      final barcode = item['barcode']?.toString().toLowerCase() ?? '';
       return name.contains(lower) ||
           sku.contains(lower) ||
-          desc.contains(lower);
+          desc.contains(lower) ||
+          (barcode.isNotEmpty && barcode.contains(lower));
     }).toList(growable: false);
   }
 

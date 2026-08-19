@@ -20,6 +20,9 @@
 //  4. RESPETA EL ANCHO DE PAPEL: 48 columnas a 80mm, 32 a 58mm.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mangopos/core/printing/star/esc_pos_raster_encoder.dart';
+import 'package:mangopos/core/printing/star/star_print_adapter.dart';
+import 'package:mangopos/data/models/business_profile.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/services/printing/esc_pos_generator.dart';
@@ -90,6 +93,7 @@ PrintTicket _modernInvoice({
   String? fiscalType = 'B02',
   bool isElectronicCf = false,
   String title = '*** FACTURA ***',
+  List<int>? logoBytes,
 }) => PrintTicketService.generateInvoice(
   order: _order(),
   items: items ?? [_item(notes: 'Sin cebolla')],
@@ -108,7 +112,49 @@ PrintTicket _modernInvoice({
   template: 'modern',
   taxBreakdown: const [(label: 'ITBIS (18%)', amount: 180)],
   paperWidth: paperWidth,
+  logoBytes: logoBytes,
+  // El bloque `logo` viene apagado de fábrica: sin encenderlo, pasar bytes
+  // de logo no imprime nada y la prueba no reproduciría el caso real.
+  headerBlocks: logoBytes == null
+      ? null
+      : [
+          const TicketBlock(key: 'logo', enabled: true),
+          ...TicketBlocks.defaultHeader.where((b) => b.key != 'logo'),
+        ],
 );
+
+/// Un logo diminuto emitido como `GS v 0`, igual que `raster_image_esc_pos`.
+const _logoBytes = <int>[
+  0x1B, 0x61, 0x01, //
+  0x1D, 0x76, 0x30, 0x00, 0x01, 0x00, 0x01, 0x00, 0xFF,
+  0x1B, 0x61, 0x00,
+];
+
+PrinterConfig _escPosPrinter() => PrinterConfig(
+  id: 'p1',
+  businessId: 'b1',
+  name: 'POS-80 Caja',
+  type: 'network',
+  isActive: true,
+  paperWidth: 80,
+  connectionConfig: const {},
+  createdAt: DateTime(2026, 1, 1),
+);
+
+PrintTicket _modernPrecheck({String title = 'PRECUENTA'}) =>
+    PrintTicketService.generatePrecheck(
+      order: _order(),
+      items: [_item(notes: 'Sin cebolla')],
+      tableName: 'TERRAZA 12',
+      waiterName: 'Juana',
+      customerName: 'Juan Perez',
+      businessName: 'Restaurante La Esquina del Sabor',
+      businessAddress: 'Calle Duarte #45, Santo Domingo Este',
+      businessRnc: '130123456',
+      title: title,
+      template: 'modern',
+      taxBreakdown: const [(label: 'ITBIS (18%)', amount: 180)],
+    );
 
 int _widestLine(String? rawText) => (rawText ?? '')
     .split('\n')
@@ -202,16 +248,164 @@ void main() {
     });
   });
 
+  group('Sale de verdad como imagen', () {
+    // El modelo moderno solo se ve como se diseñó si se rasteriza. Este grupo
+    // cubre la CADENA COMPLETA — plantilla → `preferRaster` → adaptador —
+    // porque el eslabón que falló en campo no fue ninguno de los extremos.
+
+    test('la plantilla moderna pide raster y el estándar no', () {
+      expect(_modernInvoice().preferRaster, isTrue);
+      expect(
+        PrintTicketService.generateInvoice(
+          order: _order(),
+          items: [_item()],
+          payments: [_payment()],
+          tableName: 'TERRAZA 12',
+          businessName: 'Restaurante La Esquina del Sabor',
+        ).preferRaster,
+        isFalse,
+      );
+    });
+
+    test('con logo TAMBIÉN se rasteriza', () async {
+      // El bug de campo: el logo va como `GS v 0` en el byte 15, el guard
+      // "esto ya viene rasterizado" lo confundía con un trabajo raster y el
+      // adaptador devolvía el ESC/POS intacto. Resultado en papel: la fuente
+      // del firmware, justo en los negocios que tienen logo.
+      final ticket = _modernInvoice(logoBytes: _logoBytes);
+
+      final bytes = await StarPrintAdapter.adapt(
+        printer: _escPosPrinter(),
+        escPosData: ticket.escPosCommands,
+        preferRaster: ticket.preferRaster,
+      );
+
+      expect(
+        bytes,
+        isNot(equals(ticket.escPosCommands)),
+        reason: 'el adaptador tiene que convertirlo, no devolverlo tal cual',
+      );
+      expect(EscPosRasterEncoder.looksLikeEscPosRaster(bytes), isTrue);
+      // Y no queda texto suelto: si quedara, lo dibujaría el firmware.
+      expect(
+        bytes.where((b) => b >= 0x41 && b <= 0x5A).length,
+        lessThan(ticket.escPosCommands.length ~/ 20),
+        reason: 'un ticket rasterizado no lleva las letras del ticket',
+      );
+    });
+
+    test('un segundo paso por el adaptador ya no lo toca', () async {
+      // La cola offline puede rebotar el mismo job.
+      final ticket = _modernInvoice(logoBytes: _logoBytes);
+      final once = await StarPrintAdapter.adapt(
+        printer: _escPosPrinter(),
+        escPosData: ticket.escPosCommands,
+        preferRaster: true,
+      );
+      final twice = await StarPrintAdapter.adapt(
+        printer: _escPosPrinter(),
+        escPosData: once,
+        preferRaster: true,
+      );
+      expect(twice, equals(once));
+    });
+  });
+
+  group('Pre-cuenta moderna', () {
+    // La pre-cuenta se rige por el MISMO ajuste que la factura. Si el negocio
+    // elige "Moderna" y solo cambia la factura, el cliente ve dos diseños
+    // distintos con cinco minutos de diferencia — que es justo lo que pasaba.
+
+    test('sale con el mismo acabado que la factura', () {
+      final precuenta = _modernPrecheck();
+      expect(precuenta.preferRaster, isTrue);
+
+      Set<int> interlineados(List<int> bytes) {
+        final vistos = <int>{};
+        for (var i = 0; i + 2 < bytes.length; i++) {
+          if (bytes[i] == 0x1B && bytes[i + 1] == 0x33) vistos.add(bytes[i + 2]);
+        }
+        return vistos;
+      }
+
+      expect(
+        interlineados(precuenta.escPosCommands),
+        interlineados(_modernInvoice().escPosCommands),
+      );
+      // Y nunca la fuente B, igual que la factura.
+      expect(_hasBytes(precuenta.escPosCommands, [0x1B, 0x4D, 0x01]), isFalse);
+    });
+
+    test('no pierde nada de lo que una pre-cuenta tiene que decir', () {
+      final text = _modernPrecheck().rawText ?? '';
+
+      // El disclaimer: sin él, un cliente puede tomarla por su factura.
+      expect(text.toLowerCase(), contains('solo una precuenta'));
+      // Los renglones para llenar a mano los datos fiscales.
+      expect(text, contains('RNC/Cédula'));
+      expect(text, contains('Razón social'));
+      // Los importes y el detalle.
+      expect(text, contains('TOTAL'));
+      expect(text, contains('ITBIS (18%)'));
+      expect(text, contains('TERRAZA 12'));
+      // Y NUNCA un comprobante fiscal: todavía no existe.
+      expect(text, isNot(contains('NCF')));
+    });
+
+    test('el título no grita', () {
+      // La pre-cuenta de una cuenta dividida llega como
+      // "PRECUENTA - CUENTA 1"; el modelo moderno no usa mayúsculas.
+      final text = _modernPrecheck(title: 'PRECUENTA - CUENTA 1').rawText ?? '';
+      expect(text, contains('Precuenta - Cuenta 1'));
+      expect(text, isNot(contains('PRECUENTA')));
+      expect(text, contains('Gracias por su preferencia'));
+    });
+
+    test('el modelo estándar de pre-cuenta no cambia', () {
+      final bytes = PrintTicketService.generatePrecheck(
+        order: _order(),
+        items: [_item()],
+        tableName: 'TERRAZA 12',
+        businessName: 'Restaurante La Esquina del Sabor',
+      );
+      expect(bytes.preferRaster, isFalse);
+      expect(_hasBytes(bytes.escPosCommands, [0x1B, 0x33]), isFalse);
+      expect(bytes.rawText, contains('AVISO: ESTE DOCUMENTO ES SOLO'));
+    });
+  });
+
   group('Comandos de firmware', () {
     test('ajusta el interlineado sin cambiar de fuente', () {
       final bytes = _modernInvoice().escPosCommands;
 
-      // ESC 3 n — interlineado del cuerpo, algo más apretado que el 1/6"
-      // de fábrica pero sin llegar a pegar los renglones.
+      // ESC 3 n — interlineado del cuerpo. Por ENCIMA del 1/6" de fábrica
+      // (~34) a propósito: este modelo separa los bloques con espacio en vez
+      // de con reglas `====`, así que el espacio tiene que verse.
       expect(
         _hasBytes(bytes, [0x1B, 0x33, ModernInvoiceLayout.bodyLineSpacing]),
         isTrue,
       );
+      expect(
+        ModernInvoiceLayout.bodyLineSpacing,
+        greaterThan(EscPosGenerator.tightLineSpacing),
+        reason: 'a 32 el dueño lo rechazó: "los datos se ven muy pegados"',
+      );
+
+      // UN SOLO RITMO: los únicos interlineados del ticket son el del cuerpo
+      // y el de las líneas en doble altura. Cualquier tercer valor sería un
+      // renglón de aire metido a mano, y es justo lo que rompía la uniformidad
+      // — el ticket tenía el doble de espacio alrededor de las reglas que
+      // entre dos líneas de texto.
+      final interlineados = <int>{};
+      for (var i = 0; i + 2 < bytes.length; i++) {
+        if (bytes[i] == 0x1B && bytes[i + 1] == 0x33) {
+          interlineados.add(bytes[i + 2]);
+        }
+      }
+      expect(interlineados, {
+        ModernInvoiceLayout.bodyLineSpacing,
+        ModernInvoiceLayout.bigLineSpacing,
+      });
 
       // NUNCA fuente B (ESC M 1). Se probó y el dueño la rechazó al verla
       // impresa: 9x17 puntos contra 12x24 se lee peor en papel real. Es una

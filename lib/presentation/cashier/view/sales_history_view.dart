@@ -1186,6 +1186,7 @@ mixin _PaymentActionsMixin {
       await printRepo.printEscPos(
         printer: assignedPrinter!,
         data: ticket.escPosCommands,
+        preferRaster: ticket.preferRaster,
       );
 
       if (context.mounted) {

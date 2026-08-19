@@ -111,6 +111,38 @@ void main() {
       expect(feeds.last, lessThan(cut));
     });
 
+    test('un ticket de TEXTO con logo NO se confunde con un raster', () {
+      // El bug de campo: el logo se emite como imagen (`GS v 0`) y cae sobre
+      // el byte 15 del ticket, así que la versión anterior del guard daba por
+      // rasterizada toda factura con logo. El adaptador devolvía los bytes
+      // intactos y el ticket salía con la fuente del firmware — el modo
+      // calidad no se activaba justo donde el negocio tiene marca.
+      final gen = EscPosGenerator();
+      gen.initialize();
+      gen.setLineSpacing(40);
+      gen.lineFeed();
+      // Un logo diminuto, emitido igual que `raster_image_esc_pos.dart`:
+      // `ESC a 1` + `GS v 0` + payload + `ESC a 0`.
+      gen.appendRaw([
+        0x1B, 0x61, 0x01, //
+        0x1D, 0x76, 0x30, 0x00, 0x01, 0x00, 0x01, 0x00, 0xFF,
+        0x1B, 0x61, 0x00,
+      ], plainPlaceholder: '[ logo ]');
+      gen.text('MangoPOS S.R.L.');
+      gen.cut();
+
+      final bytes = gen.getCommands();
+      final gsv = _findAll(bytes, [0x1D, 0x76, 0x30, 0x00]);
+      expect(gsv, isNotEmpty, reason: 'el logo va como GS v 0');
+      expect(
+        gsv.first,
+        lessThan(64),
+        reason: 'y cae en los primeros bytes del ticket: por eso el guard '
+            'anterior, que solo miraba ahí, se lo tragaba',
+      );
+      expect(EscPosRasterEncoder.looksLikeEscPosRaster(bytes), isFalse);
+    });
+
     test('reconoce sus propios bytes para no rasterizar dos veces', () {
       final bytes = EscPosRasterEncoder.encode(_bitmap(width: 576, height: 10));
       expect(EscPosRasterEncoder.looksLikeEscPosRaster(bytes), isTrue);
@@ -186,6 +218,66 @@ void main() {
 
       expect(resolvePrinterEmulation(star).isStarRaster, isTrue);
       expect(printerWantsEscPosRaster(star), isFalse);
+    });
+  });
+
+  group('Acabado: proporcional o rejilla', () {
+    PrinterConfig star({Map<String, dynamic> config = const {}}) =>
+        PrinterConfig(
+          id: 'p2',
+          businessId: 'b1',
+          name: 'Star TSP143III',
+          type: 'usb',
+          connectionConfig: config,
+          isActive: true,
+          createdAt: DateTime(2026, 1, 1),
+        );
+
+    test('el ticket que pide calidad sale con tipografía real', () {
+      // La factura moderna (`preferRaster`). Vale para las dos familias: que
+      // una Star no hable ESC/POS no la condena a la rejilla.
+      for (final p in [_printer(), star()]) {
+        expect(
+          wantsProportionalRaster(p, ticketPrefersRaster: true),
+          isTrue,
+          reason: '${p.name}: la factura moderna pide acabado de calidad',
+        );
+      }
+    });
+
+    test('comandas y cierres se quedan en la rejilla', () {
+      // Sus tablas cuadran por ancho de columna: una proporcional las
+      // descuadra. Solo el documento del cliente cambia de acabado.
+      expect(
+        wantsProportionalRaster(star(), ticketPrefersRaster: false),
+        isFalse,
+      );
+      expect(
+        wantsProportionalRaster(_printer(), ticketPrefersRaster: false),
+        isFalse,
+      );
+    });
+
+    test("render='grid' fuerza la rejilla aunque el ticket pida calidad", () {
+      // La válvula de escape: si en una impresora concreta la proporcional
+      // sale peor en papel, se vuelve atrás por base de datos, sin build.
+      for (final p in [
+        _printer(config: {'render': 'grid'}),
+        star(config: {'render': 'GRID'}),
+      ]) {
+        expect(printerForcesGridRaster(p), isTrue);
+        expect(wantsProportionalRaster(p, ticketPrefersRaster: true), isFalse);
+      }
+    });
+
+    test("render='raster' en una ESC/POS también cambia el acabado", () {
+      expect(
+        wantsProportionalRaster(
+          _printer(config: {'render': 'raster'}),
+          ticketPrefersRaster: false,
+        ),
+        isTrue,
+      );
     });
   });
 }

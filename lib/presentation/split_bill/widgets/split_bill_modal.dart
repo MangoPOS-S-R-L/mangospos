@@ -174,6 +174,10 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       await printRepo.printEscPos(
         printer: assignedPrinter!,
         data: ticket.escPosCommands,
+        // El modelo moderno pide salir como imagen; sin esto la pre-cuenta de
+        // una cuenta dividida saldría con la fuente del firmware mientras el
+        // resto del negocio imprime con la tipografía real.
+        preferRaster: ticket.preferRaster,
       );
 
       if (context.mounted) {

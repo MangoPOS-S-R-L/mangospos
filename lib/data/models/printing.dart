@@ -569,10 +569,24 @@ class PrintTicket {
   final List<int> escPosCommands;
   final String? rawText;
 
+  /// Este ticket pide salir como IMAGEN, no como texto.
+  ///
+  /// Lo pone el generador, no la impresora, porque es una decision del
+  /// FORMATO: la plantilla moderna se dibuja con tipografia proporcional y
+  /// eso no existe en el modo texto de ESC/POS — la fuente vive en el
+  /// firmware. Sin esto habria que activar el modo raster impresora por
+  /// impresora y el mismo negocio imprimiria dos facturas distintas segun
+  /// por donde saliera el trabajo.
+  ///
+  /// Cuesta bytes: ~40 KB contra ~3 KB del texto. Por LAN o USB no se nota;
+  /// por Bluetooth son unos 4 segundos.
+  final bool preferRaster;
+
   const PrintTicket({
     required this.type,
     required this.escPosCommands,
     this.rawText,
+    this.preferRaster = false,
   });
 }
 

@@ -5,13 +5,16 @@
 //   bytes (PNG/JPG) → img.decodeImage → resize a maxWidth conservando
 //   aspect ratio → Generator.image() centrado.
 //
-// Usa esc_pos_utils_plus con CapabilityProfile generico (mismo patron que
-// QrEscPosBuilder). Devuelve null ante cualquier fallo para no tumbar el
-// ticket — el caller imprime sin logo.
+// Emite los bytes `GS v 0` directamente (raster_image_esc_pos.dart), sin
+// esc_pos_utils_plus: su Generator.image() metia comandos que el parser del
+// modo raster no conocia y salian impresos como basura junto al logo.
+// Devuelve null ante cualquier fallo para no tumbar el ticket — el caller
+// imprime sin logo.
 
-import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart' as esc;
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+
+import 'raster_image_esc_pos.dart';
 
 class LogoEscPosBuilder {
   LogoEscPosBuilder._();
@@ -29,7 +32,6 @@ class LogoEscPosBuilder {
     required Uint8List bytes,
     int maxWidth = 384,
     int maxHeight = 200,
-    esc.PaperSize paperSize = esc.PaperSize.mm80,
   }) async {
     if (bytes.isEmpty) return null;
 
@@ -58,14 +60,9 @@ class LogoEscPosBuilder {
         );
       }
 
-      final profile = await esc.CapabilityProfile.load();
-      final generator = esc.Generator(paperSize, profile);
-
-      final out = <int>[];
-      out.addAll(generator.image(resized, align: esc.PosAlign.center));
-      // Reset alineacion para que el resto del ticket no quede centrado.
-      out.addAll(generator.setStyles(esc.PosStyles(align: esc.PosAlign.left)));
-      return out;
+      // Centrado y con la alineacion restaurada al final, en tres comandos
+      // que controlamos byte a byte.
+      return RasterImageEscPos.encode(resized, align: 1);
     } catch (e, st) {
       debugPrint('LogoEscPosBuilder.build failed: $e\n$st');
       return null;

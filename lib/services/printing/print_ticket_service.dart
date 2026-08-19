@@ -613,10 +613,16 @@ class PrintTicketService {
       items,
       receiptItemDisplayMode: receiptItemDisplayMode,
     );
-    final compact = template != 'standard';
+    // La pre-cuenta sigue el MISMO ajuste que la factura
+    // (`invoice_print_template`): si el negocio eligió "Moderna", las dos
+    // tienen que salir iguales. Si no, el cliente ve una pre-cuenta con un
+    // diseño y a los cinco minutos una factura con otro.
+    final modern = template == 'modern';
+    final compact = !modern && template != 'standard';
     final simple = template == 'simple';
 
     gen.initialize();
+    if (modern) ModernInvoiceLayout.begin(gen);
     // Mismo criterio que la factura: la familia compacta aprieta el
     // interlineado. La pre-cuenta se rige por el MISMO ajuste
     // (`invoice_print_template`), así que tiene que verse igual — si no, el
@@ -638,10 +644,11 @@ class PrintTicketService {
     // En compacto se omiten los saltos en blanco decorativos (los separadores
     // se conservan) para que la pre-cuenta salga tan apretada como la factura.
     void gap([int n = 1]) {
-      if (!compact) gen.lineFeed(n);
+      if (compact || modern) return;
+      gen.lineFeed(n);
     }
 
-    gen.lineFeed(compact ? 1 : 2);
+    gen.lineFeed(compact || modern ? 1 : 2);
 
     // ════════════════════════════════════════════
     // HEADER (mismo orden/visibilidad que la factura)
@@ -658,10 +665,11 @@ class PrintTicketService {
       phone: businessPhone,
       email: businessEmail,
       rnc: businessRnc,
-      wrapLongLines: narrow,
+      wrapLongLines: narrow || modern,
+      modern: modern,
     );
 
-    if (!compact) {
+    if (!compact && !modern) {
       gen.lineFeed();
       _thinSeparator(gen);
       gen.lineFeed();
@@ -671,57 +679,83 @@ class PrintTicketService {
     // TÍTULO DEL DOCUMENTO (en compacto sin asteriscos: "*** X ***" → "X").
     // En 58mm también: a 16 columnas los asteriscos no caben.
     // ════════════════════════════════════════════
-    final displayTitle = (compact || narrow)
+    final cleanTitle = (compact || narrow || modern)
         ? title.replaceAll('*', '').trim()
         : title;
-    beginBigText();
-    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.setBold(true);
-    gen.textCentered(displayTitle);
-    gen.setBold(false);
-    gen.setTextSize();
-    endBigText();
-
-    gap();
-    _thickSeparator(gen);
-    gap();
-
-    // ════════════════════════════════════════════
-    // INFORMACIÓN DE LA ORDEN
-    // ════════════════════════════════════════════
-    gen.setBold(true);
-    gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
-    gen.setBold(false);
-
-    if (tableName.isNotEmpty) {
-      gen.textRow('MESA:', tableName);
-    }
-
-    // Separar fecha y hora en líneas diferentes
+    // El moderno no grita: "PRECUENTA - CUENTA 1" sale como "Precuenta -
+    // Cuenta 1", igual que el nombre del comprobante en la factura.
+    final displayTitle = modern ? _titleCase(cleanTitle) : cleanTitle;
     final dateStr = _formatDate(order.createdAt);
     final timeStr = _formatTime(order.createdAt);
-    gen.textRow('FECHA:', dateStr);
-    gen.textRow('HORA:', timeStr);
 
-    if (waiterName != null && waiterName.isNotEmpty) {
-      gen.textRow('MESERO:', waiterName);
+    if (modern) {
+      // El MISMO bloque que la factura, sin comprobante fiscal: la pre-cuenta
+      // no lo tiene todavía. Reusarlo es lo que garantiza que las dos hojas
+      // se lean como el mismo documento.
+      _renderModernDocumentBlock(
+        gen,
+        order: order,
+        displayTitle: displayTitle,
+        fiscalNcf: null,
+        fiscalType: null,
+        isElectronicCf: false,
+        customerName: customerName,
+        customerLegalName: null,
+        customerTaxId: null,
+        deliveryAddress: null,
+        tableName: tableName,
+        waiterName: waiterName,
+        dateStr: dateStr,
+        timeStr: timeStr,
+      );
+    } else {
+      beginBigText();
+      gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+      gen.setBold(true);
+      gen.textCentered(displayTitle);
+      gen.setBold(false);
+      gen.setTextSize();
+      endBigText();
+
+      gap();
+      _thickSeparator(gen);
+      gap();
+
+      // ════════════════════════════════════════════
+      // INFORMACIÓN DE LA ORDEN
+      // ════════════════════════════════════════════
+      gen.setBold(true);
+      gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
+      gen.setBold(false);
+
+      if (tableName.isNotEmpty) {
+        gen.textRow('MESA:', tableName);
+      }
+
+      // Separar fecha y hora en líneas diferentes
+      gen.textRow('FECHA:', dateStr);
+      gen.textRow('HORA:', timeStr);
+
+      if (waiterName != null && waiterName.isNotEmpty) {
+        gen.textRow('MESERO:', waiterName);
+      }
+
+      // Nombre del cliente cuando esté disponible (capturado al abrir la
+      // mesa o asignado en el modal de cobro). Va después de MESERO para
+      // mantener el orden visual de la precuenta en pantalla.
+      final trimmedCustomer = customerName?.trim();
+      if (trimmedCustomer != null && trimmedCustomer.isNotEmpty) {
+        gen.textRow('CLIENTE:', trimmedCustomer);
+      }
+
+      gap();
+      _thinSeparator(gen);
     }
-
-    // Nombre del cliente cuando esté disponible (capturado al abrir la
-    // mesa o asignado en el modal de cobro). Va después de MESERO para
-    // mantener el orden visual de la precuenta en pantalla.
-    final trimmedCustomer = customerName?.trim();
-    if (trimmedCustomer != null && trimmedCustomer.isNotEmpty) {
-      gen.textRow('CLIENTE:', trimmedCustomer);
-    }
-
-    gap();
-    _thinSeparator(gen);
 
     // ════════════════════════════════════════════
     // ITEMS - PRODUCTOS (SIN QTY)
     // ════════════════════════════════════════════
-    if (!simple) {
+    if (!simple && !modern) {
       gen.setBold(true);
       gen.textRow(
         compact ? 'Cant. Descripción' : 'DESCRIPCIÓN',
@@ -764,7 +798,30 @@ class PrintTicketService {
         declaredRate: recompute.declaredRate,
       );
 
-      if (compact && simple) {
+      if (modern) {
+        // Mismo renglón de producto que la factura: cantidad, nombre, monto,
+        // y debajo el precio unitario solo cuando aporta.
+        final showUnit = (item.quantity - 1).abs() > 0.001;
+        final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
+        ModernInvoiceLayout.item(
+          gen,
+          qty: displayQty,
+          name: item.productName,
+          amount: _formatMoney(baseTotal),
+          unitPrice: showUnit ? _formatMoney(baseUnitPrice) : null,
+          isTakeout: item.isTakeout,
+          modifiers: [
+            for (final mod in item.modifiers)
+              (
+                name: mod.name,
+                amount: mod.price * itemQty * mod.qty > 0
+                    ? _formatMoney(mod.price * itemQty * mod.qty)
+                    : '',
+              ),
+          ],
+          note: cleanNote,
+        );
+      } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
         // líneas SEGUIDAS (sin blanco), modificadores con precio.
         gen.dotRow(
@@ -865,12 +922,26 @@ class PrintTicketService {
       }
     }
 
-    _thinSeparator(gen);
+    if (modern) {
+      ModernInvoiceLayout.rule(gen);
+    } else {
+      _thinSeparator(gen);
+    }
 
     // ════════════════════════════════════════════
     // TOTALES
     // ════════════════════════════════════════════
     gap();
+
+    // Una sola puerta para las filas de monto, igual que en la factura: en el
+    // modelo moderno van en el bloque pegado al margen derecho.
+    void amountRow(String label, String value) {
+      if (modern) {
+        ModernInvoiceLayout.amountRow(gen, label, value);
+        return;
+      }
+      gen.textRow('$label:', value);
+    }
 
     // Totales salen de los items ORIGINALES (no consolidados) para que el
     // subtotal absorba el centavo de redondeo por-item y coincida exactamente
@@ -898,24 +969,30 @@ class PrintTicketService {
               printableSummary.deliveryFee +
               discountForBase) /
           (1 + declaredRate);
-      gen.textRow('SUBTOTAL:', _formatMoney(subtotalBase));
+      amountRow(modern ? 'Subtotal' : 'SUBTOTAL', _formatMoney(subtotalBase));
       for (var i = 0; i < taxBreakdown.length; i++) {
         final rate = lineRates[i] ?? 0;
         final amount = subtotalBase * (rate / 100);
         if (amount.abs() < 0.005) continue;
-        gen.textRow('${taxBreakdown[i].label}:', _formatMoney(amount));
+        amountRow(taxBreakdown[i].label, _formatMoney(amount));
       }
       if (!isPostDiscountMode && printableDiscounts > 0) {
-        gen.textRow('DESCUENTO:', '-${_formatMoney(printableDiscounts)}');
+        amountRow(
+          modern ? 'Descuento' : 'DESCUENTO',
+          '-${_formatMoney(printableDiscounts)}',
+        );
       }
     } else {
       // Fallback legacy (sin tasa parseable o sin tax breakdown).
       final double printableSubtotal = printableSummary.subtotal;
-      gen.textRow('SUBTOTAL:', _formatMoney(printableSubtotal));
+      amountRow(
+        modern ? 'Subtotal' : 'SUBTOTAL',
+        _formatMoney(printableSubtotal),
+      );
       if (taxBreakdown.isNotEmpty) {
         for (final entry in taxBreakdown) {
           if (entry.amount.abs() < 0.005) continue;
-          gen.textRow('${entry.label}:', _formatMoney(entry.amount));
+          amountRow(entry.label, _formatMoney(entry.amount));
         }
       } else {
         final printableTax = printableSummary.tax;
@@ -925,48 +1002,64 @@ class PrintTicketService {
               ? ((printableServiceFee / printableSubtotal) * 100)
                     .toStringAsFixed(0)
               : '0';
-          gen.textRow(
-            'SERVICIO ($servicePct%):',
+          amountRow(
+            modern ? 'Servicio ($servicePct%)' : 'SERVICIO ($servicePct%)',
             _formatMoney(printableServiceFee),
           );
         }
         if (printableTax > 0.005) {
-          gen.textRow('ITBIS:', _formatMoney(printableTax));
+          amountRow('ITBIS', _formatMoney(printableTax));
         }
       }
       if (printableDiscounts > 0) {
-        gen.textRow('DESCUENTO:', '-${_formatMoney(printableDiscounts)}');
+        amountRow(
+          modern ? 'Descuento' : 'DESCUENTO',
+          '-${_formatMoney(printableDiscounts)}',
+        );
       }
     }
 
     // Post-discount mode: el descuento se muestra como línea informativa
     // justo debajo de los impuestos (no sustractiva: el total ya lo incluye).
     if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
-      gen.textRow('Descuento :', _formatMoney(printableDiscounts));
+      amountRow('Descuento ', _formatMoney(printableDiscounts));
     }
 
     // Fee de delivery propio: cargo exento, parte del total.
     if (printableSummary.deliveryFee > 0) {
-      gen.textRow('DELIVERY:', _formatMoney(printableSummary.deliveryFee));
+      amountRow(
+        modern ? 'Delivery' : 'DELIVERY',
+        _formatMoney(printableSummary.deliveryFee),
+      );
     }
-
-    gap();
-    _thickSeparator(gen);
-    gap();
 
     // ════════════════════════════════════════════
     // TOTAL FINAL - Tamaño grande
     // ════════════════════════════════════════════
-    if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
-    beginBigText();
-    gen.setBold(true);
-    // A 58mm el doble ancho deja 16 columnas: "TOTAL:" + monto no caben.
-    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.textRow('TOTAL:', _formatMoney(printableGrandTotal));
-    gen.setTextSize();
-    gen.setBold(false);
-    endBigText();
-    if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
+    if (modern) {
+      ModernInvoiceLayout.amountRule(gen);
+      ModernInvoiceLayout.total(
+        gen,
+        'TOTAL',
+        _formatMoney(printableGrandTotal),
+        narrow: narrow,
+      );
+    } else {
+      gap();
+      _thickSeparator(gen);
+      gap();
+
+      if (compact) gen.lineFeed(); // espacio (reducido) arriba del TOTAL
+      beginBigText();
+      gen.setBold(true);
+      // A 58mm el doble ancho deja 16 columnas: "TOTAL:" + monto no caben.
+      gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+      gen.textRow('TOTAL:', _formatMoney(printableGrandTotal));
+      gen.setTextSize();
+      gen.setBold(false);
+      endBigText();
+      if (compact) gen.lineFeed(); // espacio (reducido) abajo del TOTAL
+    }
 
     // PRD 6: equivalente USD debajo del TOTAL si está activo.
     // Decisión del cliente: la tasa NO sale en ningún ticket (ni
@@ -977,12 +1070,13 @@ class PrintTicketService {
       printableGrandTotal,
       usdSettings,
       showRate: false,
+      leadingGap: !modern,
     );
 
     // ════════════════════════════════════════════
     // DATOS DE COMPROBANTE FISCAL
     // ════════════════════════════════════════════
-    gen.lineFeed();
+    if (!modern) gen.lineFeed();
     // Renglones para llenar a mano. En 58mm el largo fijo (34 chars) se
     // pasaba del papel: la raya se recorta al ancho disponible.
     void blankFieldLine(String label) {
@@ -995,48 +1089,77 @@ class PrintTicketService {
       gen.text(fill > 0 ? '$prefix${'_' * fill}' : prefix);
     }
 
-    blankFieldLine('RNC/CÉDULA: ______________________');
-    gen.lineFeed();
-    blankFieldLine('RAZÓN SOCIAL: _____________________');
-    gen.lineFeed();
+    if (modern) {
+      ModernInvoiceLayout.rule(gen);
+      blankFieldLine('RNC/Cédula: ______________________');
+      blankFieldLine('Razón social: ____________________');
+      ModernInvoiceLayout.rule(gen);
+      // Sin gritar y sin caja de `====`: en el modelo moderno el peso lo da
+      // la negrita, y el aviso pesa por lo que dice.
+      ModernInvoiceLayout.emphasisCentered(
+        gen,
+        'Este documento es solo una precuenta',
+      );
+    } else {
+      blankFieldLine('RNC/CÉDULA: ______________________');
+      gen.lineFeed();
+      blankFieldLine('RAZÓN SOCIAL: _____________________');
+      gen.lineFeed();
 
-    // ════════════════════════════════════════════
-    // AVISO DE PRECUENTA
-    // ════════════════════════════════════════════
-    gen.lineFeed();
+      // ════════════════════════════════════════════
+      // AVISO DE PRECUENTA
+      // ════════════════════════════════════════════
+      gen.lineFeed();
 
-    // Caja de aviso
-    _thickSeparator(gen);
-    gen.setBold(true);
-    gen.textCentered('AVISO: ESTE DOCUMENTO ES SOLO');
-    gen.textCentered('UNA PRECUENTA');
-    gen.setBold(false);
+      // Caja de aviso
+      _thickSeparator(gen);
+      gen.setBold(true);
+      gen.textCentered('AVISO: ESTE DOCUMENTO ES SOLO');
+      gen.textCentered('UNA PRECUENTA');
+      gen.setBold(false);
+    }
 
     // ════════════════════════════════════════════
     // FOOTER (mismas listas que la factura)
     // ════════════════════════════════════════════
-    gen.lineFeed();
+    if (!modern) gen.lineFeed();
     _renderFooterBlocks(
       gen,
       blocks: footerBlocks ?? TicketBlocks.defaultFooter,
       footerMessage: footerMessage,
+      thankYouText: modern
+          ? 'Gracias por su preferencia'
+          : 'GRACIAS POR SU PREFERENCIA',
+      separateBlocks: !modern,
     );
-    gen.lineFeed();
+    if (!modern) gen.lineFeed();
     // Aviso especifico de pre-cuenta — fijo, no parte de los bloques
     // configurables (es disclaimer, no branding).
-    gen.textCentered('Por favor verifique los datos');
-    gen.textCentered('antes de proceder al pago');
+    if (modern) {
+      gen.textCentered('Por favor verifique los datos antes de pagar');
+    } else {
+      gen.textCentered('Por favor verifique los datos');
+      gen.textCentered('antes de proceder al pago');
+    }
 
     // Restaurar ANTES de avanzar: si no, los renglones de avance miden lo
     // apretado y la cuchilla llega a morder el pie del ticket.
-    if (compact) gen.resetLineSpacing();
-    gen.lineFeed(compact ? 2 : 4);
+    if (modern) {
+      ModernInvoiceLayout.end(gen);
+      gen.lineFeed(EscPosGenerator.safeCutFeedLines);
+    } else {
+      if (compact) gen.resetLineSpacing();
+      gen.lineFeed(compact ? 2 : 4);
+    }
     gen.cut();
 
     return PrintTicket(
       type: 'precheck',
       escPosCommands: gen.getCommands(),
       rawText: gen.getPlainText(),
+      // Igual que la factura: el modelo moderno solo se ve como se diseñó si
+      // sale rasterizado.
+      preferRaster: modern,
     );
   }
 
@@ -1199,8 +1322,13 @@ class PrintTicketService {
     // En el modelo compacto, los saltos en blanco puramente decorativos se
     // omiten (las líneas separadoras se conservan, pero sin espacio alrededor)
     // para que el ticket salga tan apretado como un recibo simple.
+    //
+    // En el moderno se omiten por otra razón: su interlineado ya deja el aire
+    // a los dos lados de CADA elemento, reglas incluidas. Sumar un renglón
+    // encima abría agujeros de 2cm y rompía el ritmo único del ticket.
     void gap([int n = 1]) {
-      if (!compact) gen.lineFeed(n);
+      if (compact || modern) return;
+      gen.lineFeed(n);
     }
 
     gen.lineFeed(compact || modern ? 1 : 2);
@@ -1688,10 +1816,18 @@ class PrintTicketService {
     // En la factura NO mostramos la tasa (showRate=false): el cliente
     // pagó en DOP, basta con el equivalente USD como referencia. La
     // tasa sí sale en pre-cuenta para transparencia previa al pago.
-    _renderUsdEquivalent(gen, effectiveTotal, usdSettings, showRate: false);
+    _renderUsdEquivalent(
+      gen,
+      effectiveTotal,
+      usdSettings,
+      showRate: false,
+      leadingGap: !modern,
+    );
 
     if (modern) {
-      gen.lineFeed();
+      // Sin renglón en blanco antes de los pagos: el interlineado del modelo
+      // ya los separa, y este bloque es el que el dueño puso de referencia
+      // para el resto del ticket — si le sumamos aire, deja de serlo.
     } else {
       gap();
       _thickSeparator(gen);
@@ -1768,7 +1904,9 @@ class PrintTicketService {
     // Si está pending/sent/rejected, se muestra el mensaje de estado.
     // Para NCF físico (B0x), todo es no-op.
     if (qrBytes != null && qrBytes.isNotEmpty) {
-      gen.lineFeed();
+      // En el moderno no lleva renglón de separación: el rasterizador ya deja
+      // medio interlineado a cada lado del gráfico.
+      if (!modern) gen.lineFeed();
       gen.appendRaw(
         qrBytes,
         plainPlaceholder: '[ Código QR de verificación DGII ]',
@@ -1799,7 +1937,7 @@ class PrintTicketService {
         gen.setAlignment(Alignment.left);
       }
     } else if (ecfStatusMessage != null && ecfStatusMessage.isNotEmpty) {
-      gen.lineFeed();
+      if (!modern) gen.lineFeed();
       gen.setAlignment(Alignment.center);
       gen.setBold(true);
       gen.text(ecfStatusMessage);
@@ -1809,7 +1947,7 @@ class PrintTicketService {
 
     // Footer: bloques en orden segun footerBlocks (o defaults canonicos
     // si null). El renderer skipea bloques sin contenido.
-    gen.lineFeed(compact || modern ? 1 : 2);
+    if (!modern) gen.lineFeed(compact ? 1 : 2);
     _renderFooterBlocks(
       gen,
       blocks: footerBlocks ?? TicketBlocks.defaultFooter,
@@ -1818,6 +1956,8 @@ class PrintTicketService {
       thankYouText: modern
           ? 'Gracias por su preferencia'
           : 'GRACIAS POR SU PREFERENCIA',
+      // El moderno no separa sus bloques con renglones en blanco.
+      separateBlocks: !modern,
     );
     if (modern) {
       // Devolver la métrica de fábrica ANTES del avance final: con el
@@ -1845,6 +1985,10 @@ class PrintTicketService {
       type: 'invoice',
       escPosCommands: gen.getCommands(),
       rawText: gen.getPlainText(),
+      // El modelo moderno solo se ve como se diseño si sale rasterizado:
+      // la tipografia proporcional no existe en el modo texto de ESC/POS.
+      // Los demas modelos siguen saliendo como texto, que es mas rapido.
+      preferRaster: modern,
     );
   }
 
@@ -1888,7 +2032,9 @@ class PrintTicketService {
     required String dateStr,
     required String timeStr,
   }) {
-    gen.lineFeed();
+    // Sin renglones sueltos alrededor de la regla: el interlineado ya la
+    // separa de sus dos vecinos exactamente lo mismo que separa dos líneas de
+    // texto. Es lo que hace que TODO el ticket tenga un solo ritmo.
     ModernInvoiceLayout.rule(gen);
 
     final hasNcf = fiscalNcf != null && fiscalNcf.isNotEmpty;
@@ -1914,8 +2060,6 @@ class PrintTicketService {
     if (fiscalType != null && !isPlainInvoiceTitle) {
       ModernInvoiceLayout.emphasisCentered(gen, displayTitle);
     }
-
-    gen.lineFeed();
 
     ModernInvoiceLayout.metaLine(gen, [
       'Orden ${order.id.substring(0, 8).toUpperCase()}',
@@ -2575,6 +2719,11 @@ class PrintTicketService {
     double dopTotal,
     UsdDisplaySettings? usdSettings, {
     bool showRate = true,
+
+    /// Renglón en blanco por encima. El modelo moderno lo apaga: su
+    /// interlineado ya separa los renglones, y encima de eso el bloque del
+    /// TOTAL quedaba con el doble de aire que el resto del ticket.
+    bool leadingGap = true,
   }) {
     // Blindaje: cualquier error (formato de número, símbolo raro, etc.)
     // se silencia. PRD 6 es DISPLAY-ONLY — nunca debe romper la
@@ -2601,7 +2750,7 @@ class PrintTicketService {
       // unicode `≈` no está en Latin-1 y `Latin1Codec.encode` lanza
       // excepción con cualquier codepoint > 0xFF (`allowInvalid: true`
       // solo aplica al decoder), lo que tumbaba todo el bloque USD.
-      gen.lineFeed();
+      if (leadingGap) gen.lineFeed();
       gen.setBold(true);
       gen.textRow('Total USD:', '~ $equivLabel');
       gen.setBold(false);
@@ -2664,7 +2813,10 @@ class PrintTicketService {
         case 'logo':
           if (logoBytes != null && logoBytes.isNotEmpty) {
             gen.appendRaw(logoBytes, plainPlaceholder: '[ logo ]');
-            gen.lineFeed();
+            // En el moderno no lleva nada: el rasterizador ya le pone medio
+            // interlineado a cada lado de la imagen, el mismo que separa dos
+            // líneas de texto.
+            if (!modern) gen.lineFeed();
           }
           break;
         case 'business_name':
@@ -2734,6 +2886,11 @@ class PrintTicketService {
     required List<TicketBlock> blocks,
     String? footerMessage,
     String thankYouText = 'GRACIAS POR SU PREFERENCIA',
+
+    /// Renglón en blanco entre bloques visibles. El modelo moderno lo apaga:
+    /// su interlineado ya separa los renglones y un blanco encima le daría al
+    /// pie el doble de aire que al resto del ticket.
+    bool separateBlocks = true,
   }) {
     var first = true;
     for (final block in blocks) {
@@ -2752,7 +2909,7 @@ class PrintTicketService {
           text = null;
       }
       if (text == null) continue;
-      if (!first) gen.lineFeed();
+      if (!first && separateBlocks) gen.lineFeed();
       gen.textCentered(text);
       first = false;
     }

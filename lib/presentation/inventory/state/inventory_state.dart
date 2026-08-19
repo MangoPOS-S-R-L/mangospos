@@ -143,7 +143,29 @@ class InventoryItemSummary {
     this.itemClassification = 'simple',
   });
 
-  bool get isLowStock => isActive && stock <= minStock;
+  /// Bajo mínimo con la MISMA regla que la vista `v_inventory_low_stock`:
+  /// activo, con mínimo configurado y stock en o por debajo de ese mínimo.
+  ///
+  /// Sin el guard de `minStock > 0`, todo insumo sin mínimo y en cero salía
+  /// como alerta — ruido que tapaba las reposiciones reales.
+  bool get isLowStock => isActive && minStock > 0 && stock <= minStock;
+
+  /// Severidad, alineada con el `alert_level` de la vista SQL. `null` si el
+  /// insumo no está bajo mínimo.
+  ///   out_of_stock → sin existencia · critical → ≤ 50% del mínimo · low
+  String? get lowStockLevel {
+    if (!isLowStock) return null;
+    if (stock <= 0) return 'out_of_stock';
+    if (stock <= minStock * 0.5) return 'critical';
+    return 'low';
+  }
+
+  /// Cuánto falta para alcanzar el mínimo. 0 si no falta nada.
+  double get shortfall {
+    if (minStock <= 0) return 0;
+    final missing = minStock - stock;
+    return missing > 0 ? missing : 0;
+  }
 
   factory InventoryItemSummary.fromMap(
     Map<String, dynamic> map, {
@@ -276,5 +298,50 @@ class InventoryState {
       items: items ?? this.items,
       movements: movements ?? this.movements,
     );
+  }
+}
+
+/// Insumos del negocio con su stock DESGLOSADO por bodega.
+///
+/// La vista de Insumos v2 muestra una fila por insumo y una columna por
+/// bodega: necesita el maestro completo (no solo lo presente en una bodega)
+/// y la cantidad de cada par (insumo × bodega) en una sola lectura.
+///
+/// `items[i].stock` es el TOTAL del negocio (suma de las bodegas visibles),
+/// no el de una bodega concreta — para eso está [quantityOf].
+class InventoryStockMatrix {
+  final List<InventoryItemSummary> items;
+
+  /// itemId → { warehouseId → cantidad }. Solo trae los pares con fila en
+  /// `inventory_stock`; la ausencia se distingue del cero con [hasStockRow].
+  final Map<String, Map<String, double>> byWarehouse;
+
+  /// True si la lectura se resolvió contra el cache local (offline).
+  final bool fromCache;
+
+  const InventoryStockMatrix({
+    required this.items,
+    required this.byWarehouse,
+    this.fromCache = false,
+  });
+
+  static const empty = InventoryStockMatrix(items: [], byWarehouse: {});
+
+  double quantityOf(String itemId, String warehouseId) =>
+      byWarehouse[itemId]?[warehouseId] ?? 0;
+
+  /// True si el insumo tiene fila en esa bodega (aunque sea 0). Permite
+  /// distinguir "hay cero" de "nunca estuvo acá".
+  bool hasStockRow(String itemId, String warehouseId) =>
+      byWarehouse[itemId]?.containsKey(warehouseId) ?? false;
+
+  /// Bodegas (de las visibles) donde el insumo tiene existencia > 0.
+  List<String> warehousesWithStock(String itemId) {
+    final row = byWarehouse[itemId];
+    if (row == null) return const [];
+    return row.entries
+        .where((e) => e.value > 0)
+        .map((e) => e.key)
+        .toList(growable: false);
   }
 }

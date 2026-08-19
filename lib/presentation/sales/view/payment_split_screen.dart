@@ -7,6 +7,8 @@ import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/presentation/settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/fiscal/ncf_types.dart';
+import '../../../core/widgets/payment_progress_inline.dart';
 import '../viewmodel/payment_split_viewmodel.dart';
 
 const _kPrimary = Color(0xFFF97316);
@@ -72,25 +74,37 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   /// recien aqui hacemos pop.
   Future<void> _finishWithPayments(List<Payment> payments) async {
     final hook = widget.onConfirmed;
+    final key = (
+      widget.orderId,
+      widget.totalAmount,
+      widget.checkId,
+      widget.customerId,
+      widget.fiscalType,
+      widget.customerRnc,
+    );
+    final vm = ref.read(paymentSplitProvider(key).notifier);
+
     if (hook != null) {
-      final key = (
-        widget.orderId,
-        widget.totalAmount,
-        widget.checkId,
-        widget.customerId,
-        widget.fiscalType,
-        widget.customerRnc,
-      );
-      final vm = ref.read(paymentSplitProvider(key).notifier);
       // F4: NCF asignado offline (si lo hubo) para imprimir el comprobante.
       final offlineNcf = ref.read(paymentSplitProvider(key)).offlineNcf;
       vm.setPrinting(true);
       try {
         await hook(payments, offlineNcf: offlineNcf);
       } finally {
-        if (mounted) vm.setPrinting(false);
+        if (mounted) vm.markFinished();
       }
+    } else {
+      // Sin hook no hay impresion, pero el cobro igual cerro: el cajero
+      // merece la misma confirmacion.
+      vm.markFinished();
     }
+    if (!mounted) return;
+
+    // Sostenemos el estado final antes de cerrar. Sin esta pausa el modal se
+    // va en el mismo frame en que termina de imprimir y el cajero nunca ve
+    // que la emision cerro bien — ve desaparecer el modal, que es exactamente
+    // lo que veria si algo hubiera fallado.
+    await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted) return;
     Navigator.pop(context, payments);
   }
@@ -211,9 +225,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
         return;
       }
       final canConfirm =
-          state.transactions.isNotEmpty &&
-          state.isComplete &&
-          !state.isProcessing;
+          state.transactions.isNotEmpty && state.isComplete && !state.isBusy;
       if (canConfirm) {
         final List<Payment>? payments = await vm.confirmPayment(context);
         if (payments != null && mounted) {
@@ -414,13 +426,33 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                Text(
-                  'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontSize: isPhone ? 11 : 12,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        'Total: RD\$ ${widget.totalAmount.toStringAsFixed(2)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isPhone ? 11 : 12,
+                          color: Colors.grey,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    // Que serie se va a emitir, visible ANTES de cobrar. En
+                    // B01 (credito fiscal) es cuando el cajero todavia esta a
+                    // tiempo de revisar el RNC; despues de emitido ya hay que
+                    // anular y volver a facturar.
+                    if (_ncfBadgeLabel(widget.fiscalType) != null) ...[
+                      SizedBox(width: isPhone ? 6 : 8),
+                      _NcfBadge(
+                        label: _ncfBadgeLabel(widget.fiscalType)!,
+                        electronic: _isElectronicSeries(widget.fiscalType),
+                        compact: isPhone,
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),
@@ -433,6 +465,60 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
             onPressed: isPrinting ? null : () => Navigator.of(context).pop(),
           ),
         ],
+      ),
+    );
+  }
+}
+
+bool _isElectronicSeries(String? fiscalType) => isElectronicNcf(fiscalType);
+
+/// Texto del chip de comprobante: `e-CF - E32` o `NCF - B02`.
+///
+/// Repone la letra de la serie con `fullNcfCode`: dentro del modulo de ventas
+/// el tipo viaja pelado ('32'), y un chip que diga "NCF - 32" no es un codigo
+/// que exista en ningun lado.
+///
+/// Devuelve null cuando la serie no vino resuelta, en vez de inventar un
+/// valor por defecto: un chip con la serie equivocada es peor que sin chip.
+String? _ncfBadgeLabel(String? fiscalType) {
+  final code = fullNcfCode(fiscalType);
+  if (code == null) return null;
+  return '${isElectronicNcf(code) ? 'e-CF' : 'NCF'} \u00b7 $code';
+}
+
+/// Chip con la serie del comprobante, al lado del total.
+class _NcfBadge extends StatelessWidget {
+  const _NcfBadge({
+    required this.label,
+    required this.electronic,
+    required this.compact,
+  });
+
+  final String label;
+  final bool electronic;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    // Azul para e-CF, gris para papel: son dos flujos con tiempos distintos y
+    // conviene que se distingan de un vistazo, sin tener que leer el codigo.
+    final bg = electronic ? const Color(0xFFE0E7FF) : const Color(0xFFF1F5F9);
+    final fg = electronic ? const Color(0xFF3730A3) : const Color(0xFF475569);
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: compact ? 9.5 : 10.5,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+          color: fg,
+        ),
       ),
     );
   }
@@ -1035,7 +1121,7 @@ class _RightPanel extends StatelessWidget {
   /// Si está procesando o imprimiendo, no mostramos nada (el botón ya
   /// muestra el estado en su label). Si está habilitado, retorna null.
   static String? _resolveDisabledReason(PaymentSplitState state) {
-    if (state.isProcessing || state.isPrinting) return null;
+    if (state.isBusy) return null;
     if (state.transactions.isEmpty) {
       return 'Agrega al menos un pago para confirmar';
     }
@@ -1048,12 +1134,8 @@ class _RightPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canConfirm =
-        state.transactions.isNotEmpty &&
-        state.isComplete &&
-        !state.isProcessing &&
-        !state.isPrinting;
-    final isBusy = state.isProcessing || state.isPrinting;
-    final busyLabel = state.isPrinting ? 'Imprimiendo...' : 'Procesando...';
+        state.transactions.isNotEmpty && state.isComplete && !state.isBusy;
+    final isBusy = state.isBusy;
 
     // PRD 6 § 4.7 — razón por la que el botón está disabled, mostrada
     // inline al lado para que el cajero sepa qué falta sin adivinar.
@@ -1074,48 +1156,35 @@ class _RightPanel extends StatelessWidget {
               onDelete: vm.removeTransaction,
             ),
           ),
+          // Las etapas del cobro se cuentan aqui, en el hueco que deja la
+          // lista de pagos, en vez de tapar el modal con un velo: el cajero
+          // sigue viendo el total y los pagos agregados mientras espera, que
+          // es lo que suele estar mirando cuando el cliente le pregunta.
+          PaymentStepsPanel(
+            stage: state.stage,
+            isElectronic: vm.isElectronicFiscal,
+            dgiiContingency: state.dgiiContingency,
+            accent: _kPrimary,
+            positive: _kPositive,
+          ),
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            height: 54,
-            child: ElevatedButton.icon(
-              onPressed: canConfirm
-                  ? () async {
-                      final List<Payment>? payments = await vm.confirmPayment(
-                        context,
-                      );
-                      if (payments != null && context.mounted) {
-                        await onConfirm(payments);
-                      }
+          ConfirmPaymentProgressButton(
+            stage: state.stage,
+            isElectronic: vm.isElectronicFiscal,
+            dgiiContingency: state.dgiiContingency,
+            ncf: state.emittedNcf,
+            // null mientras corre: es lo que impide el doble-tap que
+            // duplicaria la venta.
+            onPressed: canConfirm
+                ? () async {
+                    final List<Payment>? payments = await vm.confirmPayment(
+                      context,
+                    );
+                    if (payments != null && context.mounted) {
+                      await onConfirm(payments);
                     }
-                  : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _kPositive,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: _kBorder,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              icon: isBusy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.check_circle_outline),
-              label: Text(
-                isBusy ? busyLabel : 'Confirmar pago',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 15,
-                ),
-              ),
-            ),
+                  }
+                : null,
           ),
           if (disabledReason != null) ...[
             const SizedBox(height: 6),
@@ -1201,12 +1270,8 @@ class _MobileLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canConfirm =
-        state.transactions.isNotEmpty &&
-        state.isComplete &&
-        !state.isProcessing &&
-        !state.isPrinting;
-    final isBusy = state.isProcessing || state.isPrinting;
-    final busyLabel = state.isPrinting ? 'Imprimiendo...' : 'Procesando...';
+        state.transactions.isNotEmpty && state.isComplete && !state.isBusy;
+    final isBusy = state.isBusy;
     final isPhone = MediaQuery.sizeOf(context).width < 600;
     final gap = isPhone ? 10.0 : 16.0;
 
@@ -1226,45 +1291,33 @@ class _MobileLayout extends StatelessWidget {
             allowScrolling: false,
           ),
         ],
+        // Mismo stepper que en escritorio. En telefono va justo encima del
+        // boton, que es el ultimo sitio donde el cajero tenia el dedo.
+        PaymentStepsPanel(
+          stage: state.stage,
+          isElectronic: vm.isElectronicFiscal,
+          dgiiContingency: state.dgiiContingency,
+          accent: _kPrimary,
+          positive: _kPositive,
+        ),
         SizedBox(height: gap),
-        SizedBox(
-          width: double.infinity,
+        ConfirmPaymentProgressButton(
+          stage: state.stage,
+          isElectronic: vm.isElectronicFiscal,
+          dgiiContingency: state.dgiiContingency,
+          ncf: state.emittedNcf,
           height: isPhone ? 48 : 54,
-          child: ElevatedButton.icon(
-            onPressed: canConfirm
-                ? () async {
-                    final List<Payment>? payments = await vm.confirmPayment(
-                      context,
-                    );
-                    if (payments != null && context.mounted) {
-                      await onConfirm(payments);
-                    }
+          fontSize: isPhone ? 14 : 15,
+          onPressed: canConfirm
+              ? () async {
+                  final List<Payment>? payments = await vm.confirmPayment(
+                    context,
+                  );
+                  if (payments != null && context.mounted) {
+                    await onConfirm(payments);
                   }
-                : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kPositive,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: _kBorder,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            icon: isBusy
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.white,
-                    ),
-                  )
-                : const Icon(Icons.check),
-            label: Text(
-              isBusy ? busyLabel : 'Confirmar pago',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
+                }
+              : null,
         ),
         if (_RightPanel._resolveDisabledReason(state) != null) ...[
           const SizedBox(height: 6),

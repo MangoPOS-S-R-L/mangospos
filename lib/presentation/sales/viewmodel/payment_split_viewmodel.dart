@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/fiscal/ncf_types.dart';
+import '../../../core/fiscal/payment_stage.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
@@ -27,6 +29,12 @@ enum PaymentMethodType { cash, card, transfer, other }
 /// explícito" en `PaymentSplitState.copyWith` (sin esto no podríamos
 /// limpiar `selectedBankAccount` al cambiar de método de pago).
 const Object _bankSentinel = Object();
+
+/// Mismo truco que `_bankSentinel`, para poder *limpiar* el NCF emitido al
+/// arrancar un cobro nuevo. Sin esto `copyWith` no distingue "no me pasaron
+/// nada" de "ponlo en null", y el estado final del segundo cobro mostraria el
+/// comprobante del primero.
+const Object _ncfSentinel = Object();
 
 class PaymentTransaction {
   final String id;
@@ -68,6 +76,25 @@ class PaymentSplitState {
   final String currentInput; // String to handle "10." typing
   final PaymentMethodType activeMethod;
   final bool isProcessing;
+
+  /// Qué se está esperando ahora mismo. `isProcessing`/`isPrinting` siguen
+  /// siendo los interruptores que bloquean la UI; esto solo dice el porqué.
+  /// Mismo enum que usa el modal de cobro simple (`presentation/payments`)
+  /// para que los dos flujos de cobro se lean igual.
+  final PaymentStage stage;
+
+  /// La emisión e-CF no completó dentro del timeout de `emit-document` y el
+  /// comprobante sale en contingencia. No es un error: la venta quedó
+  /// registrada y el ticket se imprime igual; el cron de respaldo y el
+  /// webhook lo reenvían a la DGII. Va aparte de `stage` porque es el
+  /// resultado de la etapa DGII y tiene que seguir visible cuando el flujo
+  /// ya avanzó a `imprimiendo`.
+  final bool dgiiContingency;
+
+  /// NCF emitido para este cobro, para mostrarlo en el estado final. Sale del
+  /// `fiscal_document` que el RPC ya creo — no hay round-trip extra, es la
+  /// misma consulta que ya se hacia para la emision e-CF.
+  final String? emittedNcf;
   /// Fase post-cobro: el pago ya esta grabado en DB pero la impresion del
   /// ticket esta en curso. Mientras `isPrinting=true` el modal NO debe
   /// cerrarse y los botones de salir/cancelar quedan bloqueados — sino el
@@ -96,6 +123,9 @@ class PaymentSplitState {
     this.currentInput = '',
     this.activeMethod = PaymentMethodType.cash,
     this.isProcessing = false,
+    this.stage = PaymentStage.idle,
+    this.dgiiContingency = false,
+    this.emittedNcf,
     this.isPrinting = false,
     this.error,
     this.validationError,
@@ -112,6 +142,9 @@ class PaymentSplitState {
     String? currentInput,
     PaymentMethodType? activeMethod,
     bool? isProcessing,
+    PaymentStage? stage,
+    bool? dgiiContingency,
+    Object? emittedNcf = _ncfSentinel,
     bool? isPrinting,
     String? error,
     String? validationError,
@@ -127,6 +160,11 @@ class PaymentSplitState {
       currentInput: currentInput ?? this.currentInput,
       activeMethod: activeMethod ?? this.activeMethod,
       isProcessing: isProcessing ?? this.isProcessing,
+      stage: stage ?? this.stage,
+      dgiiContingency: dgiiContingency ?? this.dgiiContingency,
+      emittedNcf: identical(emittedNcf, _ncfSentinel)
+          ? this.emittedNcf
+          : emittedNcf as String?,
       isPrinting: isPrinting ?? this.isPrinting,
       error: error,
       validationError: validationError,
@@ -149,6 +187,14 @@ class PaymentSplitState {
       (totalPaid - totalAmount) > 0 ? (totalPaid - totalAmount) : 0;
   double get inputAmount => double.tryParse(currentInput) ?? 0;
   bool get isComplete => remaining <= 0.01; // Tolerance
+
+  /// El cobro esta en vuelo, o cerrando con el estado final a la vista.
+  ///
+  /// Incluye `stage != idle` a proposito: durante el segundo y pico que dura
+  /// "Facturado" tanto `isProcessing` como `isPrinting` ya estan en false, y
+  /// sin esto el boton se volveria a habilitar justo antes de que el modal se
+  /// cierre — una ventana chica pero suficiente para cobrar dos veces.
+  bool get isBusy => isProcessing || isPrinting || stage != PaymentStage.idle;
 }
 
 // ==============================================================================
@@ -280,12 +326,35 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
   }
 
+  /// True cuando la serie del comprobante es electronica (Exx / e-CF).
+  ///
+  /// La UI lo necesita ANTES de que exista el `fiscal_document` para saber si
+  /// dibujar la etapa de DGII: en NCF de papel (B01/B02) el numero sale de la
+  /// secuencia local y esa espera no ocurre, asi que listarla haria creer que
+  /// el cobro tarda mas de lo que tarda.
+  bool get isElectronicFiscal => isElectronicNcf(_fiscalType);
+
+  /// Cierra el ciclo del cobro: apaga la impresion y deja el estado final a
+  /// la vista. La pantalla lo sostiene un momento y despues cierra el modal.
+  ///
+  /// Va separado de `setPrinting(false)` porque son dos cosas distintas:
+  /// "termine de imprimir y no paso nada mas" vs "el cobro cerro bien".
+  void markFinished() {
+    state = state.copyWith(isPrinting: false, stage: PaymentStage.listo);
+  }
+
   /// Marca/desmarca la fase de impresion. La pantalla la usa para
   /// mantener el modal abierto mientras corre el callback de print, y
   /// para deshabilitar los botones de cerrar mientras tanto.
   void setPrinting(bool value) {
     if (state.isPrinting == value) return;
-    state = state.copyWith(isPrinting: value);
+    state = state.copyWith(
+      isPrinting: value,
+      // Al soltar la fase de impresion el cobro terminó: devolvemos la etapa
+      // a idle para que un segundo cobro sobre el mismo modal no arranque
+      // mostrando el stepper ya completo del anterior.
+      stage: value ? PaymentStage.imprimiendo : PaymentStage.idle,
+    );
   }
 
   // --- INPUT HANDLING ---
@@ -611,6 +680,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
     state = state.copyWith(
       isProcessing: true,
+      stage: PaymentStage.registrando,
+      // Cada cobro arranca su propio ciclo: ni el aviso de contingencia ni el
+      // NCF del cobro anterior pueden arrastrarse al siguiente.
+      dgiiContingency: false,
+      emittedNcf: null,
       error: null,
       validationError: null,
     );
@@ -622,6 +696,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       if (cashierSessionId == null || cashierSessionId.isEmpty) {
         state = state.copyWith(
           isProcessing: false,
+          stage: PaymentStage.idle,
           validationError: 'No hay una caja abierta para procesar el cobro.',
         );
         return null;
@@ -649,6 +724,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           createdPayments.addAll(offlineResult);
           state = state.copyWith(
             isProcessing: false,
+            // Offline no consulta a la DGII: el NCF se emite al sincronizar.
+            // Saltamos directo a imprimir (precuenta o comprobante con NCF
+            // offline, según lo resuelva el caller).
+            stage: PaymentStage.imprimiendo,
             isPrinting: true,
             offlineQueued: true,
           );
@@ -732,6 +811,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
                 ..addAll(offlineResult);
               state = state.copyWith(
                 isProcessing: false,
+                stage: PaymentStage.imprimiendo,
                 isPrinting: true,
                 offlineQueued: true,
               );
@@ -782,14 +862,23 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       try {
         final fiscalDocRow = await Supabase.instance.client
             .from('fiscal_documents')
-            .select('id, is_electronic')
+            .select('id, is_electronic, ncf_number')
             .eq('order_id', _orderId)
             .order('created_at', ascending: false)
             .limit(1)
             .maybeSingle();
 
+        final ncf = fiscalDocRow?['ncf_number'] as String?;
+        if (ncf != null && ncf.trim().isNotEmpty) {
+          state = state.copyWith(emittedNcf: ncf.trim());
+        }
+
         if (fiscalDocRow != null && fiscalDocRow['is_electronic'] == true) {
           final fiscalId = fiscalDocRow['id'] as String;
+          // Solo aqui anunciamos la DGII: en NCF de papel (B01/B02) esta
+          // espera no existe y mostrar la etapa seria mentirle al cajero
+          // sobre cuanto falta.
+          state = state.copyWith(stage: PaymentStage.dgii);
           final t0 = DateTime.now();
           debugPrint('[split-emit-sync] START doc=$fiscalId');
           try {
@@ -806,8 +895,14 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           } on TimeoutException {
             final dt = DateTime.now().difference(t0).inMilliseconds;
             debugPrint('[split-emit-sync] TIMEOUT despues de ${dt}ms');
+            // Contingencia, no error: el cobro ya esta grabado y el ticket
+            // se imprime igual. El cron de respaldo y el webhook reenvian
+            // el documento. Lo marcamos para que el overlay lo diga en vez
+            // de dejar al cajero creyendo que la factura ya llego a DGII.
+            state = state.copyWith(dgiiContingency: true);
           } catch (e) {
             debugPrint('[split-emit-sync] ERROR exception=$e');
+            state = state.copyWith(dgiiContingency: true);
           }
         } else {
           debugPrint(
@@ -835,12 +930,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // un instante mostrando "Confirmar pago" entre el final del
       // RPC y el setPrinting(true) que hace _finishWithPayments en la
       // pantalla. La pantalla igual lo deja en false en el finally.
-      state = state.copyWith(isProcessing: false, isPrinting: true);
+      state = state.copyWith(
+        isProcessing: false,
+        stage: PaymentStage.imprimiendo,
+        isPrinting: true,
+      );
       return createdPayments;
     } catch (e, stack) {
       debugPrint('❌ Fatal Error in confirmPayment: $e\n$stack');
       state = state.copyWith(
         isProcessing: false,
+        stage: PaymentStage.idle,
         error: _friendlyPaymentError(e),
       );
       return null;

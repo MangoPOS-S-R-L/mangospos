@@ -56,20 +56,104 @@ class TicketRasterizer {
   // las columnas con 2+ espacios (`textRow` rellena hasta el borde): esa
   // racha de espacios se lee como "esto va a la derecha".
 
-  /// Alto de renglón en modo proporcional. Da aire suficiente para acentos
-  /// y descendentes sin el derroche del interlineado de fábrica.
-  static const int proportionalLineHeight = 26;
+  /// AIRE entre renglones en modo proporcional, en puntos. Es el blanco que
+  /// queda entre la tinta de una línea y la de la siguiente.
+  ///
+  /// El valor sale de MEDIR el papel que el dueño aprobó. Sobre la factura
+  /// impresa el 2026-08-18 señaló el bloque TOTAL / Total USD / Efectivo:
+  /// *"para mí ese es perfecto, así debería estar todo el espacio"*. Ese
+  /// bloque tenía 61, 63 y 69 puntos de blanco — le sobraba aire porque
+  /// llevaba renglones en blanco de más — contra los 19 a 25 del resto del
+  /// ticket. De ahí estos 58: el mismo ritmo, ahora en TODO el ticket.
+  ///
+  /// HISTORIA, para que nadie lo baje sin imprimir: 26 → rechazado, 32 →
+  /// rechazado, 38 → rechazado ("entre 2 líneas de texto es muy pegado").
+  /// Este valor se calibra en papel, nunca en pantalla: a 203 dpi el ticket
+  /// siempre se ve más denso impreso que en el mockup.
+  ///
+  /// LO QUE CUESTA: la factura de una mesa con logo y QR pasa de ~240mm a
+  /// ~350mm de papel. Es la decisión del dueño, tomada viendo el rollo.
+  static const int proportionalLeading = 58;
 
-  /// Tamaño de fuente que llena bien ese renglón a 203 dpi.
-  static const double _proportionalFontSize = 20;
+  /// Tamaño de fuente a 203 dpi. 24 puntos ≈ 3mm de altura de mayúscula, que
+  /// es lo que se lee cómodo en un recibo térmico a un brazo de distancia.
+  ///
+  /// Ojo al subirlo: una línea de 48 columnas a 24 puntos ya roza el ancho
+  /// del papel. Lo que impide que se desborde es el ajuste de
+  /// [_fitToWidth] — sin él, el párrafo se parte en dos y la segunda mitad
+  /// se dibuja ENCIMA del renglón siguiente, porque el alto ya está
+  /// reservado.
+  static const double _proportionalFontSize = 24;
+
+  /// Alto de la caja del glifo como múltiplo del tamaño de fuente. Roboto
+  /// pide ~1.17 entre ascendente y descendente; 1.25 deja el redondeo a
+  /// favor para que el aire real nunca quede por debajo del pedido.
+  static const double _glyphBoxRatio = 1.25;
+
+  /// Avance de papel de un renglón proporcional: la caja del glifo (que
+  /// crece con `GS !`) más el aire, que es CONSTANTE.
+  ///
+  /// El aire constante es lo que hace que el TOTAL en doble altura respire
+  /// igual que el resto. Multiplicar el renglón entero por el factor de
+  /// altura — que es lo que se hacía antes — le regalaba el doble de aire a
+  /// la única línea que ya destacaba por tamaño.
+  static int proportionalPitch(int heightFactor) =>
+      (_proportionalFontSize * _glyphBoxRatio * heightFactor).round() +
+      proportionalLeading;
+
+
 
   /// Grosor de las reglas finas que sustituyen a las filas de guiones.
   static const int _ruleThickness = 2;
+
+  /// Fuente MONOESPACIADA del ticket, empaquetada en `pubspec.yaml`.
+  ///
+  /// La usa el camino de celdas fijas. Antes iba `fontFamily: 'monospace'`,
+  /// que es un alias del sistema: Roboto Mono en Android, Menlo en Apple,
+  /// Consolas en Windows. O sea, el mismo negocio imprimiendo con tres letras
+  /// distintas según qué equipo mande el trabajo — y ninguna elegida.
+  ///
+  /// Tiene que ser de ancho fijo: este camino dibuja un carácter por celda de
+  /// 12 puntos para que las columnas cuadren, y con una proporcional la `W` se
+  /// sale de su celda y pisa a la vecina. Roboto Mono es la misma familia de
+  /// diseño que la [_ticketFont] proporcional, así que los dos acabados del
+  /// ticket se ven como el mismo producto.
+  static const String _ticketMonoFont = 'RobotoTicketMono';
+
+  /// Fuente PROPORCIONAL del ticket, empaquetada en `pubspec.yaml`.
+  ///
+  /// Va fija y no a la del sistema: sin esto el mismo negocio imprime con
+  /// Roboto desde la caja Android y con SF desde un iPad. El nombre lleva
+  /// sufijo para no pisar la `Roboto` que Android usa en la interfaz, que es
+  /// la del sistema y está completa.
+  static const String _ticketFont = 'RobotoTicket';
 
   /// Caracteres que, repetidos a lo ancho de la línea, son un separador
   /// dibujado con texto. En proporcional se cambian por una regla real:
   /// es lo que más acerca el ticket al de una POS moderna.
   static const String _ruleChars = '-=_.*~';
+
+  /// Trazo y paso del separador punteado, en puntos. 3 de tinta cada 8 deja
+  /// un punteado que se lee a 203 dpi sin parecer una línea gris.
+  static const double _dottedDash = 3;
+  static const double _dottedPeriod = 8;
+
+  /// Aire arriba y abajo de cada imagen (logo, QR) en el flujo proporcional.
+  ///
+  /// Es MEDIO interlineado a cada lado, no un número suelto: así el logo y el
+  /// QR quedan a la misma distancia de su vecino que cualquier par de líneas
+  /// de texto. Con un valor propio, el ticket tenía dos ritmos — uno para el
+  /// texto y otro, más suelto, alrededor de los gráficos.
+  static const int _imageMargin = proportionalLeading ~/ 2;
+
+  /// Alto del renglón de una regla: su propio trazo más el interlineado, que
+  /// se reparte a los dos lados.
+  ///
+  /// Antes ocupaba un renglón entero de texto, así que quedaba con casi el
+  /// doble de aire que el resto — que es exactamente lo que el dueño describió
+  /// como "el espacio entre el lineado y los textos es amplio, pero entre 2
+  /// líneas de texto es muy pegado".
+  static int get _ruleLineHeight => _ruleThickness + proportionalLeading;
 
   /// Rasteriza [ticket] para un papel de [dots] puntos de ancho.
   ///
@@ -124,15 +208,37 @@ class TicketRasterizer {
         continue;
       }
       if (op is TicketTextOp) {
-        final h = (op.fontB ? cellHeightB : cellHeight) * op.heightFactor;
+        final glyph = (op.fontB ? cellHeightB : cellHeight) * op.heightFactor;
+        final h = _pitch(glyph, op);
         if (op.text.isNotEmpty || op.inverse) {
-          lines.add(_PlacedLine(op: op, y: y));
+          lines.add(_PlacedLine(op: op, y: y, height: h));
         }
         y += h;
       }
     }
 
     return _Layout(lines: lines, images: images, height: y, dots: dots);
+  }
+
+  /// Avance de papel de una línea, en puntos.
+  ///
+  /// ESTO ES LO QUE DA EL AIRE DEL TICKET. Antes se avanzaba exactamente el
+  /// alto del glifo (24 puntos para la fuente A), o sea CERO separación entre
+  /// renglones: en papel los datos salían pegados unos encima de otros y la
+  /// factura se leía como un bloque. El interlineado que el builder ya pedía
+  /// por `ESC 3 n` — el mismo que respeta cualquier impresora por firmware —
+  /// se estaba descartando en el camino rasterizado.
+  ///
+  /// El alto del glifo es el PISO cuando la línea tiene tinta: un `ESC 3`
+  /// demasiado bajo en papel encima los renglones, y aquí preferimos no
+  /// encimar tinta. Una línea vacía no tiene qué encimar, así que respeta el
+  /// interlineado tal cual y sirve para medio renglón de aire.
+  static int _pitch(int glyphHeight, TicketTextOp op) {
+    final spacing = op.lineSpacing;
+    if (spacing == null || spacing <= 0) return glyphHeight;
+    final isBlank = op.text.isEmpty && !op.inverse;
+    if (isBlank) return spacing;
+    return spacing > glyphHeight ? spacing : glyphHeight;
   }
 
   // ── Dibujo ────────────────────────────────────────────────────────────
@@ -180,7 +286,11 @@ class TicketRasterizer {
     final baseCellH = op.fontB ? cellHeightB : cellHeight;
     final baseSize = op.fontB ? _fontSizeB : _fontSize;
     final cellW = (baseCellW * op.widthFactor).toDouble();
-    final lineHeight = (baseCellH * op.heightFactor).toDouble();
+    // El alto es el AVANCE de la línea, no el de la celda: el aire extra del
+    // interlineado se reparte arriba y abajo del glifo, que es como queda en
+    // una impresora por firmware.
+    final lineHeight = placed.height.toDouble();
+    final glyphHeight = (baseCellH * op.heightFactor).toDouble();
 
     final chars = op.text.characters();
     final textWidth = chars.length * cellW;
@@ -194,7 +304,12 @@ class TicketRasterizer {
       // Franja invertida (las bandas "PARA LLEVAR" de la comanda): fondo
       // negro a todo el ancho de la línea y texto en blanco.
       canvas.drawRect(
-        ui.Rect.fromLTWH(0, placed.y.toDouble(), dots.toDouble(), lineHeight),
+        ui.Rect.fromLTWH(
+          0,
+          placed.y + (lineHeight - glyphHeight) / 2,
+          dots.toDouble(),
+          glyphHeight,
+        ),
         ui.Paint()..color = const ui.Color(0xFF000000),
       );
     }
@@ -207,7 +322,7 @@ class TicketRasterizer {
       color: color,
       fontSize: baseSize * op.heightFactor,
       fontWeight: op.bold ? ui.FontWeight.w700 : ui.FontWeight.w400,
-      fontFamily: 'monospace',
+      fontFamily: _ticketMonoFont,
       decoration: op.underline ? ui.TextDecoration.underline : null,
     );
 
@@ -220,7 +335,7 @@ class TicketRasterizer {
               ui.ParagraphStyle(
                 textAlign: ui.TextAlign.center,
                 fontSize: baseSize * op.heightFactor,
-                fontFamily: 'monospace',
+                fontFamily: _ticketMonoFont,
               ),
             )
             ..pushStyle(style)
@@ -245,17 +360,24 @@ class TicketRasterizer {
 
     for (final op in ticket.ops) {
       if (op is TicketImageOp) {
+        // El margen se mide contra la TINTA del gráfico, no contra su borde:
+        // un QR trae 4 módulos de blanco obligatorios alrededor (la quiet
+        // zone del estándar) y un logo PNG suele traer los suyos. Sumarle el
+        // margen entero a ese blanco dejaba el QR a 77 puntos del texto
+        // mientras el resto del ticket iba a 66.
+        final (arriba, abajo) = _blankEdges(op);
+        y += _marginAfterInk(arriba);
         images.add(_PlacedImage(op: op, y: y));
-        y += op.height;
+        y += op.height + _marginAfterInk(abajo);
         continue;
       }
       if (op is! TicketTextOp) continue;
       final isRule = _looksLikeRule(op.text);
-      // Una regla no necesita el renglón completo; el aire lo dan los
-      // márgenes que se le suman arriba y abajo.
+      // Una regla no necesita el renglón completo: su "glifo" son 2 puntos de
+      // trazo, y el aire se lo da el mismo interlineado que a todo lo demás.
       final height = isRule
-          ? proportionalLineHeight
-          : (proportionalLineHeight * op.heightFactor);
+          ? _ruleLineHeight
+          : _pitch(proportionalPitch(op.heightFactor), op);
       if (op.text.isNotEmpty || op.inverse) {
         lines.add(
           _ProportionalLine(op: op, y: y, height: height, isRule: isRule),
@@ -339,10 +461,29 @@ class TicketRasterizer {
     // renglón. Es lo que más acerca el ticket al de una POS moderna.
     if (line.isRule) {
       final top = line.y + (line.height - _ruleThickness) / 2;
-      canvas.drawRect(
-        ui.Rect.fromLTWH(0, top, dots.toDouble(), _ruleThickness.toDouble()),
-        ui.Paint()..color = black,
-      );
+      final paint = ui.Paint()..color = black;
+
+      // El carácter con el que se dibujó la regla en texto decide el trazo:
+      // una fila de puntos pide una línea punteada y una de guiones, una
+      // sólida. Así el layout sigue mandando desde el generador ESC/POS y
+      // el mismo ticket se ve razonable aunque salga sin rasterizar.
+      final dotted = op.text.trim().startsWith('.');
+      if (dotted) {
+        const period = _dottedPeriod;
+        for (var x = 0.0; x < dots; x += period) {
+          final w = (x + _dottedDash > dots) ? dots - x : _dottedDash;
+          if (w <= 0) break;
+          canvas.drawRect(
+            ui.Rect.fromLTWH(x, top, w, _ruleThickness.toDouble()),
+            paint,
+          );
+        }
+      } else {
+        canvas.drawRect(
+          ui.Rect.fromLTWH(0, top, dots.toDouble(), _ruleThickness.toDouble()),
+          paint,
+        );
+      }
       return;
     }
 
@@ -362,28 +503,31 @@ class TicketRasterizer {
     final color = op.inverse ? const ui.Color(0xFFFFFFFF) : black;
     final fontSize = _proportionalFontSize * op.heightFactor;
 
-    ui.Paragraph build(String text, ui.TextAlign align) {
+    ui.Paragraph paragraph(String text, ui.TextAlign align, double size) {
       final builder =
           ui.ParagraphBuilder(
-              ui.ParagraphStyle(textAlign: align, fontSize: fontSize),
+              ui.ParagraphStyle(textAlign: align, fontSize: size),
             )
             ..pushStyle(
               ui.TextStyle(
                 color: color,
-                fontSize: fontSize,
+                fontSize: size,
                 fontWeight: op.bold ? ui.FontWeight.w700 : ui.FontWeight.w400,
                 decoration: op.underline ? ui.TextDecoration.underline : null,
-                // Sin fontFamily: la fuente por defecto del sistema (Roboto en
-                // Android, SF en Apple, Segoe en Windows). Todas son sans
-                // reales y a 203 dpi cualquiera supera de lejos a la matriz de
-                // puntos del firmware. Contra: el ticket no sale idéntico entre
-                // plataformas. Se acepta a cambio de no empaquetar un TTF.
+                fontFamily: _ticketFont,
+                // Sin esto el 1 es más angosto que el 8 y los importes
+                // bailan entre filas: la columna de montos deja de leerse
+                // como columna. Roboto trae las cifras tabulares.
+                fontFeatures: const [ui.FontFeature.tabularFigures()],
               ),
             )
             ..addText(text);
       return builder.build()
         ..layout(ui.ParagraphConstraints(width: dots.toDouble()));
     }
+
+    ui.Paragraph build(String text, ui.TextAlign align) =>
+        _fitToWidth(text, align, fontSize, dots, paragraph);
 
     // Centrado y derecha se dibujan de una pieza: partirlos en columnas
     // rompería el bloque de totales, que YA viene alineado a la derecha
@@ -404,29 +548,161 @@ class TicketRasterizer {
 
     // Izquierda: las rachas de 2+ espacios que dejan `textRow`/`dotRow` al
     // rellenar hasta el borde son la marca de "esto va a la derecha".
+    //
+    // TODO SE COLOCA SOBRE LA REJILLA DE CARACTERES del generador, que mide
+    // 12 puntos por columna en los dos papeles (576/48 = 384/32 = 12). Es la
+    // misma rejilla con la que el builder compuso la línea, así que la
+    // factura cae en las mismas posiciones se rasterice o no.
+    //
+    // Antes se dibujaba la sangría como espacios de verdad y las columnas
+    // intermedias se repartían por regla de tres sobre el largo de la línea.
+    // Las dos cosas fallaban: un espacio proporcional mide la mitad que una
+    // celda — el precio unitario no caía debajo del nombre del producto — y
+    // la regla de tres sobre líneas cortas mandaba la sangría a cualquier
+    // parte.
+    final cell = ((op.fontB ? cellWidthB : cellWidth) * op.widthFactor)
+        .toDouble();
     final columns = _splitColumns(op.text);
-    if (columns.length < 2) {
-      final p = build(op.text.trimRight(), ui.TextAlign.left);
-      canvas.drawParagraph(
-        p,
-        ui.Offset(0, line.y + (line.height - p.height) / 2),
-      );
+    final spans = _columnSpans(op.text);
+    double dy(ui.Paragraph p) => line.y + (line.height - p.height) / 2;
+
+    if (columns.length < 2 || spans.length != columns.length) {
+      final p = build(op.text.trim(), ui.TextAlign.left);
+      final left = spans.isEmpty ? 0.0 : spans.first.$1 * cell;
+      canvas.drawParagraph(p, ui.Offset(left, dy(p)));
       return;
     }
 
-    // La sangría inicial se conserva: es lo que distingue un sub-detalle
-    // (modificador, nota) de una línea de producto.
-    final indent = op.text.length - op.text.trimLeft().length;
-    final left = build('${' ' * indent}${columns.first}', ui.TextAlign.left);
-    final right = build(columns.last, ui.TextAlign.right);
-    canvas.drawParagraph(
-      left,
-      ui.Offset(0, line.y + (line.height - left.height) / 2),
-    );
-    canvas.drawParagraph(
-      right,
-      ui.Offset(0, line.y + (line.height - right.height) / 2),
-    );
+    // Primera columna anclada donde arranca su texto: la sangría es lo que
+    // distingue un sub-detalle (modificador, nota, precio unitario) de una
+    // línea de producto.
+    final first = build(columns.first, ui.TextAlign.left);
+    canvas.drawParagraph(first, ui.Offset(spans.first.$1 * cell, dy(first)));
+
+    final last = build(columns.last, ui.TextAlign.right);
+    canvas.drawParagraph(last, ui.Offset(0, dy(last)));
+
+    // Las intermedias, cada una por el lado que le toca: una cifra por la
+    // derecha (o la columna baila en cuanto una fila trae 1 y la siguiente
+    // 12) y un texto por la izquierda (o el nombre del producto se corre
+    // según su largo — que es justo lo que se veía en el papel: "4x3 mille"
+    // arrancaba antes que "4x3 coors original").
+    for (var i = 1; i < columns.length - 1; i++) {
+      if (_isNumericColumn(columns[i])) {
+        final p = build(columns[i], ui.TextAlign.right);
+        canvas.drawParagraph(
+          p,
+          ui.Offset(spans[i].$2 * cell - dots, dy(p)),
+        );
+      } else {
+        final p = build(columns[i], ui.TextAlign.left);
+        canvas.drawParagraph(p, ui.Offset(spans[i].$1 * cell, dy(p)));
+      }
+    }
+  }
+
+  /// ¿La columna es una CIFRA? Decide por qué lado se ancla.
+  ///
+  /// Se le quitan los símbolos de moneda antes de mirar, porque `RD$1,200.00`
+  /// es una cifra aunque empiece por letras. Lo que queda con letras dentro
+  /// es un nombre y va por la izquierda.
+  static bool _isNumericColumn(String text) {
+    final limpio = text.replaceAll(RegExp(r'(RD|US)?\$'), '').trim();
+    if (limpio.isEmpty) return false;
+    return RegExp(r'^[-+()%\d.,/ ]+$').hasMatch(limpio);
+  }
+
+  /// Filas en blanco al principio y al final de un gráfico.
+  ///
+  /// Son el blanco que la propia imagen ya trae: la quiet zone del QR, el
+  /// margen de un logo mal recortado. Cuenta como aire y por eso se descuenta
+  /// del margen (ver [_marginAfterInk]).
+  static (int, int) _blankEdges(TicketImageOp op) {
+    bool filaVacia(int y) {
+      final base = y * op.width;
+      for (var x = 0; x < op.width; x++) {
+        if (op.pixels[base + x]) return false;
+      }
+      return true;
+    }
+
+    var arriba = 0;
+    while (arriba < op.height && filaVacia(arriba)) {
+      arriba++;
+    }
+    // Un gráfico entero en blanco no tiene "abajo": se evita contarlo dos
+    // veces y que el margen se dispare.
+    if (arriba >= op.height) return (op.height, 0);
+    var abajo = 0;
+    while (abajo < op.height && filaVacia(op.height - 1 - abajo)) {
+      abajo++;
+    }
+    return (arriba, abajo);
+  }
+
+  /// Lo que falta para completar [_imageMargin] cuando el gráfico ya aporta
+  /// [blanco] puntos de aire por su cuenta.
+  static int _marginAfterInk(int blanco) {
+    final falta = _imageMargin - blanco;
+    return falta < 0 ? 0 : falta;
+  }
+
+  /// Compone el párrafo achicando la letra lo justo para que la línea quepa
+  /// de una pieza en el papel.
+  ///
+  /// El alto del renglón ya está reservado ANTES de dibujar, así que una
+  /// línea que no cabe no se sale por el costado: se parte en dos y la
+  /// segunda mitad se dibuja encima del renglón siguiente. Pasa con el
+  /// nombre largo de un negocio en doble tamaño, o con cualquier línea de 48
+  /// columnas cuando se sube el tamaño de fuente.
+  ///
+  /// Se prefiere achicar esa línea concreta antes que bajarle el tamaño a
+  /// todo el ticket por culpa del caso peor. El suelo del 60% evita que un
+  /// texto absurdamente largo salga en letra ilegible: a partir de ahí se
+  /// deja partir, que al menos se lee.
+  static ui.Paragraph _fitToWidth(
+    String text,
+    ui.TextAlign align,
+    double fontSize,
+    int dots,
+    ui.Paragraph Function(String, ui.TextAlign, double) build,
+  ) {
+    final p = build(text, align, fontSize);
+    if (p.longestLine <= dots) return p;
+    final factor = dots / p.longestLine;
+    final shrunk = fontSize * (factor < 0.6 ? 0.6 : factor);
+    return build(text, align, shrunk);
+  }
+
+  /// Índices `(inicio, fin)` de cada columna dentro de la línea, usando la
+  /// misma regla que [_splitColumns]: rachas de 2+ espacios las separan.
+  ///
+  /// Existe además de `_splitColumns` porque para colocar las columnas
+  /// intermedias no basta con su texto: hace falta saber DÓNDE las puso el
+  /// generador.
+  static List<(int, int)> _columnSpans(String text) {
+    final spans = <(int, int)>[];
+    var i = 0;
+    while (i < text.length) {
+      while (i < text.length && text[i] == ' ') {
+        i++;
+      }
+      if (i >= text.length) break;
+      final start = i;
+      var lastNonSpace = i;
+      while (i < text.length) {
+        if (text[i] == ' ') {
+          // Una racha de 2+ espacios cierra la columna; una sola es parte
+          // del texto ("4x3 Blue Moon").
+          if (i + 1 < text.length && text[i + 1] == ' ') break;
+        } else {
+          lastNonSpace = i;
+        }
+        i++;
+      }
+      spans.add((start, lastNonSpace + 1));
+    }
+    return spans;
   }
 
   /// ¿La línea es una fila de caracteres de separación (`-----`, `=====`)?
@@ -470,9 +746,13 @@ class _Layout {
 }
 
 class _PlacedLine {
-  const _PlacedLine({required this.op, required this.y});
+  const _PlacedLine({required this.op, required this.y, required this.height});
   final TicketTextOp op;
   final int y;
+
+  /// Avance de papel de la línea (ver `TicketRasterizer._pitch`). Puede ser
+  /// mayor que la celda del glifo: esa diferencia es el aire del ticket.
+  final int height;
 }
 
 class _PlacedImage {

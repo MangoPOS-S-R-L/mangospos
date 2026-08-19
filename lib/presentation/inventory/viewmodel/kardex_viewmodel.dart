@@ -7,18 +7,23 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
+import '../state/inventory_warehouse_scope.dart';
 import '../state/kardex_state.dart';
 import 'inventory_viewmodel.dart';
 
 final kardexViewModelProvider = ChangeNotifierProvider<KardexViewModel>((ref) {
-  return KardexViewModel(ref.read(inventoryRepositoryProvider));
+  return KardexViewModel(ref.read(inventoryRepositoryProvider), ref);
 });
 
 class KardexViewModel extends ChangeNotifier {
   final InventoryRepository _repository;
+
+  /// Para heredar el contexto de bodega del módulo.
+  final Ref _ref;
+
   KardexState _state = const KardexState();
 
-  KardexViewModel(this._repository);
+  KardexViewModel(this._repository, this._ref);
 
   KardexState get state => _state;
 
@@ -35,6 +40,27 @@ class KardexViewModel extends ChangeNotifier {
         throw Exception('No se pudo resolver el negocio actual');
       }
       _state = _state.copyWith(businessId: businessId);
+
+      // El contexto de bodega del módulo viaja hasta acá: entrar al kardex
+      // EN FRÍO (desde el hub, sin filtros) lo abre en la bodega elegida en
+      // Insumos. Si se entró desde una celda o una card de distribución, los
+      // filtros ya traen insumo —y a veces bodega— y se respetan tal cual:
+      // por eso el guard es `isEmpty` y no `warehouseId == null`.
+      if (_state.filters.isEmpty) {
+        final warehouses = _ref
+            .read(inventoryViewModelProvider)
+            .state
+            .warehouses;
+        final scoped = _ref
+            .read(inventoryWarehouseScopeProvider.notifier)
+            .effectiveId(warehouses.map((w) => w.id), null);
+        if (scoped != null) {
+          _state = _state.copyWith(
+            filters: KardexFilters(warehouseId: scoped),
+          );
+        }
+      }
+
       await _reload();
     } catch (e) {
       _state = _state.copyWith(

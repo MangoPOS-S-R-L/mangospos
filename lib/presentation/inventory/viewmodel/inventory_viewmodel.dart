@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -6,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
+import '../state/inventory_warehouse_scope.dart';
 
 final inventoryRepositoryProvider = Provider<InventoryRepository>((ref) {
   return InventoryRepository(Supabase.instance.client);
@@ -14,15 +17,18 @@ final inventoryRepositoryProvider = Provider<InventoryRepository>((ref) {
 final inventoryViewModelProvider = ChangeNotifierProvider<InventoryViewModel>((
   ref,
 ) {
-  return InventoryViewModel(ref.read(inventoryRepositoryProvider));
+  return InventoryViewModel(ref.read(inventoryRepositoryProvider), ref);
 });
 
 class InventoryViewModel extends ChangeNotifier {
   final InventoryRepository _repository;
 
+  /// Para leer/escribir el contexto de bodega compartido del módulo.
+  final Ref _ref;
+
   InventoryState _state = const InventoryState();
 
-  InventoryViewModel(this._repository);
+  InventoryViewModel(this._repository, this._ref);
 
   InventoryState get state => _state;
 
@@ -42,9 +48,22 @@ class InventoryViewModel extends ChangeNotifier {
       }
 
       final warehouses = await _repository.getWarehouses(businessId);
-      final selectedWarehouseId =
-          _state.selectedWarehouseId ??
+
+      // La bodega la manda el contexto del módulo (el que se elige en
+      // Insumos y se recuerda entre sesiones). Solo si ese contexto está en
+      // "Todas" —o apunta a una bodega que ya no existe— caemos a la
+      // primera: estas pantallas necesitan sí o sí una bodega concreta.
+      final scope = _ref.read(inventoryWarehouseScopeProvider.notifier);
+      await scope.ensureRestored(
+        businessId,
+        validIds: warehouses.map((w) => w.id),
+      );
+      final fallback = _state.selectedWarehouseId ??
           (warehouses.isNotEmpty ? warehouses.first.id : null);
+      final selectedWarehouseId = scope.effectiveId(
+        warehouses.map((w) => w.id),
+        fallback,
+      );
 
       _state = _state.copyWith(
         businessId: businessId,
@@ -101,6 +120,13 @@ class InventoryViewModel extends ChangeNotifier {
       loading: true,
       clearError: true,
     );
+    // El contexto viaja: elegir bodega acá también la deja elegida en
+    // Insumos, salidas y kardex.
+    if (warehouseId != null) {
+      unawaited(
+        _ref.read(inventoryWarehouseScopeProvider.notifier).select(warehouseId),
+      );
+    }
     notifyListeners();
 
     try {

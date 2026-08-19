@@ -519,7 +519,14 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     if (_processingLocal || state.processingPayment) return;
     _processingLocal = true;
 
-    state = state.copyWith(processingPayment: true, error: null);
+    state = state.copyWith(
+      processingPayment: true,
+      stage: PaymentStage.registrando,
+      // Cada cobro arranca su propio ciclo: si el anterior termino en
+      // contingencia, ese aviso no puede arrastrarse al siguiente.
+      dgiiContingency: false,
+      error: null,
+    );
 
     // Venta a crédito: validación previa (cliente con crédito habilitado y
     // dentro del límite). El trigger de BD es el backstop; aquí damos el
@@ -561,7 +568,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       }
       if (creditError != null) {
         _processingLocal = false;
-        state = state.copyWith(processingPayment: false, error: creditError);
+        state = state.copyWith(
+          processingPayment: false,
+          stage: PaymentStage.idle,
+          error: creditError,
+        );
         return;
       }
     }
@@ -667,16 +678,27 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       // Mantenemos el state con processingPayment=true durante la espera
       // para que el spinner del modal siga visible al usuario.
       if (fiscalDoc != null && fiscalDoc.isElectronic) {
+        // Solo aquí anunciamos la DGII: en NCF de papel esta espera no
+        // existe y mostrar la etapa seria mentirle al cajero.
+        state = state.copyWith(stage: PaymentStage.dgii);
         final emitted = await _emitDocumentSync(
           fiscalDocumentId: fiscalDoc.id,
         );
         if (emitted != null) {
           fiscalDoc = emitted;
+        } else {
+          // Timeout o error de `emit-document`: el cobro ya esta grabado y
+          // el ticket sale igual, pero todavia no llego a la DGII. Se marca
+          // para que el overlay lo diga en ambar en vez de dejar al cajero
+          // creyendo que la factura ya esta emitida. El cron de respaldo y
+          // el webhook la reenvian.
+          state = state.copyWith(dgiiContingency: true);
         }
       }
 
       state = state.copyWith(
         processingPayment: false,
+        stage: PaymentStage.imprimiendo,
         paymentProcessed: true,
         processedPayment: payment,
         fiscalDocument: fiscalDoc,
@@ -696,6 +718,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       if (!shouldQueueOffline) {
         state = state.copyWith(
           processingPayment: false,
+          stage: PaymentStage.idle,
           error: 'Error al procesar pago: ${_cleanError(e)}',
         );
         return;
@@ -797,6 +820,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
         state = state.copyWith(
           processingPayment: false,
+          // Offline no consulta DGII, pero sí imprime recibo provisional.
+          stage: PaymentStage.imprimiendo,
           paymentProcessed: true,
           processedPayment: localPayment,
           fiscalDocument: localFiscalDoc,
@@ -809,6 +834,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       } catch (offlineError) {
         state = state.copyWith(
           processingPayment: false,
+          stage: PaymentStage.idle,
           error: 'Error al guardar pago offline: ${_cleanError(offlineError)}',
         );
       }

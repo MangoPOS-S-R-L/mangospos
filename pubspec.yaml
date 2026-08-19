@@ -156,6 +156,37 @@ flutter:
     - assets/favicon/
     - assets/Login Images/
 
+  # Tipografia del TICKET, no de la interfaz.
+  #
+  # La factura en modo raster se dibuja con `ui.ParagraphBuilder` y sin
+  # `fontFamily` tomaba la del sistema: Roboto en Android, SF en Apple,
+  # Segoe en Windows. Es decir, el mismo negocio imprimiendo facturas con
+  # dos letras distintas segun que equipo mande el trabajo.
+  #
+  # Se empaqueta el subset latino (~44 KB por peso). Va con nombre propio
+  # `RobotoTicket` y no `Roboto` para no pisar la fuente que Flutter usa en
+  # la UI en Android, que es la del sistema y esta completa.
+  fonts:
+    - family: RobotoTicket
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+    # Variante MONOESPACIADA, para el raster de celdas fijas (Star TSP100 y
+    # comandas/cierres). Ese camino dibuja un caracter por celda de 12 puntos
+    # para que las columnas del ticket cuadren al punto, asi que la fuente
+    # TIENE que ser de ancho fijo — con la Roboto normal la W y la M se salen
+    # de su celda y pisan la letra vecina. Roboto Mono es la misma familia de
+    # diseno (misma licencia Apache 2.0) y a 19 pt avanza 11.4 puntos: entra
+    # en la celda de 12 con aire de sobra.
+    - family: RobotoTicketMono
+      fonts:
+        - asset: assets/fonts/RobotoMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/RobotoMono-Bold.ttf
+          weight: 700
+
   # To add assets to your application, add an assets section, like this:
 
 

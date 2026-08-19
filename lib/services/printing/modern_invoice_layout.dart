@@ -47,21 +47,38 @@ typedef ModernModifier = ({String name, String amount});
 class ModernInvoiceLayout {
   /// Interlineado del cuerpo, en puntos.
   ///
-  /// La fuente A mide 24 puntos de alto, así que 32 deja 8 de aire. Es algo
-  /// más apretado que el 1/6" de fábrica (~34) pero se sigue leyendo con
-  /// holgura.
+  /// La fuente A mide 24 puntos de alto, así que 88 deja 64 de aire. Es MUCHO
+  /// más que el 1/6" de fábrica (~34) y es a propósito: este modelo no separa
+  /// los bloques con reglas `====` sino con espacio, y el dueño calibró
+  /// cuánto espacio sobre el papel (ver `TicketRasterizer.proportionalLeading`
+  /// — el mismo aire, para que la factura se lea igual salga por el camino
+  /// que salga).
   ///
-  /// HISTORIA, para que nadie lo vuelva a bajar "para ahorrar papel": la
-  /// primera versión usaba fuente B con interlineado 26. Se veía mal en
-  /// papel real — renglones pegados y letra pobre — y hubo que revertirlo.
-  /// El ahorro de este modelo viene del LAYOUT (la mitad de renglones que
-  /// el estándar), no de exprimir el interlineado.
-  static const int bodyLineSpacing = EscPosGenerator.tightLineSpacing;
+  /// HISTORIA, para que nadie lo vuelva a bajar "para ahorrar papel":
+  ///  - la primera versión usaba fuente B con interlineado 26: renglones
+  ///    pegados y letra pobre, revertido al ver el papel;
+  ///  - la segunda usó 32 (el `tightLineSpacing` de la familia compacta) y el
+  ///    dueño lo rechazó igual — "los datos se ven muy pegados y eso provoca
+  ///    confusión";
+  ///  - y hasta 2026-08-18 el camino RASTERIZADO ni siquiera leía este valor
+  ///    (ver `TicketRasterizer._pitch`), así que la factura moderna salía con
+  ///    los renglones tocándose sin importar lo que dijera este número;
+  ///  - con 40 ya impreso, el veredicto fue "entre 2 líneas de texto es muy
+  ///    pegado", señalando el bloque del TOTAL como la referencia buena.
+  ///
+  /// El ahorro de este modelo viene del LAYOUT (la mitad de renglones que el
+  /// estándar), no de exprimir el interlineado.
+  static const int bodyLineSpacing = 88;
 
   /// Interlineado para las líneas en doble altura (48 puntos de glifo). El
   /// avance de papel es SIEMPRE el interlineado vigente, así que dejar el
   /// del cuerpo haría que el TOTAL se solape con la línea siguiente.
-  static const int bigLineSpacing = EscPosGenerator.doubleHeightLineSpacing;
+  ///
+  /// Mismo aire que el cuerpo (64 puntos) sobre un glifo del doble de alto:
+  /// el nombre del negocio y el TOTAL respiran como el resto en vez de
+  /// llevarse el doble de espacio por ser más grandes.
+  static const int bigLineSpacing = 112;
+
 
   /// Ancho del bloque de montos (totales y pagos), alineado a la derecha.
   /// Se recorta al ancho real disponible para que también entre a 58mm.
@@ -94,9 +111,30 @@ class ModernInvoiceLayout {
     gen.setFont(Font.a);
   }
 
-  /// Regla fina a todo el ancho. El modelo moderno usa UNA sola forma de
-  /// separador (esta) en vez de alternar `-----` y `=====`.
+  /// Separador a todo el ancho. El modelo moderno usa UNA sola forma en vez
+  /// de alternar `-----` y `=====`.
+  ///
+  /// Se dibuja con PUNTOS y no con guiones a proposito: en el camino
+  /// rasterizado, `TicketRasterizer` lee el caracter para decidir el trazo y
+  /// convierte una fila de puntos en una regla punteada real — lo que separa
+  /// bloques sin cortar el ticket en cajas. Sin rasterizar sigue siendo una
+  /// fila de puntos, que tambien se lee mas liviana que una de guiones.
   static void rule(EscPosGenerator gen) {
+    gen.text('.' * gen.maxChars);
+  }
+
+  // NO hay helper de "medio renglón" a propósito. El ticket tiene UN solo
+  // ritmo: el interlineado deja el mismo aire a los dos lados de cada
+  // elemento — texto, regla, logo o QR — y cualquier renglón suelto que se
+  // añada encima rompe justo eso. Si un bloque necesita separarse más, la
+  // respuesta es una regla, no un blanco.
+
+
+  /// Regla SOLIDA, para encerrar el total.
+  ///
+  /// Es la unica linea gruesa del ticket: lo que hace que el ojo caiga en el
+  /// importe sin buscarlo. Si hubiera mas de una, dejaria de funcionar.
+  static void solidRule(EscPosGenerator gen) {
     gen.text('-' * gen.maxChars);
   }
 

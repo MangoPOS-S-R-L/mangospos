@@ -95,9 +95,43 @@ int? _parseVendorId(String? raw) {
 /// hablan ESC/POS (ver [resolvePrinterEmulation]).
 bool printerWantsEscPosRaster(PrinterConfig printer) {
   if (resolvePrinterEmulation(printer).isStarRaster) return false;
-  final mode = printer.connectionConfig['render']
-      ?.toString()
-      .trim()
-      .toLowerCase();
+  final mode = _renderMode(printer);
   return mode == 'raster' || mode == 'image' || mode == 'grafico';
 }
+
+/// ¿Este ticket se dibuja con TIPOGRAFÍA REAL (proporcional) o con la rejilla
+/// de celdas fijas?
+///
+/// Las dos salen como imagen; lo que cambia es el acabado. La rejilla imita al
+/// firmware — un carácter por celda de 12 puntos — y es lo correcto para las
+/// tablas de comandas y cierres, donde las columnas tienen que cuadrar al
+/// punto. La proporcional es la de un recibo de Square: ancho variable,
+/// negrita de verdad y reglas finas.
+///
+/// Lo pide el TICKET ([ticketPrefersRaster], hoy el modelo de factura moderno
+/// vía `PrintTicket.preferRaster`) o el ajuste de la impresora. Vale también
+/// para las Star: que no hablen ESC/POS no las obliga a la rejilla, y a 203
+/// dpi dibujan igual de bien un bitmap con tipografía real.
+///
+/// VÁLVULA DE ESCAPE: `connection_config.render = 'grid'` la fuerza a celdas
+/// fijas. Si en una impresora concreta la proporcional sale peor (papel malo,
+/// cabezal gastado), se vuelve atrás cambiando una fila en la base de datos y
+/// sin build nuevo.
+bool wantsProportionalRaster(
+  PrinterConfig printer, {
+  required bool ticketPrefersRaster,
+}) {
+  if (printerForcesGridRaster(printer)) return false;
+  return ticketPrefersRaster || printerWantsEscPosRaster(printer);
+}
+
+/// La impresora pide expresamente la rejilla de celdas fijas
+/// (`connection_config.render = 'grid'`). Ver [wantsProportionalRaster].
+bool printerForcesGridRaster(PrinterConfig printer) {
+  final mode = _renderMode(printer);
+  return mode == 'grid' || mode == 'celdas' || mode == 'mono';
+}
+
+/// `connection_config.render` normalizado, o null si no está.
+String? _renderMode(PrinterConfig printer) =>
+    printer.connectionConfig['render']?.toString().trim().toLowerCase();

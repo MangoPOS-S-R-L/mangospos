@@ -38,6 +38,7 @@ class TicketTextOp {
     this.widthFactor = 1,
     this.heightFactor = 1,
     this.fontB = false,
+    this.lineSpacing,
   });
 
   final String text;
@@ -58,10 +59,20 @@ class TicketTextOp {
   final int widthFactor;
   final int heightFactor;
 
+  /// `ESC 3 n` vigente, en puntos: el AVANCE de papel que el builder pidió
+  /// para esta línea (null = interlineado de fábrica).
+  ///
+  /// NO es decorativo. Mientras el raster lo ignoró, cada línea avanzaba
+  /// exactamente el alto de su glifo y el ticket salía con los renglones
+  /// TOCÁNDOSE: la misma factura se veía aireada por firmware y amontonada
+  /// en cuanto se rasterizaba. El modelo moderno, que es el que más apoya su
+  /// diseño en el interlineado, era el que peor lo sufría.
+  final int? lineSpacing;
+
   @override
   String toString() =>
       'TicketTextOp("$text", ${align.name}, b:$bold, i:$inverse, '
-      'w:$widthFactor, h:$heightFactor, fB:$fontB)';
+      'w:$widthFactor, h:$heightFactor, fB:$fontB, ls:$lineSpacing)';
 }
 
 /// Un bloque de imagen ya decodificado a píxeles (1 = punto negro).
@@ -119,6 +130,7 @@ class EscPosParser {
     var heightFactor = 1;
     var fontB = false;
     var drawer = false;
+    int? lineSpacing;
 
     // Buffer de la línea en curso. Se vacía en cada LF.
     final line = <int>[];
@@ -138,8 +150,9 @@ class EscPosParser {
     // metían un renglón en blanco fantasma que corría todo el ticket.
     void flushPending() {
       if (line.isEmpty) return;
-      final text = latin1.decode(line, allowInvalid: true);
+      final text = _printable(latin1.decode(line, allowInvalid: true));
       line.clear();
+      if (text.isEmpty) return;
       ops.add(
         TicketTextOp(
           text: text,
@@ -150,6 +163,7 @@ class EscPosParser {
           widthFactor: widthFactor,
           heightFactor: heightFactor,
           fontB: fontB,
+          lineSpacing: lineSpacing,
         ),
       );
     }
@@ -165,11 +179,12 @@ class EscPosParser {
             widthFactor: widthFactor,
             heightFactor: heightFactor,
             fontB: fontB,
+            lineSpacing: lineSpacing,
           ),
         );
         return;
       }
-      final text = latin1.decode(line, allowInvalid: true);
+      final text = _printable(latin1.decode(line, allowInvalid: true));
       line.clear();
       ops.add(
         TicketTextOp(
@@ -181,6 +196,7 @@ class EscPosParser {
           widthFactor: widthFactor,
           heightFactor: heightFactor,
           fontB: fontB,
+          lineSpacing: lineSpacing,
         ),
       );
     }
@@ -201,6 +217,7 @@ class EscPosParser {
             widthFactor = 1;
             heightFactor = 1;
             fontB = false;
+            lineSpacing = null;
             i += 2;
             continue;
           case 0x61: // ESC a n — alineación
@@ -235,16 +252,28 @@ class EscPosParser {
           case 0x33: // ESC 3 n — interlineado
           case 0x64: // ESC d n — avanzar n líneas
             if (i + 2 >= data.length) return _done(ops, cut, drawer);
+            if (cmd == 0x33) {
+              // El interlineado SÍ se guarda: en el raster es el avance de
+              // papel de las líneas que siguen (ver `TicketTextOp.lineSpacing`).
+              lineSpacing = data[i + 2];
+            }
             if (cmd == 0x64) {
               flushLine();
               final n = data[i + 2];
               for (var k = 0; k < n; k++) {
-                ops.add(TicketTextOp(text: '', align: align));
+                ops.add(
+                  TicketTextOp(
+                    text: '',
+                    align: align,
+                    lineSpacing: lineSpacing,
+                  ),
+                );
               }
             }
             i += 3;
             continue;
           case 0x32: // ESC 2 — interlineado default
+            lineSpacing = null;
             i += 2;
             continue;
           case 0x70: // ESC p m t1 t2 — gaveta
@@ -284,9 +313,26 @@ class EscPosParser {
         }
       }
 
+      // FS n — comandos de modo Kanji (`FS .`, `FS &`) y afines. No pintan
+      // nada en un ticket latino, pero si no se consumen el argumento cae al
+      // texto: el 0x1C se dibujaba como el glifo de caracter desconocido (un
+      // cuadrito que en papel parece una "M") pegado al logo y al QR.
+      if (b == 0x1C) {
+        i += 2;
+        continue;
+      }
+
       if (b == _gs && i + 1 < data.length) {
         final cmd = data[i + 1];
         switch (cmd) {
+          case 0x28: // GS ( fn pL pH data — familia de longitud variable
+            // (graficos nuevos, QR nativo, macros). Saltarlo COMPLETO usando
+            // pL/pH: cortarlo a 2 bytes desincronizaba el stream y el resto
+            // del ticket se leia como basura.
+            if (i + 5 >= data.length) return _done(ops, cut, drawer);
+            final len = data[i + 3] | (data[i + 4] << 8);
+            i += 5 + len;
+            continue;
           case 0x21: // GS ! n — tamaño
             if (i + 2 >= data.length) return _done(ops, cut, drawer);
             final n = data[i + 2];
@@ -355,6 +401,13 @@ class EscPosParser {
     flushImage();
     return ParsedTicket(ops: ops, cut: cut, openCashDrawer: drawer);
   }
+
+  /// Borra los caracteres de control que un comando no reconocido pueda
+  /// haber dejado caer en el texto. Un byte de control no tiene glifo: la
+  /// fuente lo pinta como "caracter desconocido" y sale IMPRESO en la
+  /// factura del cliente. Preferimos perder un byte basura a mostrarlo.
+  static String _printable(String text) =>
+      text.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
 
   /// Salida temprana cuando el flujo viene truncado. Arrastra igual el flag
   /// de gaveta: si el `ESC p` ya se había visto, no se pierde.

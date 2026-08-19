@@ -290,7 +290,11 @@ Future<void> _printQuickSaleComprobante(
       }
       return;
     }
-    await printRepo.printEscPos(printer: printer!, data: ticket.escPosCommands);
+    await printRepo.printEscPos(
+      printer: printer!,
+      data: ticket.escPosCommands,
+      preferRaster: ticket.preferRaster,
+    );
   } catch (e) {
     // Fire-and-forget: nunca lanzar. El comprobante se puede reimprimir
     // desde el historial (con su NCF) una vez sincronizado.

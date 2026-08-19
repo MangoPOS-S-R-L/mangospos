@@ -5936,6 +5936,7 @@ class _CartView extends ConsumerWidget {
             idempotencyKey: idempotencyKey,
             kind: type,
             areaCode: 'cashier',
+            preferRaster: ticket.preferRaster,
           );
         } else {
           if (!printer.isNetwork) {

@@ -123,6 +123,29 @@ void main() {
       expect(lines.firstWhere((l) => l.text == 'normal').inverse, isFalse);
     });
 
+    test('el interlineado (ESC 3) viaja con la línea', () {
+      // Es el avance de papel del ticket. Mientras se descartaba, el raster
+      // dibujaba cada renglón pegado al siguiente aunque el builder pidiera
+      // aire — el bug que hacía ver la factura moderna "toda amontonada".
+      final gen = EscPosGenerator();
+      gen.initialize();
+      gen.setLineSpacing(40);
+      gen.text('con aire');
+      gen.resetLineSpacing();
+      gen.text('de fabrica');
+
+      final lines = EscPosParser.parse(
+        gen.getCommands(),
+      ).ops.whereType<TicketTextOp>().toList();
+
+      expect(lines.firstWhere((l) => l.text == 'con aire').lineSpacing, 40);
+      expect(
+        lines.firstWhere((l) => l.text == 'de fabrica').lineSpacing,
+        isNull,
+        reason: 'ESC 2 devuelve la métrica de fábrica',
+      );
+    });
+
     test('conserva los renglones en blanco (son parte del layout)', () {
       final gen = EscPosGenerator();
       gen.initialize();
@@ -285,6 +308,218 @@ void main() {
       expect(bmp.height, greaterThan(48));
       expect(bmp.height, lessThanOrEqualTo(72));
       expect(bmp.width, 384);
+    });
+
+    test('el interlineado pedido separa los renglones', () async {
+      // La misma línea con y sin `ESC 3 40`: con interlineado el renglón
+      // avanza 40 puntos en vez de 24, y esos 16 de diferencia son el aire
+      // que el dueño pedía ver en la factura moderna.
+      final pegado = EscPosGenerator(paperWidth: 58);
+      pegado.initialize();
+      pegado.text('A');
+      pegado.text('B');
+
+      final aireado = EscPosGenerator(paperWidth: 58);
+      aireado.initialize();
+      aireado.setLineSpacing(40);
+      aireado.text('A');
+      aireado.text('B');
+
+      final bmpPegado = await TicketRasterizer.render(
+        EscPosParser.parse(pegado.getCommands()),
+        384,
+      );
+      final bmpAireado = await TicketRasterizer.render(
+        EscPosParser.parse(aireado.getCommands()),
+        384,
+      );
+
+      expect(bmpAireado.height, greaterThan(bmpPegado.height));
+      // Y el aire está ENTRE los renglones, no todo al final: la franja justo
+      // encima del segundo glifo tiene que quedar en blanco.
+      expect(inkInRow(bmpAireado, 39, 0, 384), isFalse);
+    });
+
+    test('una línea en blanco avanza solo lo que pide el interlineado', () async {
+      // Media línea de aire (`ModernInvoiceLayout.gap`): un renglón vacío no
+      // tiene tinta que encimar, así que puede avanzar menos que el glifo.
+      final gen = EscPosGenerator(paperWidth: 58);
+      gen.initialize();
+      gen.text('A');
+      gen.setLineSpacing(20);
+      gen.text('');
+      gen.setLineSpacing(40);
+      gen.text('B');
+
+      final bmp = await TicketRasterizer.render(
+        EscPosParser.parse(gen.getCommands()),
+        384,
+      );
+      // 24 (A) + 20 (aire) = el segundo glifo arranca en 44, no en 48.
+      expect(inkInRow(bmp, 30, 0, 384), isFalse);
+      expect(inkInRow(bmp, 56, 0, 384), isTrue);
+    });
+
+    test('en proporcional el aire NO depende del tamaño de la letra', () {
+      // El TOTAL va en doble altura: su renglón tiene que crecer lo que crece
+      // el glifo y ni un punto más. Multiplicar el renglón entero por el
+      // factor —que es lo que se hacía— le regalaba el doble de aire a la
+      // única línea que ya destacaba por tamaño.
+      final normal = TicketRasterizer.proportionalPitch(1);
+      final doble = TicketRasterizer.proportionalPitch(2);
+      final cajaDelGlifo = normal - TicketRasterizer.proportionalLeading;
+
+      expect(doble - normal, cajaDelGlifo);
+      expect(doble - 2 * cajaDelGlifo, TicketRasterizer.proportionalLeading);
+    });
+
+    test('el renglón proporcional avanza el paso pedido', () async {
+      final gen = EscPosGenerator(paperWidth: 80);
+      gen.initialize();
+      gen.text('A');
+      gen.text('B');
+
+      final bmp = await TicketRasterizer.render(
+        EscPosParser.parse(gen.getCommands()),
+        576,
+        proportional: true,
+      );
+
+      bool filaConTinta(int y) {
+        if (y >= bmp.height) return false;
+        for (final b in bmp.rows[y]) {
+          if (b != 0) return true;
+        }
+        return false;
+      }
+
+      final arranques = <int>[];
+      var dentro = false;
+      for (var y = 0; y < bmp.height; y++) {
+        final tinta = filaConTinta(y);
+        if (tinta && !dentro) arranques.add(y);
+        dentro = tinta;
+      }
+
+      expect(arranques, hasLength(2), reason: 'dos renglones con tinta');
+      expect(
+        arranques[1] - arranques[0],
+        TicketRasterizer.proportionalPitch(1),
+      );
+    });
+
+    test('la regla se separa como cualquier otra línea', () async {
+      // Una regla ocupaba un renglón entero de texto, así que quedaba con
+      // casi el doble de aire que sus vecinas: "el espacio entre el lineado y
+      // los textos es amplio, pero entre 2 líneas de texto es muy pegado".
+      final gen = EscPosGenerator(paperWidth: 80);
+      gen.initialize();
+      gen.text('A');
+      gen.text('.' * 48);
+      gen.text('B');
+
+      final bmp = await TicketRasterizer.render(
+        EscPosParser.parse(gen.getCommands()),
+        576,
+        proportional: true,
+      );
+
+      final huecos = <int>[];
+      var blancoDesde = -1;
+      for (var y = 0; y < bmp.height; y++) {
+        final tinta = bmp.rows[y].any((b) => b != 0);
+        if (!tinta && blancoDesde < 0) {
+          blancoDesde = y;
+        } else if (tinta && blancoDesde >= 0) {
+          if (blancoDesde > 0) huecos.add(y - blancoDesde);
+          blancoDesde = -1;
+        }
+      }
+
+      expect(huecos, hasLength(2), reason: 'texto/regla y regla/texto');
+      // Los dos huecos alrededor de la regla, iguales entre sí y del orden
+      // del interlineado: el mismo aire que separa dos líneas de texto.
+      expect((huecos[0] - huecos[1]).abs(), lessThanOrEqualTo(1));
+      for (final hueco in huecos) {
+        expect(hueco, closeTo(TicketRasterizer.proportionalLeading, 12));
+      }
+    });
+
+    test('el nombre del producto arranca siempre en la misma columna', () async {
+      // En el papel se veía "4x3 mille" arrancando antes que "4x3 coors
+      // original": las columnas del medio se anclaban por la DERECHA, así que
+      // cada nombre caía en un sitio distinto según su largo. Un nombre va
+      // por la izquierda; solo las cifras se anclan por la derecha.
+      final gen = EscPosGenerator(paperWidth: 80);
+      gen.initialize();
+      gen.textRow('1  4x3 mille', r'RD$527.34');
+      gen.textRow('1  4x3 coors original', r'RD$585.94');
+
+      final bmp = await TicketRasterizer.render(
+        EscPosParser.parse(gen.getCommands()),
+        576,
+        proportional: true,
+      );
+
+      bool ink(int y, int x) => (bmp.rows[y][x ~/ 8] & (0x80 >> (x % 8))) != 0;
+
+      /// Primera columna con tinta pasada la cantidad, en el renglón [n].
+      int inicioDelNombre(int n) {
+        final desde = n * TicketRasterizer.proportionalPitch(1);
+        final hasta = desde + TicketRasterizer.proportionalPitch(1);
+        for (var x = 30; x < 300; x++) {
+          for (var y = desde; y < hasta && y < bmp.height; y++) {
+            if (ink(y, x)) return x;
+          }
+        }
+        return -1;
+      }
+
+      final primero = inicioDelNombre(0);
+      expect(primero, greaterThan(0));
+      expect(inicioDelNombre(1), primero);
+    });
+
+    test('el blanco que trae un gráfico cuenta como aire', () async {
+      // Un QR trae 4 módulos de quiet zone por norma y un logo suele traer su
+      // propio margen. Si el margen del layout se suma a ese blanco, el
+      // gráfico queda más lejos del texto que el resto del ticket.
+      Future<int> huecoBajoImagen(int filasEnBlanco) async {
+        const alto = 40;
+        final pixeles = List<bool>.filled(24 * alto, false);
+        for (var y = 0; y < alto - filasEnBlanco; y++) {
+          for (var x = 0; x < 24; x++) {
+            pixeles[y * 24 + x] = true;
+          }
+        }
+        final ticket = ParsedTicket(
+          ops: [
+            TicketImageOp(width: 24, height: alto, pixels: pixeles),
+            const TicketTextOp(text: 'Codigo de Seguridad: 1mjasw'),
+          ],
+          cut: false,
+        );
+
+        final bmp = await TicketRasterizer.render(
+          ticket,
+          576,
+          proportional: true,
+        );
+        // El hueco entre la tinta de la imagen y la del texto.
+        var y = 0;
+        while (y < bmp.height && bmp.rows[y].any((b) => b != 0)) {
+          y++;
+        }
+        final inicioHueco = y;
+        while (y < bmp.height && !bmp.rows[y].any((b) => b != 0)) {
+          y++;
+        }
+        return y - inicioHueco;
+      }
+
+      final sinMargenPropio = await huecoBajoImagen(0);
+      final conMargenPropio = await huecoBajoImagen(20);
+      expect(conMargenPropio, sinMargenPropio);
     });
 
     test('el texto de doble tamaño ocupa el doble de alto', () async {

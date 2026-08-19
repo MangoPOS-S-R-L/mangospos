@@ -20,6 +20,7 @@ import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
 import '../../customers/viewmodel/customers_viewmodel.dart';
 import '../../settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import '../../../core/widgets/payment_progress_overlay.dart';
 import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
@@ -428,28 +429,27 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                   ),
                 ],
               ),
-                  // Overlay while payment is processing
+                  // Progreso del cobro por etapas. Antes era un spinner con
+                  // "Procesando pago..."; con la emisión e-CF el cobro puede
+                  // bloquear hasta 8s esperando a la DGII y hacía falta decir
+                  // qué se está esperando.
                   if (state.processingPayment)
+                    // El Positioned.fill va AQUÍ y no dentro del overlay: si
+                    // estuviera adentro, este ClipRRect quedaría entre el
+                    // Positioned y el Stack y Flutter aborta con "Incorrect
+                    // use of ParentDataWidget".
                     Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(AppRadius.lg),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            CircularProgressIndicator(color: AppColors.primary),
-                            const SizedBox(height: 16),
-                            Text(
-                              'Procesando pago...',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.foreground,
-                              ),
-                            ),
-                          ],
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(AppRadius.lg),
+                        child: PaymentProgressOverlay(
+                          stage: state.stage,
+                          // El tipo seleccionado manda: `fiscalDocument`
+                          // todavía no existe cuando arranca el cobro, así que
+                          // se lee de la serie elegida por el cajero
+                          // (Exx = electrónico).
+                          isElectronic:
+                              state.selectedNcfType?.startsWith('E') ?? false,
+                          dgiiContingency: state.dgiiContingency,
                         ),
                       ),
                     ),

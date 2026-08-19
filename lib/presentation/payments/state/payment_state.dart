@@ -1,7 +1,13 @@
 import 'package:equatable/equatable.dart';
+import '../../../core/fiscal/payment_stage.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
+
+// `PaymentStage` se mudó a core/fiscal cuando el cobro por split (mesas)
+// también empezó a necesitarla. Se reexporta para que los imports que ya
+// apuntaban aquí sigan resolviendo.
+export '../../../core/fiscal/payment_stage.dart';
 
 /// 💰 Estado del proceso de pago
 class PaymentState extends Equatable {
@@ -50,6 +56,17 @@ class PaymentState extends Equatable {
 
   // Estado del proceso
   final bool processingPayment; // true while payment RPC is in flight
+  /// Qué se está esperando ahora mismo. `processingPayment` sigue siendo el
+  /// interruptor que bloquea la UI; esto solo dice el porqué.
+  final PaymentStage stage;
+
+  /// La emisión e-CF no completó a tiempo y el comprobante sale en
+  /// contingencia. No es un error de cobro: la venta quedó registrada y el
+  /// ticket se imprime igual; el cron de respaldo y el webhook reenvían el
+  /// documento a la DGII después. Se separa de `stage` porque es el
+  /// resultado de la etapa DGII, no una etapa más — el flujo sigue avanzando
+  /// a `imprimiendo` y el aviso tiene que sobrevivir a ese avance.
+  final bool dgiiContingency;
   final bool paymentProcessed;
   final Payment? processedPayment;
   final FiscalDocument? fiscalDocument;
@@ -75,6 +92,8 @@ class PaymentState extends Equatable {
     this.selectedNcfType,
     this.ecfEnabled = false,
     this.processingPayment = false,
+    this.stage = PaymentStage.idle,
+    this.dgiiContingency = false,
     this.paymentProcessed = false,
     this.processedPayment,
     this.fiscalDocument,
@@ -101,6 +120,8 @@ class PaymentState extends Equatable {
     String? selectedNcfType,
     bool? ecfEnabled,
     bool? processingPayment,
+    PaymentStage? stage,
+    bool? dgiiContingency,
     bool? paymentProcessed,
     Payment? processedPayment,
     FiscalDocument? fiscalDocument,
@@ -130,6 +151,8 @@ class PaymentState extends Equatable {
       selectedNcfType: selectedNcfType ?? this.selectedNcfType,
       ecfEnabled: ecfEnabled ?? this.ecfEnabled,
       processingPayment: processingPayment ?? this.processingPayment,
+      stage: stage ?? this.stage,
+      dgiiContingency: dgiiContingency ?? this.dgiiContingency,
       paymentProcessed: paymentProcessed ?? this.paymentProcessed,
       processedPayment: processedPayment ?? this.processedPayment,
       fiscalDocument: fiscalDocument ?? this.fiscalDocument,
@@ -233,6 +256,8 @@ class PaymentState extends Equatable {
     selectedNcfType,
     ecfEnabled,
     processingPayment,
+    stage,
+    dgiiContingency,
     paymentProcessed,
     processedPayment,
     fiscalDocument,

@@ -5,67 +5,12 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
+import '../state/adjust_reasons.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
-
-/// Catálogo de razones de ajuste (Sprint Inventario V1.1, migración 0017).
-/// El backend valida que el `reason_code` esté en este enum: si agregas o
-/// quitas valores acá, sincroniza el CHECK constraint en la DB.
-class _AdjustReason {
-  final String code;
-  final String label;
-  final String description;
-  final IconData icon;
-  const _AdjustReason(this.code, this.label, this.description, this.icon);
-}
-
-const List<_AdjustReason> _kAdjustReasons = [
-  _AdjustReason(
-    'physical_count',
-    'Conteo físico',
-    'Cuadrar con la realidad de la bodega',
-    Icons.fact_check_rounded,
-  ),
-  _AdjustReason(
-    'breakage',
-    'Rotura / dañado',
-    'Producto roto o no apto para venta',
-    Icons.broken_image_rounded,
-  ),
-  _AdjustReason(
-    'expiration',
-    'Vencido',
-    'Producto vencido o caducado',
-    Icons.event_busy_rounded,
-  ),
-  _AdjustReason(
-    'theft',
-    'Faltante / robo',
-    'Faltante sospechoso o pérdida',
-    Icons.no_accounts_rounded,
-  ),
-  _AdjustReason(
-    'donation',
-    'Donación / cortesía',
-    'Regalo, donación o cortesía',
-    Icons.volunteer_activism_rounded,
-  ),
-  _AdjustReason(
-    'correction',
-    'Corrección',
-    'Corrección de error operativo',
-    Icons.edit_note_rounded,
-  ),
-  _AdjustReason(
-    'other',
-    'Otro',
-    'Otro motivo (requiere notas)',
-    Icons.more_horiz_rounded,
-  ),
-];
 
 class StockReconciliationView extends ConsumerStatefulWidget {
   const StockReconciliationView({super.key});
@@ -373,7 +318,7 @@ class _AdjustDialog extends ConsumerStatefulWidget {
 class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
   late final TextEditingController _countedController;
   late final TextEditingController _notesController;
-  _AdjustReason? _selectedReason;
+  AdjustReason? _selectedReason;
   bool _submitting = false;
   String? _errorMessage;
 
@@ -594,7 +539,7 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              DropdownButtonFormField<_AdjustReason>(
+              DropdownButtonFormField<AdjustReason>(
                 initialValue: _selectedReason,
                 isExpanded: true,
                 decoration: InputDecoration(
@@ -603,7 +548,7 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
                   ),
                   hintText: 'Selecciona un motivo',
                 ),
-                items: _kAdjustReasons
+                items: kAdjustReasons
                     .map(
                       (r) => DropdownMenuItem(
                         value: r,

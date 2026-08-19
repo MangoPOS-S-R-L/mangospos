@@ -1528,6 +1528,10 @@ class PrintingRepository {
     String? idempotencyKey,
     String kind = 'other',
     String? areaCode,
+    /// El ticket pide salir como imagen (ver `PrintTicket.preferRaster`).
+    /// Se propaga tal cual al adaptador: la decisión es del formato, no de
+    /// la impresora, y tiene que valer por cualquier transporte.
+    bool preferRaster = false,
     // Guard interno anti-recursión del retry con config fresca
     // (_retryWithFreshConfig). Los callers externos no deben pasarlo.
     bool refreshOnFailure = true,
@@ -1536,7 +1540,11 @@ class PrintingRepository {
     // no imprime nada. El adaptador rasteriza el ticket antes de que salga
     // por CUALQUIER transporte (directo, host remoto o cola). Para el resto
     // de las impresoras devuelve los mismos bytes.
-    data = await StarPrintAdapter.adapt(printer: printer, escPosData: data);
+    data = await StarPrintAdapter.adapt(
+      printer: printer,
+      escPosData: data,
+      preferRaster: preferRaster,
+    );
 
     // PRD 5 F2.5: routing por host_device_id.
     // Si la impresora está vinculada a un device físico (USB/BT) que NO es
@@ -2096,6 +2104,8 @@ class PrintingRepository {
     required PrinterConfig printer,
     required List<int> data,
     Duration timeout = const Duration(seconds: 10),
+    /// Ver `printEscPos`: el formato del ticket manda sobre el transporte.
+    bool preferRaster = false,
     // El receipt path (`_printEscPosLocal`) ya envuelve esta llamada en
     // un retry de 3 intentos con backoff, así que ahí pasamos
     // `attempts: 1` para no multiplicar. Otros callers (kitchen, test)
@@ -2107,7 +2117,11 @@ class PrintingRepository {
     // cocina llaman aquí directo, así que la conversión a raster Star
     // también tiene que pasar por este lado. Si ya viene rasterizado (o la
     // impresora es ESC/POS) el adaptador devuelve los bytes intactos.
-    data = await StarPrintAdapter.adapt(printer: printer, escPosData: data);
+    data = await StarPrintAdapter.adapt(
+      printer: printer,
+      escPosData: data,
+      preferRaster: preferRaster,
+    );
 
     if (Platform.isWindows) {
       await _printRawDirectUsbWindows(
