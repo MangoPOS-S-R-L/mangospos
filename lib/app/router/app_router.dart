@@ -58,7 +58,9 @@ import '../../presentation/inventory/view/inventory_rotation_view.dart';
 import '../../presentation/inventory/view/inventory_valuation_view.dart';
 import '../../presentation/inventory/view/consolidated_inventory_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
+import '../../presentation/inventory/view/supplier_detail_view.dart';
 import '../../presentation/inventory/view/suppliers_view.dart';
+import '../../presentation/inventory/view/warehouse_detail_view.dart';
 import '../../presentation/inventory/view/warehouses_view.dart';
 import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
@@ -774,8 +776,30 @@ class AppRouter {
             builder: (context, state) => const WarehousesView(),
           ),
           GoRoute(
+            path: AppRoutes.inventoryWarehouseDetail,
+            builder: (context, state) => WarehouseDetailView(
+              warehouseId: state.pathParameters['warehouseId'] ?? '',
+              initialTab: switch (state.uri.queryParameters['tab']) {
+                'movimientos' => WarehouseTab.movements,
+                'transferencias' => WarehouseTab.transfers,
+                _ => WarehouseTab.stock,
+              },
+            ),
+          ),
+          GoRoute(
             path: AppRoutes.inventorySuppliers,
             builder: (context, state) => const SuppliersView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventorySupplierDetail,
+            builder: (context, state) => SupplierDetailView(
+              supplierId: state.pathParameters['supplierId'] ?? '',
+              initialTab: switch (state.uri.queryParameters['tab']) {
+                'ordenes' => SupplierTab.orders,
+                'cuenta' => SupplierTab.account,
+                _ => SupplierTab.items,
+              },
+            ),
           ),
           GoRoute(
             path: AppRoutes.inventoryRequirements,
@@ -827,7 +851,9 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.inventoryPhysicalCount,
-            builder: (context, state) => const PhysicalCountView(),
+            builder: (context, state) => PhysicalCountView(
+              initialWarehouseId: state.uri.queryParameters['warehouse'],
+            ),
           ),
           GoRoute(
             path: AppRoutes.inventoryReorder,

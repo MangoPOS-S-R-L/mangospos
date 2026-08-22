@@ -1070,3 +1070,12 @@ List<AccessPermission> permissionsForCategory(String categoryId) {
       .where((permission) => permission.categoryId == categoryId)
       .toList(growable: false);
 }
+
+/// Índice por código del catálogo. Guardar permisos necesita resolver la
+/// metadata (label, módulo, descripción) de un código suelto para poder
+/// sembrarlo en `public.permissions` si la BD todavía no lo conoce.
+final Map<String, AccessPermission> _permissionsByCode = {
+  for (final permission in accessPermissions) permission.code: permission,
+};
+
+AccessPermission? permissionByCode(String code) => _permissionsByCode[code];

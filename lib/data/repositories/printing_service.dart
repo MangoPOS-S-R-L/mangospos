@@ -1,6 +1,11 @@
 // lib/data/repositories/printing_service.dart
 import 'package:flutter/foundation.dart'
-    show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show
+        debugPrint,
+        kIsWeb,
+        defaultTargetPlatform,
+        TargetPlatform,
+        visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
 import '../models/sales_models.dart';
@@ -65,9 +70,17 @@ class ReadyPrintReport {
   /// configurada (`prints_receipts = true`).
   final List<String> areasWithoutReadyPrinter;
 
+  /// Áreas donde NINGUNA impresora respondió directo y el ticket quedó
+  /// ENCOLADO en el cloud queue. No es lo mismo que impreso: el papel sale
+  /// cuando otra terminal drene la cola (y nunca, si la impresora es
+  /// USB/BT — el worker solo despacha jobs de red). Se reporta aparte para
+  /// que la UI no cante "reimpresa" cuando en cocina no salió nada.
+  final List<String> areasEscalatedToQueue;
+
   const ReadyPrintReport({
     required this.areasPrinted,
     required this.areasWithoutReadyPrinter,
+    this.areasEscalatedToQueue = const [],
   });
 
   static const empty = ReadyPrintReport(
@@ -77,6 +90,30 @@ class ReadyPrintReport {
 
   bool get nothingPrinted => areasPrinted == 0;
   bool get missingReadyPrinter => areasWithoutReadyPrinter.isNotEmpty;
+  bool get queuedInsteadOfPrinted => areasEscalatedToQueue.isNotEmpty;
+}
+
+/// Clave de idempotencia de un ticket de cocina: la comparten la cola BT
+/// ([BlePrinterConnectionManager]) y el cloud queue (`print_jobs`, unique por
+/// `(business_id, idempotency_key)` donde `status <> 'cancelled'`), y con ella
+/// descartan el mismo ticket reencolado tras un glitch de red.
+///
+/// [suffix] es lo que separa un ticket DISTINTO de la misma orden + área +
+/// impresora: una reimpresión o un ticket de LISTO son papel aparte, y sin
+/// sello propio las colas los descartaban contra el job de la comanda
+/// original —normalmente ya 'done'— sin imprimir nada y sin avisar.
+///
+/// Null cuando no hay `orderId`: sin él no hay nada estable que deduplicar.
+@visibleForTesting
+String? kitchenTicketIdempotencyKey({
+  required String? orderId,
+  required String areaCode,
+  required String printerId,
+  String? suffix,
+}) {
+  if (orderId == null || orderId.isEmpty) return null;
+  final tail = (suffix == null || suffix.isEmpty) ? '' : '-$suffix';
+  return 'kitchen-$orderId-$areaCode-$printerId$tail';
 }
 
 /// 🖨️ Servicio de Impresión con Agrupación por Departamento
@@ -374,6 +411,12 @@ class PrintingService {
     // legacy (los errores se propagan sin escalado a cloud).
     String? businessId,
     String? orderId,
+    // Distingue este ticket de OTROS tickets de la misma orden+área+impresora
+    // dentro de las colas de reintento (cloud queue y cola BT), que
+    // deduplican por clave. Sin él, una REIMPRESIÓN o un ticket de LISTO
+    // reusan la clave de la comanda original y la cola los descarta en
+    // silencio. Null = comanda original (clave legacy, byte-idéntica).
+    String? idempotencySuffix,
   }) async {
     final errors = <String>[];
     String? firstDirectPrinterId;
@@ -388,6 +431,7 @@ class PrintingService {
           fallbackData: fallbackData,
           businessId: businessId,
           orderId: orderId,
+          idempotencySuffix: idempotencySuffix,
         );
         if (outcome == KitchenPrintOutcome.directSuccess) {
           firstDirectPrinterId ??= printer.id;
@@ -435,7 +479,16 @@ class PrintingService {
     required Map<String, dynamic> fallbackData,
     String? businessId,
     String? orderId,
+    String? idempotencySuffix,
   }) async {
+    // Clave de idempotencia del ticket, compartida por la cola BT y el cloud
+    // queue. Ver [kitchenTicketIdempotencyKey].
+    final ticketKey = kitchenTicketIdempotencyKey(
+      orderId: orderId,
+      areaCode: areaCode,
+      printerId: printer.id,
+      suffix: idempotencySuffix,
+    );
     // Sprint 1.3.b: el switch interno mantiene los 3 niveles de intento
     // directo (TCP/agent HTTP, USB directo/agent, BT directo). Si TODOS
     // los caminos directos fallan, el catch general escala el job al
@@ -622,9 +675,8 @@ class PrintingService {
               defaultTargetPlatform == TargetPlatform.iOS) {
             // Misma clave de idempotencia que el cloud fallback → si el ticket
             // se reintenta, la cola lo deduplica y no se duplica el papel.
-            final jobId = (orderId != null && orderId.isNotEmpty)
-                ? 'kitchen-$orderId-$areaCode-${printer.id}'
-                : 'kitchen-${DateTime.now().microsecondsSinceEpoch}'
+            final jobId = ticketKey ??
+                'kitchen-${DateTime.now().microsecondsSinceEpoch}'
                     '-$areaCode-${printer.id}';
             final result = await BlePrinterConnectionManager.instance
                 .printOrEnqueue(address: btId, data: bytes, jobId: jobId);
@@ -651,9 +703,7 @@ class PrintingService {
         rethrow;
       }
       try {
-        final idempotencyKey = (orderId != null && orderId.isNotEmpty)
-            ? 'kitchen-$orderId-$areaCode-${printer.id}'
-            : null;
+        final idempotencyKey = ticketKey;
         await _printingRepo.enqueuePrintJobToCloud(
           businessId: businessId,
           dataHex: _bytesToHex(bytes),
@@ -1261,6 +1311,9 @@ class PrintingService {
         items,
         businessId: businessId,
       );
+      // Duplicado deliberado: sello único para que las colas de reintento no
+      // lo dedupliquen contra la comanda original (ver `ticketKey`).
+      final reprintTag = 'reprint-${DateTime.now().microsecondsSinceEpoch}';
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
@@ -1302,6 +1355,7 @@ class PrintingService {
           },
           businessId: businessId,
           orderId: orderId,
+          idempotencySuffix: reprintTag,
         );
       }
     } on ItemsWithoutPrintAreaException {
@@ -1366,6 +1420,10 @@ class PrintingService {
         readyItems,
         businessId: businessId,
       );
+      // El ticket de LISTO es un papel DISTINTO de la comanda de esa misma
+      // orden+área+impresora. Sin sello propio compartía la clave de
+      // idempotencia con ella y las colas de reintento lo descartaban.
+      final readyTag = 'ready-${DateTime.now().microsecondsSinceEpoch}';
 
       var areasPrinted = 0;
       final areasWithoutReadyPrinter = <String>[];
@@ -1414,6 +1472,7 @@ class PrintingService {
           printers: printers,
           buildBytes: buildKitchenBytes,
           areaCode: areaCode,
+          idempotencySuffix: readyTag,
           fallbackData: {
             'title': 'LISTO ${orderData['tableName'] ?? 'COCINA'}',
             'body':
@@ -1490,9 +1549,17 @@ class PrintingService {
       if (onlyAreaCode != null && itemsByArea.containsKey(onlyAreaCode)) {
         itemsByArea = {onlyAreaCode: itemsByArea[onlyAreaCode]!};
       }
+      // La reimpresión es un duplicado DELIBERADO de la comanda: necesita su
+      // propia clave de idempotencia. Con la de la comanda original, tanto el
+      // cloud queue (unique por business+idempotency_key donde status <>
+      // 'cancelled', ver mig 20260513_0008) como la cola BT la descartaban
+      // contra el job viejo —normalmente ya 'done'— y no salía papel, pero el
+      // dispatch reportaba éxito y el KDS decía "Comanda reimpresa".
+      final reprintTag = 'reprint-${DateTime.now().microsecondsSinceEpoch}';
 
       var areasPrinted = 0;
       final areasWithoutPrinter = <String>[];
+      final areasEscalated = <String>[];
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
@@ -1529,7 +1596,7 @@ class PrintingService {
                 paperWidth: printer.paperWidth,
               ).escPosCommands;
 
-          await _dispatchKitchenTicket(
+          final outcome = await _dispatchKitchenTicket(
             printers: printers,
             buildBytes: buildKitchenBytes,
             areaCode: areaCode,
@@ -1542,8 +1609,16 @@ class PrintingService {
             },
             businessId: businessId,
             orderId: orderId,
+            idempotencySuffix: reprintTag,
           );
-          areasPrinted++;
+          // Escalado ≠ impreso. Quien reimprime está parado frente a la
+          // impresora esperando el papel: si ninguna respondió directo y el
+          // ticket quedó en la cola, hay que decirlo en vez de cantar éxito.
+          if (outcome == KitchenPrintOutcome.escalatedToCloud) {
+            areasEscalated.add(areaCode);
+          } else {
+            areasPrinted++;
+          }
         } catch (e) {
           debugPrint('⚠️ Reimpresión de comanda falló en área $areaCode: $e');
           areasWithoutPrinter.add(areaCode);
@@ -1553,6 +1628,7 @@ class PrintingService {
       return ReadyPrintReport(
         areasPrinted: areasPrinted,
         areasWithoutReadyPrinter: areasWithoutPrinter,
+        areasEscalatedToQueue: areasEscalated,
       );
     } on ItemsWithoutPrintAreaException {
       rethrow;

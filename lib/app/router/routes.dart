@@ -110,7 +110,14 @@ class AppRoutes {
   static const inventoryHome = '/inventory';
   static const inventoryItems = '$inventoryHome/items';
   static const inventoryWarehouses = '$inventoryHome/warehouses';
+  /// Interior de UNA bodega (Fase 2). `:warehouseId` es el uuid; el query
+  /// opcional `?tab=movimientos|transferencias` abre la pestaña directo.
+  static const inventoryWarehouseDetail =
+      '$inventoryWarehouses/:warehouseId';
   static const inventorySuppliers = '$inventoryHome/suppliers';
+  /// Interior de UN proveedor (Fase 3). `:supplierId` es el uuid; el query
+  /// opcional `?tab=ordenes|cuenta` abre la pestaña directo.
+  static const inventorySupplierDetail = '$inventorySuppliers/:supplierId';
   static const inventoryReceipts = '$inventoryHome/receipts';
   static const inventoryTransfers = '$inventoryHome/transfers';
   static const inventoryAdjustments = '$inventoryHome/adjustments';

@@ -6,12 +6,25 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/repositories/inventory_repository.dart';
+import '../../../data/repositories/suppliers_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
 import '../state/inventory_warehouse_scope.dart';
 
 final inventoryRepositoryProvider = Provider<InventoryRepository>((ref) {
   return InventoryRepository(Supabase.instance.client);
+});
+
+/// Fase 3 Proveedores. Es un repositorio APARTE del de inventario a
+/// propósito: la relación comercial (compras, deuda, cumplimiento) cruza
+/// cuatro tablas que no son inventario, y `InventoryRepository` ya pasa las
+/// 1900 líneas. El CRUD de la ficha de contacto sigue donde estaba.
+///
+/// Vive como singleton de la sesión porque recuerda qué soporta el esquema
+/// (`termsSupported`, `linksSupported`) y así no vuelve a probarlo en cada
+/// entrada a la pantalla.
+final suppliersRepositoryProvider = Provider<SuppliersRepository>((ref) {
+  return SuppliersRepository(Supabase.instance.client);
 });
 
 final inventoryViewModelProvider = ChangeNotifierProvider<InventoryViewModel>((

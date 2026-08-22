@@ -520,13 +520,19 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             ),
           // Insumos: vinculado al módulo de inventario. Si está
           // apagado (`none`), ocultamos también la entrada.
+          //
+          // Va al MAESTRO de insumos, no a `inventoryOutflow`. Apuntaba ahí
+          // por herencia, y como esa ruta es la pantalla de salidas
+          // manuales, quien entraba por acá caía en "Registro de Salida de
+          // Inventario" —la misma a la que ya lleva su propia entrada más
+          // abajo— y nunca veía la vista de Insumos.
           if (inventoryEnabled)
             _SettingsOption(
               title: 'Insumos',
-              subtitle: 'Materias primas e ingredientes',
+              subtitle: 'Qué tenés, dónde está y qué falta reponer',
               icon: Icons.science_rounded,
               color: const Color(0xFFFFEDED),
-              route: AppRoutes.inventoryOutflow,
+              route: AppRoutes.inventoryItems,
             ),
         ],
       ),

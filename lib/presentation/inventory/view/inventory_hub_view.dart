@@ -153,14 +153,15 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                 _HubCard(
                   icon: Icons.warehouse_outlined,
                   title: 'Bodegas',
-                  subtitle: 'Almacenes físicos y bodega de tránsito',
+                  subtitle: 'Qué guarda cada almacén y qué falta reponer',
                   route: AppRoutes.inventoryWarehouses,
                   available: true,
                 ),
                 _HubCard(
                   icon: Icons.local_shipping_outlined,
                   title: 'Proveedores',
-                  subtitle: 'Catálogo de proveedores y condiciones',
+                  subtitle: 'A quién le comprás, en qué términos y cuánto le '
+                      'debés',
                   route: AppRoutes.inventorySuppliers,
                   available: true,
                 ),

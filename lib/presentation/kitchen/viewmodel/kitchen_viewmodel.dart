@@ -552,6 +552,18 @@ class KitchenViewModel extends ChangeNotifier {
         itemIds: itemIds,
         onlyAreaCode: areaCode,
       );
+      // Escalado a la cola NO es papel en mano. Se avisa primero que
+      // cualquier otra cosa: quien reimprime está esperando el ticket ahí
+      // mismo y antes se le decía "Comanda reimpresa" aunque no saliera nada.
+      if (report.queuedInsteadOfPrinted) {
+        final areas = _areaNames(report.areasEscalatedToQueue);
+        return report.nothingPrinted
+            ? 'La comanda NO salió: ninguna impresora de $areas respondió '
+                'desde esta pantalla. Quedó en la cola de impresión — si no '
+                'sale en unos segundos, reimprímela desde la caja.'
+            : 'Comanda reimpresa, pero en $areas ninguna impresora respondió: '
+                'quedó en la cola de impresión.';
+      }
       if (report.nothingPrinted) {
         return report.missingReadyPrinter
             ? 'La comanda no salió en: '

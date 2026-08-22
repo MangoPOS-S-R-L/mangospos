@@ -10,6 +10,10 @@
 // propiedad estructural que arregló el bug — con el botón dentro de un
 // `Flexible` y etiqueta elidible, la fila no desborda ni con la escala de
 // texto al doble. Si alguien vuelve a poner el botón rígido, esto falla.
+//
+// El botón NO es un `OutlinedButton` ni el menú un `IconButton`: se midió que
+// esa maquinaria de Material costaba el 36% del rebuild de la tabla, así que
+// ambos se rehicieron a mano. La réplica sigue a la implementación real.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,19 +27,31 @@ Widget _rowActions() => Row(
   mainAxisAlignment: MainAxisAlignment.end,
   children: [
     Flexible(
-      child: OutlinedButton.icon(
-        onPressed: () {},
-        icon: const Icon(Icons.tune, size: 15),
-        label: const Text(
-          'Ajustar',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        style: OutlinedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          minimumSize: Size.zero,
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+      child: InkWell(
+        onTap: () {},
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          height: 32,
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.tune, size: 15),
+              SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  'Ajustar',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     ),
@@ -43,11 +59,15 @@ Widget _rowActions() => Row(
     SizedBox(
       width: kRowMenuWidth,
       child: PopupMenuButton<String>(
-        icon: const Icon(Icons.more_vert, size: 19),
         padding: EdgeInsets.zero,
         itemBuilder: (_) => const [
           PopupMenuItem(value: 'edit', child: Text('Editar ficha')),
         ],
+        child: const SizedBox(
+          width: kRowMenuWidth,
+          height: 40,
+          child: Icon(Icons.more_vert, size: 19),
+        ),
       ),
     ),
   ],

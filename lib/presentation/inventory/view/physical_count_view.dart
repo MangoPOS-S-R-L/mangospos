@@ -17,7 +17,12 @@ import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
 
 class PhysicalCountView extends ConsumerStatefulWidget {
-  const PhysicalCountView({super.key});
+  /// Bodega desde la que se llegó (Fase 2 Bodegas). Cuando viene, el conteo
+  /// arranca sobre ESA bodega en vez de pedir que se elija otra vez: entrar a
+  /// la bodega y tocar "Conteo físico" ya dijo cuál es.
+  final String? initialWarehouseId;
+
+  const PhysicalCountView({super.key, this.initialWarehouseId});
 
   @override
   ConsumerState<PhysicalCountView> createState() => _PhysicalCountViewState();
@@ -37,7 +42,11 @@ class _PhysicalCountViewState extends ConsumerState<PhysicalCountView> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(_load);
+    Future.microtask(() async {
+      await _load();
+      // Llegar con una bodega en la mano significa "quiero contar acá".
+      if (mounted && widget.initialWarehouseId != null) await _openCreate();
+    });
   }
 
   Future<void> _load() async {
@@ -85,7 +94,10 @@ class _PhysicalCountViewState extends ConsumerState<PhysicalCountView> {
     final created = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _CreatePhysicalCountDialog(businessId: bid),
+      builder: (_) => _CreatePhysicalCountDialog(
+        businessId: bid,
+        initialWarehouseId: widget.initialWarehouseId,
+      ),
     );
     if (created == true) _load();
   }
@@ -404,7 +416,11 @@ Color _statusColor(PhysicalCountStatus s) {
 
 class _CreatePhysicalCountDialog extends ConsumerStatefulWidget {
   final String businessId;
-  const _CreatePhysicalCountDialog({required this.businessId});
+  final String? initialWarehouseId;
+  const _CreatePhysicalCountDialog({
+    required this.businessId,
+    this.initialWarehouseId,
+  });
 
   @override
   ConsumerState<_CreatePhysicalCountDialog> createState() =>
@@ -445,11 +461,16 @@ class _CreatePhysicalCountDialogState
             .where((w) => w.name != '__IN_TRANSIT__')
             .toList(growable: false);
         if (_warehouses.isNotEmpty) {
-          final main = _warehouses.firstWhere(
-            (w) => w.isMain,
-            orElse: () => _warehouses.first,
-          );
-          _warehouseId = main.id;
+          // La bodega de origen manda; si ya no existe, cae en la principal.
+          final requested = widget.initialWarehouseId;
+          final preselected = requested == null
+              ? null
+              : _warehouses.where((w) => w.id == requested).firstOrNull;
+          _warehouseId =
+              preselected?.id ??
+              _warehouses
+                  .firstWhere((w) => w.isMain, orElse: () => _warehouses.first)
+                  .id;
         }
         _loading = false;
       });

@@ -33,6 +33,29 @@ class InventorySupplierDetail {
   final bool isActive;
   final DateTime? createdAt;
 
+  // ── Fase 3 Proveedores — condiciones comerciales estructuradas ──────────
+  //
+  // `paymentTerms` (texto libre) sigue siendo lo que escribió el negocio y no
+  // se toca. Estos campos son los que permiten CALCULAR: un vencimiento, un
+  // atraso, un orden por deuda. Llegan con la migración
+  // 20260819_0003_supplier_terms_and_items y son nulos mientras no se aplique
+  // — la pantalla lo detecta y se queda con el texto.
+
+  /// 'contado' | 'credito' | 'anticipo'. Vacío = sin definir.
+  final String paymentTermsType;
+
+  /// Días de plazo. Null = no configurado (distinto de 0 = contado).
+  final int? paymentTermsDays;
+
+  /// 'invoice' | 'receipt': desde cuándo cuentan los días.
+  final String paymentTermsFrom;
+
+  /// Monto mínimo que el proveedor exige por orden.
+  final double? minOrderAmount;
+
+  /// Días de entrega PROMETIDOS, para contrastar con el promedio real.
+  final int? leadTimeDays;
+
   const InventorySupplierDetail({
     required this.id,
     required this.name,
@@ -45,6 +68,11 @@ class InventorySupplierDetail {
     required this.notes,
     required this.isActive,
     required this.createdAt,
+    this.paymentTermsType = '',
+    this.paymentTermsDays,
+    this.paymentTermsFrom = '',
+    this.minOrderAmount,
+    this.leadTimeDays,
   });
 
   factory InventorySupplierDetail.fromMap(Map<String, dynamic> map) {
@@ -60,7 +88,24 @@ class InventorySupplierDetail {
       notes: map['notes']?.toString() ?? '',
       isActive: map['is_active'] != false,
       createdAt: DateTime.tryParse(map['created_at']?.toString() ?? ''),
+      paymentTermsType: map['payment_terms_type']?.toString() ?? '',
+      paymentTermsDays: _intOrNull(map['payment_terms_days']),
+      paymentTermsFrom: map['payment_terms_from']?.toString() ?? '',
+      minOrderAmount: _doubleOrNull(map['min_order_amount']),
+      leadTimeDays: _intOrNull(map['lead_time_days']),
     );
+  }
+
+  static int? _intOrNull(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+
+  static double? _doubleOrNull(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString());
   }
 }
 

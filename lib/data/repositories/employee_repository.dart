@@ -1,3 +1,4 @@
+import 'package:mangopos/core/security/access_control_catalog.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class Employee {
@@ -346,6 +347,7 @@ class EmployeeRepository {
     required String primaryRole,
     required Set<String> effectivePermissionCodes,
   }) async {
+    await _ensurePermissionCatalog(effectivePermissionCodes);
     await _client.rpc(
       'fn_save_user_access_profile',
       params: {
@@ -356,6 +358,73 @@ class EmployeeRepository {
         'p_effective_permission_codes': effectivePermissionCodes.toList(),
       },
     );
+  }
+
+  /// Siembra en `public.permissions` los códigos que la BD todavía no
+  /// conoce, ANTES de mandar el perfil al RPC.
+  ///
+  /// `fn_save_user_access_profile` inserta los overrides con
+  /// `join public.permissions p on p.code = ...`: un código que no existe
+  /// como fila se cae del join EN SILENCIO. El RPC devuelve void, la UI
+  /// dice "guardado" y al reabrir el permiso aparece apagado, porque la
+  /// lectura sale del mismo catálogo. Así se perdieron los tres de
+  /// Créditos (y 10 más de Conteo físico, Producción y compras a crédito):
+  /// se agregaron al catálogo Dart sin sembrarlos en la BD.
+  ///
+  /// El seed necesita ser owner/admin (policy `permissions_write_admin`),
+  /// que es justo quien puede abrir esta pantalla. Si aún así falta algún
+  /// código, se levanta un error claro en vez de perder permisos callado.
+  Future<void> _ensurePermissionCatalog(Set<String> codes) async {
+    if (codes.isEmpty) return;
+
+    // Se lee el catálogo entero (≈100 filas) en vez de filtrar por código:
+    // un `inFilter` con todo el catálogo arma una URL de varios KB y
+    // PostgREST la rechaza con 414.
+    final known = await _client.from('permissions').select('code');
+    final knownCodes = (known as List)
+        .map((row) => (row as Map<String, dynamic>)['code']?.toString())
+        .whereType<String>()
+        .toSet();
+
+    final missing = codes.difference(knownCodes);
+    if (missing.isEmpty) return;
+
+    final rows = missing.map((code) {
+      final meta = permissionByCode(code);
+      return {
+        'code': code,
+        'name': meta?.label ?? code,
+        // `module` usa los mismos valores que el `categoryId` del catálogo
+        // Dart (finance, inventory, restaurant...).
+        'module': meta?.categoryId ?? code.split('.').first,
+        'description': meta?.description,
+      };
+    }).toList(growable: false);
+
+    try {
+      await _client.from('permissions').upsert(rows, onConflict: 'code');
+    } catch (_) {
+      // Sin permiso de escritura en el catálogo: lo reporta la
+      // verificación de abajo con los códigos concretos.
+    }
+
+    final after = await _client
+        .from('permissions')
+        .select('code')
+        .inFilter('code', missing.toList());
+    final seeded = (after as List)
+        .map((row) => (row as Map<String, dynamic>)['code']?.toString())
+        .whereType<String>()
+        .toSet();
+
+    final stillMissing = missing.difference(seeded);
+    if (stillMissing.isNotEmpty) {
+      throw StateError(
+        'No se pudieron guardar estos permisos porque no existen en el '
+        'catálogo de la base de datos: ${stillMissing.join(", ")}. '
+        'Aplicá la migration 20260822_0002_permissions_catalog_backfill.',
+      );
+    }
   }
 
   /// Lee si el usuario (empleado) está marcado como compartido entre

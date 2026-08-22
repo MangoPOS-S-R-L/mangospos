@@ -31,6 +31,47 @@ class InventoryOfflineCache {
   String _snapshotKey(String businessId, String warehouseId) =>
       'offline_inventory_snapshot_${businessId}_$warehouseId';
 
+  String _warehousesKey(String businessId) =>
+      'offline_inventory_warehouses_$businessId';
+
+  /// Persiste la lista de bodegas del negocio.
+  ///
+  /// Los snapshots de items se guardan por (negocio, bodega), así que para
+  /// leerlos hay que saber PRIMERO qué bodegas existen. Sin esta copia, un
+  /// arranque cache-first tendría que esperar igual la consulta de bodegas
+  /// y el caché de items no serviría de nada para pintar rápido.
+  Future<void> saveWarehousesSnapshot({
+    required String businessId,
+    required List<Map<String, dynamic>> rows,
+  }) async {
+    try {
+      final storage = await _storage;
+      await storage.write(_warehousesKey(businessId), jsonEncode(rows));
+    } catch (e) {
+      debugPrint('InventoryOfflineCache.saveWarehousesSnapshot error: $e');
+    }
+  }
+
+  /// Última lista de bodegas conocida, o null si nunca se guardó.
+  Future<List<Map<String, dynamic>>?> loadWarehousesSnapshot(
+    String businessId,
+  ) async {
+    try {
+      final storage = await _storage;
+      final raw = await storage.read(_warehousesKey(businessId));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return null;
+      return decoded
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('InventoryOfflineCache.loadWarehousesSnapshot error: $e');
+      return null;
+    }
+  }
+
   /// Persiste lista de items + map de stock. [itemsRaw] es la respuesta
   /// cruda de `inventory_items` (Map). [stockByItem] es el map
   /// item_id → quantity recuperado de `inventory_stock`.

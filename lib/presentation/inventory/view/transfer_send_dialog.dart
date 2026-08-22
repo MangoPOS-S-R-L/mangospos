@@ -10,7 +10,11 @@ import '../../../core/theme/app_radius.dart';
 import '../../../services/session/session_controller.dart';
 
 class TransferSendDialog extends ConsumerStatefulWidget {
-  const TransferSendDialog({super.key});
+  /// Bodega de ORIGEN sugerida. La manda el interior de una bodega: si ya
+  /// estás parado en el Bar, la transferencia sale del Bar.
+  final String? initialFromWarehouseId;
+
+  const TransferSendDialog({super.key, this.initialFromWarehouseId});
 
   @override
   ConsumerState<TransferSendDialog> createState() => _TransferSendDialogState();
@@ -47,10 +51,19 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
       // Pre-seleccionar la primera bodega como origen y la siguiente como destino.
       final inv = ref.read(inventoryViewModelProvider).state;
       final realWarehouses = inv.warehouses; // ya no incluye IN_TRANSIT
+      final requested = widget.initialFromWarehouseId;
+      final origin = requested == null
+          ? null
+          : realWarehouses.where((w) => w.id == requested).firstOrNull;
       if (realWarehouses.length >= 2) {
         setState(() {
-          _fromWarehouseId = realWarehouses.first.id;
-          _toWarehouseId = realWarehouses[1].id;
+          _fromWarehouseId = origin?.id ?? realWarehouses.first.id;
+          _toWarehouseId = realWarehouses
+              .firstWhere(
+                (w) => w.id != _fromWarehouseId,
+                orElse: () => realWarehouses[1],
+              )
+              .id;
         });
         await _loadSourceItems();
       } else if (realWarehouses.length == 1) {

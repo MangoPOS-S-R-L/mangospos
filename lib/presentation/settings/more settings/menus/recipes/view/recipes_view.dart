@@ -8,6 +8,7 @@ import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_tokens.dart';
 import '../state/recipes_state.dart';
 import '../viewmodel/recipes_viewmodel.dart';
+import 'widgets/searchable_select_field.dart';
 
 class RecipesView extends ConsumerStatefulWidget {
   const RecipesView({super.key});
@@ -483,20 +484,18 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String>(
-                initialValue: _menuItemId,
-                decoration: const InputDecoration(labelText: 'Producto'),
-                items: widget.menuProducts
-                    .map(
-                      (product) => DropdownMenuItem(
-                        value: product.id,
-                        child: Text(product.name),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: widget.initialRecipe != null
-                    ? null
-                    : (value) => setState(() => _menuItemId = value),
+              SearchableSelectField<RecipeMenuProduct>(
+                labelText: 'Producto',
+                hintText: 'Busca el producto por nombre...',
+                items: widget.menuProducts,
+                selected: _productById(_menuItemId),
+                labelOf: (product) => product.name,
+                subtitleOf: (product) =>
+                    product.isActive ? null : 'Producto inactivo',
+                // El producto de una receta ya creada no se puede cambiar.
+                enabled: widget.initialRecipe == null,
+                onSelected: (product) =>
+                    setState(() => _menuItemId = product.id),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -551,38 +550,28 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
     return List<Widget>.generate(_rows.length, (index) {
       final row = _rows[index];
       return Padding(
+        key: row.key,
         padding: const EdgeInsets.only(bottom: 10),
         child: Row(
           children: [
             Expanded(
               flex: 4,
-              child: DropdownButtonFormField<String>(
-                initialValue: row.inventoryItemId,
-                decoration: const InputDecoration(labelText: 'Insumo'),
-                items: widget.inventoryItems
-                    .map(
-                      (item) => DropdownMenuItem(
-                        value: item.id,
-                        child: Text(
-                          item.sku.trim().isEmpty
-                              ? item.name
-                              : '${item.name} · ${item.sku}',
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: (value) {
+              child: SearchableSelectField<RecipeInventoryItem>(
+                labelText: 'Insumo',
+                hintText: 'Busca por nombre o SKU...',
+                items: widget.inventoryItems,
+                selected: _itemById(row.inventoryItemId),
+                labelOf: (item) => item.name,
+                subtitleOf: (item) => item.sku.trim().isEmpty
+                    ? item.unit
+                    : '${item.sku} · ${item.unit}',
+                keywordsOf: (item) => [item.sku],
+                onSelected: (item) {
                   setState(() {
-                    row.inventoryItemId = value;
-                    final inventoryItem = widget.inventoryItems
-                        .where((item) => item.id == value)
-                        .cast<RecipeInventoryItem?>()
-                        .firstWhere((item) => item != null, orElse: () => null);
+                    row.inventoryItemId = item.id;
                     // Al cambiar de insumo, fijamos la unidad a su unidad base
                     // (las opciones del selector dependen del insumo).
-                    if (inventoryItem != null) {
-                      row.unit.text = inventoryItem.unit;
-                    }
+                    row.unit.text = item.unit;
                   });
                 },
               ),
@@ -648,6 +637,14 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
       final removed = _rows.removeAt(index);
       removed.dispose();
     });
+  }
+
+  RecipeMenuProduct? _productById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    return widget.menuProducts
+        .where((product) => product.id == id)
+        .cast<RecipeMenuProduct?>()
+        .firstWhere((product) => product != null, orElse: () => null);
   }
 
   RecipeInventoryItem? _itemById(String? id) {
@@ -743,6 +740,10 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
 }
 
 class _IngredientDraftRow {
+  /// Identidad estable de la fila: los buscadores mantienen su texto en el
+  /// estado del widget, asi que al borrar una fila el resto debe conservar
+  /// el suyo en vez de correrse por indice.
+  final Key key = UniqueKey();
   String? inventoryItemId;
   final TextEditingController quantity;
   final TextEditingController unit;

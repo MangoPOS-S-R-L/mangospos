@@ -8,6 +8,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 import '../state/adjust_reasons.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
+import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
@@ -66,6 +67,15 @@ class _StockReconciliationViewState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(context, state),
+            if (ResponsiveHelper.useCompactShell(context) &&
+                state.warehouses.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _buildWarehousePicker(state),
+                ),
+              ),
             if (state.items.isNotEmpty) _buildSearchField(),
             Expanded(
               child: state.loading && state.items.isEmpty
@@ -171,6 +181,11 @@ class _StockReconciliationViewState
               ],
             ),
           ),
+          if (!ResponsiveHelper.useCompactShell(context) &&
+              state.warehouses.isNotEmpty) ...[
+            _buildWarehousePicker(state),
+            const SizedBox(width: 10),
+          ],
           IconButton.filledTonal(
             onPressed: state.loading
                 ? null
@@ -185,6 +200,139 @@ class _StockReconciliationViewState
         ],
       ),
     );
+  }
+
+  /// Bodegas elegibles para cuadrar: las activas menos la virtual
+  /// `__IN_TRANSIT__`, que no es un lugar físico sino mercancía en camino.
+  List<InventoryWarehouse> _selectableWarehouses(InventoryState state) {
+    return state.warehouses
+        .where((w) => w.name != '__IN_TRANSIT__')
+        .toList(growable: false);
+  }
+
+  InventoryWarehouse? _selectedWarehouse(InventoryState state) {
+    final id = state.selectedWarehouseId;
+    if (id == null) return null;
+    for (final w in state.warehouses) {
+      if (w.id == id) return w;
+    }
+    return null;
+  }
+
+  /// El cuadre SIEMPRE escribe el movimiento en `state.selectedWarehouseId`.
+  /// Antes ese dato vivía escondido en el contexto del módulo: se ajustaba a
+  /// ciegas. Este botón lo pone a la vista y lo hace cambiable desde acá.
+  Widget _buildWarehousePicker(InventoryState state) {
+    final selected = _selectedWarehouse(state);
+    final options = _selectableWarehouses(state);
+    final canSwitch = options.length > 1 && !state.loading && !state.saving;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: canSwitch ? () => _pickWarehouse(state) : null,
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.card),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.warehouse_outlined,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'BODEGA',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                      color: AppColors.mutedForeground,
+                    ),
+                  ),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 170),
+                    child: Text(
+                      selected?.name ?? 'Sin bodega',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (canSwitch) ...[
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.expand_more,
+                  size: 18,
+                  color: AppColors.mutedForeground,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickWarehouse(InventoryState state) async {
+    final options = _selectableWarehouses(state);
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+        title: const Text('¿En cuál bodega vas a cuadrar?'),
+        children: [
+          for (final w in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(w.id),
+              child: Row(
+                children: [
+                  Icon(
+                    w.id == state.selectedWarehouseId
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: w.id == state.selectedWarehouseId
+                        ? AppColors.primary
+                        : AppColors.mutedForeground,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      w.isMain ? '${w.name} · Principal' : w.name,
+                      style: TextStyle(color: AppColors.foreground),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || picked == state.selectedWarehouseId) return;
+    // Recarga la lista con el stock de ESA bodega; el ajuste posterior cae
+    // donde el usuario acaba de elegir.
+    await ref.read(inventoryViewModelProvider).selectWarehouse(picked);
   }
 
   Widget _buildEmptyState() {
@@ -299,17 +447,25 @@ class _StockReconciliationViewState
     BuildContext context,
     InventoryItemSummary item,
   ) async {
+    final state = ref.read(inventoryViewModelProvider).state;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => _AdjustDialog(item: item),
+      builder: (dialogContext) => _AdjustDialog(
+        item: item,
+        warehouseName: _selectedWarehouse(state)?.name,
+      ),
     );
   }
 }
 
 class _AdjustDialog extends ConsumerStatefulWidget {
   final InventoryItemSummary item;
-  const _AdjustDialog({required this.item});
+
+  /// Bodega donde va a caer el movimiento (la del selector del header).
+  final String? warehouseName;
+
+  const _AdjustDialog({required this.item, this.warehouseName});
 
   @override
   ConsumerState<_AdjustDialog> createState() => _AdjustDialogState();
@@ -426,6 +582,12 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
     if (raw.contains('INVALID_COUNTED_QUANTITY')) {
       return 'Cantidad contada inválida';
     }
+    // La base rechaza un delta nulo/cero. Pasa con insumos que nunca tuvieron
+    // stock en esta bodega si no se aplicó la migración 20260822_0001.
+    if (raw.contains('INVALID_QUANTITY')) {
+      return 'No se pudo calcular la diferencia contra esta bodega. '
+          'Avisa a soporte: falta el fix INVALID_QUANTITY en la base.';
+    }
     if (raw.contains('REASON_REQUIRED')) {
       return 'Selecciona un motivo';
     }
@@ -471,12 +633,28 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(
-                        'Stock actual: ${widget.item.stock.toStringAsFixed(2)} ${widget.item.unit}',
-                        style: TextStyle(
-                          color: AppColors.foreground,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Stock actual: ${widget.item.stock.toStringAsFixed(2)} ${widget.item.unit}',
+                            style: TextStyle(
+                              color: AppColors.foreground,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (widget.warehouseName != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              'En ${widget.warehouseName}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   ],
@@ -491,7 +669,9 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
                   labelText: 'Stock contado',
-                  helperText: 'Cantidad física verificada en la bodega',
+                  helperText: widget.warehouseName == null
+                      ? 'Cantidad física verificada en la bodega'
+                      : 'Cantidad física verificada en ${widget.warehouseName}',
                   suffixText: widget.item.unit,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(AppRadius.card),

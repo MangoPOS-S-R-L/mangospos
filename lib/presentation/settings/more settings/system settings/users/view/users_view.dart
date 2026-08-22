@@ -2131,6 +2131,14 @@ class _UserDialogState extends State<_UserDialog> {
           'de nuevo.';
     }
 
+    // Permisos que no existen en el catálogo de la BD. Es la causa real
+    // del "lo marco, guarda bien, y al volver a entrar está apagado": el
+    // mensaje ya viene escrito para humanos, solo se limpia el prefijo de
+    // Dart.
+    if (lower.contains('catálogo de la base de datos')) {
+      return raw.replaceFirst('Bad state: ', '');
+    }
+
     // Fallback: dejar el error crudo accesible para soporte pero más
     // limpio de leer.
     return 'No se pudo guardar el usuario. Detalle técnico: $raw';

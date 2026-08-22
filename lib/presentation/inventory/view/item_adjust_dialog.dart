@@ -22,6 +22,10 @@ import '../state/adjust_reasons.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 
+/// Formateador compartido: `decimalPattern` parsea el patrón del locale
+/// en cada construcción y acá se pedía uno por método de build.
+final NumberFormat _fmtQty = NumberFormat.decimalPattern('es_DO');
+
 /// Abre el ajuste contextual. Devuelve `true` si se guardó algo.
 Future<bool> showItemAdjustDialog(
   BuildContext context, {
@@ -233,12 +237,18 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
     if (raw.contains('INVALID_COUNTED_QUANTITY')) {
       return 'Cantidad contada inválida';
     }
+    // La base rechaza un delta nulo/cero. Pasa con insumos que nunca tuvieron
+    // stock en esta bodega si no se aplicó la migración 20260822_0001.
+    if (raw.contains('INVALID_QUANTITY')) {
+      return 'No se pudo calcular la diferencia contra esta bodega. '
+          'Avisa a soporte: falta el fix INVALID_QUANTITY en la base.';
+    }
     if (raw.contains('REASON_REQUIRED')) return 'Selecciona un motivo';
     return 'Error: $raw';
   }
 
   Future<void> _pickWarehouse() async {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final picked = await showDialog<String>(
       context: context,
       builder: (ctx) => SimpleDialog(
@@ -473,7 +483,7 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
   };
 
   Widget _warehouseBanner() {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
       decoration: BoxDecoration(
@@ -647,7 +657,7 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
 
   Widget _deltaBanner(BusinessCurrency currency) {
     final delta = _delta;
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final neutral = delta == 0;
     final negative = delta < 0;
     final color = neutral
@@ -700,7 +710,7 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
   }
 
   String _footerHint() {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final newTotal = _item.stock + _delta;
     return 'Queda en el kardex de $_warehouseName a tu nombre. '
         'El total del negocio pasa a ${fmt.format(newTotal)} ${_item.unit}.';

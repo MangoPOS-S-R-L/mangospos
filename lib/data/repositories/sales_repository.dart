@@ -38,6 +38,36 @@ class OrderOutOfScopeException implements Exception {
   String toString() => 'ORDER_OUT_OF_SCOPE';
 }
 
+/// Traduce los errores del candado de órdenes cerradas (migración
+/// `20260819_0004_no_items_on_closed_order`) a algo que el mesero pueda
+/// accionar. El servidor los manda con SQLSTATE propio:
+///
+///   MP401 — la cuenta ya se cobró (hay pagos o NCF): no se resucita.
+///   MP402 — la mesa ya la tomó otra sesión mientras esta estaba cerrada.
+///   MP403 — la orden ya no existe.
+///
+/// El caso feliz (la mesa la cerró el barrendero de mesas fantasma y nadie la
+/// reabrió) NO llega aquí: el trigger resucita orden + sesión + mesa y el ítem
+/// entra sin que el mesero se entere. Ver el encabezado de la migración.
+///
+/// Devuelve `null` si el error no es del candado — el caller sigue con su
+/// mensaje de siempre.
+String? closedOrderErrorMessage(Object error) {
+  if (error is! PostgrestException) return null;
+  switch (error.code) {
+    case 'MP401':
+      return 'Esta cuenta ya fue cobrada. Abre la mesa otra vez para cargar '
+          'productos nuevos.';
+    case 'MP402':
+      return 'La mesa ya se abrió en otra cuenta. Carga el producto en la '
+          'cuenta activa.';
+    case 'MP403':
+      return 'La orden ya no existe. Vuelve al salón y abre la mesa de nuevo.';
+    default:
+      return null;
+  }
+}
+
 /// 🥭 MangoPOS - Sales Repository
 /// Repositorio completo para el módulo de ventas
 class SalesRepository {
@@ -1278,6 +1308,10 @@ class SalesRepository {
 
       return response as String;
     } catch (e) {
+      // Candado de orden cerrada: el mensaje crudo de Postgres no le dice
+      // nada al mesero. Ver `closedOrderErrorMessage`.
+      final friendly = closedOrderErrorMessage(e);
+      if (friendly != null) throw Exception(friendly);
       throw Exception('Error al agregar item: $e');
     }
   }

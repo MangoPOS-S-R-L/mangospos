@@ -8,6 +8,7 @@ import '../../core/network/connectivity_service.dart';
 import '../../core/offline/inventory_offline_cache.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../presentation/inventory/state/inventory_state.dart';
+import '../../presentation/inventory/state/warehouse_overview_state.dart';
 import '../../presentation/inventory/state/transfers_state.dart';
 import '../datasources/queries/inventory_queries.dart';
 
@@ -45,11 +46,28 @@ class InventoryRepository {
         .eq('business_id', businessId)
         .eq('is_active', true)
         .order('is_main', ascending: false)
-        .order('name');
+        .order('name', ascending: true);
 
-    return List<Map<String, dynamic>>.from(
-      response,
-    ).map(InventoryWarehouse.fromMap).toList(growable: false);
+    final rows = List<Map<String, dynamic>>.from(response);
+    // Write-through, best-effort: no cambia lo que devuelve este método,
+    // solo deja la copia que necesita [getCachedWarehouses] para poder
+    // pintar antes de que responda la red.
+    unawaited(
+      _cache.saveWarehousesSnapshot(businessId: businessId, rows: rows),
+    );
+    return rows.map(InventoryWarehouse.fromMap).toList(growable: false);
+  }
+
+  /// Bodegas desde el caché local, SIN tocar la red. `null` si nunca se
+  /// guardó una copia. Es el primer paso del arranque cache-first: los
+  /// snapshots de items están indexados por bodega, así que hay que saber
+  /// cuáles son antes de poder leerlos.
+  Future<List<InventoryWarehouse>?> getCachedWarehouses(
+    String businessId,
+  ) async {
+    final rows = await _cache.loadWarehousesSnapshot(businessId);
+    if (rows == null || rows.isEmpty) return null;
+    return rows.map(InventoryWarehouse.fromMap).toList(growable: false);
   }
 
   /// PRD 9 Fase 1B: lista todas las bodegas del business (incluye inactivas
@@ -125,6 +143,377 @@ class InventoryRepository {
           'is_active': isActive,
         })
         .eq('id', warehouseId);
+  }
+
+  // ── Fase 2 Bodegas — el mapa y el interior de cada almacén ─────────────
+
+  /// Columnas del maestro de insumos. Mismas que usa la matriz de Insumos:
+  /// el detalle de una bodega pinta las mismas fichas.
+  static const _itemColumns =
+      'id, sku, name, description, unit, cost, min_stock, max_stock, '
+      'is_active, costing_method, barcode, tracks_lots, item_classification, '
+      'purchase_unit, pack_size';
+
+  /// Tri-estado del soporte de mínimos por bodega:
+  /// `null` = todavía no se probó, `true/false` = respuesta del esquema.
+  ///
+  /// `inventory_stock.min_stock` llega con la migración
+  /// `20260819_0001_warehouse_min_stock`. Mientras no esté aplicada, el
+  /// servidor responde 42703 y la pantalla degrada al mínimo global en vez
+  /// de romperse: la app tiene que andar contra las dos versiones del
+  /// esquema porque los negocios se actualizan en tiempos distintos.
+  bool? _warehouseMinSupported;
+
+  bool get warehouseMinStockSupported => _warehouseMinSupported == true;
+
+  /// True si el error es "la columna no existe" (esquema viejo).
+  static bool _isUndefinedColumn(Object e) {
+    if (e is PostgrestException) {
+      if (e.code == '42703') return true;
+      return e.message.contains('min_stock') &&
+          e.message.toLowerCase().contains('does not exist');
+    }
+    return false;
+  }
+
+  /// Filas de `inventory_stock` de las bodegas pedidas, con el mínimo propio
+  /// cuando el esquema lo tiene. Deja registrado el soporte en
+  /// [_warehouseMinSupported] para no volver a probar en la sesión.
+  Future<List<Map<String, dynamic>>> _fetchStockRows(
+    List<String> warehouseIds,
+  ) async {
+    if (warehouseIds.isEmpty) return const [];
+    if (_warehouseMinSupported != false) {
+      try {
+        final response = await _client
+            .from(InventoryQueries.tableInventoryStock)
+            .select('item_id, warehouse_id, quantity, last_updated, min_stock')
+            .inFilter('warehouse_id', warehouseIds);
+        _warehouseMinSupported = true;
+        return List<Map<String, dynamic>>.from(response);
+      } catch (e) {
+        if (!_isUndefinedColumn(e)) rethrow;
+        _warehouseMinSupported = false;
+        debugPrint(
+          '[bodegas] sin mínimos por bodega: falta la migración '
+          '20260819_0001_warehouse_min_stock',
+        );
+      }
+    }
+    final response = await _client
+        .from(InventoryQueries.tableInventoryStock)
+        .select('item_id, warehouse_id, quantity, last_updated')
+        .inFilter('warehouse_id', warehouseIds);
+    return List<Map<String, dynamic>>.from(response);
+  }
+
+  /// Mapa de bodegas: cada almacén con el valor de lo que guarda, cuántos
+  /// insumos viven ahí, qué está bajo mínimo local, qué viene en camino y
+  /// hace cuánto que no se cuenta.
+  ///
+  /// Cinco lecturas, cuatro en paralelo: el maestro de insumos, el stock de
+  /// todas las bodegas, las transferencias en camino y el último conteo
+  /// físico de cada una. Las dos últimas son señales de apoyo: si fallan
+  /// (vista ausente en un despliegue viejo, permisos) la pantalla sigue
+  /// mostrando lo importante en vez de caerse entera.
+  Future<InventoryWarehousesOverview> getWarehousesOverview(
+    String businessId,
+  ) async {
+    final warehouses = await getAllWarehouses(businessId);
+    final ids = warehouses.map((w) => w.id).toList(growable: false);
+
+    final results = await Future.wait<dynamic>([
+      _client
+          .from(InventoryQueries.tableInventoryItems)
+          .select(_itemColumns)
+          .eq('business_id', businessId)
+          .order('name', ascending: true),
+      _fetchStockRows(ids),
+      _pendingTransfersOrEmpty(businessId),
+      _lastCompletedCounts(businessId),
+    ]);
+
+    final itemsRaw = List<Map<String, dynamic>>.from(results[0]);
+    final stockRows = List<Map<String, dynamic>>.from(results[1]);
+    final transfers = results[2] as List<StockTransfer>;
+    final lastCounts = results[3] as Map<String, DateTime>;
+
+    final stockByWarehouse = <String, Map<String, double>>{};
+    final minByWarehouse = <String, Map<String, double>>{};
+    final lastActivity = <String, DateTime>{};
+    for (final row in stockRows) {
+      final warehouseId = row['warehouse_id']?.toString();
+      final itemId = row['item_id']?.toString();
+      if (warehouseId == null || warehouseId.isEmpty) continue;
+      if (itemId == null || itemId.isEmpty) continue;
+      (stockByWarehouse[warehouseId] ??= <String, double>{})[itemId] = _toQty(
+        row['quantity'],
+      );
+      final min = row['min_stock'];
+      if (min != null) {
+        (minByWarehouse[warehouseId] ??= <String, double>{})[itemId] = _toQty(
+          min,
+        );
+      }
+      final updated = DateTime.tryParse(row['last_updated']?.toString() ?? '');
+      if (updated != null) {
+        final current = lastActivity[warehouseId];
+        if (current == null || updated.isAfter(current)) {
+          lastActivity[warehouseId] = updated;
+        }
+      }
+    }
+
+    final incoming = <String, int>{};
+    for (final transfer in transfers) {
+      incoming[transfer.toWarehouseId] =
+          (incoming[transfer.toWarehouseId] ?? 0) + 1;
+    }
+
+    final items = itemsRaw
+        .map((raw) => InventoryItemSummary.fromMap(raw, stock: 0))
+        .toList(growable: false);
+
+    return InventoryWarehousesOverview.build(
+      warehouses: warehouses,
+      items: items,
+      stockByWarehouse: stockByWarehouse,
+      minByWarehouse: minByWarehouse,
+      lastActivityByWarehouse: lastActivity,
+      lastCountByWarehouse: lastCounts,
+      incomingTransfers: incoming,
+      transfersInTransit: transfers.length,
+      perWarehouseMinSupported: _warehouseMinSupported == true,
+    );
+  }
+
+  /// El mapa reconstruido desde los snapshots locales, SIN tocar la red.
+  /// `null` si nunca se guardó una copia.
+  ///
+  /// Trae menos que la lectura fresca —el caché no guarda transferencias ni
+  /// conteos— pero alcanza para pintar las tarjetas con su valor y sus
+  /// insumos mientras responde el servidor.
+  Future<InventoryWarehousesOverview?> getCachedWarehousesOverview(
+    String businessId,
+  ) async {
+    final cached = await getCachedWarehouses(businessId);
+    if (cached == null || cached.isEmpty) return null;
+    final visible = cached
+        .where((w) => w.name != '__IN_TRANSIT__')
+        .toList(growable: false);
+    if (visible.isEmpty) return null;
+
+    final matrix = await getCachedItemsMatrix(
+      businessId: businessId,
+      warehouseIds: visible.map((w) => w.id).toList(growable: false),
+    );
+    if (matrix == null || matrix.items.isEmpty) return null;
+
+    final stockByWarehouse = <String, Map<String, double>>{};
+    matrix.byWarehouse.forEach((itemId, row) {
+      row.forEach((warehouseId, qty) {
+        (stockByWarehouse[warehouseId] ??= <String, double>{})[itemId] = qty;
+      });
+    });
+
+    // El snapshot de bodegas sólo guarda id/nombre/principal: lo que falta
+    // (dirección, estado) se completa en la lectura fresca. Se asume activa
+    // porque el snapshot se hidrata desde `getWarehouses`, que ya filtra.
+    return InventoryWarehousesOverview.build(
+      warehouses: visible
+          .map(
+            (w) => InventoryWarehouseDetail(
+              id: w.id,
+              name: w.name,
+              address: '',
+              isMain: w.isMain,
+              isActive: true,
+              createdAt: null,
+            ),
+          )
+          .toList(growable: false),
+      items: matrix.items,
+      stockByWarehouse: stockByWarehouse,
+      perWarehouseMinSupported: _warehouseMinSupported == true,
+      fromCache: true,
+    );
+  }
+
+  /// Transferencias enviadas y sin recibir. Señal de apoyo: si la vista
+  /// falla, el mapa se dibuja igual sin la franja de tránsito.
+  Future<List<StockTransfer>> _pendingTransfersOrEmpty(
+    String businessId,
+  ) async {
+    try {
+      return await listTransfers(
+        businessId: businessId,
+        status: StockTransferStatus.sent.wire,
+        limit: 200,
+      );
+    } catch (e) {
+      debugPrint('[bodegas] no se pudieron leer las transferencias: $e');
+      return const [];
+    }
+  }
+
+  /// warehouseId → fecha del último conteo físico COMPLETADO.
+  Future<Map<String, DateTime>> _lastCompletedCounts(String businessId) async {
+    try {
+      final response = await _client
+          .from('v_physical_count_sessions_summary')
+          .select('warehouse_id, completed_at')
+          .eq('business_id', businessId)
+          .eq('status', 'completed')
+          .order('completed_at', ascending: false)
+          .limit(200);
+      final result = <String, DateTime>{};
+      for (final row in List<Map<String, dynamic>>.from(response)) {
+        final warehouseId = row['warehouse_id']?.toString();
+        final completed = DateTime.tryParse(
+          row['completed_at']?.toString() ?? '',
+        );
+        if (warehouseId == null || warehouseId.isEmpty || completed == null) {
+          continue;
+        }
+        // Vienen ordenados desc: la primera aparición es la más reciente.
+        result.putIfAbsent(warehouseId, () => completed);
+      }
+      return result;
+    } catch (e) {
+      debugPrint('[bodegas] no se pudieron leer los conteos físicos: $e');
+      return const {};
+    }
+  }
+
+  /// Mínimos PROPIOS de una bodega (itemId → mínimo). Vacío si el esquema
+  /// todavía no los soporta.
+  Future<Map<String, double>> getWarehouseMinStock(String warehouseId) async {
+    if (_warehouseMinSupported == false) return const {};
+    try {
+      final response = await _client
+          .from(InventoryQueries.tableInventoryStock)
+          .select('item_id, min_stock')
+          .eq('warehouse_id', warehouseId)
+          .not('min_stock', 'is', null);
+      _warehouseMinSupported = true;
+      final result = <String, double>{};
+      for (final row in List<Map<String, dynamic>>.from(response)) {
+        final itemId = row['item_id']?.toString();
+        if (itemId == null || itemId.isEmpty) continue;
+        result[itemId] = _toQty(row['min_stock']);
+      }
+      return result;
+    } catch (e) {
+      if (!_isUndefinedColumn(e)) rethrow;
+      _warehouseMinSupported = false;
+      return const {};
+    }
+  }
+
+  /// Fija (o borra, con [minStock] en null) el mínimo de un insumo en una
+  /// bodega. Va por RPC porque `inventory_stock` no tiene policy de
+  /// escritura para `authenticated`: un update directo se iría en silencio.
+  Future<void> setWarehouseMinStock({
+    required String warehouseId,
+    required String itemId,
+    required double? minStock,
+  }) async {
+    await _client.rpc(
+      'fn_inventory_set_warehouse_min_stock',
+      params: {
+        'p_warehouse_id': warehouseId,
+        'p_item_id': itemId,
+        'p_min_stock': minStock,
+      },
+    );
+    _warehouseMinSupported = true;
+  }
+
+  /// Copia la LISTA de insumos de [sourceWarehouseId] (o de todo el catálogo,
+  /// si va nulo) a [targetWarehouseId], creando cada fila con existencia 0.
+  ///
+  /// Nunca copia cantidades: duplicar el stock inventaría mercancía que no
+  /// existe y descuadraría la valuación del negocio. La bodega nueva arranca
+  /// en cero y se llena contando, recibiendo o transfiriendo.
+  ///
+  /// Devuelve cuántos insumos se agregaron, o `null` si el esquema todavía no
+  /// tiene la función (migración `20260819_0002_copy_warehouse_items` sin
+  /// aplicar) — la pantalla lo distingue de "no había nada que copiar".
+  Future<int?> copyWarehouseItems({
+    required String targetWarehouseId,
+    String? sourceWarehouseId,
+    bool onlyActive = true,
+  }) async {
+    try {
+      final response = await _client.rpc(
+        'fn_inventory_copy_warehouse_items',
+        params: {
+          'p_target_warehouse_id': targetWarehouseId,
+          'p_source_warehouse_id': sourceWarehouseId,
+          'p_only_active': onlyActive,
+        },
+      );
+      if (response is num) return response.toInt();
+      return int.tryParse(response?.toString() ?? '') ?? 0;
+    } catch (e) {
+      if (_isMissingFunction(e)) {
+        debugPrint(
+          '[bodegas] no se pudo copiar la lista: falta la migración '
+          '20260819_0002_copy_warehouse_items',
+        );
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  /// True si el error es "esa función no existe" (esquema viejo). PostgREST
+  /// contesta `PGRST202` cuando no la encuentra en su caché de esquema, y
+  /// Postgres `42883` cuando la firma no coincide.
+  static bool _isMissingFunction(Object e) {
+    if (e is PostgrestException) {
+      if (e.code == 'PGRST202' || e.code == '42883') return true;
+      final message = e.message.toLowerCase();
+      return message.contains('fn_inventory_copy_warehouse_items') &&
+          (message.contains('does not exist') ||
+              message.contains('could not find'));
+    }
+    return false;
+  }
+
+  /// Cuántos movimientos de entrada y de salida hubo en la bodega desde
+  /// [since]. Dos conteos exactos en el servidor: la alternativa era traer
+  /// las filas y contarlas acá, que miente en cuanto pasan del límite.
+  Future<({int inbound, int outbound})> getMovementCounts({
+    required String businessId,
+    required String warehouseId,
+    required DateTime since,
+  }) async {
+    final iso = since.toUtc().toIso8601String();
+    final responses = await Future.wait([
+      _client
+          .from(InventoryQueries.tableInventoryMovements)
+          .select('id')
+          .eq('business_id', businessId)
+          .eq('warehouse_id', warehouseId)
+          .gte('created_at', iso)
+          .gt('quantity', 0)
+          .count(CountOption.exact),
+      _client
+          .from(InventoryQueries.tableInventoryMovements)
+          .select('id')
+          .eq('business_id', businessId)
+          .eq('warehouse_id', warehouseId)
+          .gte('created_at', iso)
+          .lt('quantity', 0)
+          .count(CountOption.exact),
+    ]);
+    return (inbound: responses[0].count, outbound: responses[1].count);
+  }
+
+  static double _toQty(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
   }
 
   Future<List<InventoryItemSummary>> getItems({
@@ -316,24 +705,38 @@ class InventoryRepository {
     }
 
     try {
-      final itemsResponse = await _client
-          .from(InventoryQueries.tableInventoryItems)
-          .select(columns)
-          .eq('business_id', businessId)
-          .order('name');
-      final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
+      // Las dos lecturas son INDEPENDIENTES: el stock filtra por bodega, no
+      // por los items. En serie sumaban dos viajes completos al servidor
+      // antes de poder pintar nada, así que van con `Future.wait`.
+      //
+      // Tiene que ser `Future.wait` y no dos `await` seguidos: los builders
+      // de postgrest son perezosos —la petición sale recién con el primer
+      // `then`—, así que crearlos por separado no adelanta trabajo.
+      //
+      // `ascending: true` EXPLÍCITO: postgrest-dart declara
+      // `order(column, {bool ascending = false})`, al revés que PostgREST.
+      // Sin esto la lista salía de la Z a la A.
+      final responses = await Future.wait<dynamic>([
+        _client
+            .from(InventoryQueries.tableInventoryItems)
+            .select(columns)
+            .eq('business_id', businessId)
+            .order('name', ascending: true),
+        if (warehouseIds.isNotEmpty)
+          _client
+              .from(InventoryQueries.tableInventoryStock)
+              .select('item_id, warehouse_id, quantity')
+              .inFilter('warehouse_id', warehouseIds),
+      ]);
+      final itemsRaw = List<Map<String, dynamic>>.from(responses.first);
 
       final matrix = <String, Map<String, double>>{};
       final byWarehouse = <String, Map<String, double>>{
         for (final id in warehouseIds) id: <String, double>{},
       };
 
-      if (warehouseIds.isNotEmpty) {
-        final stockResponse = await _client
-            .from(InventoryQueries.tableInventoryStock)
-            .select('item_id, warehouse_id, quantity')
-            .inFilter('warehouse_id', warehouseIds);
-        for (final row in List<Map<String, dynamic>>.from(stockResponse)) {
+      if (responses.length > 1) {
+        for (final row in List<Map<String, dynamic>>.from(responses[1])) {
           final itemId = row['item_id']?.toString();
           final warehouseId = row['warehouse_id']?.toString();
           if (itemId == null || itemId.isEmpty) continue;
@@ -362,27 +765,66 @@ class InventoryRepository {
     } catch (e) {
       if (!_isConnectivityError(e)) rethrow;
 
-      // Offline: reconstruimos la matriz desde los snapshots por bodega.
-      // El maestro de insumos es el mismo en todos, así que basta el primero
-      // que exista; si no hay ninguno, propagamos el error original.
-      List<Map<String, dynamic>>? itemsRaw;
-      final matrix = <String, Map<String, double>>{};
-      for (final warehouseId in warehouseIds) {
-        final snapshot = await _cache.loadItemsSnapshot(
-          businessId: businessId,
-          warehouseId: warehouseId,
-        );
-        if (snapshot == null) continue;
-        itemsRaw ??= snapshot.items;
-        snapshot.stock.forEach((itemId, qty) {
-          (matrix[itemId] ??= <String, double>{})[warehouseId] = qty;
-        });
-      }
-      if (itemsRaw == null) rethrow;
+      // Offline: servimos la última copia local. Si tampoco hay, propagamos
+      // el error original.
+      final cached = await getCachedItemsMatrix(
+        businessId: businessId,
+        warehouseIds: warehouseIds,
+        query: normalized,
+      );
+      if (cached == null) rethrow;
       debugPrint('[inventory] getItemsMatrix cayó al cache local: $e');
       _lastReadFromCache = true;
-      return build(itemsRaw, matrix, fromCache: true);
+      return cached;
     }
+  }
+
+  /// Matriz reconstruida desde los snapshots locales, SIN tocar la red.
+  /// `null` si no hay ninguna copia guardada.
+  ///
+  /// La usan dos caminos distintos: el arranque cache-first (pintar algo
+  /// real de inmediato mientras la red responde) y el fallback de
+  /// [getItemsMatrix] cuando no hay conexión. La matriz sale marcada con
+  /// `fromCache: true` en ambos — quien la consume decide si eso significa
+  /// "estás offline" o "todavía estoy refrescando".
+  Future<InventoryStockMatrix?> getCachedItemsMatrix({
+    required String businessId,
+    required List<String> warehouseIds,
+    String? query,
+  }) async {
+    // El maestro de insumos es el mismo en todos los snapshots, así que
+    // basta el primero que exista; el stock sí se toma bodega por bodega.
+    List<Map<String, dynamic>>? itemsRaw;
+    final matrix = <String, Map<String, double>>{};
+    for (final warehouseId in warehouseIds) {
+      final snapshot = await _cache.loadItemsSnapshot(
+        businessId: businessId,
+        warehouseId: warehouseId,
+      );
+      if (snapshot == null) continue;
+      itemsRaw ??= snapshot.items;
+      snapshot.stock.forEach((itemId, qty) {
+        (matrix[itemId] ??= <String, double>{})[warehouseId] = qty;
+      });
+    }
+    if (itemsRaw == null) return null;
+
+    final normalized = query?.trim();
+    final filtered = (normalized == null || normalized.isEmpty)
+        ? itemsRaw
+        : _filterRawItems(itemsRaw, normalized);
+    return InventoryStockMatrix(
+      items: filtered.map((item) {
+        final id = item['id']?.toString() ?? '';
+        final row = matrix[id];
+        final total = row == null
+            ? 0.0
+            : row.values.fold<double>(0, (acc, qty) => acc + qty);
+        return InventoryItemSummary.fromMap(item, stock: total);
+      }).toList(growable: false),
+      byWarehouse: matrix,
+      fromCache: true,
+    );
   }
 
   /// Filtro case-insensitive contra name/sku/description/barcode.
@@ -1265,69 +1707,12 @@ class InventoryRepository {
         .toList(growable: false);
   }
 
-  Future<InventorySupplierDetail> createSupplierDetailed({
-    required String businessId,
-    required String name,
-    String? rnc,
-    String? contactName,
-    String? phone,
-    String? email,
-    String? address,
-    String? paymentTerms,
-    String? notes,
-    bool isActive = true,
-  }) async {
-    final response = await _client
-        .from('suppliers')
-        .insert({
-          'business_id': businessId,
-          'name': name,
-          'rnc': rnc,
-          'contact_name': contactName,
-          'phone': phone,
-          'email': email,
-          'address': address,
-          'payment_terms': paymentTerms,
-          'notes': notes,
-          'is_active': isActive,
-        }..removeWhere((key, value) => value == null || value == ''))
-        .select(
-          'id, name, rnc, contact_name, phone, email, address, '
-          'payment_terms, notes, is_active, created_at',
-        )
-        .single();
-    return InventorySupplierDetail.fromMap(
-      Map<String, dynamic>.from(response),
-    );
-  }
-
-  Future<void> updateSupplierDetailed({
-    required String supplierId,
-    required String name,
-    String? rnc,
-    String? contactName,
-    String? phone,
-    String? email,
-    String? address,
-    String? paymentTerms,
-    String? notes,
-    required bool isActive,
-  }) async {
-    await _client
-        .from('suppliers')
-        .update({
-          'name': name,
-          'rnc': rnc,
-          'contact_name': contactName,
-          'phone': phone,
-          'email': email,
-          'address': address,
-          'payment_terms': paymentTerms,
-          'notes': notes,
-          'is_active': isActive,
-        })
-        .eq('id', supplierId);
-  }
+  // El ALTA y la EDICIÓN de la ficha viven en `SuppliersRepository`
+  // (Fase 3 Proveedores). Estaban acá como `createSupplierDetailed` /
+  // `updateSupplierDetailed` y se quitaron al quedar sin llamadores: dos
+  // caminos de escritura sobre `suppliers` divergían en silencio, porque
+  // sólo el nuevo guarda las condiciones estructuradas. La lectura
+  // `getAllSuppliers` se queda: la usa el diálogo de recepción directa.
 
   // ── Sprint Inventario V1.1 Fase B — Transferencias entre bodegas ──
 

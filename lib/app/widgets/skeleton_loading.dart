@@ -1,8 +1,45 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 
+/// Bloque gris SIN animación propia. Pensado para vivir dentro de un
+/// [SkeletonShimmer].
+///
+/// POR QUÉ EXISTE: [SkeletonBox] trae su propio `AnimationController` y su
+/// propio `ShaderMask`. Para dos o tres piezas da igual, pero el esqueleto de
+/// una tabla tiene decenas: cada `ShaderMask` es un `saveLayer` por frame, y
+/// el esqueleto termina costando más que el spinner que vino a reemplazar.
+/// Con [SkeletonBlock] + un solo [SkeletonShimmer] arriba, la animación se
+/// paga una vez para todo el subárbol.
+class SkeletonBlock extends StatelessWidget {
+  final double width;
+  final double height;
+  final double borderRadius;
+
+  const SkeletonBlock({
+    super.key,
+    this.width = double.infinity,
+    required this.height,
+    this.borderRadius = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xFFE0E0E0),
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+    );
+  }
+}
+
 /// A shimmer-animated skeleton placeholder for loading states.
 /// Use instead of CircularProgressIndicator for a smoother UX.
+///
+/// Trae su propia animación: para un esqueleto de muchas piezas usa
+/// [SkeletonBlock] dentro de un único [SkeletonShimmer].
 class SkeletonBox extends StatelessWidget {
   final double width;
   final double height;
@@ -17,14 +54,11 @@ class SkeletonBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ShimmerWrap(
-      child: Container(
+    return SkeletonShimmer(
+      child: SkeletonBlock(
         width: width,
         height: height,
-        decoration: BoxDecoration(
-          color: const Color(0xFFE0E0E0),
-          borderRadius: BorderRadius.circular(borderRadius),
-        ),
+        borderRadius: borderRadius,
       ),
     );
   }
@@ -152,16 +186,16 @@ class ZoneTablesSkeleton extends StatelessWidget {
   }
 }
 
-/// Wraps a child with a shimmer animation effect.
-class _ShimmerWrap extends StatefulWidget {
+/// Aplica UNA animación de shimmer a todo un subárbol de [SkeletonBlock].
+class SkeletonShimmer extends StatefulWidget {
   final Widget child;
-  const _ShimmerWrap({required this.child});
+  const SkeletonShimmer({super.key, required this.child});
 
   @override
-  State<_ShimmerWrap> createState() => _ShimmerWrapState();
+  State<SkeletonShimmer> createState() => _SkeletonShimmerState();
 }
 
-class _ShimmerWrapState extends State<_ShimmerWrap>
+class _SkeletonShimmerState extends State<SkeletonShimmer>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _animation;

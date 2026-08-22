@@ -19,11 +19,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../app/router/routes.dart';
+import '../../../app/widgets/skeleton_loading.dart';
 import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/inventory/pack_conversion.dart';
@@ -40,9 +39,7 @@ import '../state/inventory_state.dart';
 import '../state/inventory_warehouse_scope.dart';
 import '../state/kardex_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
-import '../viewmodel/kardex_viewmodel.dart';
 import 'item_adjust_dialog.dart';
-import 'transfer_send_dialog.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/item_form_dialog.dart';
 
@@ -63,6 +60,12 @@ const List<Color> _kWarehouseDots = <Color>[
   Color(0xFFEC4899),
   Color(0xFF14B8A6),
 ];
+
+/// Formateador de cantidades COMPARTIDO. `NumberFormat.decimalPattern`
+/// parsea el patrón del locale en cada construcción, y esta pantalla lo
+/// pedía dentro de métodos por celda: con una fila por insumo y una columna
+/// por bodega eran cientos de construcciones en cada frame.
+final NumberFormat _fmtQty = NumberFormat.decimalPattern('es_DO');
 
 /// Alto de los chips de la toolbar. Es un valor COMPARTIDO a propósito: con
 /// alturas intrínsecas, el chip con contador medía 40 y el de menú 39, así
@@ -102,6 +105,14 @@ class InventoryItemsView extends ConsumerStatefulWidget {
 class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
   bool _loading = true;
   bool _refreshing = false;
+
+  /// Pintamos la copia local y la lectura fresca sigue en vuelo.
+  ///
+  /// Es DISTINTO de `_matrix.fromCache`, que solo dice de dónde salieron los
+  /// datos. Con este flag arriba la matriz viene del caché pero estamos
+  /// online: no corresponde el cartel de "sin conexión", sino la barrita de
+  /// progreso. Sin separarlos, un arranque normal gritaba que no había red.
+  bool _awaitingFresh = false;
   String? _error;
   String? _businessId;
 
@@ -177,11 +188,17 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         });
         return;
       }
+      _businessId = businessId;
+
+      // Cache-first: si hay copia local se pinta YA y la red queda de
+      // refresco. SharedPreferences resuelve en memoria, así que esto no
+      // agrega latencia cuando no hay nada guardado.
+      await _primeFromCache(businessId);
+
       final warehouses = await _repo.getWarehouses(businessId);
       final visible = warehouses
           .where((w) => w.name != '__IN_TRANSIT__')
           .toList(growable: false);
-      _businessId = businessId;
       _warehouses = visible;
 
       // El contexto persistido manda; si apunta a una bodega que ya no
@@ -200,6 +217,41 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     }
   }
 
+  /// Pinta la última copia local para no dejar la pantalla en esqueleto
+  /// mientras responde la red. No toca `_error`: si algo falla acá, el
+  /// arranque normal sigue su curso y manda lo que diga el servidor.
+  Future<void> _primeFromCache(String businessId) async {
+    try {
+      final cached = await _repo.getCachedWarehouses(businessId);
+      if (cached == null) return;
+      final visible = cached
+          .where((w) => w.name != '__IN_TRANSIT__')
+          .toList(growable: false);
+      if (visible.isEmpty) return;
+
+      final matrix = await _repo.getCachedItemsMatrix(
+        businessId: businessId,
+        warehouseIds: visible.map((w) => w.id).toList(growable: false),
+      );
+      if (matrix == null || matrix.items.isEmpty || !mounted) return;
+
+      await ref
+          .read(inventoryWarehouseScopeProvider.notifier)
+          .ensureRestored(businessId, validIds: visible.map((w) => w.id));
+      if (!mounted) return;
+
+      setState(() {
+        _warehouses = visible;
+        _matrix = matrix;
+        _loading = false;
+        _awaitingFresh = true;
+      });
+    } catch (e) {
+      // El caché es un atajo, no una fuente de verdad: si falla, se sigue.
+      debugPrint('[insumos] no se pudo pintar desde caché: $e');
+    }
+  }
+
   Future<void> _load() async {
     final businessId = _businessId;
     if (businessId == null) {
@@ -207,16 +259,21 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       return;
     }
     try {
+      // Sin `query`: se trae el maestro COMPLETO una vez y el texto se
+      // filtra en memoria. El repositorio filtraba client-side de todos
+      // modos, así que la ida a red por tecla no traía ni una fila distinta
+      // y sí costaba dos consultas más una serialización del snapshot
+      // offline por bodega.
       final matrix = await _repo.getItemsMatrix(
         businessId: businessId,
         warehouseIds: _warehouseIds,
-        query: _query,
       );
       if (!mounted) return;
       setState(() {
         _matrix = matrix;
         _loading = false;
         _refreshing = false;
+        _awaitingFresh = false;
         _error = null;
         _lastMovements.clear();
       });
@@ -225,6 +282,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       setState(() {
         _loading = false;
         _refreshing = false;
+        _awaitingFresh = false;
         _error = e.toString();
       });
     }
@@ -236,14 +294,12 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
   }
 
   void _onSearchChanged(String value) {
+    // 120 ms y no 300: ya no espera una respuesta de red, solo coalesce
+    // pulsaciones para no reconstruir la tabla en cada tecla.
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+    _searchDebounce = Timer(const Duration(milliseconds: 120), () {
       if (!mounted) return;
-      setState(() {
-        _query = value.trim();
-        _refreshing = true;
-      });
-      _load();
+      setState(() => _query = value.trim());
     });
   }
 
@@ -255,13 +311,17 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     if (normalized.isEmpty || _dialogOpen) return;
     _searchDebounce?.cancel();
     _searchCtrl.text = normalized;
-    setState(() {
-      _query = normalized;
-      _refreshing = true;
-    });
-    await _load();
-    if (!mounted) return;
-    final hits = _visibleItems();
+    setState(() => _query = normalized);
+
+    var hits = _visibleItems();
+    // Si no aparece en memoria puede ser un insumo dado de alta en otra
+    // terminal después de nuestra última lectura: SOLO en ese caso vale la
+    // pena ir a red, y así el escaneo normal resuelve sin esperar nada.
+    if (hits.isEmpty) {
+      await _refresh();
+      if (!mounted) return;
+      hits = _visibleItems();
+    }
     if (hits.length == 1) {
       await _openAdjust(hits.first, reasonCode: 'physical_count');
     } else if (hits.isEmpty) {
@@ -292,9 +352,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     return _warehouses.isEmpty ? null : _warehouses.first.id;
   }
 
-  /// Predicado ÚNICO de la tabla. El texto tecleado ya viene filtrado desde
-  /// el repositorio, así que acá solo quedan los filtros de la toolbar y el
-  /// contexto de bodega.
+  /// Predicado ÚNICO de la tabla: texto, filtros de la toolbar y contexto de
+  /// bodega. Todo se resuelve en memoria sobre la matriz ya cargada.
   ///
   /// [ignoreLowStock] deja fuera el filtro de "bajo mínimo" para poder contar
   /// cuántos insumos aparecerían al activarlo —el número del badge— con
@@ -317,6 +376,9 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     }
     if (_costing != null && item.costingMethod != _costing) return false;
     if (!ignoreLowStock && _onlyLowStock && !item.isLowStock) return false;
+    if (_query.isNotEmpty && !_matchesQuery(item, _query.toLowerCase())) {
+      return false;
+    }
     // En contexto de UNA bodega la lista se limita a lo que vive ahí. La
     // excepción es la búsqueda: si el usuario escribe (o escanea) quiere
     // encontrar el insumo aunque esa bodega todavía no lo tenga — es
@@ -329,6 +391,14 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     }
     return true;
   }
+
+  /// Mismo criterio que aplicaba el repositorio. El código de barras entra
+  /// porque la barra de búsqueda acepta el disparo de la pistola.
+  static bool _matchesQuery(InventoryItemSummary item, String lower) =>
+      item.name.toLowerCase().contains(lower) ||
+      item.sku.toLowerCase().contains(lower) ||
+      item.description.toLowerCase().contains(lower) ||
+      item.barcode.toLowerCase().contains(lower);
 
   /// Los insumos que la tabla realmente pinta, tras filtros y contexto.
   List<InventoryItemSummary> _visibleItems() =>
@@ -365,11 +435,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     _dialogOpen = true;
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => ItemFormDialog(
-        businessId: businessId,
-        repo: _repo,
-        edit: edit,
-      ),
+      builder: (_) =>
+          ItemFormDialog(businessId: businessId, repo: _repo, edit: edit),
     );
     _dialogOpen = false;
     if (saved == true) await _refresh();
@@ -397,31 +464,6 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     if (!saved || !mounted) return;
     AppToast.success(context, 'Ajuste registrado en el kardex.');
     await _refresh();
-  }
-
-  Future<void> _openTransfer() async {
-    _dialogOpen = true;
-    await showDialog<void>(
-      context: context,
-      builder: (_) => const TransferSendDialog(),
-    );
-    _dialogOpen = false;
-    if (mounted) await _refresh();
-  }
-
-  /// Abre el kardex ya filtrado por el insumo (y la bodega, si el
-  /// movimiento se pidió desde una celda concreta).
-  Future<void> _openKardex(
-    InventoryItemSummary item, {
-    String? warehouseId,
-  }) async {
-    await ref
-        .read(kardexViewModelProvider)
-        .applyFilters(
-          KardexFilters(itemId: item.id, warehouseId: warehouseId),
-        );
-    if (!mounted) return;
-    context.push(AppRoutes.inventoryKardex);
   }
 
   Future<void> _toggleActive(InventoryItemSummary item) async {
@@ -566,48 +608,104 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     final isNarrow = MediaQuery.of(context).size.width < 1000;
     final items = _visibleItems();
 
+    // El esqueleto NO reemplaza la pantalla entera: el encabezado, la barra
+    // de bodega y la toolbar no dependen de la matriz, así que se pintan de
+    // una y solo el contenido de la tabla espera. Antes toda la vista era un
+    // spinner centrado y la pantalla aparecía de golpe al final.
+    final showSkeleton = _loading && _matrix.items.isEmpty;
+
     Widget body;
-    if (_loading && _matrix.items.isEmpty) {
-      body = Center(child: CircularProgressIndicator(color: AppColors.primary));
-    } else if (_error != null && _matrix.items.isEmpty) {
+    if (_error != null && _matrix.items.isEmpty) {
       body = _errorState();
     } else {
-      body = RefreshIndicator(
-        color: AppColors.primary,
-        onRefresh: _refresh,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: isCompact
-              ? const EdgeInsets.fromLTRB(14, 12, 14, 28)
-              : const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _header(
-                isCompact: isCompact,
-                isNarrow: isNarrow,
-                canCreate: canEditItems,
-              ),
-              SizedBox(height: isCompact ? 12 : 16),
-              _scopeBar(isCompact: isCompact, isNarrow: isNarrow),
-              SizedBox(height: isCompact ? 10 : 14),
-              _toolbar(stacked: isCompact || isNarrow),
-              if (_matrix.fromCache) ...[
-                const SizedBox(height: 10),
-                _offlineBanner(),
+      // `CustomScrollView` y no `SingleChildScrollView`: con la tabla dentro
+      // de una `Column` se construían TODAS las filas en cada `setState`, y
+      // eso crecía linealmente con el catálogo (~0.3 ms por fila medidos).
+      // Con `SliverList.builder` solo se construyen las que entran en
+      // pantalla, así que el costo de un click deja de depender de cuántos
+      // insumos tenga el negocio.
+      final pad = isCompact ? 14.0 : 24.0;
+      body = LayoutBuilder(
+        builder: (context, constraints) {
+          // La tabla necesita un ancho mínimo; si no entra, sigue el camino
+          // viejo con scroll horizontal (ver `_desktopTable`). Ese caso no
+          // puede ser sliver: un sliver no vive dentro de un scroll
+          // horizontal, y meter TODA la página en uno haría que el buscador
+          // y los filtros también se desplacen de lado.
+          final tableMinWidth =
+              _kColName +
+              _kColCost +
+              _kColWarehouse * _warehouses.length +
+              _kColTotal +
+              _kColActions;
+          final tableOverflows =
+              !isCompact && (constraints.maxWidth - pad * 2) < tableMinWidth;
+
+          return RefreshIndicator(
+            color: AppColors.primary,
+            onRefresh: _refresh,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    pad,
+                    isCompact ? 12 : 24,
+                    pad,
+                    0,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _header(
+                          isCompact: isCompact,
+                          isNarrow: isNarrow,
+                          canCreate: canEditItems,
+                          busy: showSkeleton,
+                        ),
+                        SizedBox(height: isCompact ? 12 : 16),
+                        // Las bodegas llegan ANTES que la matriz (son dos
+                        // lecturas distintas), así que en cuanto se sabe
+                        // cuáles son se pinta la barra de verdad aunque la
+                        // tabla siga cargando.
+                        if (_warehouses.isEmpty)
+                          _scopeBarSkeleton(isCompact: isCompact)
+                        else
+                          _scopeBar(isCompact: isCompact, isNarrow: isNarrow),
+                        SizedBox(height: isCompact ? 10 : 14),
+                        _toolbar(stacked: isCompact || isNarrow),
+                        // Solo cuando el caché es el resultado FINAL (la red
+                        // falló). Con `_awaitingFresh` la copia local es un
+                        // adelanto y el aviso correcto es la barra de
+                        // progreso de arriba.
+                        if (_matrix.fromCache && !_awaitingFresh) ...[
+                          const SizedBox(height: 10),
+                          _offlineBanner(),
+                        ],
+                        SizedBox(height: isCompact ? 12 : 16),
+                      ],
+                    ),
+                  ),
+                ),
+                ..._contentSlivers(
+                  items,
+                  currency,
+                  pad: pad,
+                  contentWidth: constraints.maxWidth - pad * 2,
+                  isCompact: isCompact,
+                  showSkeleton: showSkeleton,
+                  tableOverflows: tableOverflows,
+                  canAdjust: canAdjust,
+                  canEdit: canEditItems,
+                ),
+                SliverPadding(
+                  padding: EdgeInsets.only(bottom: isCompact ? 28 : 24),
+                ),
               ],
-              SizedBox(height: isCompact ? 12 : 16),
-              if (items.isEmpty)
-                _emptyState()
-              else if (isCompact)
-                _mobileList(items, currency, canAdjust: canAdjust,
-                    canEdit: canEditItems)
-              else
-                _desktopTable(items, currency,
-                    canAdjust: canAdjust, canEdit: canEditItems),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       );
     }
 
@@ -620,7 +718,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           child: Stack(
             children: [
               body,
-              if (_refreshing)
+              if (_refreshing || _awaitingFresh)
                 const Positioned(
                   top: 0,
                   left: 0,
@@ -731,14 +829,333 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                   _classification = null;
                   _costing = null;
                   _status = _StatusFilter.active;
-                  _refreshing = true;
                 });
-                _load();
               },
               icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
               label: const Text('Limpiar filtros'),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  // ── Esqueletos de carga ─────────────────────────────────────────────────
+  //
+  // Todos usan `SkeletonBlock` dentro de UN solo `SkeletonShimmer`: la
+  // animación se paga una vez para todo el subárbol en vez de una por pieza.
+  // Y todos respetan la geometría de la vista real, que es la única razón
+  // por la que un esqueleto sirve: al llegar los datos nada cambia de sitio.
+
+  /// Anchos de nombre que varían por fila. Con todas las barras iguales el
+  /// esqueleto se lee como una tabla vacía, no como algo cargando.
+  static const List<double> _kSkeletonNameWidths = [
+    190,
+    148,
+    224,
+    172,
+    202,
+    138,
+    214,
+    160,
+  ];
+
+  Widget _scopeBarSkeleton({required bool isCompact}) {
+    final pills = [
+      for (var i = 0; i < 3; i++)
+        SkeletonBlock(width: i == 0 ? 128 : 104, height: 34, borderRadius: 999),
+    ];
+
+    if (isCompact) {
+      return SkeletonShimmer(
+        child: SizedBox(
+          height: 38,
+          child: Row(
+            children: [
+              for (final pill in pills) ...[pill, const SizedBox(width: 7)],
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppShadows.soft,
+      ),
+      child: SkeletonShimmer(
+        child: Row(
+          children: [
+            for (final pill in pills) ...[pill, const SizedBox(width: 7)],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _desktopTableSkeleton() {
+    // Si todavía no sabemos cuántas bodegas hay, asumimos dos: es el caso
+    // más común y evita que la tabla se reacomode cuando lleguen.
+    final columns = _warehouses.isEmpty ? 2 : _warehouses.length;
+    final minWidth =
+        _kColName +
+        _kColCost +
+        _kColWarehouse * columns +
+        _kColTotal +
+        _kColActions;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overflows = constraints.maxWidth < minWidth;
+        final width = overflows ? minWidth : constraints.maxWidth;
+        var colWarehouse = _kColWarehouse;
+        if (!overflows) {
+          colWarehouse += ((width - minWidth) / columns).clamp(
+            0.0,
+            _kColWarehouseMax - _kColWarehouse,
+          );
+        }
+
+        return SizedBox(
+          width: width,
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              border: Border.all(color: AppColors.border),
+              boxShadow: AppShadows.soft,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                // El encabezado real cuando ya conocemos los nombres de las
+                // bodegas: es texto estático y no tiene por qué parpadear.
+                if (_warehouses.isEmpty)
+                  _skeletonTableHeader(columns, colWarehouse)
+                else
+                  _tableHeader(colWarehouse),
+                SkeletonShimmer(
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < 8; i++)
+                        _skeletonTableRow(i, columns, colWarehouse),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _skeletonTableHeader(int columns, double colWarehouse) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+      // Redondeo propio: en el camino sliver el marco lo dibuja un
+      // `DecoratedSliver`, que NO recorta a sus hijos. En el camino con
+      // scroll horizontal el `Clip.antiAlias` del contenedor lo tapa igual,
+      // así que sirve para los dos.
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.lg),
+        ),
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: SkeletonShimmer(
+        child: Row(
+          children: [
+            // `Align` no es decorativo: `Expanded` y `SizedBox(width:)`
+            // imponen ancho TIGHT y el `width` del bloque se ignoraría,
+            // pintando una barra que ocupa toda la columna.
+            const Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SkeletonBlock(width: 68, height: 10, borderRadius: 3),
+              ),
+            ),
+            const SizedBox(
+              width: _kColCost,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SkeletonBlock(width: 48, height: 10, borderRadius: 3),
+              ),
+            ),
+            for (var i = 0; i < columns; i++)
+              SizedBox(
+                width: colWarehouse,
+                child: const Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: EdgeInsets.only(right: 12),
+                    child: SkeletonBlock(
+                      width: 62,
+                      height: 10,
+                      borderRadius: 3,
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(
+              width: _kColTotal,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SkeletonBlock(width: 92, height: 10, borderRadius: 3),
+                ),
+              ),
+            ),
+            const SizedBox(width: _kColActions),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _skeletonTableRow(int index, int columns, double colWarehouse) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.muted)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SkeletonBlock(
+                  width:
+                      _kSkeletonNameWidths[index % _kSkeletonNameWidths.length],
+                  height: 13,
+                  borderRadius: 4,
+                ),
+                const SizedBox(height: 6),
+                const SkeletonBlock(width: 116, height: 9, borderRadius: 4),
+              ],
+            ),
+          ),
+          const SizedBox(
+            width: _kColCost,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SkeletonBlock(width: 66, height: 12, borderRadius: 4),
+            ),
+          ),
+          for (var i = 0; i < columns; i++)
+            SizedBox(
+              width: colWarehouse,
+              child: const Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SkeletonBlock(width: 42, height: 12, borderRadius: 4),
+                ),
+              ),
+            ),
+          const SizedBox(
+            width: _kColTotal,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SkeletonBlock(width: 58, height: 14, borderRadius: 4),
+                ),
+                SizedBox(height: 6),
+                Padding(
+                  padding: EdgeInsets.only(right: 12),
+                  child: SkeletonBlock(width: 92, height: 8, borderRadius: 999),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(
+            width: _kColActions,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: SkeletonBlock(width: 96, height: 28, borderRadius: 8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _mobileListSkeleton() {
+    return SkeletonShimmer(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SkeletonBlock(width: 168, height: 46, borderRadius: 10),
+          const SizedBox(height: 14),
+          const SkeletonBlock(width: 132, height: 10, borderRadius: 3),
+          const SizedBox(height: 8),
+          for (var i = 0; i < 5; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _skeletonMobileCard(i),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _skeletonMobileCard(int index) {
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SkeletonBlock(
+                      width:
+                          _kSkeletonNameWidths[index %
+                              _kSkeletonNameWidths.length],
+                      height: 14,
+                      borderRadius: 4,
+                    ),
+                    const SizedBox(height: 6),
+                    const SkeletonBlock(width: 104, height: 9, borderRadius: 4),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const SkeletonBlock(width: 52, height: 22, borderRadius: 4),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const SkeletonBlock(height: 34, borderRadius: 8),
+          const SizedBox(height: 10),
+          Row(
+            children: const [
+              Expanded(child: SkeletonBlock(height: 46, borderRadius: 8)),
+              SizedBox(width: 8),
+              SkeletonBlock(width: 52, height: 46, borderRadius: 8),
+            ],
+          ),
         ],
       ),
     );
@@ -750,6 +1167,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     required bool isCompact,
     required bool isNarrow,
     required bool canCreate,
+    required bool busy,
   }) {
     final title = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -790,7 +1208,10 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               if (canCreate)
                 IconButton(
                   tooltip: 'Nuevo insumo',
-                  onPressed: () => _openForm(),
+                  // Deshabilitado y no oculto: si desapareciera mientras
+                  // carga, el encabezado saltaría al llegar los datos —
+                  // justo lo que un esqueleto viene a evitar.
+                  onPressed: busy ? null : () => _openForm(),
                   icon: Icon(Icons.add_circle, color: AppColors.primary),
                 ),
             ],
@@ -799,23 +1220,15 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       );
     }
 
+    // Sin atajos a Transferencias ni al Kardex: los dos tienen su propia
+    // pantalla en el hub y tener dos caminos para lo mismo confunde más de lo
+    // que ahorra. Acá queda el maestro del insumo y el ajuste por celda.
     final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        OutlinedButton.icon(
-          onPressed: _openTransfer,
-          icon: const Icon(Icons.swap_horiz, size: 18),
-          label: const Text('Transferir'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: AppColors.foreground,
-            side: BorderSide(color: AppColors.border),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          ),
-        ),
         if (canCreate) ...[
-          const SizedBox(width: 10),
           FilledButton.icon(
-            onPressed: () => _openForm(),
+            onPressed: busy ? null : () => _openForm(),
             icon: const Icon(Icons.add, size: 18),
             label: const Text('Nuevo insumo'),
             style: FilledButton.styleFrom(
@@ -907,9 +1320,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               ),
             ),
           ),
-          Expanded(
-            child: Wrap(spacing: 7, runSpacing: 7, children: chips),
-          ),
+          Expanded(child: Wrap(spacing: 7, runSpacing: 7, children: chips)),
           if (!isNarrow) ...[
             const SizedBox(width: 12),
             SizedBox(
@@ -960,11 +1371,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                 onPressed: () {
                   _searchDebounce?.cancel();
                   _searchCtrl.clear();
-                  setState(() {
-                    _query = '';
-                    _refreshing = true;
-                  });
-                  _load();
+                  setState(() => _query = '');
                 },
               ),
         border: OutlineInputBorder(
@@ -1053,6 +1460,151 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     );
   }
 
+  // ── Contenido como slivers ──────────────────────────────────────────────
+
+  /// El contenido de la página. Es lo único que se construye perezosamente:
+  /// el encabezado, la barra de bodega y la toolbar son piezas únicas y van
+  /// en un `SliverToBoxAdapter` arriba.
+  List<Widget> _contentSlivers(
+    List<InventoryItemSummary> items,
+    BusinessCurrency currency, {
+    required double pad,
+    required double contentWidth,
+    required bool isCompact,
+    required bool showSkeleton,
+    required bool tableOverflows,
+    required bool canAdjust,
+    required bool canEdit,
+  }) {
+    Widget boxed(Widget child) => SliverPadding(
+      padding: EdgeInsets.symmetric(horizontal: pad),
+      sliver: SliverToBoxAdapter(child: child),
+    );
+
+    if (showSkeleton) {
+      return [
+        boxed(isCompact ? _mobileListSkeleton() : _desktopTableSkeleton()),
+      ];
+    }
+    if (items.isEmpty) return [boxed(_emptyState())];
+
+    if (isCompact) {
+      return [
+        boxed(_mobileListHeader(items, canAdjust: canAdjust)),
+        SliverPadding(
+          padding: EdgeInsets.symmetric(horizontal: pad),
+          sliver: SliverList.builder(
+            itemCount: items.length,
+            itemBuilder: (context, index) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _mobileCard(
+                items[index],
+                canAdjust: canAdjust,
+                canEdit: canEdit,
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
+
+    if (tableOverflows) {
+      // Único camino NO perezoso que queda: la tabla completa dentro de un
+      // scroll horizontal. Un sliver no puede vivir ahí dentro.
+      return [
+        boxed(
+          _desktopTable(
+            items,
+            currency,
+            canAdjust: canAdjust,
+            canEdit: canEdit,
+          ),
+        ),
+      ];
+    }
+
+    return _desktopTableSlivers(
+      items,
+      currency,
+      pad: pad,
+      contentWidth: contentWidth,
+      canAdjust: canAdjust,
+      canEdit: canEdit,
+    );
+  }
+
+  List<Widget> _desktopTableSlivers(
+    List<InventoryItemSummary> items,
+    BusinessCurrency currency, {
+    required double pad,
+    required double contentWidth,
+    required bool canAdjust,
+    required bool canEdit,
+  }) {
+    final columns = _warehouses.length;
+    final minWidth =
+        _kColName +
+        _kColCost +
+        _kColWarehouse * columns +
+        _kColTotal +
+        _kColActions;
+    var colWarehouse = _kColWarehouse;
+    if (columns > 0) {
+      colWarehouse += ((contentWidth - minWidth) / columns).clamp(
+        0.0,
+        _kColWarehouseMax - _kColWarehouse,
+      );
+    }
+
+    return [
+      SliverPadding(
+        padding: EdgeInsets.symmetric(horizontal: pad),
+        // `DecoratedSliver` pinta el marco de la tarjeta detrás de un grupo
+        // de slivers y `SliverMainAxisGroup` los encadena como una sola
+        // pieza. Así el encabezado y el pie siguen siendo widgets normales y
+        // solo las FILAS son perezosas.
+        sliver: DecoratedSliver(
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: AppColors.border),
+            boxShadow: AppShadows.soft,
+          ),
+          sliver: SliverMainAxisGroup(
+            slivers: [
+              SliverToBoxAdapter(child: _tableHeader(colWarehouse)),
+              SliverList.builder(
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  final row = _tableRow(
+                    item,
+                    currency,
+                    colWarehouse: colWarehouse,
+                    canAdjust: canAdjust,
+                    canEdit: canEdit,
+                  );
+                  if (_expandedItemId != item.id) return row;
+                  // La fila expandida y su panel viajan juntos: son un solo
+                  // elemento de la lista, así el índice sigue alineado con
+                  // `items`.
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      row,
+                      _distributionPanel(item, canAdjust: canAdjust),
+                    ],
+                  );
+                },
+              ),
+              SliverToBoxAdapter(child: _tableFooter(items, currency)),
+            ],
+          ),
+        ),
+      ),
+    ];
+  }
+
   // ── Tabla escritorio: matriz insumo × bodega ────────────────────────────
 
   Widget _desktopTable(
@@ -1127,22 +1679,32 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
 
   Widget _tableHeader(double colWarehouse) {
     final scope = _scopeId;
-    Widget head(String text, {TextAlign align = TextAlign.left, Color? color}) =>
-        Text(
-          text,
-          textAlign: align,
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.5,
-            color: color ?? AppColors.mutedForeground,
-          ),
-        );
+    Widget head(
+      String text, {
+      TextAlign align = TextAlign.left,
+      Color? color,
+    }) => Text(
+      text,
+      textAlign: align,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 0.5,
+        color: color ?? AppColors.mutedForeground,
+      ),
+    );
 
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
+      // Redondeo propio: en el camino sliver el marco lo dibuja un
+      // `DecoratedSliver`, que NO recorta a sus hijos. En el camino con
+      // scroll horizontal el `Clip.antiAlias` del contenedor lo tapa igual,
+      // así que sirve para los dos.
       decoration: BoxDecoration(
         color: AppColors.background,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.lg),
+        ),
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       child: Row(
@@ -1154,9 +1716,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
             Container(
               width: colWarehouse,
               padding: const EdgeInsets.only(right: 12),
-              decoration: BoxDecoration(
-                border: _columnSeparator(i),
-              ),
+              decoration: BoxDecoration(border: _columnSeparator(i)),
               child: head(
                 _warehouses[i].name.toUpperCase(),
                 align: TextAlign.right,
@@ -1206,9 +1766,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       _ => Colors.transparent,
     };
     final rowBg = switch (level) {
-      'out_of_stock' || 'critical' => AppColors.destructive.withValues(
-        alpha: 0.035,
-      ),
+      'out_of_stock' ||
+      'critical' => AppColors.destructive.withValues(alpha: 0.035),
       'low' => AppColors.warning.withValues(alpha: 0.04),
       _ => item.isActive ? AppColors.card : AppColors.background,
     };
@@ -1229,7 +1788,9 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           ),
           child: Row(
             children: [
-              Expanded(child: _nameCell(item, rail: rail, expanded: expanded)),
+              Expanded(
+                child: _nameCell(item, rail: rail, expanded: expanded),
+              ),
               SizedBox(width: _kColCost, child: _costCell(item, currency)),
               for (var i = 0; i < _warehouses.length; i++)
                 Container(
@@ -1245,7 +1806,11 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               SizedBox(width: _kColTotal, child: _totalCell(item)),
               SizedBox(
                 width: _kColActions,
-                child: _rowActions(item, canAdjust: canAdjust, canEdit: canEdit),
+                child: _rowActions(
+                  item,
+                  canAdjust: canAdjust,
+                  canEdit: canEdit,
+                ),
               ),
             ],
           ),
@@ -1304,10 +1869,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                   ),
                   if (!item.isActive) ...[
                     const SizedBox(width: 7),
-                    _Pill(
-                      text: 'INACTIVO',
-                      color: AppColors.mutedForeground,
-                    ),
+                    _Pill(text: 'INACTIVO', color: AppColors.mutedForeground),
                   ] else if (item.itemClassification != 'simple') ...[
                     const SizedBox(width: 7),
                     _ClassificationChip(value: item.itemClassification),
@@ -1384,46 +1946,51 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
   }) {
     final qty = _matrix.quantityOf(item.id, warehouse.id);
     final present = _matrix.hasStockRow(item.id, warehouse.id);
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final zero = qty == 0;
 
-    return Tooltip(
-      message: canAdjust
-          ? 'Ajustar ${item.name} en ${warehouse.name}'
-          : '${warehouse.name}: ${fmt.format(qty)} ${item.unit}',
-      waitDuration: const Duration(milliseconds: 600),
-      child: Material(
-        color: highlighted
-            ? AppColors.primary.withValues(alpha: 0.07)
-            : Colors.transparent,
-        child: InkWell(
-          onTap: canAdjust
-              ? () => _openAdjust(item, warehouseId: warehouse.id)
-              : null,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(6, 10, 12, 10),
-            alignment: Alignment.centerRight,
-            child: Text(
-              present ? fmt.format(qty) : '—',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: zero ? FontWeight.w500 : FontWeight.w600,
-                color: zero
-                    ? AppColors.mutedForeground.withValues(alpha: 0.55)
-                    : AppColors.foreground,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
+    // MEDIDO: un `Tooltip` por celda costaba el 43% del rebuild de la tabla
+    // (41 ms → 23 ms con 40 filas al quitarlo) y el `Material` anidado otro
+    // 9%. `Semantics` deja la etiqueta accesible por casi nada, y el
+    // `InkWell` funciona igual porque el `Material` de la FILA ya es su
+    // ancestro. El tinte de la bodega en contexto va con `Ink`, que pinta
+    // sobre ese mismo `Material` y solo se monta cuando hace falta.
+    Widget cell = InkWell(
+      onTap: canAdjust
+          ? () => _openAdjust(item, warehouseId: warehouse.id)
+          : null,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 10, 12, 10),
+        alignment: Alignment.centerRight,
+        child: Text(
+          present ? fmt.format(qty) : '—',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: zero ? FontWeight.w500 : FontWeight.w600,
+            color: zero
+                ? AppColors.mutedForeground.withValues(alpha: 0.55)
+                : AppColors.foreground,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
       ),
     );
+    if (highlighted) {
+      cell = Ink(color: AppColors.primary.withValues(alpha: 0.07), child: cell);
+    }
+    return Semantics(
+      button: canAdjust,
+      label: canAdjust
+          ? 'Ajustar ${item.name} en ${warehouse.name}'
+          : '${warehouse.name}: ${fmt.format(qty)} ${item.unit}',
+      child: cell,
+    );
   }
 
   Widget _totalCell(InventoryItemSummary item) {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final level = item.lowStockLevel;
     final color = switch (level) {
       'out_of_stock' || 'critical' => AppColors.destructive,
@@ -1446,9 +2013,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       if (item.minStock > 0) return item.minStock * 2;
       return null;
     }();
-    final fill = scale == null
-        ? null
-        : (item.stock / scale).clamp(0.0, 1.0);
+    final fill = scale == null ? null : (item.stock / scale).clamp(0.0, 1.0);
     final minMark = (scale == null || item.minStock <= 0)
         ? null
         : (item.minStock / scale).clamp(0.0, 1.0);
@@ -1541,26 +2106,35 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         // fila —el ícono y el menú siguen accesibles.
         if (canAdjust)
           Flexible(
-            child: OutlinedButton.icon(
-              onPressed: () => _openAdjust(item),
-              icon: const Icon(Icons.tune, size: 15),
-              label: const Text(
-                'Ajustar',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.foreground,
-                side: BorderSide(color: AppColors.border),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+            child: InkWell(
+              onTap: () => _openAdjust(item),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+              child: Container(
+                height: 32,
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
                 ),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                textStyle: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.tune, size: 15, color: AppColors.foreground),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'Ajustar',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.foreground,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1575,18 +2149,26 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
   }
 
   Widget _rowMenu(InventoryItemSummary item, {required bool canEdit}) {
+    // Con `icon:` este widget monta un `IconButton` completo —estilo
+    // resoluble por estado, FocusNode, constraints de 48— por fila. Con
+    // `child:` se queda en un `InkWell`. Junto con el botón "Ajustar" de
+    // abajo, esos dos eran el 36% del rebuild de la tabla.
     return PopupMenuButton<String>(
       tooltip: 'Más acciones',
-      icon: Icon(Icons.more_vert, size: 19, color: AppColors.mutedForeground),
       padding: EdgeInsets.zero,
+      child: SizedBox(
+        width: _kRowMenuWidth,
+        height: 40,
+        child: Icon(
+          Icons.more_vert,
+          size: 19,
+          color: AppColors.mutedForeground,
+        ),
+      ),
       onSelected: (value) {
         switch (value) {
           case 'edit':
             _openForm(edit: item);
-          case 'kardex':
-            _openKardex(item, warehouseId: _scopeId);
-          case 'transfer':
-            _openTransfer();
           case 'toggle':
             _toggleActive(item);
           case 'delete':
@@ -1604,24 +2186,6 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               title: Text('Editar ficha'),
             ),
           ),
-        const PopupMenuItem(
-          value: 'kardex',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.receipt_long_outlined, size: 18),
-            title: Text('Ver kardex'),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'transfer',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.swap_horiz, size: 18),
-            title: Text('Transferir'),
-          ),
-        ),
         if (canEdit) ...[
           const PopupMenuDivider(),
           PopupMenuItem(
@@ -1690,7 +2254,12 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
 
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 13, 18, 13),
-      color: AppColors.background,
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: const BorderRadius.vertical(
+          bottom: Radius.circular(AppRadius.lg),
+        ),
+      ),
       child: Row(
         children: [
           Expanded(
@@ -1702,7 +2271,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                 ),
                 children: [
                   TextSpan(
-                    text: '${items.length} '
+                    text:
+                        '${items.length} '
                         '${items.length == 1 ? 'insumo' : 'insumos'}',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
@@ -1716,9 +2286,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
             ),
           ),
           Text(
-            scopeName == null
-                ? 'Valor de existencias'
-                : 'Valor en $scopeName',
+            scopeName == null ? 'Valor de existencias' : 'Valor en $scopeName',
             style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
           ),
           const SizedBox(width: 10),
@@ -1742,7 +2310,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     InventoryItemSummary item, {
     required bool canAdjust,
   }) {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final movements = _lastMovements[item.id];
     final packed = hasPack(
       item.packSize,
@@ -1758,7 +2326,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         ? '${fmt.format(item.stock)} de ${fmt.format(item.minStock)} '
               '${item.unit} mínimos · faltan ${fmt.format(shortfall)}'
               '${packed ? ' (${_fmtNum(baseToPack(shortfall, item.packSize))} '
-                    '${item.purchaseUnit})' : ''}'
+                        '${item.purchaseUnit})' : ''}'
         : '${fmt.format(item.stock)} ${item.unit} · por encima del mínimo '
               'de ${fmt.format(item.minStock)}';
 
@@ -1840,7 +2408,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     required KardexMovement? last,
     required bool canAdjust,
   }) {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final qty = _matrix.quantityOf(item.id, warehouse.id);
     final present = _matrix.hasStockRow(item.id, warehouse.id);
     final zero = qty == 0;
@@ -1946,10 +2514,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                 child: canAdjust
                     ? (isScope
                           ? FilledButton(
-                              onPressed: () => _openAdjust(
-                                item,
-                                warehouseId: warehouse.id,
-                              ),
+                              onPressed: () =>
+                                  _openAdjust(item, warehouseId: warehouse.id),
                               style: FilledButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 10,
@@ -1962,10 +2528,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                               child: const Text('Ajustar aquí'),
                             )
                           : OutlinedButton(
-                              onPressed: () => _openAdjust(
-                                item,
-                                warehouseId: warehouse.id,
-                              ),
+                              onPressed: () =>
+                                  _openAdjust(item, warehouseId: warehouse.id),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: AppColors.foreground,
                                 side: BorderSide(color: AppColors.border),
@@ -1981,23 +2545,6 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                             ))
                     : const SizedBox.shrink(),
               ),
-              const SizedBox(width: 6),
-              IconButton(
-                tooltip: 'Kardex de ${warehouse.name}',
-                onPressed: () => _openKardex(item, warehouseId: warehouse.id),
-                icon: Icon(
-                  Icons.receipt_long_outlined,
-                  size: 17,
-                  color: AppColors.mutedForeground,
-                ),
-                style: IconButton.styleFrom(
-                  side: BorderSide(color: AppColors.border),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.sm),
-                  ),
-                  minimumSize: const Size(34, 34),
-                ),
-              ),
             ],
           ),
         ],
@@ -2011,11 +2558,10 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           ? 'Sin movimientos recientes acá'
           : 'Nunca tuvo este insumo';
     }
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final when = last.createdAt;
     final ago = when == null ? '' : ' ${_relativeDay(when)}';
-    final signed =
-        (last.quantity > 0 ? '+' : '') + fmt.format(last.quantity);
+    final signed = (last.quantity > 0 ? '+' : '') + fmt.format(last.quantity);
     return '${_movementLabel(last.movementType)}$ago · $signed';
   }
 
@@ -2046,11 +2592,11 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
 
   // ── Móvil: piso de bodega ───────────────────────────────────────────────
 
-  Widget _mobileList(
-    List<InventoryItemSummary> items,
-    BusinessCurrency currency, {
+  /// Encabezado de la lista móvil. Las cards NO van acá: viven en un
+  /// `SliverList.builder` para que solo se construyan las visibles.
+  Widget _mobileListHeader(
+    List<InventoryItemSummary> items, {
     required bool canAdjust,
-    required bool canEdit,
   }) {
     final scope = _scopeId;
     final scopeName = scope == null ? null : _warehouseNameOf(scope);
@@ -2095,15 +2641,6 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           ),
         ),
         const SizedBox(height: 8),
-        for (final item in items)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _mobileCard(
-              item,
-              canAdjust: canAdjust,
-              canEdit: canEdit,
-            ),
-          ),
       ],
     );
   }
@@ -2120,11 +2657,9 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     required bool canAdjust,
     required bool canEdit,
   }) {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final scope = _scopeId;
-    final qty = scope == null
-        ? item.stock
-        : _matrix.quantityOf(item.id, scope);
+    final qty = scope == null ? item.stock : _matrix.quantityOf(item.id, scope);
     final level = item.lowStockLevel;
     final accent = switch (level) {
       'out_of_stock' || 'critical' => AppColors.destructive,
@@ -2200,7 +2735,9 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                     ),
                   ),
                   Text(
-                    scope == null ? '${item.unit} en total' : '${item.unit} acá',
+                    scope == null
+                        ? '${item.unit} en total'
+                        : '${item.unit} acá',
                     style: TextStyle(
                       fontSize: 11,
                       color: AppColors.mutedForeground,
@@ -2267,17 +2804,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               else
                 const Spacer(),
               const SizedBox(width: 8),
-              _MobileSquareButton(
-                icon: Icons.swap_horiz,
-                tooltip: 'Transferir',
-                onTap: _openTransfer,
-              ),
-              const SizedBox(width: 8),
-              _MobileSquareButton(
-                icon: Icons.more_horiz,
-                tooltip: 'Más acciones',
-                child: _rowMenu(item, canEdit: canEdit),
-              ),
+              _MobileSquareButton(child: _rowMenu(item, canEdit: canEdit)),
             ],
           ),
         ],
@@ -2287,7 +2814,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
 
   /// "Dónde más está" — el dato que el móvil no puede mostrar en columnas.
   String _elsewhereLabel(InventoryItemSummary item, String? scope) {
-    final fmt = NumberFormat.decimalPattern('es_DO');
+    final fmt = _fmtQty;
     final parts = <String>[];
     for (final w in _warehouses) {
       if (w.id == scope) continue;
@@ -2548,17 +3075,11 @@ class _FilterMenu<T extends Object> extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: active
-                    ? const Color(0xFFC2410C)
-                    : AppColors.foreground,
+                color: active ? const Color(0xFFC2410C) : AppColors.foreground,
               ),
             ),
             const SizedBox(width: 4),
-            Icon(
-              Icons.expand_more,
-              size: 17,
-              color: AppColors.mutedForeground,
-            ),
+            Icon(Icons.expand_more, size: 17, color: AppColors.mutedForeground),
           ],
         ),
       ),
@@ -2568,6 +3089,10 @@ class _FilterMenu<T extends Object> extends StatelessWidget {
 
 /// Barra de existencias con la marca del mínimo. La marca es la lectura
 /// clave: dice si el relleno llega o no llega a donde tiene que llegar.
+/// Ancho fijo de la barra. Estar declarado acá es lo que permite prescindir
+/// del `LayoutBuilder`: no hay nada que medir en tiempo de layout.
+const double _kStockBarWidth = 92;
+
 class _StockBar extends StatelessWidget {
   final double fill;
   final double? minMark;
@@ -2581,71 +3106,61 @@ class _StockBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const width = _kStockBarWidth;
     return SizedBox(
-      width: 92,
+      width: width,
       height: 8,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          return Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                top: 2,
-                left: 0,
-                right: 0,
-                child: Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.muted,
-                    borderRadius: BorderRadius.circular(AppRadius.full),
-                  ),
-                ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: 2,
+            left: 0,
+            right: 0,
+            child: Container(
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.muted,
+                borderRadius: BorderRadius.circular(AppRadius.full),
               ),
-              Positioned(
-                top: 2,
-                left: 0,
-                child: Container(
-                  height: 4,
-                  width: width * fill,
-                  decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(AppRadius.full),
-                  ),
-                ),
+            ),
+          ),
+          Positioned(
+            top: 2,
+            left: 0,
+            child: Container(
+              height: 4,
+              width: width * fill,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(AppRadius.full),
               ),
-              if (minMark != null)
-                Positioned(
-                  top: 0,
-                  left: (width * minMark!).clamp(0.0, width - 2),
-                  child: Container(
-                    width: 2,
-                    height: 8,
-                    color: AppColors.foreground,
-                  ),
-                ),
-            ],
-          );
-        },
+            ),
+          ),
+          if (minMark != null)
+            Positioned(
+              top: 0,
+              left: (width * minMark!).clamp(0.0, width - 2),
+              child: Container(
+                width: 2,
+                height: 8,
+                color: AppColors.foreground,
+              ),
+            ),
+        ],
       ),
     );
   }
 }
 
-/// Botón cuadrado secundario de las cards móviles (44px+ de lado: se toca
-/// con el pulgar y con guantes de cocina).
+/// Caja cuadrada secundaria de las cards móviles (46 de alto: se toca con el
+/// pulgar y con guantes de cocina). Al sacar el atajo de transferencia quedó
+/// envolviendo solo el menú de la fila, así que ya no arma el botón: recibe
+/// el hijo hecho y le pone el marco.
 class _MobileSquareButton extends StatelessWidget {
-  final IconData? icon;
-  final String tooltip;
-  final VoidCallback? onTap;
-  final Widget? child;
+  final Widget child;
 
-  const _MobileSquareButton({
-    required this.tooltip,
-    this.icon,
-    this.onTap,
-    this.child,
-  });
+  const _MobileSquareButton({required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -2656,13 +3171,7 @@ class _MobileSquareButton extends StatelessWidget {
         border: Border.all(color: AppColors.border),
         borderRadius: BorderRadius.circular(AppRadius.md),
       ),
-      child: child != null
-          ? Center(child: child)
-          : IconButton(
-              tooltip: tooltip,
-              onPressed: onTap,
-              icon: Icon(icon, size: 20, color: AppColors.foreground),
-            ),
+      child: Center(child: child),
     );
   }
 }
