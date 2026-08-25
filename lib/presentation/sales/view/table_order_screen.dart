@@ -285,6 +285,69 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   return fallback;
 }
 
+/// Bloque de totales de la pre-cuenta EN PANTALLA, con el mismo criterio que
+/// el ticket impreso: un renglón por impuesto (ITBIS y Ley separados) más la
+/// línea de descuento, de modo que Subtotal + impuestos − descuento = TOTAL.
+///
+/// Antes el modal recibía solo `subtotal` y `tax` (los dos impuestos sumados,
+/// rotulados "ITBIS (18%)") y ninguna línea de descuento: con una oferta
+/// aplicada mostraba "2,109.38 + 590.62" contra un "TOTAL 1,470.00" que no
+/// cuadraba con nada (mesa A21, 2026-08-24).
+///
+/// Fail-soft: si algo falla devuelve lista vacía y el modal cae a su bloque
+/// legacy en vez de quedarse sin totales.
+Future<List<Map<String, dynamic>>> _buildPrecheckTotalsPayload(
+  WidgetRef ref,
+  Order order,
+  List<OrderItem> items, {
+  String? forcedOrigin,
+}) async {
+  try {
+    final summary = summarizeOrderPricing(
+      order,
+      items,
+      forcedOrigin: forcedOrigin,
+    );
+    final configuredBreakdown = ref
+        .read(currentOrderProvider.notifier)
+        .getTaxBreakdown(summary.subtotal);
+    final taxBreakdown = buildOrderTaxBreakdown(
+      order,
+      items,
+      forcedOrigin: forcedOrigin,
+      configuredBreakdown: configuredBreakdown,
+    );
+
+    // Mismo ajuste del negocio que usan carrito y ticket
+    // (`business_settings.discount_display_mode`).
+    var postDiscountMode = false;
+    final businessId = ref.read(sessionProvider).activeBusinessId ?? '';
+    if (businessId.isNotEmpty) {
+      final mode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getDiscountDisplayMode(businessId);
+      postDiscountMode = mode == PosSettingsRepository.discountPostDiscount;
+    }
+
+    return buildReceiptTotalsRows(
+      summary: summary,
+      taxBreakdown: taxBreakdown,
+      postDiscountMode: postDiscountMode,
+    )
+        .map(
+          (row) => <String, dynamic>{
+            'label': row.label,
+            'amount': row.amount,
+            'isNegative': row.isNegative,
+          },
+        )
+        .toList(growable: false);
+  } catch (e) {
+    debugPrint('precheck: no se pudo armar el bloque de totales: $e');
+    return const <Map<String, dynamic>>[];
+  }
+}
+
 Future<FiscalDocument?> _loadFiscalDocument(
   WidgetRef ref,
   String orderId, {
@@ -2780,6 +2843,11 @@ class _CartView extends ConsumerWidget {
               return;
             }
 
+            final offlinePrecheckTotals = await _buildPrecheckTotalsPayload(
+              ref,
+              printOrder,
+              items,
+            );
             final preCheckData = <String, dynamic>{
               'restaurantName': businessProfile.name,
               'businessName': businessProfile.businessName,
@@ -2803,7 +2871,9 @@ class _CartView extends ConsumerWidget {
               'tax': printOrder.tax,
               'serviceFee': printOrder.serviceFee,
               'total': printOrder.total,
+              'totals': offlinePrecheckTotals,
             };
+            if (!context.mounted) return;
             try {
               await _runPrecheckWithDestinationPicker(
                 context,
@@ -4957,6 +5027,13 @@ class _CartView extends ConsumerWidget {
                                         freshOrder.id,
                                       ) ??
                                       ref.read(sessionProvider).userName;
+                                  final precheckTotals =
+                                      await _buildPrecheckTotalsPayload(
+                                        ref,
+                                        freshOrder,
+                                        freshItems,
+                                        forcedOrigin: freshState.origin,
+                                      );
                                   if (!context.mounted) return;
                                   final preCheckData = {
                                     'restaurantName': businessProfile.name,
@@ -4987,6 +5064,7 @@ class _CartView extends ConsumerWidget {
                                         freshSummary.tax +
                                         freshSummary.serviceFee,
                                     'total': freshSummary.total,
+                                    'totals': precheckTotals,
                                   };
 
                                   try {

@@ -569,3 +569,137 @@ OrderPricingSummary summarizeOrderPricing(
     taxDetails: taxGroups.map((key, value) => MapEntry(key, _r(value))),
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bloque de totales del recibo (pantalla y papel)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Extrae el porcentaje de una label de impuesto tipo "ITBIS (18%)",
+/// "LEY (10%)" o "ITBIS (16.5%)". Null si la label no trae tasa.
+final RegExp _rateInLabelRegex = RegExp(r'\((\d+(?:[.,]\d+)?)\s*%\)');
+
+double? parseTaxRatePercentFromLabel(String label) {
+  final match = _rateInLabelRegex.firstMatch(label);
+  if (match == null) return null;
+  return double.tryParse(match.group(1)?.replaceAll(',', '.') ?? '');
+}
+
+/// Una fila del bloque de totales ("Subtotal", "ITBIS (18%)", "Descuento"…).
+class ReceiptTotalRow {
+  const ReceiptTotalRow({
+    required this.label,
+    required this.amount,
+    this.isNegative = false,
+  });
+
+  final String label;
+  final double amount;
+
+  /// Se muestra restando ("- RD$ 1,230.00"). El descuento informativo del
+  /// modo `post_discount` va en false: el total ya lo trae aplicado.
+  final bool isNegative;
+}
+
+/// Arma las filas de totales de un recibo para que **siempre cuadren**:
+/// Subtotal + impuestos − descuento + delivery = TOTAL.
+///
+/// Es la misma reconciliación que ya hacen el panel del carrito y el ticket
+/// impreso (`PrintTicketService`): cuando todas las tasas son conocidas y
+/// uniformes, la base se reconstruye desde el TOTAL en vez de arrastrar el
+/// `subtotal` del backend, que viene NETO de descuento y no cierra con los
+/// impuestos mostrados. Sin esa reconciliación pasa lo de la mesa A21:
+/// "Subtotal 2,109.38 + ITBIS 590.62" con "TOTAL 1,470.00" — tres números que
+/// no suman entre sí porque faltaba la línea de descuento y los dos impuestos
+/// venían fusionados en uno.
+///
+/// [taxBreakdown] son las líneas ya resueltas por [buildOrderTaxBreakdown].
+/// [postDiscountMode] refleja `business_settings.discount_display_mode`.
+/// El TOTAL no viene en la lista: es `summary.total`.
+List<ReceiptTotalRow> buildReceiptTotalsRows({
+  required OrderPricingSummary summary,
+  required List<({String label, double amount})> taxBreakdown,
+  bool postDiscountMode = false,
+}) {
+  final rows = <ReceiptTotalRow>[];
+
+  final lineRates = taxBreakdown
+      .map((entry) => parseTaxRatePercentFromLabel(entry.label))
+      .toList(growable: false);
+  final allRatesKnown = taxBreakdown.isNotEmpty && !lineRates.contains(null);
+  final declaredRate = allRatesKnown
+      ? lineRates.fold<double>(0, (sum, rate) => sum + (rate ?? 0)) / 100.0
+      : 0.0;
+  final actualRate = summary.subtotal > 0.005
+      ? (summary.tax + summary.serviceFee) / summary.subtotal
+      : 0.0;
+  final ratesAreUniform = (actualRate - declaredRate).abs() < 0.001;
+  final canRecompute = allRatesKnown && declaredRate > 0 && ratesAreUniform;
+
+  if (canRecompute) {
+    // En modo pre_discount los impuestos se muestran sobre la base COMPLETA y
+    // el descuento se resta después; en post_discount la base ya viene neta y
+    // el descuento sale como nota informativa.
+    final discountForBase = postDiscountMode ? 0.0 : summary.discounts;
+    // El fee de delivery es EXENTO: fuera de la base gravable.
+    final subtotalBase =
+        (summary.total - summary.deliveryFee + discountForBase) /
+        (1 + declaredRate);
+    rows.add(ReceiptTotalRow(label: 'Subtotal', amount: _r(subtotalBase)));
+    for (var i = 0; i < taxBreakdown.length; i++) {
+      final amount = _r(subtotalBase * ((lineRates[i] ?? 0) / 100));
+      if (amount.abs() < 0.005) continue;
+      rows.add(ReceiptTotalRow(label: taxBreakdown[i].label, amount: amount));
+    }
+    if (summary.discounts > 0.004) {
+      rows.add(
+        ReceiptTotalRow(
+          label: 'Descuento',
+          amount: _r(summary.discounts),
+          isNegative: !postDiscountMode,
+        ),
+      );
+    }
+  } else {
+    // Tasas mixtas (ej. takeout + dine-in) o sin tasa parseable: los valores
+    // nativos del summary son correctos porque se computan ítem por ítem.
+    rows.add(ReceiptTotalRow(label: 'Subtotal', amount: summary.subtotal));
+    if (taxBreakdown.isNotEmpty) {
+      for (final entry in taxBreakdown) {
+        if (entry.amount.abs() < 0.005) continue;
+        rows.add(ReceiptTotalRow(label: entry.label, amount: entry.amount));
+      }
+    } else {
+      if (summary.serviceFee > 0.004) {
+        final pct = summary.subtotal > 0
+            ? ((summary.serviceFee / summary.subtotal) * 100).toStringAsFixed(0)
+            : '0';
+        rows.add(
+          ReceiptTotalRow(
+            label: 'Servicio ($pct%)',
+            amount: summary.serviceFee,
+          ),
+        );
+      }
+      if (summary.tax > 0.004) {
+        rows.add(ReceiptTotalRow(label: 'ITBIS', amount: summary.tax));
+      }
+    }
+    if (summary.discounts > 0.004) {
+      rows.add(
+        ReceiptTotalRow(
+          label: 'Descuento',
+          amount: _r(summary.discounts),
+          isNegative: !postDiscountMode,
+        ),
+      );
+    }
+  }
+
+  if (summary.deliveryFee > 0.004) {
+    rows.add(
+      ReceiptTotalRow(label: 'Delivery', amount: _r(summary.deliveryFee)),
+    );
+  }
+
+  return rows;
+}

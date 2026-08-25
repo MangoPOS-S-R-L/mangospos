@@ -17,6 +17,7 @@ import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/tax/tax_exceptions.dart';
+import 'package:mangopos/data/utils/bogo_promo_allocator.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -5126,55 +5127,44 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             : ((promo['reward_quantity'] as num?)?.toInt() ?? 1);
         if (buyQty <= 1 || freeQty <= 0) continue;
 
-        // El BOGO se calcula DENTRO de cada cuenta (split bill) y por UNIDADES
-        // (no por filas): una fila qty=3 cuenta como 3, no como 1. Cada cuenta
-        // libera (unidades ~/ buyQty) * freeQty unidades, asignadas a las más
-        // baratas (por unidad), y se descuenta SOLO esas unidades. Así un check
-        // con 4 cervezas (sean 4 filas o una qty=3 + qty=1) libera exactamente
-        // 1 = el precio de UNA unidad (275), no la fila completa (825). Orden
-        // determinista (por-unidad, luego id) → mismo resultado en cada recarga,
-        // sin churn ni contaminación entre cuentas.
-        double perUnitGross(OrderItem it) => it.quantity > 0
-            ? grossAmount(it) / it.quantity
-            : grossAmount(it);
+        // El BOGO se calcula DENTRO de cada cuenta (split bill), por PRODUCTO
+        // y por UNIDADES (no por filas). El reparto vive en
+        // `allocateBogoDiscounts` (data/utils/bogo_promo_allocator.dart), puro
+        // y testeado: agrupa por cuenta+producto, libera
+        // (unidades ~/ buyQty) * freeQty por grupo y descuenta solo esas
+        // unidades a las más baratas del propio producto. Determinista → mismo
+        // reparto en cada recarga, sin churn, sin contaminación entre cuentas
+        // ni entre productos.
+        final byItemId = {for (final item in targetItems) item.id: item};
+        final allocations = allocateBogoDiscounts(
+          lines: targetItems
+              .map(
+                (item) => BogoLine(
+                  id: item.id,
+                  quantity: item.quantity.round(),
+                  gross: grossAmount(item),
+                  checkId: item.checkId,
+                  productId: item.productId,
+                ),
+              )
+              .toList(growable: false),
+          buyQuantity: buyQty,
+          freeQuantity: freeQty,
+        );
 
-        final byCheck = <String?, List<OrderItem>>{};
-        for (final item in targetItems) {
-          byCheck.putIfAbsent(item.checkId, () => <OrderItem>[]).add(item);
-        }
-        for (final group in byCheck.values) {
-          final totalUnits = group.fold<int>(
-            0,
-            (sum, it) => sum + it.quantity.round(),
-          );
-          var freeUnits = (totalUnits ~/ buyQty) * freeQty;
-          if (freeUnits <= 0) continue;
-
-          final sorted = [...group]
-            ..sort((a, b) {
-              final byUnit = perUnitGross(a).compareTo(perUnitGross(b));
-              return byUnit != 0 ? byUnit : a.id.compareTo(b.id);
-            });
-          for (final item in sorted) {
-            if (freeUnits <= 0) break;
-            final qty = item.quantity.round();
-            if (qty <= 0) continue;
-            final unitsFree = freeUnits < qty ? freeUnits : qty;
-            final discount = (perUnitGross(item) * unitsFree)
-                .clamp(0, double.infinity)
-                .toDouble();
-            updates.add((
-              itemId: item.id,
-              discount: double.parse(discount.toStringAsFixed(2)),
-              notes: _buildAutoPromoNotes(
-                originalNotes: item.notes,
-                promoId: promoId,
-              ),
-              promotionId: promoId,
-            ));
-            touchedItemIds.add(item.id);
-            freeUnits -= unitsFree;
-          }
+        for (final entry in allocations.entries) {
+          final item = byItemId[entry.key];
+          if (item == null) continue;
+          updates.add((
+            itemId: item.id,
+            discount: entry.value,
+            notes: _buildAutoPromoNotes(
+              originalNotes: item.notes,
+              promoId: promoId,
+            ),
+            promotionId: promoId,
+          ));
+          touchedItemIds.add(item.id);
         }
         continue;
       }

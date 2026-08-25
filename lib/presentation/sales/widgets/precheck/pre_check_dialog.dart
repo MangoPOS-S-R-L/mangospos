@@ -67,6 +67,14 @@ class PreCheckDialog extends StatelessWidget {
     final tax = data['tax'] ?? 0.0;
     final total = data['total'] ?? (subtotal + tax);
 
+    // Bloque de totales ya reconciliado por `buildReceiptTotalsRows` (mismo
+    // criterio que el ticket impreso): un renglón por impuesto + la línea de
+    // descuento, de modo que Subtotal + impuestos − descuento = TOTAL. Si no
+    // viene (llamadores viejos), caemos al bloque legacy de dos renglones.
+    final totalsRows = (data['totals'] as List<dynamic>? ?? const [])
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList(growable: false);
+
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 0,
@@ -244,16 +252,34 @@ class PreCheckDialog extends StatelessWidget {
                     const SizedBox(height: 16),
 
                     // Totals
-                    _TotalRow(
-                      label: 'Subtotal',
-                      value: currencyFormat.format(subtotal),
-                    ),
-                    const SizedBox(height: 8),
-                    _TotalRow(
-                      label: 'ITBIS (18%)',
-                      value: currencyFormat.format(tax),
-                    ),
-                    const SizedBox(height: 12),
+                    if (totalsRows.isNotEmpty)
+                      ...totalsRows.map((row) {
+                        final amount = (row['amount'] as num?)?.toDouble() ?? 0;
+                        final isNegative = row['isNegative'] == true;
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _TotalRow(
+                            label: row['label']?.toString() ?? '',
+                            value: isNegative
+                                ? '- ${currencyFormat.format(amount)}'
+                                : currencyFormat.format(amount),
+                            highlight: isNegative,
+                          ),
+                        );
+                      })
+                    else ...[
+                      _TotalRow(
+                        label: 'Subtotal',
+                        value: currencyFormat.format(subtotal),
+                      ),
+                      const SizedBox(height: 8),
+                      _TotalRow(
+                        label: 'ITBIS',
+                        value: currencyFormat.format(tax),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    const SizedBox(height: 4),
 
                     // GRAND TOTAL
                     Row(
@@ -434,7 +460,15 @@ class _TotalRow extends StatelessWidget {
   final String label;
   final String value;
 
-  const _TotalRow({required this.label, required this.value});
+  /// Resalta la fila en verde (se usa para el descuento, igual que el panel
+  /// del carrito).
+  final bool highlight;
+
+  const _TotalRow({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -453,7 +487,9 @@ class _TotalRow extends StatelessWidget {
           style: GoogleFonts.inter(
             fontSize: 14,
             fontWeight: FontWeight.w600,
-            color: const Color(0xFF333333),
+            color: highlight
+                ? const Color(0xFF16A34A)
+                : const Color(0xFF333333),
           ),
         ),
       ],
