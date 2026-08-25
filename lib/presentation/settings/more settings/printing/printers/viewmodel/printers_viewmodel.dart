@@ -16,11 +16,14 @@ import 'package:flutter_blue_plus_windows/flutter_blue_plus_windows.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // USB
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter_usb_printer/flutter_usb_printer.dart';
 
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/network/android_net_lock.dart';
+import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
@@ -1237,21 +1240,55 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     state = state.copyWith(isDiscovering: true, errorMessage: null);
 
     try {
-      // 1. Escaneo vía flutter_usb_printer (Android)
+      // 1. Escaneo USB en Android.
+      //
+      // Usa el canal nativo propio (mangopos/usb_raw_printer) porque es el
+      // único que devuelve `deviceName` y `serialNumber`: sin ellos dos
+      // térmicas del mismo modelo comparten `vid:pid`, el dedupe de más
+      // abajo se comía la segunda y nunca se podía agregar. Si el canal no
+      // está (APK sin el plugin), cae al plugin legado con la limitación
+      // histórica de una sola por modelo.
       if (!kIsWeb && Platform.isAndroid) {
         try {
-          final List<Map<String, dynamic>> devices =
-              await FlutterUsbPrinter.getUSBDeviceList();
+          List<Map<String, dynamic>> devices;
+          try {
+            devices = await AndroidUsbRawPrinter.listDevices();
+          } on MissingPluginException {
+            _log('scanUSB() canal nativo ausente, usando plugin legado');
+            devices = await FlutterUsbPrinter.getUSBDeviceList();
+          }
+
+          // Cuántas veces se repite cada modelo: solo numeramos ("#2") cuando
+          // de verdad hay más de una igual, para no ensuciar el caso normal.
+          final modelCount = <String, int>{};
           for (final d in devices) {
-            final vendorId = d['vendorId']?.toString() ?? '';
-            final productId = d['productId']?.toString() ?? '';
-            final name = d['manufacturer'] ?? d['productName'] ?? 'USB';
+            final key = '${d['vendorId']}:${d['productId']}';
+            modelCount[key] = (modelCount[key] ?? 0) + 1;
+          }
+          final seenOfModel = <String, int>{};
+
+          for (final d in devices) {
+            final identity = UsbPrinterIdentity.fromDeviceMap(d);
+            if (identity == null) continue;
+
+            final modelKey = '${identity.vendorId}:${identity.productId}';
+            final ordinal = (seenOfModel[modelKey] ?? 0) + 1;
+            seenOfModel[modelKey] = ordinal;
+
+            final base = (d['manufacturer'] ?? d['productName'] ?? 'USB')
+                .toString()
+                .trim();
+            // El nombre es la clave del índice único (business_id, name):
+            // sin el sufijo, la segunda impresora chocaba con
+            // "Este registro ya existe."
+            final suffix = (modelCount[modelKey] ?? 1) > 1 ? ' #$ordinal' : '';
+
             out.add(
               DiscoveredPrinter(
-                name: '$name (USB)',
+                name: '$base (USB$suffix)',
                 type: PrinterType.usb,
-                idHint: '$vendorId:$productId',
-                mac: '$vendorId:$productId',
+                idHint: identity.storageValue,
+                mac: identity.storageValue,
               ),
             );
           }

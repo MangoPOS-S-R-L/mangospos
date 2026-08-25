@@ -27,7 +27,12 @@ class AndroidUsbRawPrinter {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// Lista las impresoras USB conectadas (dispositivos con endpoint bulk OUT).
-  /// Cada mapa trae `vendorId`, `productId`, `manufacturer`, `productName`.
+  /// Cada mapa trae `vendorId`, `productId`, `manufacturer`, `productName`,
+  /// `deviceName`, `deviceId` y `serialNumber`.
+  ///
+  /// Los tres últimos identifican el dispositivo CONCRETO: dos térmicas del
+  /// mismo modelo comparten `vendorId:productId`, así que sin ellos no hay
+  /// forma de decir a cuál de las dos va el ticket.
   static Future<List<Map<String, dynamic>>> listDevices() async {
     _ensureAndroid();
     final raw = await _channel.invokeMethod<List<dynamic>>('listDevices');
@@ -37,19 +42,30 @@ class AndroidUsbRawPrinter {
         .toList();
   }
 
-  /// Escribe [data] completo a la impresora `vendorId:productId`. Devuelve
-  /// solo cuando el dispositivo aceptó el último byte; lanza [PlatformException]
-  /// (códigos `usb_device_not_found`, `usb_permission_denied`,
+  /// Escribe [data] completo a la impresora indicada. Devuelve solo cuando el
+  /// dispositivo aceptó el último byte; lanza [PlatformException] (códigos
+  /// `usb_device_not_found`, `usb_ambiguous_device`, `usb_permission_denied`,
   /// `usb_transfer_failed`, …) si algo falla.
+  ///
+  /// [deviceName] (puerto del bus) y [serialNumber] son opcionales pero son lo
+  /// que permite tener DOS impresoras del mismo modelo: el nativo intenta
+  /// primero coincidencia exacta por esos campos y solo cae a
+  /// `vendorId:productId` cuando el candidato es único. Si hay varias iguales
+  /// conectadas y ninguna coincide, responde `usb_ambiguous_device` en vez de
+  /// imprimir en cualquiera.
   static Future<void> write({
     required int vendorId,
     required int productId,
     required Uint8List data,
+    String? deviceName,
+    String? serialNumber,
   }) async {
     _ensureAndroid();
     await _channel.invokeMethod<bool>('write', {
       'vendorId': vendorId,
       'productId': productId,
+      'deviceName': deviceName,
+      'serialNumber': serialNumber,
       'data': data,
     });
   }

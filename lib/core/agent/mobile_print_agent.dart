@@ -26,6 +26,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../printing/android_usb_raw_printer.dart';
+import '../printing/usb_printer_identity.dart';
 import '../offline/hub/hub_config.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
@@ -502,15 +503,27 @@ class MobilePrintAgent {
     // USB printers (Android only)
     if (Platform.isAndroid) {
       try {
-        final usbDevices = await FlutterUsbPrinter.getUSBDeviceList();
+        // Preferimos el canal nativo propio: es el único que expone
+        // `deviceName`/`serialNumber`, lo que distingue dos térmicas del
+        // mismo modelo. Si no está (APK viejo), caemos al plugin.
+        List<Map<String, dynamic>> usbDevices;
+        try {
+          usbDevices = await AndroidUsbRawPrinter.listDevices();
+        } on MissingPluginException {
+          usbDevices = await FlutterUsbPrinter.getUSBDeviceList();
+        }
         for (final d in usbDevices) {
+          final identity = UsbPrinterIdentity.fromDeviceMap(d);
           printers.add({
             'type': 'usb',
             'name': d['manufacturer'] ?? d['productName'] ?? 'USB Printer',
             'vendorId': d['vendorId']?.toString() ?? '',
             'productId': d['productId']?.toString() ?? '',
             'deviceId': d['deviceId']?.toString() ?? '',
-            'address': '${d['vendorId']}:${d['productId']}',
+            'deviceName': d['deviceName']?.toString() ?? '',
+            'serialNumber': d['serialNumber']?.toString() ?? '',
+            'address':
+                identity?.storageValue ?? '${d['vendorId']}:${d['productId']}',
           });
         }
       } catch (e) {
@@ -740,8 +753,18 @@ class MobilePrintAgent {
       throw Exception('USB OTG printing only supported on Android');
     }
 
-    final vendorId = int.tryParse(printer['vendorId']?.toString() ?? '');
-    final productId = int.tryParse(printer['productId']?.toString() ?? '');
+    // El payload que llega desde `printRawViaAgentToPrinter` es un
+    // `PrinterConfig.toMap()`: NO trae vendorId/productId sueltos, trae la
+    // identidad en `devicePath`/`mac`. Sin leerlos, todo trabajo terminaba en
+    // el fallback "primera USB conectada" — con dos impresoras, en la que no
+    // era.
+    final identity = UsbPrinterIdentity.parse(printer['devicePath']?.toString()) ??
+        UsbPrinterIdentity.parse(printer['device_path']?.toString()) ??
+        UsbPrinterIdentity.parse(printer['mac']?.toString()) ??
+        UsbPrinterIdentity.fromDeviceMap(printer);
+
+    final vendorId = identity?.vendorId;
+    final productId = identity?.productId;
 
     // Camino principal: canal nativo propio con bulkTransfer troceado y
     // verificado (arregla tickets a la mitad). Fallback por vid/pid ausente
@@ -751,6 +774,8 @@ class MobilePrintAgent {
         await AndroidUsbRawPrinter.write(
           vendorId: vendorId,
           productId: productId,
+          deviceName: identity?.deviceName,
+          serialNumber: identity?.serialNumber,
           data: data,
         );
         return;
@@ -758,18 +783,28 @@ class MobilePrintAgent {
         debugPrint('[MobileAgent] usb_raw_printer ausente, usando legado');
       } on PlatformException catch (e) {
         if (e.code == 'usb_device_not_found') {
-          // vid/pid guardado ya no coincide: probar la primera conectada.
+          // El identificador guardado ya no coincide. Rescate SOLO si hay una
+          // única USB conectada: con dos o más no se puede adivinar cuál es.
           final devices = await AndroidUsbRawPrinter.listDevices();
-          if (devices.isNotEmpty) {
-            final vid =
-                int.tryParse(devices.first['vendorId']?.toString() ?? '');
-            final pid =
-                int.tryParse(devices.first['productId']?.toString() ?? '');
-            if (vid != null && pid != null) {
-              await AndroidUsbRawPrinter.write(
-                  vendorId: vid, productId: pid, data: data);
-              return;
-            }
+          if (devices.isEmpty) {
+            throw Exception('No USB printers found');
+          }
+          if (devices.length > 1) {
+            throw Exception(
+              'La impresora USB configurada no está en su puerto original y '
+              'hay ${devices.length} conectadas. Reasígnala desde Ajustes → '
+              'Impresoras.',
+            );
+          }
+          final fallback = UsbPrinterIdentity.fromDeviceMap(devices.first);
+          if (fallback != null) {
+            await AndroidUsbRawPrinter.write(
+              vendorId: fallback.vendorId,
+              productId: fallback.productId,
+              deviceName: fallback.deviceName,
+              data: data,
+            );
+            return;
           }
           throw Exception('No USB printers found');
         }
@@ -785,11 +820,20 @@ class MobilePrintAgent {
       connected = await _usbPrinter.connect(vendorId, productId) ?? false;
     }
 
-    // Fallback: try connecting to the first available USB printer
+    // Fallback: solo si hay UNA impresora USB conectada. Este camino legado
+    // no sabe direccionar un dispositivo concreto (connect() solo acepta
+    // vid/pid), así que con dos o más "la primera" sería una lotería.
     if (!connected) {
       final devices = await FlutterUsbPrinter.getUSBDeviceList();
       if (devices.isEmpty) {
         throw Exception('No USB printers found');
+      }
+      if (devices.length > 1) {
+        throw Exception(
+          'La impresora USB configurada no está en su puerto original y hay '
+          '${devices.length} conectadas. Reasígnala desde Ajustes → '
+          'Impresoras.',
+        );
       }
       final d = devices.first;
       final vid = int.tryParse(d['vendorId']?.toString() ?? '');

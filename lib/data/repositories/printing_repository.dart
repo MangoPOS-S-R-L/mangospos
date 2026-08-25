@@ -15,6 +15,7 @@ import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
+import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
@@ -2161,16 +2162,21 @@ class PrintingRepository {
 
   /// Impresión USB nativa en Android (USB Host / OTG) vía flutter_usb_printer.
   ///
-  /// El identificador se guarda como `vendorId:productId` (decimal) tanto en
-  /// `mac` como en `device_path` cuando se descubre la impresora — ver
-  /// `PrintersViewModel.scanUSB()`. Aceptamos ambos campos y varios formatos
-  /// (`"1234:5678"`, `"usb://1a2b:3c4d/serie"`) por robustez.
+  /// El identificador se guarda tanto en `mac` como en `device_path` cuando se
+  /// descubre la impresora — ver `PrintersViewModel.scanUSB()`. Aceptamos
+  /// ambos campos y varios formatos por robustez:
+  ///   - `"1234:5678"`                        (legado: solo vid:pid)
+  ///   - `"usb://1a2b:3c4d/serie"`            (legado desktop)
+  ///   - `"1234:5678?dev=/dev/bus/usb/001/003&sn=XYZ"` (actual)
+  ///
+  /// El sufijo `dev`/`sn` es lo que permite tener DOS impresoras del mismo
+  /// modelo: sin él ambas comparten vid:pid y el ticket sale en cualquiera.
   Future<void> _printRawDirectUsbAndroid({
     required PrinterConfig printer,
     required List<int> data,
   }) async {
-    final ids = _parseUsbVidPid(printer.devicePath) ??
-        _parseUsbVidPid(printer.mac);
+    final ids = _parseUsbIdentity(printer.devicePath) ??
+        _parseUsbIdentity(printer.mac);
     if (ids == null) {
       throw Exception(
         'La impresora USB "${printer.name}" no tiene un identificador '
@@ -2178,7 +2184,7 @@ class PrintingRepository {
         'Impresoras → buscar por USB.',
       );
     }
-    final (vendorId, productId) = ids;
+    final (vendorId, productId, deviceName, serialNumber) = ids;
     final bytes = Uint8List.fromList(data);
 
     // Camino principal: canal nativo propio (mangopos/usb_raw_printer) con
@@ -2190,6 +2196,8 @@ class PrintingRepository {
         printerName: printer.name,
         vendorId: vendorId,
         productId: productId,
+        deviceName: deviceName,
+        serialNumber: serialNumber,
         bytes: bytes,
       );
       return;
@@ -2207,19 +2215,27 @@ class PrintingRepository {
     );
   }
 
-  /// Escritura por el canal nativo. Si el vid/pid guardado ya no está
-  /// presente (reconexión con otro puerto/cable), cae a la primera impresora
-  /// USB conectada — cubre el caso típico de una sola térmica por OTG.
+  /// Escritura por el canal nativo.
+  ///
+  /// Si el identificador guardado ya no está presente (reconexión en otro
+  /// puerto o cable) hay un rescate: imprimir en la única USB conectada. Ese
+  /// rescate SOLO aplica cuando hay exactamente una — con dos o más no se
+  /// puede adivinar cuál es, y mandar el ticket a la equivocada (cocina
+  /// saliendo en la caja) es peor que un error claro pidiendo reasignarla.
   Future<void> _printUsbAndroidNative({
     required String printerName,
     required int vendorId,
     required int productId,
     required Uint8List bytes,
+    String? deviceName,
+    String? serialNumber,
   }) async {
     try {
       await AndroidUsbRawPrinter.write(
         vendorId: vendorId,
         productId: productId,
+        deviceName: deviceName,
+        serialNumber: serialNumber,
         data: bytes,
       );
       return;
@@ -2229,11 +2245,26 @@ class PrintingRepository {
       }
     }
 
-    // vid/pid guardado no coincide con lo conectado: probar la primera.
+    // El identificador guardado no coincide con nada conectado.
     final devices = await AndroidUsbRawPrinter.listDevices();
-    final d = devices.isEmpty ? null : devices.first;
-    final vid = int.tryParse(d?['vendorId']?.toString() ?? '');
-    final pid = int.tryParse(d?['productId']?.toString() ?? '');
+    if (devices.isEmpty) {
+      throw Exception(
+        'No se encontró la impresora USB "$printerName". '
+        'Verifica el cable OTG y que la impresora esté encendida.',
+      );
+    }
+    if (devices.length > 1) {
+      throw Exception(
+        'La impresora USB "$printerName" no está en el puerto donde se '
+        'configuró y hay ${devices.length} impresoras USB conectadas. '
+        'Reasígnala desde Ajustes → Impresoras para no imprimir en la que '
+        'no es.',
+      );
+    }
+
+    final d = devices.first;
+    final vid = int.tryParse(d['vendorId']?.toString() ?? '');
+    final pid = int.tryParse(d['productId']?.toString() ?? '');
     if (vid == null || pid == null) {
       throw Exception(
         'No se encontró la impresora USB "$printerName". '
@@ -2241,7 +2272,12 @@ class PrintingRepository {
       );
     }
     try {
-      await AndroidUsbRawPrinter.write(vendorId: vid, productId: pid, data: bytes);
+      await AndroidUsbRawPrinter.write(
+        vendorId: vid,
+        productId: pid,
+        deviceName: d['deviceName']?.toString(),
+        data: bytes,
+      );
     } on PlatformException catch (e) {
       throw Exception(_humanizeUsbError(printerName, e));
     }
@@ -2282,21 +2318,38 @@ class PrintingRepository {
     }
 
     // 2) Fallback: si el vid/pid guardado ya no coincide (reconexión con
-    //    otro deviceId), tomamos la primera impresora USB presente. Esto
-    //    cubre el caso de una sola impresora conectada por OTG.
+    //    otro deviceId), tomamos la ÚNICA impresora USB presente. Con dos o
+    //    más conectadas no se aplica: este camino legado no sabe direccionar
+    //    un dispositivo concreto (connect() solo acepta vid/pid), así que
+    //    elegir "la primera" imprimiría en la equivocada.
     if (!connected) {
+      List<Map<String, dynamic>> devices = const [];
       try {
-        final devices = await FlutterUsbPrinter.getUSBDeviceList();
-        if (devices.isNotEmpty) {
+        devices = await FlutterUsbPrinter.getUSBDeviceList();
+      } catch (e) {
+        debugPrint('[USB-Android] fallback getUSBDeviceList: $e');
+      }
+
+      if (devices.length > 1) {
+        throw Exception(
+          'La impresora USB "$printerName" no está en el puerto donde se '
+          'configuró y hay ${devices.length} impresoras USB conectadas. '
+          'Reasígnala desde Ajustes → Impresoras para no imprimir en la '
+          'que no es.',
+        );
+      }
+
+      if (devices.length == 1) {
+        try {
           final d = devices.first;
           final vid = int.tryParse(d['vendorId']?.toString() ?? '');
           final pid = int.tryParse(d['productId']?.toString() ?? '');
           if (vid != null && pid != null) {
             connected = await usb.connect(vid, pid) ?? false;
           }
+        } catch (e) {
+          debugPrint('[USB-Android] fallback connect: $e');
         }
-      } catch (e) {
-        debugPrint('[USB-Android] fallback getUSBDeviceList/connect: $e');
       }
     }
 
@@ -2328,35 +2381,13 @@ class PrintingRepository {
     }
   }
 
-  /// Parsea `vendorId:productId` desde una cadena guardada. Soporta:
-  ///   - `"4611:8215"`         (decimal — formato del scan Android)
-  ///   - `"usb://1a2b:3c4d"`   (hex con prefijo — formato desktop)
-  ///   - `"usb://1a2b:3c4d/serie"` (con serie al final)
-  /// Devuelve `(vendorId, productId)` en enteros o `null` si no es parseable.
-  (int, int)? _parseUsbVidPid(String? raw) {
-    final s = raw?.trim();
-    if (s == null || s.isEmpty) return null;
-
-    // Quitar prefijo usb:// y cualquier segmento tras el primer '/'.
-    var body = s;
-    if (body.contains('://')) body = body.split('://').last;
-    if (body.contains('/')) body = body.split('/').first;
-
-    final parts = body.split(':');
-    if (parts.length < 2) return null;
-
-    // Android guarda decimal; desktop guarda hex. Intentamos decimal y si el
-    // token trae dígitos hex (a-f) caemos a base 16.
-    int? parseId(String t) {
-      final tk = t.trim();
-      if (tk.isEmpty) return null;
-      return int.tryParse(tk) ?? int.tryParse(tk, radix: 16);
-    }
-
-    final vid = parseId(parts[0]);
-    final pid = parseId(parts[1]);
-    if (vid == null || pid == null) return null;
-    return (vid, pid);
+  /// Identidad completa de una impresora USB guardada (vid, pid, dispositivo
+  /// concreto). Delega en [UsbPrinterIdentity], compartido con el agente
+  /// movil para que ambos lean exactamente el mismo formato.
+  (int, int, String?, String?)? _parseUsbIdentity(String? raw) {
+    final id = UsbPrinterIdentity.parse(raw);
+    if (id == null) return null;
+    return (id.vendorId, id.productId, id.deviceName, id.serialNumber);
   }
 
   Future<List<Map<String, dynamic>>> discoverLocalUsbPrinters() async {

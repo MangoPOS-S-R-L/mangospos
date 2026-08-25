@@ -69,6 +69,8 @@ class UsbRawPrinterPlugin(private val context: Context) {
                 "write" -> write(
                     call.argument<Int>("vendorId"),
                     call.argument<Int>("productId"),
+                    call.argument<String>("deviceName"),
+                    call.argument<String>("serialNumber"),
                     call.argument<ByteArray>("data"),
                     result,
                 )
@@ -80,7 +82,10 @@ class UsbRawPrinterPlugin(private val context: Context) {
     private fun listDevices(result: MethodChannel.Result) {
         io.execute {
             try {
-                val devices = usbManager?.deviceList?.values.orEmpty()
+                val manager = usbManager
+                val devices = if (manager == null) {
+                    emptyList()
+                } else manager.deviceList.values
                     .filter { findBulkOut(it) != null }
                     .map { d ->
                         mapOf(
@@ -88,7 +93,16 @@ class UsbRawPrinterPlugin(private val context: Context) {
                             "productId" to d.productId,
                             "manufacturer" to d.manufacturerName,
                             "productName" to d.productName,
+                            // Identidad del dispositivo CONCRETO: sin esto dos
+                            // térmicas del mismo modelo (mismo vid:pid) son
+                            // indistinguibles. `deviceName` es la ruta del bus
+                            // (/dev/bus/usb/001/003) — única mientras no se
+                            // recablee; `serialNumber` es estable entre
+                            // reconexiones pero muchas térmicas no lo exponen
+                            // (y en API 29+ requiere permiso concedido).
                             "deviceName" to d.deviceName,
+                            "deviceId" to d.deviceId,
+                            "serialNumber" to readSerial(manager, d),
                         )
                     }
                 main.post { result.success(devices) }
@@ -101,6 +115,8 @@ class UsbRawPrinterPlugin(private val context: Context) {
     private fun write(
         vendorId: Int?,
         productId: Int?,
+        deviceName: String?,
+        serialNumber: String?,
         data: ByteArray?,
         result: MethodChannel.Result,
     ) {
@@ -110,7 +126,7 @@ class UsbRawPrinterPlugin(private val context: Context) {
         }
         io.execute {
             try {
-                writeBlocking(vendorId, productId, data)
+                writeBlocking(vendorId, productId, deviceName, serialNumber, data)
                 main.post { result.success(true) }
             } catch (e: UsbPrintException) {
                 main.post { result.error(e.code, e.message, null) }
@@ -123,16 +139,17 @@ class UsbRawPrinterPlugin(private val context: Context) {
     private class UsbPrintException(val code: String, message: String) :
         Exception(message)
 
-    private fun writeBlocking(vendorId: Int, productId: Int, data: ByteArray) {
+    private fun writeBlocking(
+        vendorId: Int,
+        productId: Int,
+        deviceName: String?,
+        serialNumber: String?,
+        data: ByteArray,
+    ) {
         val manager = usbManager
             ?: throw UsbPrintException("usb_unavailable", "USB no disponible en este equipo")
 
-        val device = manager.deviceList.values
-            .firstOrNull { it.vendorId == vendorId && it.productId == productId }
-            ?: throw UsbPrintException(
-                "usb_device_not_found",
-                "Impresora USB $vendorId:$productId no conectada",
-            )
+        val device = selectDevice(manager, vendorId, productId, deviceName, serialNumber)
 
         ensurePermission(manager, device)
 
@@ -185,6 +202,74 @@ class UsbRawPrinterPlugin(private val context: Context) {
             }
         } finally {
             connection.close()
+        }
+    }
+
+    /**
+     * Elige el dispositivo físico al que va el ticket.
+     *
+     * Con una sola térmica por OTG bastaba `vid:pid`, pero dos impresoras del
+     * mismo modelo comparten esos números: había que poder direccionar el
+     * dispositivo CONCRETO. El orden de preferencia es:
+     *
+     *   1. `deviceName` exacto — el puerto del bus donde se configuró.
+     *   2. `serialNumber` — sobrevive a un cambio de puerto, cuando la
+     *      impresora lo expone y tenemos permiso para leerlo.
+     *   3. `vid:pid`, y solo si es INEQUÍVOCO (un único candidato). Con dos
+     *      iguales conectadas se lanza `usb_ambiguous_device` en vez de
+     *      imprimir en cualquiera: mejor un error claro que un ticket de
+     *      cocina saliendo en la caja.
+     */
+    private fun selectDevice(
+        manager: UsbManager,
+        vendorId: Int,
+        productId: Int,
+        deviceName: String?,
+        serialNumber: String?,
+    ): UsbDevice {
+        val all = manager.deviceList.values.filter { findBulkOut(it) != null }
+
+        if (!deviceName.isNullOrBlank()) {
+            all.firstOrNull { it.deviceName == deviceName }?.let { return it }
+        }
+        if (!serialNumber.isNullOrBlank()) {
+            all.firstOrNull { readSerial(manager, it) == serialNumber }?.let { return it }
+        }
+
+        val candidates = all.filter {
+            it.vendorId == vendorId && it.productId == productId
+        }
+        return when {
+            candidates.size == 1 -> candidates.first()
+            candidates.isEmpty() -> throw UsbPrintException(
+                "usb_device_not_found",
+                "Impresora USB $vendorId:$productId no conectada",
+            )
+            else -> throw UsbPrintException(
+                "usb_ambiguous_device",
+                "Hay ${candidates.size} impresoras USB iguales conectadas y la " +
+                    "configurada ya no está en su puerto original. Vuelve a " +
+                    "agregarla desde Ajustes → Impresoras para fijar cuál es.",
+            )
+        }
+    }
+
+    /**
+     * Serial del dispositivo, o `null` si no lo expone. Desde API 29 leerlo
+     * exige permiso concedido: sin él `getSerialNumber()` lanza
+     * SecurityException, así que se consulta solo cuando ya lo tenemos.
+     */
+    private fun readSerial(manager: UsbManager, device: UsbDevice): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                !manager.hasPermission(device)
+            ) {
+                null
+            } else {
+                device.serialNumber?.takeIf { it.isNotBlank() }
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 

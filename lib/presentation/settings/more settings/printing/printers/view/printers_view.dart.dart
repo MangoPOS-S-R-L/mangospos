@@ -9,6 +9,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/diagnostics/bluetooth_diagnostics_screen.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
@@ -1303,6 +1304,26 @@ class _PrinterFoundCard extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// Con dos térmicas del mismo modelo, las dos filas se veían idénticas
+  /// ("Conexion USB (Local)") y no había forma de saber cuál se estaba
+  /// eligiendo. Mostramos el puerto del bus o la serie, que es justo lo que
+  /// las distingue.
+  static String _usbSubtitle(Map<String, dynamic> printer) {
+    final identity = UsbPrinterIdentity.parse(
+      printer['devicePath']?.toString() ?? printer['mac']?.toString(),
+    );
+    if (identity == null) return 'Conexion USB (Local)';
+    final serial = identity.serialNumber;
+    if (serial != null && serial.isNotEmpty) {
+      return 'USB · Serie $serial';
+    }
+    final device = identity.deviceName;
+    if (device != null && device.isNotEmpty) {
+      return 'USB · Puerto ${device.split('/').last}';
+    }
+    return 'USB · ${identity.vendorId}:${identity.productId}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final ip = printer['ip'] as String? ?? '—';
@@ -1346,11 +1367,13 @@ class _PrinterFoundCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    isUsb ? 'Conexion USB (Local)' : 'MAC: $mac',
+                    isUsb ? _usbSubtitle(printer) : 'MAC: $mac',
                     style: const TextStyle(
                       fontSize: 12,
                       color: MangoColors.muted,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
