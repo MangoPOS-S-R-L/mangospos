@@ -46,6 +46,12 @@ class AppRoutes {
   static const settingsPlan = '$settings/plan';
   static const purchasesList = '$settings/purchases';
   static const purchasesRegister = '$settings/purchases/register';
+  /// Detalle de UNA factura de compra. `:orderId` es el uuid de la orden.
+  /// Cuelga de `purchasesList`, así hereda su permiso (`compras.acceso`):
+  /// consultar una factura es lo mismo que consultar el listado.
+  static const purchasesOrderDetail = '$purchasesList/order/:orderId';
+  static String purchasesOrderDetailPath(String orderId) =>
+      '$purchasesList/order/$orderId';
   static const promosCenter = '$settings/promos';
   static const settingsUsers = '$settings/users';
   static const settingsWaiters = '$settings/waiters';

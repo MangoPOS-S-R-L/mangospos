@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import '../models/payment_models.dart';
 import '../utils/payment_amount_utils.dart';
@@ -59,26 +60,47 @@ class CashierRepository {
     return data.map((json) => PaymentMethod.fromMap(json)).toList();
   }
 
-  Future<CashRegisterSession> requireActiveSession() async {
+  /// Sesión de caja con la que se debe registrar un cobro.
+  ///
+  /// El modelo del POS es "una caja abierta por REGISTRADORA, visible para
+  /// todos los empleados del local" (ver `cashier_viewmodel`: la pantalla de
+  /// Caja usa `getActiveSessionForRegister`, sin filtro de usuario). Filtrar
+  /// aquí solo por `user_id` rompía ese modelo: si la caja la abrió otro
+  /// usuario (cambio de turno, cajero que abrió y admin que cobra), la
+  /// pantalla decía "Caja Abierta" y el modal de cobro respondía "No hay
+  /// sesión de caja abierta".
+  ///
+  /// Orden de resolución: sesión propia primero (si tienes la tuya, cobras
+  /// contra la tuya); si no hay, la caja abierta desde ESTE equipo; y si
+  /// tampoco, la caja abierta del negocio. El arqueo no depende del dueño de
+  /// la sesión: `cash_transactions` se agrupan por `session_id`.
+  Future<CashRegisterSession> requireActiveSession({String? businessId}) async {
     final userId = _client.auth.currentUser?.id;
-    if (userId == null) {
-      throw Exception(
-        'No hay sesión de caja abierta. Por favor, abre una sesión antes de procesar pagos.',
-      );
+
+    Map<String, dynamic>? data;
+
+    if (userId != null) {
+      // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
+      // bug previo de cierre), tomamos la más reciente en lugar de crashear
+      // con PostgrestException 406. Idem en las otras getActive* abajo.
+      data = await _client
+          .from('cash_register_sessions')
+          .select()
+          .eq('user_id', userId)
+          .eq('status', 'open')
+          .isFilter('closed_at', null)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
     }
 
-    // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
-    // bug previo de cierre), tomamos la más reciente en lugar de crashear
-    // con PostgrestException 406. Idem en las otras getActive* abajo.
-    final data = await _client
-        .from('cash_register_sessions')
-        .select()
-        .eq('user_id', userId)
-        .eq('status', 'open')
-        .isFilter('closed_at', null)
-        .order('created_at', ascending: false)
-        .limit(1)
-        .maybeSingle();
+    if (data == null && businessId != null && businessId.isNotEmpty) {
+      final session = await getActiveSessionForBusiness(
+        businessId,
+        deviceId: await DeviceUtils.getDeviceId(),
+      );
+      if (session != null) return session;
+    }
 
     if (data == null) {
       throw Exception(
@@ -86,6 +108,52 @@ class CashierRepository {
       );
     }
 
+    return CashRegisterSession.fromMap(data);
+  }
+
+  /// Sesión abierta de una registradora del negocio, sin filtrar por usuario.
+  /// Es la misma vista que muestra la pantalla de Caja.
+  ///
+  /// Con `deviceId` prioriza la caja abierta DESDE ESTE equipo: en un negocio
+  /// con dos registradoras, "la más reciente del negocio" podría ser la de la
+  /// otra caja y el cobro quedaría atribuido al turno equivocado. Si este
+  /// equipo no abrió ninguna, cae a la del negocio (el caso normal: un solo
+  /// 'Caja principal').
+  Future<CashRegisterSession?> getActiveSessionForBusiness(
+    String businessId, {
+    String? deviceId,
+  }) async {
+    if (deviceId != null && deviceId.isNotEmpty) {
+      try {
+        final byDevice = await _client
+            .from('cash_register_sessions')
+            .select('*, cash_registers!inner(business_id)')
+            .eq('cash_registers.business_id', businessId)
+            .eq('device_id', deviceId)
+            .eq('status', 'open')
+            .isFilter('closed_at', null)
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+        if (byDevice != null) return CashRegisterSession.fromMap(byDevice);
+      } catch (_) {
+        // `device_id` lo agrega la migración 20260401_0002. Si una BD no la
+        // tiene, seguimos con la búsqueda por negocio en vez de tumbar el
+        // cobro.
+      }
+    }
+
+    final data = await _client
+        .from('cash_register_sessions')
+        .select('*, cash_registers!inner(business_id)')
+        .eq('cash_registers.business_id', businessId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    if (data == null) return null;
     return CashRegisterSession.fromMap(data);
   }
 

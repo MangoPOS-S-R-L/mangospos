@@ -132,6 +132,13 @@ class BusinessFeatures {
   final InventoryMode inventoryMode;
   final bool multimeseroEnabled;
   final bool transfersRequireApproval;
+
+  /// Recepción de mercancía obligatoria: registrar una compra NO mueve stock;
+  /// la mercancía entra cuando el almacén la recibe y emite su conduce.
+  /// Default false = comportamiento histórico (la compra "Recibida" postea
+  /// el stock de una vez).
+  final bool requireGoodsReceipt;
+
   final bool kitchenBannerDineIn;
   final bool kitchenBannerTakeout;
 
@@ -164,6 +171,7 @@ class BusinessFeatures {
     this.inventoryMode = InventoryMode.none,
     this.multimeseroEnabled = false,
     this.transfersRequireApproval = false,
+    this.requireGoodsReceipt = false,
     this.kitchenBannerDineIn = true,
     this.kitchenBannerTakeout = true,
     this.deliveryAddressEnabled = false,
@@ -193,6 +201,7 @@ class BusinessFeatures {
       inventoryMode: _inventoryModeFromWire(map['inventory_mode']?.toString()),
       multimeseroEnabled: map['multimesero_enabled'] == true,
       transfersRequireApproval: map['transfers_require_approval'] == true,
+      requireGoodsReceipt: map['require_goods_receipt'] == true,
       // Default `true` cuando la columna no viene en el SELECT o vale
       // NULL: preserva el comportamiento histórico (ambas franjas).
       kitchenBannerDineIn: map['kitchen_banner_dine_in'] != false,
@@ -237,6 +246,7 @@ class BusinessFeatures {
     InventoryMode? inventoryMode,
     bool? multimeseroEnabled,
     bool? transfersRequireApproval,
+    bool? requireGoodsReceipt,
     bool? kitchenBannerDineIn,
     bool? kitchenBannerTakeout,
     bool? deliveryAddressEnabled,
@@ -262,6 +272,7 @@ class BusinessFeatures {
       multimeseroEnabled: multimeseroEnabled ?? this.multimeseroEnabled,
       transfersRequireApproval:
           transfersRequireApproval ?? this.transfersRequireApproval,
+      requireGoodsReceipt: requireGoodsReceipt ?? this.requireGoodsReceipt,
       kitchenBannerDineIn: kitchenBannerDineIn ?? this.kitchenBannerDineIn,
       kitchenBannerTakeout: kitchenBannerTakeout ?? this.kitchenBannerTakeout,
       deliveryAddressEnabled:
@@ -1070,7 +1081,7 @@ class PosSettingsRepository {
     required String businessId,
     required BusinessFeatures features,
   }) async {
-    await _client.from('business_settings').upsert({
+    final payload = <String, dynamic>{
       'business_id': businessId,
       'sales_mode_table_enabled': features.salesModeTableEnabled,
       'sales_mode_manual_enabled': features.salesModeManualEnabled,
@@ -1090,7 +1101,25 @@ class PosSettingsRepository {
       'delivery_fee_required': features.deliveryFeeRequired,
       'delivery_fee_min': features.deliveryFeeMin,
       'delivery_fee_presets': features.deliveryFeePresets,
-    }, onConflict: 'business_id');
+      'require_goods_receipt': features.requireGoodsReceipt,
+    };
+
+    try {
+      await _client
+          .from('business_settings')
+          .upsert(payload, onConflict: 'business_id');
+    } on PostgrestException catch (e) {
+      // `require_goods_receipt` llega con la migración 20260828_0001. En un
+      // servidor que no la aplicó, mandarla tumbaría el guardado de TODAS
+      // las banderas: se reintenta sin ella. Perder una opción que ese
+      // servidor no puede honrar es aceptable; perder el resto no.
+      final missingColumn = e.code == '42703' || e.code == 'PGRST204';
+      if (!missingColumn) rethrow;
+      payload.remove('require_goods_receipt');
+      await _client
+          .from('business_settings')
+          .upsert(payload, onConflict: 'business_id');
+    }
   }
 }
 

@@ -24,6 +24,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
+import '../billing/widgets/access_guard.dart';
 import '../billing/widgets/billing_guard.dart';
 import '../onboarding/pending_approval_guard.dart';
 import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
@@ -79,15 +80,22 @@ class _MainShellState extends ConsumerState<MainShell> {
     // Wrap del child con dos guards en orden de prioridad:
     //   1. PendingApprovalGuard: si la cuenta está pendiente de aprobación
     //      (status='pending'), bloquea con pantalla "en revisión".
-    //   2. BillingGuard: si la cuenta está suspendida o en trial sin tarjeta
-    //      verificada, el guard sustituye el contenido por un overlay
-    //      bloqueante.
+    //   2. AccessGuard: bloqueo por falta de pago (migración 20260825_0001).
+    //      Escalonado: banner de aviso → banner de gracia con regresiva →
+    //      pantalla completa de bloqueo. Nace apagado por kill switch en la
+    //      BD (platform_access_policy.enforcement_enabled), así que hasta que
+    //      el operador lo encienda es un no-op.
+    //   3. BillingGuard: overlay de onboarding "trial sin tarjeta". Sigue
+    //      apagado (_kEnabled=false); el camino de suspensión ahora lo maneja
+    //      AccessGuard.
     // Pending tiene prioridad sobre billing — si la cuenta ni siquiera
     // está aprobada, no tiene sentido empujarle el flujo de tarjeta.
     // Rutas exentas (registro, onboarding, login, billing) las maneja
     // cada guard internamente.
     final child = PendingApprovalGuard(
-      child: BillingGuard(child: widget.navigationShell),
+      child: AccessGuard(
+        child: BillingGuard(child: widget.navigationShell),
+      ),
     );
 
     // Escuchamos el resultado del último sync para notificar al cajero

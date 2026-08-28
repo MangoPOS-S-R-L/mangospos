@@ -68,6 +68,13 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   // mercancía ya llegó, así que el registro debe sumar el stock de una vez.
   // El usuario puede bajarlo a Borrador/Enviada para órdenes que aún no llegan.
   String _status = 'received';
+
+  /// El negocio exige recepción en almacén (`business_settings
+  /// .require_goods_receipt`). Con esto en true, registrar una compra NO
+  /// mueve stock: la mercancía entra cuando el almacén la recibe y emite su
+  /// conduce. Se descarta la opción "Recibida" del selector y el default
+  /// baja a "Enviada".
+  bool _requireGoodsReceipt = false;
   DateTime _expectedDate = DateTime.now().add(const Duration(days: 3));
 
   // Condición de pago: al contado (default) o a crédito. Contado es el valor
@@ -159,9 +166,17 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         _warehouseId = state.warehouses.first.id;
       }
       final nextNumber = await vm.generateNextOrderNumber();
+      // Se lee DESPUÉS de init(): la bandera vive en business_settings y
+      // necesita el negocio activo ya resuelto.
+      final requireReceipt = await vm.requiresGoodsReceipt();
       if (!mounted) return;
       setState(() {
         _orderNumberCtrl.text = nextNumber;
+        _requireGoodsReceipt = requireReceipt;
+        if (requireReceipt && _status == 'received') {
+          // La orden nace pendiente: el stock lo mete la recepción.
+          _status = 'sent';
+        }
       });
       _syncCreditTermsWithSupplier();
     });
@@ -393,11 +408,31 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             Expanded(
               child: DropdownButtonFormField<String>(
                 initialValue: _status,
-                decoration: const InputDecoration(labelText: 'Estado'),
-                items: const [
-                  DropdownMenuItem(value: 'draft', child: Text('Borrador')),
-                  DropdownMenuItem(value: 'sent', child: Text('Enviada')),
-                  DropdownMenuItem(value: 'received', child: Text('Recibida')),
+                decoration: InputDecoration(
+                  labelText: 'Estado',
+                  helperText: _requireGoodsReceipt
+                      ? 'El stock entra al recibir en almacén'
+                      : null,
+                  helperMaxLines: 2,
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'draft',
+                    child: Text('Borrador'),
+                  ),
+                  const DropdownMenuItem(
+                    value: 'sent',
+                    child: Text('Enviada'),
+                  ),
+                  // Con recepción obligatoria la opción no se ofrece: no es
+                  // que se ignore al elegirla, es que no existe. Un selector
+                  // que promete algo que el negocio prohíbe es peor que uno
+                  // corto.
+                  if (!_requireGoodsReceipt)
+                    const DropdownMenuItem(
+                      value: 'received',
+                      child: Text('Recibida'),
+                    ),
                 ],
                 onChanged: (value) {
                   if (value == null) return;
@@ -1875,7 +1910,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             invoiceNumber: invoiceNumber,
             ncf: ncf.isEmpty ? null : ncf,
             items: items,
-            updateItemCost: true,
+            // El costo maestro del insumo NO se actualiza al guardar: solo
+            // cuando la mercancía entra (el trigger de inventario recostea al
+            // postear el movimiento de compra). Una orden en Borrador o
+            // cancelada ya no deja el costo movido.
             discount: orderDiscount,
           );
     } catch (_) {

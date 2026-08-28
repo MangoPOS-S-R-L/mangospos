@@ -6,9 +6,10 @@ import 'package:intl/intl.dart';
 import '../../../app/router/routes.dart';
 import '../../../services/session/session_controller.dart';
 import '../state/purchases_state.dart';
+import '../utils/purchase_status.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
-import 'purchase_receive_dialog.dart';
+import 'goods_receipt_dialog.dart';
 import '../../../core/theme/app_colors.dart';
 
 class PurchasesListView extends ConsumerStatefulWidget {
@@ -60,32 +61,50 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Compras',
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF0F172A),
-                            ),
-                          ),
-                          SizedBox(height: 6),
-                          Text(
-                            'Proveedores y órdenes de compra del negocio',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF64748B),
-                            ),
-                          ),
-                        ],
+                      // Compras se abre desde Más Opciones con `context.go`,
+                      // que REEMPLAZA el stack: sin este botón (y su fallback
+                      // a Ajustes) la pantalla no tiene salida hacia atrás.
+                      IconButton(
+                        onPressed: () {
+                          if (context.canPop()) {
+                            context.pop();
+                          } else {
+                            context.go(AppRoutes.settings);
+                          }
+                        },
+                        icon: const Icon(Icons.arrow_back),
+                        tooltip: 'Volver a Ajustes',
                       ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Compras',
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0F172A),
+                              ),
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Proveedores y órdenes de compra del negocio',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Color(0xFF64748B),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
                       Wrap(
                         spacing: 12,
                         runSpacing: 12,
+                        alignment: WrapAlignment.end,
                         children: [
                           if (canEditSuppliers)
                             OutlinedButton.icon(
@@ -237,88 +256,146 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                                 const Divider(height: 1),
                             itemBuilder: (context, index) {
                               final order = state.orders[index];
-                              return ListTile(
-                                isThreeLine: true,
-                                title: Row(
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        '${order.orderNumber} · ${order.supplierName}',
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                              // Fila propia en vez de ListTile: la orden tiene
+                              // que ser tocable (abre su factura) y además
+                              // llevar el botón de recibir; el `trailing` de
+                              // un ListTile no da alto para las dos cosas.
+                              return Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  // La factura completa —productos, costos,
+                                  // ITBIS y descuentos— vive en su propia
+                                  // pantalla: el listado solo trae el total.
+                                  onTap: () => context.go(
+                                    AppRoutes.purchasesOrderDetailPath(order.id),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      12,
+                                      16,
+                                      12,
                                     ),
-                                    // §6.4 — La compra se guardó a crédito
-                                    // pero la deuda no nació. Un estado
-                                    // partido solo se descubre cuando el
-                                    // proveedor viene a cobrar: aquí se ve.
-                                    if (order.payablePending) ...[
-                                      const SizedBox(width: 8),
-                                      const _PendingPayableChip(),
-                                    ],
-                                  ],
-                                ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '${order.warehouseName} · ${_statusLabel(order.status)}'
-                                      '${order.expectedDate == null ? '' : ' · Esperada ${dateFormat.format(order.expectedDate!)}'}',
-                                    ),
-                                    // Factura y NCF en su propio renglón: son
-                                    // identificadores distintos y ambos hacen
-                                    // falta para conciliar contra el papel.
-                                    Text(
-                                      [
-                                        if (order.invoiceNumber.isNotEmpty)
-                                          'Factura ${order.invoiceNumber}',
-                                        if (order.ncf.isNotEmpty)
-                                          'NCF ${order.ncf}',
-                                        if (order.invoiceNumber.isEmpty &&
-                                            order.ncf.isEmpty)
-                                          'Sin factura registrada',
-                                      ].join(' · '),
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: Color(0xFF94A3B8),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                trailing: SizedBox(
-                                  width: 160,
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Text(
-                                        currency.format(order.total),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        dateFormat.format(order.createdAt),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF64748B),
-                                        ),
-                                      ),
-                                      if (canReceive &&
-                                          _canReceiveOrder(order.status)) ...[
-                                        const SizedBox(height: 8),
-                                        OutlinedButton(
-                                          onPressed: state.saving
-                                              ? null
-                                              : () => _openReceiveDialog(order),
-                                          child: Text(
-                                            order.status == 'partial'
-                                                ? 'Recibir resto'
-                                                : 'Recibir',
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Flexible(
+                                                    child: Text(
+                                                      '${order.orderNumber} · ${order.supplierName}',
+                                                      overflow: TextOverflow
+                                                          .ellipsis,
+                                                      style: const TextStyle(
+                                                        fontSize: 15,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  // §6.4 — La compra se guardó
+                                                  // a crédito pero la deuda no
+                                                  // nació. Un estado partido
+                                                  // solo se descubre cuando el
+                                                  // proveedor viene a cobrar:
+                                                  // aquí se ve.
+                                                  if (order.payablePending) ...[
+                                                    const SizedBox(width: 8),
+                                                    const _PendingPayableChip(),
+                                                  ],
+                                                ],
+                                              ),
+                                              const SizedBox(height: 3),
+                                              Text(
+                                                '${order.warehouseName} · ${purchaseStatusLabel(order.status)}'
+                                                '${order.expectedDate == null ? '' : ' · Esperada ${dateFormat.format(order.expectedDate!)}'}',
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: Color(0xFF475569),
+                                                ),
+                                              ),
+                                              // Factura y NCF en su propio
+                                              // renglón: son identificadores
+                                              // distintos y ambos hacen falta
+                                              // para conciliar contra el papel.
+                                              Text(
+                                                [
+                                                  if (order
+                                                      .invoiceNumber
+                                                      .isNotEmpty)
+                                                    'Factura ${order.invoiceNumber}',
+                                                  if (order.ncf.isNotEmpty)
+                                                    'NCF ${order.ncf}',
+                                                  if (order
+                                                          .invoiceNumber
+                                                          .isEmpty &&
+                                                      order.ncf.isEmpty)
+                                                    'Sin factura registrada',
+                                                ].join(' · '),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Color(0xFF94A3B8),
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
+                                        const SizedBox(width: 12),
+                                        Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              currency.format(order.total),
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              dateFormat.format(
+                                                order.createdAt,
+                                              ),
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Color(0xFF64748B),
+                                              ),
+                                            ),
+                                            if (canReceive &&
+                                                _canReceiveOrder(
+                                                  order.status,
+                                                )) ...[
+                                              const SizedBox(height: 8),
+                                              OutlinedButton(
+                                                onPressed: state.saving
+                                                    ? null
+                                                    : () => _openReceiveDialog(
+                                                        order,
+                                                      ),
+                                                child: Text(
+                                                  order.status == 'partial'
+                                                      ? 'Recibir resto'
+                                                      : 'Recibir',
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                        // Afordancia de "esto se abre": la
+                                        // fila lleva a la factura completa.
+                                        const Icon(
+                                          Icons.chevron_right,
+                                          size: 20,
+                                          color: Color(0xFF94A3B8),
+                                        ),
                                       ],
-                                    ],
+                                    ),
                                   ),
                                 ),
                               );
@@ -431,33 +508,14 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
     await showCreateSupplierDialog(context, ref);
   }
 
-  String _statusLabel(String status) {
-    switch (status) {
-      case 'draft':
-        return 'Borrador';
-      case 'sent':
-        return 'Enviada';
-      case 'partial':
-        return 'Parcial';
-      case 'received':
-        return 'Recibida';
-      case 'cancelled':
-        return 'Cancelada';
-      default:
-        return status;
-    }
-  }
-
   bool _canReceiveOrder(String status) {
     return status != 'received' && status != 'cancelled';
   }
 
   Future<void> _openReceiveDialog(PurchaseOrderSummary order) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => PurchaseReceiveDialog(order: order),
-    );
+    // Recibir → emitir conduce → imprimirlo. El flujo completo vive en
+    // showPurchaseReceiveFlow para que el listado y el detalle hagan lo mismo.
+    await showPurchaseReceiveFlow(context, ref, order);
   }
 }
 

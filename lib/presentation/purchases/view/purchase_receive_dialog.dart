@@ -1,18 +1,28 @@
-// Sprint 3 Inventario — Diálogo de recepción parcial de Órdenes de Compra.
+// Diálogo de recepción de mercancía en almacén.
 //
-// Reemplaza el viejo confirm dialog ("¿recibir orden?"). Permite recibir
-// cantidades parciales por línea, con shortcuts para "todo lo pendiente"
-// y validación de que la cantidad no exceda el saldo pendiente.
+// Permite recibir cantidades parciales por línea, con shortcuts para "todo lo
+// pendiente" y validación de que la cantidad no exceda el saldo pendiente.
+//
+// Al confirmar emite el CONDUCE: un documento numerado con lo que entró de
+// cada producto (migración 20260828_0001). El diálogo devuelve el
+// [GoodsReceipt] para que quien lo abrió lo imprima; si el servidor todavía
+// no tiene la migración, cae a la recepción sin documento —que mueve el stock
+// igual— y lo dice, en vez de dejar al almacén sin poder recibir.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/inventory/pack_conversion.dart';
+import '../../../data/repositories/purchases_repository.dart';
+import '../state/goods_receipt.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 
+/// Devuelve el [GoodsReceipt] emitido, o `null` si se canceló (o si el
+/// servidor no tiene la migración del conduce y se recibió por la ruta vieja).
 class PurchaseReceiveDialog extends ConsumerStatefulWidget {
   final PurchaseOrderSummary order;
   const PurchaseReceiveDialog({super.key, required this.order});
@@ -31,6 +41,13 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
   final TextEditingController _notesController = TextEditingController();
   bool _submitting = false;
   String? _submitError;
+
+  /// Clave de idempotencia del envío en curso. Se genera al enviar y se
+  /// CONSERVA mientras el usuario no cambie nada: si la respuesta se pierde
+  /// por red, reintentar devuelve la misma recepción en vez de meter la
+  /// mercancía dos veces. Cualquier edición la descarta — un payload distinto
+  /// es una recepción distinta y reusar la clave devolvería la vieja.
+  String? _pendingKey;
 
   @override
   void initState() {
@@ -69,6 +86,7 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
 
   void _fillAllPending() {
     setState(() {
+      _pendingKey = null;
       for (final line in _lines) {
         if (line.pending > 0) {
           _drafts[line.id] = _PartialDraft(quantity: line.pending);
@@ -78,17 +96,22 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
   }
 
   void _clearAll() {
-    setState(() => _drafts.clear());
+    setState(() {
+      _pendingKey = null;
+      _drafts.clear();
+    });
   }
 
   bool get _hasAnyQuantity => _drafts.values.any((d) => d.quantity > 0);
 
   Future<void> _submit() async {
     final lineItems = <Map<String, dynamic>>[];
+    final receiptLines = <Map<String, dynamic>>[];
+    var pendingAfter = 0.0;
+
     for (final line in _lines) {
       final draft = _drafts[line.id];
       final qty = draft?.quantity ?? 0;
-      if (qty <= 0) continue;
       if (qty > line.pending) {
         setState(
           () => _submitError =
@@ -96,6 +119,9 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
         );
         return;
       }
+      pendingAfter += line.pending - qty;
+      if (qty <= 0) continue;
+
       lineItems.add({
         'poi_id': line.id,
         'quantity': qty,
@@ -109,36 +135,85 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
               .split('T')
               .first,
       });
+      // La v2 exige el costo con el que entra la mercancía. Se manda el de la
+      // orden: recibir NO es el momento de cambiar precios, y así el kardex
+      // queda con el mismo costo que se aprobó al comprar.
+      receiptLines.add({
+        'poi_id': line.id,
+        'qty': qty,
+        'actual_unit_cost': line.unitCost,
+      });
     }
+
     if (lineItems.isEmpty) {
       setState(() => _submitError = 'Indica al menos una línea con cantidad > 0');
       return;
     }
 
+    final notes = _notesController.text.trim().isEmpty
+        ? null
+        : _notesController.text.trim();
+    // Queda mercancía por entrar → la recepción es parcial. El conduce lo
+    // dice en la cara para que nadie archive el papel creyendo que la compra
+    // llegó completa.
+    final closeMode = pendingAfter > 0.0001 ? 'partial' : 'complete';
+    final idempotencyKey = _pendingKey ??= const Uuid().v4();
+
     setState(() {
       _submitting = true;
       _submitError = null;
     });
+
     final navigator = Navigator.of(context);
+    final viewModel = ref.read(purchasesViewModelProvider);
+
     try {
-      final result = await ref
-          .read(purchasesViewModelProvider)
-          .receiveOrderPartial(
-            orderId: widget.order.id,
-            lineItems: lineItems,
-            notes: _notesController.text.trim().isEmpty
-                ? null
-                : _notesController.text.trim(),
-          );
+      GoodsReceipt? receipt;
+      var conduceIssued = true;
+
+      try {
+        final result = await viewModel.receiveOrderWithReceipt(
+          warehouseId: widget.order.warehouseId,
+          lines: receiptLines,
+          idempotencyKey: idempotencyKey,
+          orderId: widget.order.id,
+          supplierId: widget.order.supplierId.isEmpty
+              ? null
+              : widget.order.supplierId,
+          notes: notes,
+          closeMode: closeMode,
+        );
+        final receptionId = result['reception_id']?.toString() ?? '';
+        if (receptionId.isNotEmpty) {
+          receipt = await viewModel.loadGoodsReceipt(receptionId);
+        }
+      } on GoodsReceiptUnavailable {
+        // Servidor sin la migración del conduce: se recibe por la ruta vieja,
+        // que mueve el stock igual pero no deja documento.
+        conduceIssued = false;
+        await viewModel.receiveOrderPartial(
+          orderId: widget.order.id,
+          lineItems: lineItems,
+          notes: notes,
+        );
+      }
+
       if (!mounted) return;
-      final status = result['status']?.toString() ?? 'partial';
-      AppToast.info(
-        context,
-        status == 'received'
-            ? 'Orden recibida completamente. Inventario actualizado.'
-            : 'Recepción parcial registrada. La orden queda en estado "parcial".',
-      );
-      navigator.pop();
+      if (conduceIssued) {
+        AppToast.success(
+          context,
+          closeMode == 'complete'
+              ? 'Recepción registrada. Inventario actualizado.'
+              : 'Recepción parcial registrada. La orden queda "parcial".',
+        );
+      } else {
+        AppToast.warning(
+          context,
+          'Mercancía recibida, pero SIN conduce: falta aplicar la migración '
+          '20260828_0001 en el servidor.',
+        );
+      }
+      navigator.pop(receipt);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -161,8 +236,19 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
     if (raw.contains('PURCHASE_ORDER_CANCELLED')) {
       return 'La orden está cancelada.';
     }
-    if (raw.contains('PURCHASE_ORDER_WAREHOUSE_REQUIRED')) {
+    if (raw.contains('PURCHASE_ORDER_WAREHOUSE_REQUIRED') ||
+        raw.contains('WAREHOUSE_NOT_FOUND')) {
       return 'La orden no tiene bodega asignada. Edita la orden antes de recibir.';
+    }
+    if (raw.contains('COST_VARIANCE_UNAPPROVED')) {
+      return 'El costo recibido se aparta del de la orden más de lo permitido. '
+          'Necesitas un supervisor (owner/admin) para aprobarlo.';
+    }
+    if (raw.contains('SUPPLIER_INVALID')) {
+      return 'El proveedor de la orden no pertenece a este negocio.';
+    }
+    if (raw.contains('IDEMPOTENCY_KEY_REQUIRED')) {
+      return 'Error interno: la recepción se envió sin clave. Vuelve a intentar.';
     }
     return 'Error: $raw';
   }
@@ -245,6 +331,7 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
                           draft: _drafts[line.id],
                           onChange: (d) {
                             setState(() {
+                              _pendingKey = null;
                               if (d == null || d.quantity <= 0) {
                                 _drafts.remove(line.id);
                               } else {
