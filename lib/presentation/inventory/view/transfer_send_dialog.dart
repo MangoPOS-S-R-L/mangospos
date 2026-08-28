@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 
 import '../state/inventory_state.dart';
+import '../utils/transfer_validation.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
@@ -175,16 +176,17 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
         )
         .toList(growable: false);
 
-    // Validar que ninguna cantidad supere el stock disponible.
-    for (final i in _sourceItems) {
-      final qty = _quantities[i.id] ?? 0;
-      if (qty > i.stock) {
-        setState(
-          () => _errorMessage =
-              '${i.name}: cantidad (${qty.toStringAsFixed(2)}) supera el stock (${i.stock.toStringAsFixed(2)})',
-        );
-        return;
-      }
+    // Validar el stock SOLO de lo que se va a transferir. La regla vive en
+    // validateTransferLines para poder probarla: antes este recorrido pasaba
+    // por TODOS los ítems de la bodega y un artículo en negativo que nadie
+    // seleccionó tumbaba la transferencia completa.
+    final stockError = validateTransferLines(
+      items: _sourceItems,
+      quantities: _quantities,
+    );
+    if (stockError != null) {
+      setState(() => _errorMessage = stockError);
+      return;
     }
 
     setState(() {
@@ -670,7 +672,10 @@ class _ItemRowState extends State<_ItemRow> {
   @override
   Widget build(BuildContext context) {
     final selected = widget.quantity > 0;
-    final exceedsStock = widget.quantity > widget.item.stock;
+    // Solo se marca en rojo lo que el usuario PIDIÓ de más. Sin el `selected`
+    // toda fila con existencia negativa nacía en rojo aunque nadie la hubiera
+    // tocado, porque 0 > -5.
+    final exceedsStock = selected && widget.quantity > widget.item.stock;
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
