@@ -123,13 +123,25 @@ class PurchasesRepository {
   Future<List<PurchaseOrderSummary>> getOrders({
     required String businessId,
     String? status,
+    /// Varios estados a la vez. Lo usa la pantalla de recepción, que necesita
+    /// "todo lo que todavía se puede recibir" y eso no es un solo estado.
+    /// Tiene prioridad sobre [status] cuando viene con valores.
+    List<String>? statuses,
     int limit = 50,
     int offset = 0,
   }) async {
     // Igual que en `getSuppliers`: `ncf` llega con 20260814_0003 y su ausencia
     // no puede dejar el listado en blanco.
     Future<List<Map<String, dynamic>>> fetch(String columns) async {
-      final response = status != null && status.isNotEmpty
+      final response = statuses != null && statuses.isNotEmpty
+          ? await _client
+                .from(PurchasesQueries.tablePurchaseOrders)
+                .select(columns)
+                .eq('business_id', businessId)
+                .inFilter('status', statuses)
+                .order('created_at', ascending: false)
+                .range(offset, offset + limit - 1)
+          : status != null && status.isNotEmpty
           ? await _client
                 .from(PurchasesQueries.tablePurchaseOrders)
                 .select(columns)
@@ -827,6 +839,25 @@ class PurchasesRepository {
       receivedByName: receiverName,
       notes: header['notes']?.toString() ?? '',
       lines: lines.map(GoodsReceiptLine.fromMap).toList(growable: false),
+    );
+  }
+
+  /// Estados en los que una orden todavía admite mercancía. `received` y
+  /// `cancelled` quedan fuera: la primera ya cerró, la segunda no debería
+  /// recibir nada.
+  static const receivableStatuses = <String>['draft', 'sent', 'partial'];
+
+  /// Órdenes pendientes de recibir, para el selector de la pantalla de
+  /// recepción. Trae más que una página normal porque es una lista para
+  /// escoger, no para navegar.
+  Future<List<PurchaseOrderSummary>> getReceivableOrders(
+    String businessId, {
+    int limit = 200,
+  }) {
+    return getOrders(
+      businessId: businessId,
+      statuses: receivableStatuses,
+      limit: limit,
     );
   }
 

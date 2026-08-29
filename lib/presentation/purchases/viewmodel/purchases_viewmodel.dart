@@ -398,6 +398,21 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
+  /// Órdenes que todavía admiten mercancía, para el selector de "Recibir
+  /// orden de compra". No toca el estado del listado: la pantalla de
+  /// recepción vive fuera del módulo de compras.
+  Future<List<PurchaseOrderSummary>> loadReceivableOrders() async {
+    // El selector se abre desde Inventario, donde este viewmodel puede no
+    // haber corrido init(): el negocio se resuelve aquí en vez de devolver
+    // una lista vacía que se leería como "no hay órdenes pendientes".
+    var id = _state.businessId;
+    if (id == null || id.isEmpty) {
+      id = await resolveBusinessIdOrNull(Supabase.instance.client, 'auto');
+    }
+    if (id == null || id.isEmpty) return const [];
+    return _repository.getReceivableOrders(id);
+  }
+
   Future<GoodsReceipt> loadGoodsReceipt(String receptionId) {
     return _repository.getGoodsReceipt(receptionId);
   }

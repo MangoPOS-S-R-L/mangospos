@@ -104,6 +104,13 @@ class GoodsReceipt {
 
   final List<GoodsReceiptLine> lines;
 
+  /// El documento NO sale de una recepción registrada: se armó con lo que la
+  /// orden dice que se recibió. Pasa con las compras recibidas antes de que
+  /// existiera el conduce. Se imprime igual —el contable necesita el papel—
+  /// pero marcado, porque un documento reconstruido no puede pasar por uno
+  /// firmado el día de la entrega.
+  final bool isReconstructed;
+
   const GoodsReceipt({
     required this.id,
     required this.number,
@@ -120,7 +127,45 @@ class GoodsReceipt {
     required this.receivedByName,
     required this.notes,
     required this.lines,
+    this.isReconstructed = false,
   });
+
+  /// Conduce armado desde la ORDEN, para compras que se recibieron antes de
+  /// que el sistema emitiera documento (o por la ruta vieja, que solo movía
+  /// stock). Toma lo que cada línea tiene como recibido; sin número, porque
+  /// un correlativo se asigna al recibir y este documento no lo vivió.
+  factory GoodsReceipt.reconstructedFromOrder({
+    required String orderId,
+    required String orderNumber,
+    required String invoiceNumber,
+    required String ncf,
+    required String supplierName,
+    required String warehouseName,
+    required DateTime date,
+    required String status,
+    required List<GoodsReceiptLine> lines,
+    String supplierRnc = '',
+    String notes = '',
+  }) {
+    return GoodsReceipt(
+      id: orderId,
+      number: '',
+      date: date,
+      createdAt: date,
+      status: status,
+      orderId: orderId,
+      orderNumber: orderNumber,
+      invoiceNumber: invoiceNumber,
+      ncf: ncf,
+      supplierName: supplierName,
+      supplierRnc: supplierRnc,
+      warehouseName: warehouseName,
+      receivedByName: '',
+      notes: notes,
+      lines: lines,
+      isReconstructed: true,
+    );
+  }
 
   double get total => lines.fold<double>(0, (sum, line) => sum + line.amount);
 

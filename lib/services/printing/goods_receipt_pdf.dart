@@ -31,6 +31,7 @@ class GoodsReceiptPdf {
   static Future<Uint8List> build({
     required GoodsReceipt receipt,
     required String businessName,
+    String? businessBranch,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
@@ -47,6 +48,7 @@ class GoodsReceiptPdf {
         build: (context) => [
           _header(
             businessName: businessName,
+            businessBranch: businessBranch,
             businessAddress: businessAddress,
             businessPhone: businessPhone,
             businessRnc: businessRnc,
@@ -82,6 +84,7 @@ class GoodsReceiptPdf {
   static Future<void> printDocument({
     required GoodsReceipt receipt,
     required String businessName,
+    String? businessBranch,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
@@ -91,6 +94,7 @@ class GoodsReceiptPdf {
     final bytes = await build(
       receipt: receipt,
       businessName: businessName,
+      businessBranch: businessBranch,
       businessAddress: businessAddress,
       businessPhone: businessPhone,
       businessRnc: businessRnc,
@@ -107,6 +111,7 @@ class GoodsReceiptPdf {
   static Future<void> shareDocument({
     required GoodsReceipt receipt,
     required String businessName,
+    String? businessBranch,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
@@ -116,6 +121,7 @@ class GoodsReceiptPdf {
     final bytes = await build(
       receipt: receipt,
       businessName: businessName,
+      businessBranch: businessBranch,
       businessAddress: businessAddress,
       businessPhone: businessPhone,
       businessRnc: businessRnc,
@@ -129,11 +135,13 @@ class GoodsReceiptPdf {
 
   static pw.Widget _header({
     required String businessName,
+    String? businessBranch,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
   }) {
     final subtitle = <String>[
+      if ((businessBranch ?? '').trim().isNotEmpty) businessBranch!.trim(),
       if ((businessAddress ?? '').trim().isNotEmpty) businessAddress!.trim(),
       if ((businessPhone ?? '').trim().isNotEmpty) 'TEL. ${businessPhone!.trim()}',
       if ((businessRnc ?? '').trim().isNotEmpty) 'RNC ${businessRnc!.trim()}',
@@ -142,12 +150,13 @@ class GoodsReceiptPdf {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        pw.Center(
-          child: pw.Text(
-            businessName.toUpperCase(),
-            style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
+        if (businessName.trim().isNotEmpty)
+          pw.Center(
+            child: pw.Text(
+              businessName.trim().toUpperCase(),
+              style: pw.TextStyle(fontSize: 15, fontWeight: pw.FontWeight.bold),
+            ),
           ),
-        ),
         for (final line in subtitle)
           pw.Center(
             child: pw.Text(
@@ -205,6 +214,13 @@ class GoodsReceiptPdf {
                     pw.Text(
                       'REIMPRESIÓN',
                       style: const pw.TextStyle(fontSize: 8),
+                    ),
+                  // Reconstruido desde la orden: no hubo recepción registrada.
+                  // Va visible, no en letra chica al pie.
+                  if (receipt.isReconstructed)
+                    pw.Text(
+                      'Sin recepción registrada — reconstruido de la orden',
+                      style: const pw.TextStyle(fontSize: 8.5),
                     ),
                 ],
               ),

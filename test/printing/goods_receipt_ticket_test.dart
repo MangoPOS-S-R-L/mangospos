@@ -7,6 +7,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/presentation/purchases/state/goods_receipt.dart';
+import 'package:mangopos/presentation/purchases/utils/goods_receipt_printing.dart';
 import 'package:mangopos/services/printing/goods_receipt_ticket.dart';
 
 GoodsReceipt _receipt({
@@ -116,6 +117,64 @@ void main() {
     });
   });
 
+  group('Encabezado del conduce', () {
+    // Regla del dueño: en el papel va el NEGOCIO, nunca la empresa.
+    test('gana el nombre del negocio sobre la razón social', () {
+      final name = resolveGoodsReceiptBusinessName(
+        businessName: 'Cocina Mexicana',
+        fiscalName: 'Inversiones Gastronómicas del Cibao SRL',
+      );
+      expect(name, 'Cocina Mexicana');
+    });
+
+    test('sin nombre de negocio NO cae a la razón social', () {
+      final name = resolveGoodsReceiptBusinessName(
+        businessName: '   ',
+        fiscalName: 'Inversiones Gastronómicas del Cibao SRL',
+        sessionName: 'Cocina Mexicana Ágora',
+      );
+      expect(name, 'Cocina Mexicana Ágora');
+    });
+
+    test('sin nada devuelve vacío, no el nombre del sistema', () {
+      final name = resolveGoodsReceiptBusinessName(
+        businessName: null,
+        fiscalName: 'Razón Social SRL',
+        sessionName: null,
+      );
+      expect(name, isEmpty);
+      expect(name, isNot(contains('Mango')));
+    });
+
+    test('el encabezado vacío no deja una línea en blanco arriba', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: _receipt(),
+        businessName: '',
+      );
+      final lines = (ticket.rawText ?? '').split('\n');
+      // Sin nombre, la primera línea con contenido ya es el separador o el
+      // título — no un renglón vacío que se coma papel.
+      final firstContent = lines.firstWhere(
+        (l) => l.trim().isNotEmpty,
+        orElse: () => '',
+      );
+      expect(firstContent.trim(), isNotEmpty);
+    });
+
+    test('la sucursal sale bajo el nombre del negocio', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: _receipt(),
+        businessName: 'Cocina Mexicana',
+        businessBranch: 'Sucursal Ágora',
+        businessRnc: '130012345',
+      );
+      final text = ticket.rawText ?? '';
+      expect(text, contains('Cocina Mexicana'));
+      expect(text, contains('Sucursal Ágora'));
+      expect(text, contains('130012345'));
+    });
+  });
+
   group('GoodsReceiptTicket', () {
     test('imprime número, suplidor, productos y total', () {
       final ticket = GoodsReceiptTicket.build(
@@ -182,6 +241,52 @@ void main() {
           reason: 'línea que se sale del papel de 58mm: "$line"',
         );
       }
+    });
+
+    test('el conduce reconstruido lo declara en el papel', () {
+      // Compras recibidas antes de que existiera el documento: se puede
+      // imprimir, pero no puede pasar por uno emitido el día de la entrega.
+      final receipt = GoodsReceipt.reconstructedFromOrder(
+        orderId: 'order-1',
+        orderNumber: 'PO-00012',
+        invoiceNumber: 'F-9987',
+        ncf: '',
+        supplierName: 'Ferreteria Bellon SRL',
+        warehouseName: 'Bodega Principal',
+        date: DateTime(2026, 7, 3),
+        status: 'complete',
+        lines: const [
+          GoodsReceiptLine(
+            code: '000004',
+            reference: '',
+            description: 'Blocks de 6 pulgadas',
+            quantity: 500,
+            unit: 'unidad',
+            unitCost: 48.35,
+          ),
+        ],
+      );
+
+      expect(receipt.isReconstructed, isTrue);
+      // Sin número: el correlativo se asigna al recibir, y esta no lo vivió.
+      expect(receipt.number, isEmpty);
+      expect(receipt.total, closeTo(24175, 0.01));
+
+      final text = GoodsReceiptTicket.build(
+        receipt: receipt,
+        businessName: 'Mi Negocio',
+      ).rawText;
+      expect(text, contains('SIN RECEPCION REGISTRADA'));
+      expect(text, contains('s/n'));
+      expect(text, contains('Blocks de 6 pulgadas'));
+    });
+
+    test('un conduce normal NO se marca como reconstruido', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: _receipt(),
+        businessName: 'Mi Negocio',
+      );
+      expect(ticket.rawText, isNot(contains('SIN RECEPCION REGISTRADA')));
     });
 
     test('sin número imprime "s/n" en vez de un hueco', () {

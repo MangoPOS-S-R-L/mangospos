@@ -17,7 +17,7 @@ import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../state/direct_receipts_state.dart';
 import '../viewmodel/direct_receipts_viewmodel.dart';
-import 'direct_receipt_dialog.dart';
+import 'receive_source_dialog.dart';
 import 'widgets/inventory_back_button.dart';
 
 class InventoryDirectReceiptsView extends ConsumerStatefulWidget {
@@ -66,9 +66,9 @@ class _InventoryDirectReceiptsViewState
     return Scaffold(
       backgroundColor: AppColors.background,
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: state.saving ? null : () => _openCreateDialog(context),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Nueva recepción'),
+        onPressed: state.saving ? null : () => _openReceiveFlow(context),
+        icon: const Icon(Icons.move_to_inbox_rounded),
+        label: const Text('Recibir orden de compra'),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -129,8 +129,9 @@ class _InventoryDirectReceiptsViewState
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'Usa el botón "Nueva recepción" para registrar mercancía '
-                            'que entró sin OC formal.',
+                            'Usa "Recibir orden de compra" para meter mercancía '
+                            'al almacén: contra una orden registrada, o manual '
+                            'si entró sin orden previa.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: AppColors.mutedForeground,
@@ -155,12 +156,17 @@ class _InventoryDirectReceiptsViewState
     );
   }
 
-  Future<void> _openCreateDialog(BuildContext context) async {
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const DirectReceiptDialog(),
-    );
+  /// Puerta única de entrada de mercancía: pregunta el origen (orden de
+  /// compra registrada o compra manual) y lanza el flujo que corresponda.
+  ///
+  /// Recibir contra una OC no crea una recepción directa, así que ese caso no
+  /// aparece en este listado —vive en el detalle de la orden, con su conduce—;
+  /// por eso el refresh solo se justifica para el camino manual, pero se hace
+  /// siempre: es una consulta barata y evita dejar la pantalla desfasada.
+  Future<void> _openReceiveFlow(BuildContext context) async {
+    final received = await showReceiveSourceDialog(context, ref);
+    if (!mounted || !received) return;
+    await ref.read(directReceiptsViewModelProvider).refresh();
   }
 
   Future<void> _openDetail(DirectReceipt receipt) async {

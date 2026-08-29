@@ -26,6 +26,7 @@ class GoodsReceiptTicket {
   static PrintTicket build({
     required GoodsReceipt receipt,
     required String businessName,
+    String? businessBranch,
     String? businessAddress,
     String? businessPhone,
     String? businessRnc,
@@ -41,13 +42,22 @@ class GoodsReceiptTicket {
     gen.initialize();
     gen.lineFeed();
 
-    // ── Encabezado del negocio ──
-    gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.setBold(true);
-    gen.textCenteredWrapped(businessName);
-    gen.setBold(false);
-    gen.setTextSize();
-    for (final line in [businessAddress, businessPhone, businessRnc]) {
+    // ── Encabezado del NEGOCIO que recibe ──
+    // Si no hay nombre no se imprime una línea en blanco: mejor un ticket sin
+    // encabezado que uno con un hueco donde debería ir quién recibió.
+    if (businessName.trim().isNotEmpty) {
+      gen.setTextSize(width: narrow ? 1 : 2, height: 2);
+      gen.setBold(true);
+      gen.textCenteredWrapped(businessName.trim());
+      gen.setBold(false);
+      gen.setTextSize();
+    }
+    for (final line in [
+      businessBranch,
+      businessAddress,
+      businessPhone,
+      businessRnc,
+    ]) {
       final value = line?.trim() ?? '';
       if (value.isEmpty) continue;
       gen.textCenteredWrapped(value);
@@ -68,6 +78,14 @@ class GoodsReceiptTicket {
     }
     if (isReprint) {
       gen.textCentered('*** REIMPRESION ***');
+    }
+    // Un documento armado desde la orden no puede pasar por uno emitido el
+    // día de la entrega: se dice en la cabeza, no en letra chica.
+    if (receipt.isReconstructed) {
+      gen.separator();
+      gen.textCenteredWrapped(
+        'SIN RECEPCION REGISTRADA - reconstruido de la orden',
+      );
     }
     gen.separator();
 

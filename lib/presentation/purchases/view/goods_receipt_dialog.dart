@@ -102,15 +102,7 @@ class _GoodsReceiptDialog extends ConsumerWidget {
                     style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
                   ),
                 ),
-              _field('Suplidor', receipt.supplierName),
-              _field('Almacén', receipt.warehouseName),
-              if (receipt.orderNumber.isNotEmpty)
-                _field('Orden de compra', receipt.orderNumber),
-              if (receipt.invoiceNumber.isNotEmpty)
-                _field('Factura', receipt.invoiceNumber),
-              if (receipt.ncf.isNotEmpty) _field('NCF', receipt.ncf),
-              if (receipt.receivedByName.isNotEmpty)
-                _field('Recibido por', receipt.receivedByName),
+              _headerBlock(),
               const Divider(height: 20),
               for (final line in receipt.lines)
                 Padding(
@@ -226,6 +218,76 @@ class _GoodsReceiptDialog extends ConsumerWidget {
     );
   }
 
+  /// Cabecera del documento: el suplidor manda a la izquierda —es el dato que
+  /// se busca primero al archivar— y a su lado, arriba, el resto de la
+  /// identificación. Antes iban apilados uno debajo del otro y empujaban las
+  /// líneas de mercancía fuera de la vista.
+  Widget _headerBlock() {
+    final fields = <(String, String)>[
+      ('Almacén', receipt.warehouseName),
+      if (receipt.orderNumber.isNotEmpty)
+        ('Orden de compra', receipt.orderNumber),
+      if (receipt.invoiceNumber.isNotEmpty) ('Factura', receipt.invoiceNumber),
+      if (receipt.ncf.isNotEmpty) ('NCF', receipt.ncf),
+      if (receipt.receivedByName.isNotEmpty)
+        ('Recibido por', receipt.receivedByName),
+    ];
+
+    final supplier = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'SUPLIDOR',
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          receipt.supplierName,
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+        ),
+        if (receipt.supplierRnc.trim().isNotEmpty)
+          Text(
+            'RNC ${receipt.supplierRnc.trim()}',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.mutedForeground,
+            ),
+          ),
+      ],
+    );
+
+    final meta = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [for (final f in fields) _field(f.$1, f.$2)],
+    );
+
+    // En pantalla angosta (tablet de pie, teléfono) las dos columnas no caben
+    // sin apretar los valores: se apilan.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 440) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [supplier, const SizedBox(height: 10), meta],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 5, child: supplier),
+            const SizedBox(width: 16),
+            Expanded(flex: 6, child: meta),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _field(String label, String value) {
     if (value.trim().isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -234,7 +296,7 @@ class _GoodsReceiptDialog extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 128,
+            width: 104,
             child: Text(
               label,
               style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),

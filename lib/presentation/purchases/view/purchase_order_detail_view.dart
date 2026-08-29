@@ -87,6 +87,48 @@ class _PurchaseOrderDetailViewState
     }
   }
 
+  /// Conduce armado desde la ORDEN, para las compras que se recibieron antes
+  /// de que el sistema emitiera documento. Devuelve `null` cuando ya hay
+  /// recepciones registradas (esas mandan) o cuando la orden no tiene nada
+  /// recibido todavía.
+  ///
+  /// Sin esto, una compra vieja marcada "Recibida" no ofrecía NADA: ni botón
+  /// de recibir (ya está recibida) ni conduce que imprimir. El contable
+  /// necesita el papel de lo que ya entró, no solo de lo que entre de hoy en
+  /// adelante.
+  GoodsReceipt? _reconstructedReceipt(PurchaseOrderDetail detail) {
+    if (_receipts.isNotEmpty) return null;
+    final lines = detail.lines
+        .where((line) => line.quantityReceived > 0)
+        .map(
+          (line) => GoodsReceiptLine(
+            code: line.sku,
+            reference: line.description,
+            description: line.itemName,
+            quantity: line.quantityReceived,
+            unit: line.unit,
+            unitCost: line.unitCost,
+          ),
+        )
+        .toList(growable: false);
+    if (lines.isEmpty) return null;
+
+    final order = detail.order;
+    return GoodsReceipt.reconstructedFromOrder(
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      invoiceNumber: order.invoiceNumber,
+      ncf: order.ncf,
+      supplierName: order.supplierName,
+      warehouseName: order.warehouseName,
+      // La fecha de recepción es la buena; sin ella, la de registro es lo
+      // único que queda.
+      date: order.receivedDate ?? order.createdAt,
+      status: order.status == 'partial' ? 'partial' : 'complete',
+      lines: lines,
+    );
+  }
+
   /// Best-effort: la orden se ve igual sin la lista de conduces (un servidor
   /// sin la migración simplemente no tiene ninguno), así que un fallo acá no
   /// puede tumbar el detalle.
@@ -149,9 +191,11 @@ class _PurchaseOrderDetailViewState
                   _linesCard(detail, currency, wide),
                   const SizedBox(height: 16),
                   _totalsCard(detail, currency, wide),
-                  if (_receipts.isNotEmpty || _loadingReceipts) ...[
+                  if (_receipts.isNotEmpty ||
+                      _loadingReceipts ||
+                      _reconstructedReceipt(detail) != null) ...[
                     const SizedBox(height: 16),
-                    _receiptsCard(currency),
+                    _receiptsCard(detail, currency),
                   ],
                   if (detail.order.notes.trim().isNotEmpty) ...[
                     const SizedBox(height: 16),
@@ -498,7 +542,8 @@ class _PurchaseOrderDetailViewState
   /// Lo que de verdad ENTRÓ al almacén, con su documento. La orden dice lo
   /// que se compró; el conduce dice lo que llegó, y son cosas distintas en
   /// cuanto hay una entrega parcial.
-  Widget _receiptsCard(BusinessCurrency currency) {
+  Widget _receiptsCard(PurchaseOrderDetail detail, BusinessCurrency currency) {
+    final reconstructed = _reconstructedReceipt(detail);
     return _card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -525,10 +570,43 @@ class _PurchaseOrderDetailViewState
           ),
           const SizedBox(height: 4),
           Text(
-            'Cada entrega genera su conduce. Se reimprime desde aquí.',
+            reconstructed == null
+                ? 'Cada entrega genera su conduce. Se reimprime desde aquí.'
+                : 'Esta compra se recibió antes de que el sistema emitiera '
+                      'conduce, así que no hay documento guardado. Puedes '
+                      'imprimir uno armado con lo que la orden dice que entró; '
+                      'sale marcado como reconstruido.',
             style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
           ),
           const SizedBox(height: 10),
+          if (reconstructed != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => showGoodsReceiptDialog(
+                      context,
+                      ref,
+                      receipt: reconstructed,
+                    ),
+                    icon: const Icon(Icons.receipt_long_rounded, size: 18),
+                    label: const Text('Ver e imprimir conduce'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => GoodsReceiptPrinting.printThermal(
+                      context,
+                      ref,
+                      receipt: reconstructed,
+                    ),
+                    icon: const Icon(Icons.print_outlined, size: 18),
+                    label: const Text('Imprimir ticket'),
+                  ),
+                ],
+              ),
+            ),
           for (final receipt in _receipts)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
