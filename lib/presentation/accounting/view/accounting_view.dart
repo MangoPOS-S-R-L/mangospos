@@ -1903,11 +1903,15 @@ class _ExportMenu extends StatelessWidget {
                   filename: filename, headers: headers, rows: rows);
               break;
             case 'xlsx':
+              // Los mismos índices que el PDF alinea a la derecha son los
+              // que en Excel tienen que ser número: en contabilidad el
+              // archivo se abre para sumar, no para leer.
               await ReportExporter.exportExcel(
                   filename: filename,
                   sheetName: 'Reporte',
                   headers: headers,
-                  rows: rows);
+                  rows: rows,
+                  moneyColumns: numericColumns);
               break;
             case 'pdf':
               await ReportExporter.exportPdf(

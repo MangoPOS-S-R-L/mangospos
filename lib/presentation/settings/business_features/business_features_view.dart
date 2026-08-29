@@ -440,6 +440,20 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
 
                     const SizedBox(height: 20),
                     _Section(title: 'Inventario'),
+                    _FlagTile(
+                      icon: Icons.local_shipping_outlined,
+                      label: 'Recepción de mercancía obligatoria',
+                      subtitle:
+                          'Registrar una compra NO mete la mercancía al '
+                          'inventario. El stock entra cuando el almacén la '
+                          'recibe, y esa recepción emite un conduce numerado '
+                          'con lo que llegó de cada producto — el soporte '
+                          'que archiva contabilidad.',
+                      value: _features.requireGoodsReceipt,
+                      onChanged: (v) => _update(
+                        _features.copyWith(requireGoodsReceipt: v),
+                      ),
+                    ),
                     _InventoryModeSelector(
                       selected: _features.inventoryMode,
                       onChanged: (mode) async {

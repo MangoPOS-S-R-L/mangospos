@@ -208,6 +208,9 @@ class _InventoryRotationViewState
       sheetName: 'Rotación',
       headers: data.headers,
       rows: data.rowsData,
+      numericColumns: data.numericCols,
+      // 'Valor consumido' es plata: 2 decimales fijos en la hoja.
+      moneyColumns: const [9],
     );
     if (!mounted) return;
     AppToast.info(

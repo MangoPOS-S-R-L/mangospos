@@ -670,7 +670,7 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
           ),
           _SettingsOption(
             title: 'Recepciones',
-            subtitle: 'Ingreso directo de mercancía sin OC',
+            subtitle: 'Recibir mercancía: contra orden de compra o manual',
             icon: Icons.move_to_inbox_rounded,
             color: Color(0xFFE6F7EE),
             route: AppRoutes.inventoryReceipts,

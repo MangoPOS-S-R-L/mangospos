@@ -229,6 +229,11 @@ class PurchaseOrderLine {
   final double unitCost;
   final double taxRate;
   final double total;
+  /// Descuento del proveedor en la LÍNEA, en RD$ NETO (sin ITBIS). Es
+  /// informativo: `unitCost` ya viene descontado. Sirve para reconstruir el
+  /// precio de lista en el detalle de la factura. La columna llega con la
+  /// migración 20260725_0001; sin ella la lectura cae a 0.
+  final double discount;
   // Snapshot de empaque al crear la orden (para mostrar/recibir en la
   // unidad de compra). purchaseUnit vacío / packSize 1 = sin empaque.
   final String purchaseUnit;
@@ -247,9 +252,28 @@ class PurchaseOrderLine {
     required this.unitCost,
     required this.taxRate,
     required this.total,
+    this.discount = 0,
     this.purchaseUnit = '',
     this.packSize = 1,
   });
+
+  /// Base NETA de la línea (sin ITBIS), tal como se guardó.
+  double get netTotal => total;
+
+  /// ITBIS de la línea en dinero. `tax_rate` se guarda como tasa EFECTIVA
+  /// (el registro la deriva del ITBIS absoluto digitado), así que el
+  /// porcentaje reconstruye el monto exacto que se pagó.
+  double get taxValue => total * taxRate / 100;
+
+  /// Total de la línea con ITBIS.
+  double get grossTotal => netTotal + taxValue;
+
+  /// Precio de lista por unidad, antes del descuento del proveedor. Sin
+  /// descuento (o sin cantidad) es el propio [unitCost].
+  double get listUnitCost {
+    if (discount <= 0 || quantityOrdered <= 0) return unitCost;
+    return (total + discount) / quantityOrdered;
+  }
 
   double get pending =>
       (quantityOrdered - quantityReceived).clamp(0, double.infinity);
@@ -289,6 +313,7 @@ class PurchaseOrderLine {
       unitCost: toDouble(map['unit_cost']),
       taxRate: toDouble(map['tax_rate']),
       total: toDouble(map['total']),
+      discount: toDouble(map['discount']),
       // Snapshot guardado en la línea; si falta, cae al del insumo vinculado.
       purchaseUnit: (map['purchase_unit'] ??
               (itemRel is Map ? itemRel['purchase_unit'] : null))
@@ -302,6 +327,54 @@ class PurchaseOrderLine {
       }(),
     );
   }
+}
+
+/// Factura de compra COMPLETA: la cabecera guardada (con su desglose) más
+/// las líneas de lo que se compró.
+///
+/// El listado solo trae el total; para revisar una factura contra el papel
+/// del proveedor hace falta el desglose que la orden guardó —subtotal, ITBIS
+/// y descuento global— y el detalle de cada producto.
+class PurchaseOrderDetail {
+  final PurchaseOrderSummary order;
+
+  /// Base NETA guardada en la cabecera (sin ITBIS).
+  final double subtotal;
+
+  /// ITBIS guardado en la cabecera.
+  final double tax;
+
+  /// Descuento GLOBAL de la orden en RD$ (pronto pago, acuerdo comercial).
+  /// No se prorratea a las líneas. 0 cuando la migración 20260725_0001 no
+  /// está aplicada: la columna no existe y no se puede inventar.
+  final double discount;
+
+  final List<PurchaseOrderLine> lines;
+
+  const PurchaseOrderDetail({
+    required this.order,
+    required this.subtotal,
+    required this.tax,
+    required this.discount,
+    required this.lines,
+  });
+
+  /// Suma de los descuentos POR LÍNEA (informativo: los costos ya vienen
+  /// descontados, así que esto no se resta otra vez del total).
+  double get lineDiscounts =>
+      lines.fold<double>(0, (sum, line) => sum + line.discount);
+
+  /// Lo que suman las líneas con su ITBIS. Puede diferir del total guardado
+  /// en órdenes viejas o creadas por otros flujos; la vista lo avisa en vez
+  /// de tapar la diferencia.
+  double get linesGrossTotal =>
+      lines.fold<double>(0, (sum, line) => sum + line.grossTotal);
+
+  /// Diferencia entre lo que suman las líneas y el total guardado, ya
+  /// descontado el descuento global. Cero (± 1 centavo) = todo cuadra.
+  double get totalsMismatch => linesGrossTotal - discount - order.total;
+
+  bool get totalsAgree => totalsMismatch.abs() < 0.01;
 }
 
 class PurchaseDraftItem {

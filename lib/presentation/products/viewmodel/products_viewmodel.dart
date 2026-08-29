@@ -646,6 +646,9 @@ class ProductsViewModel extends ChangeNotifier {
       final ok = await ReportExporter.exportExcel(
         filename: 'plantilla_productos',
         sheetName: 'Plantilla',
+        // Las 11 columnas que el import ENTIENDE (ver `CatalogCsvParser`).
+        // La plantilla traía solo 7 y quien la usaba no tenía forma de saber
+        // que también podía cargar descripción, área y estado.
         headers: const [
           'Nombre',
           'Precio',
@@ -654,8 +657,13 @@ class ProductsViewModel extends ChangeNotifier {
           'Codigo de Barras',
           'Categoria',
           'Impuesto',
+          'Modo Impuesto',
+          'Area de Produccion',
+          'Descripcion',
+          'Activo',
         ],
         rows: const [],
+        moneyColumns: const [1, 2],
       );
 
       _error = ok
@@ -667,6 +675,20 @@ class ProductsViewModel extends ChangeNotifier {
       _error = 'Error descargando plantilla: $e';
       notifyListeners();
     }
+  }
+
+  /// Margen sobre precio de venta, en porcentaje con 2 decimales. Vacío si
+  /// falta el precio o el costo — un 100% inventado por un costo en blanco
+  /// haría creer que todo el catálogo es pura ganancia.
+  static String _marginPct(dynamic price, dynamic cost) {
+    final p = price is num
+        ? price.toDouble()
+        : double.tryParse(price?.toString() ?? '');
+    final c = cost is num
+        ? cost.toDouble()
+        : double.tryParse(cost?.toString() ?? '');
+    if (p == null || c == null || p <= 0) return '';
+    return ((p - c) / p * 100).toStringAsFixed(2);
   }
 
   Future<void> exportProductsToExcel() async {
@@ -697,6 +719,13 @@ class ProductsViewModel extends ChangeNotifier {
                   .where((n) => n.isNotEmpty)
                   .join(', ')
             : '';
+        // Existencia del insumo 1:1 (v_menu_items_stock). Ausente cuando el
+        // producto no lleva inventario o la vista no está desplegada: en ese
+        // caso las tres columnas salen vacías, no en cero — "no se controla"
+        // y "queda cero" no son lo mismo en un maestro de artículos.
+        final stock = _asMap(product['stock']);
+        final tracked = product['is_inventory_tracked'] == true;
+
         rows.add([
           // ── Compatibles con el import (NO cambiar nombres ni orden) ──
           product['name']?.toString() ?? '',
@@ -717,6 +746,12 @@ class ProductsViewModel extends ChangeNotifier {
           product['sold_by_type']?.toString() ?? '',
           product['image_url']?.toString() ?? '',
           product['id']?.toString() ?? '',
+          product['presentation']?.toString() ?? '',
+          _marginPct(product['price'], product['cost']),
+          siNo(tracked),
+          tracked ? (stock['available_units']?.toString() ?? '') : '',
+          tracked ? (stock['unit']?.toString() ?? '') : '',
+          tracked ? (stock['inventory_item_id']?.toString() ?? '') : '',
         ]);
       }
 
@@ -741,8 +776,20 @@ class ProductsViewModel extends ChangeNotifier {
           'Vendido por',
           'Imagen',
           'ID',
+          'Presentacion',
+          'Margen %',
+          'Controla Inventario',
+          'Existencia',
+          'Unidad Stock',
+          'Insumo Vinculado (ID)',
         ],
         rows: rows,
+        // Precio, costo y margen como NÚMERO para que se puedan sumar y
+        // ordenar en la hoja. SKU, código de barras e IDs quedan como texto a
+        // propósito: como número perderían los ceros a la izquierda y un
+        // EAN-13 saldría en notación científica.
+        moneyColumns: const [1, 2],
+        numericColumns: const [13, 18, 20],
       );
 
       _error = ok

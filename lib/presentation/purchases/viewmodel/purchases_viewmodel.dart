@@ -8,6 +8,7 @@ import '../../../data/repositories/purchases_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../inventory/viewmodel/inventory_viewmodel.dart'
     show inventoryRepositoryProvider;
+import '../state/goods_receipt.dart';
 import '../state/purchases_state.dart';
 
 final purchasesRepositoryProvider = Provider<PurchasesRepository>((ref) {
@@ -228,7 +229,6 @@ class PurchasesViewModel extends ChangeNotifier {
     String? invoiceNumber,
     String? ncf,
     required List<PurchaseDraftItem> items,
-    bool updateItemCost = false,
     double discount = 0,
   }) async {
     final businessId = _state.businessId;
@@ -251,7 +251,6 @@ class PurchasesViewModel extends ChangeNotifier {
         invoiceNumber: invoiceNumber,
         ncf: ncf,
         items: items,
-        updateItemCost: updateItemCost,
         discount: discount,
       );
       _state = _state.copyWith(saving: false);
@@ -311,6 +310,13 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
+  /// Detalle de UNA factura de compra: cabecera con su desglose + líneas.
+  /// No toca el estado del listado — la pantalla de detalle lo maneja
+  /// localmente y se lee por id, así abre igual desde un enlace directo.
+  Future<PurchaseOrderDetail> loadOrderDetail(String orderId) {
+    return _repository.getOrderDetail(orderId);
+  }
+
   /// Sprint 3 — Recepción parcial.
   /// Devuelve las líneas de la OC para mostrar el dialog (con qty pedida vs
   /// recibida). No persiste estado: el dialog lo maneja localmente.
@@ -346,6 +352,81 @@ class PurchasesViewModel extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  /// Recepción de mercancía CON conduce. Igual que [receiveOrderPartial] en
+  /// efecto sobre el stock, pero además deja el documento numerado que el
+  /// contable archiva.
+  ///
+  /// [idempotencyKey] la genera la pantalla y la reusa en cada reintento:
+  /// reenviar tras un timeout devuelve la misma recepción en vez de duplicar
+  /// la entrada de mercancía.
+  Future<Map<String, dynamic>> receiveOrderWithReceipt({
+    required String warehouseId,
+    required List<Map<String, dynamic>> lines,
+    required String idempotencyKey,
+    String? orderId,
+    String? supplierId,
+    String? notes,
+    String closeMode = 'complete',
+  }) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+    try {
+      final result = await _repository.receivePurchaseOrderWithReceipt(
+        warehouseId: warehouseId,
+        lines: lines,
+        idempotencyKey: idempotencyKey,
+        orderId: orderId,
+        supplierId: supplierId,
+        notes: notes,
+        closeMode: closeMode,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return result;
+    } catch (e) {
+      _state = _state.copyWith(saving: false);
+      // GoodsReceiptUnavailable NO es un error del usuario: la pantalla lo
+      // atrapa y reintenta por la ruta sin documento. Pintarlo en el estado
+      // dejaría un banner rojo sobre una recepción que sí funcionó.
+      if (e is! GoodsReceiptUnavailable) {
+        _state = _state.copyWith(error: 'Error en la recepción: $e');
+      }
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Órdenes que todavía admiten mercancía, para el selector de "Recibir
+  /// orden de compra". No toca el estado del listado: la pantalla de
+  /// recepción vive fuera del módulo de compras.
+  Future<List<PurchaseOrderSummary>> loadReceivableOrders() async {
+    // El selector se abre desde Inventario, donde este viewmodel puede no
+    // haber corrido init(): el negocio se resuelve aquí en vez de devolver
+    // una lista vacía que se leería como "no hay órdenes pendientes".
+    var id = _state.businessId;
+    if (id == null || id.isEmpty) {
+      id = await resolveBusinessIdOrNull(Supabase.instance.client, 'auto');
+    }
+    if (id == null || id.isEmpty) return const [];
+    return _repository.getReceivableOrders(id);
+  }
+
+  Future<GoodsReceipt> loadGoodsReceipt(String receptionId) {
+    return _repository.getGoodsReceipt(receptionId);
+  }
+
+  Future<List<GoodsReceipt>> loadGoodsReceiptsForOrder(String orderId) {
+    return _repository.getGoodsReceiptsForOrder(orderId);
+  }
+
+  /// ¿Este negocio obliga a pasar por recepción en almacén? Cuando es true,
+  /// el registro de compras no ofrece guardar la orden ya "Recibida".
+  Future<bool> requiresGoodsReceipt() async {
+    final businessId = _state.businessId;
+    if (businessId == null) return false;
+    return _repository.requiresGoodsReceipt(businessId);
   }
 
   Future<void> _reload() async {

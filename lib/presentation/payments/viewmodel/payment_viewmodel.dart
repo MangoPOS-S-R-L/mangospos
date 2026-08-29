@@ -148,11 +148,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     );
 
     try {
-      CashRegisterSession? cashSession;
-      if (_connectivity.isConnected) {
-        cashSession = await _cashierRepo.requireActiveSession();
-      }
-
+      // El negocio se resuelve ANTES de la sesión de caja: la caja se busca
+      // escopeada al negocio (la abre un usuario y la usa todo el local), no
+      // solo por el usuario logueado.
       final businessId = await resolveBusinessIdOrNull(
         Supabase.instance.client,
         'auto',
@@ -160,6 +158,13 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
 
       if (businessId == null) {
         throw Exception('No se pudo identificar el negocio');
+      }
+
+      CashRegisterSession? cashSession;
+      if (_connectivity.isConnected) {
+        cashSession = await _cashierRepo.requireActiveSession(
+          businessId: businessId,
+        );
       }
 
       // Venta a crédito: solo visible con permiso. El seed del método

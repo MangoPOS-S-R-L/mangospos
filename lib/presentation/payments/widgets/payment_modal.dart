@@ -98,8 +98,12 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
   bool _needsCashSession(PaymentState state) {
     final message = state.error?.toLowerCase();
     if (message == null) return false;
+    // El texto real del repo es 'No hay sesión de caja abierta...'. La
+    // variante mojibake anterior ('sesiA3n', con mayúscula) nunca podía
+    // matchear un string ya pasado a minúsculas: el botón "IR A CAJA"
+    // jamás aparecía.
     return message.contains('sesion de caja') ||
-        message.contains('sesiA3n de caja');
+        message.contains('sesión de caja');
   }
 
   void _goToCashier(BuildContext context) {
@@ -459,6 +463,44 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     );
   }
 
+  /// Motivo REAL por el que el panel de crédito no tiene método seleccionado.
+  ///
+  /// Antes este panel culpaba siempre a la conexión ("Requiere conexión a
+  /// internet") aunque la causa fuera otra: si `_initializePayment` aborta
+  /// (p. ej. no encuentra sesión de caja), la lista de métodos queda vacía y
+  /// nunca se preselecciona 'credit'. Decir "no hay internet" con internet
+  /// mandaba al cajero a revisar lo que no era.
+  String _creditUnavailableReason(PaymentState state) {
+    final error = state.error?.toLowerCase() ?? '';
+
+    if (error.contains('sesion de caja') || error.contains('sesión de caja')) {
+      return 'No se puede registrar la venta a crédito porque no hay una '
+          'sesión de caja abierta en este negocio. Abre la caja y vuelve a '
+          'intentar.';
+    }
+
+    if (error.contains('offline') || error.contains('conexion') ||
+        error.contains('conexión')) {
+      return 'La venta a crédito no está disponible sin conexión. '
+          'Requiere internet para validar el límite del cliente.';
+    }
+
+    if (state.paymentMethods.isEmpty) {
+      return 'No se pudieron cargar los métodos de pago, así que la venta a '
+          'crédito no está disponible.'
+          '${state.error != null ? "\n\nDetalle: ${state.error}" : ""}';
+    }
+
+    if (!state.paymentMethods.any((m) => m.isCredit)) {
+      return 'Este negocio no tiene el método "Crédito" disponible. '
+          'Verifica que tengas el permiso creditos.vender y que el método '
+          'esté activo en Ajustes → Tipos de Pago.';
+    }
+
+    return 'La venta a crédito no está disponible en este momento.'
+        '${state.error != null ? "\n\nDetalle: ${state.error}" : ""}';
+  }
+
   String _cleanErrorMessage(String error) {
     if (error.contains('fn_process_payment')) {
       return 'Error de configuraci\u00f3n: Funci\u00f3n de pago no encontrada en base de datos.';
@@ -815,10 +857,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               borderRadius: BorderRadius.circular(AppRadius.lg),
               border: Border.all(color: const Color(0xFFFDBA74)),
             ),
-            child: const Text(
-              'La venta a cr\u00e9dito no est\u00e1 disponible en este momento. '
-              'Requiere conexi\u00f3n a internet.',
-              style: TextStyle(
+            child: Text(
+              _creditUnavailableReason(state),
+              style: const TextStyle(
                 color: Color(0xFF7C2D12),
                 fontWeight: FontWeight.w600,
               ),

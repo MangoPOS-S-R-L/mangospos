@@ -68,6 +68,7 @@ import '../../presentation/inventory/view/production_orders_view.dart';
 import '../../presentation/inventory/view/physical_count_view.dart';
 import '../../presentation/inventory/view/inventory_reorder_view.dart';
 import '../../presentation/inventory/view/transfers_view.dart';
+import '../../presentation/purchases/view/purchase_order_detail_view.dart';
 import '../../presentation/purchases/view/purchases_list_view.dart';
 import '../../presentation/purchases/view/purchases_register_view.dart';
 import '../../presentation/promos/view/discounts_view.dart';
@@ -870,6 +871,12 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.purchasesRegister,
             builder: (context, state) => const PurchasesRegisterView(),
+          ),
+          GoRoute(
+            path: AppRoutes.purchasesOrderDetail,
+            builder: (context, state) => PurchaseOrderDetailView(
+              orderId: state.pathParameters['orderId'] ?? '',
+            ),
           ),
           ]),
 

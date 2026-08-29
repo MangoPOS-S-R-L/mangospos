@@ -142,7 +142,12 @@ class _InventoryValuationViewState
   /// Construye headers + rows según el modo de vista actual. Reutilizado
   /// por las 3 funciones de export (CSV/Excel/PDF) para que el contenido
   /// sea idéntico entre formatos.
-  ({List<String> headers, List<List<String>> rows, List<int> numericCols})
+  ({
+    List<String> headers,
+    List<List<String>> rows,
+    List<int> numericCols,
+    List<int> moneyCols,
+  })
   _buildExportData(ValuationState state) {
     if (state.viewMode == ValuationViewMode.byItem) {
       final headers = const [
@@ -171,8 +176,13 @@ class _InventoryValuationViewState
             ],
           )
           .toList(growable: false);
-      // Columnas numéricas (alineación derecha en PDF).
-      return (headers: headers, rows: rows, numericCols: const [3, 4, 5, 6, 8]);
+      // Columnas numéricas (alineación derecha en PDF, número real en Excel).
+      return (
+        headers: headers,
+        rows: rows,
+        numericCols: const [3, 4, 5, 6, 8],
+        moneyCols: const [3, 5],
+      );
     } else {
       final headers = const [
         'SKU',
@@ -196,7 +206,12 @@ class _InventoryValuationViewState
             ],
           )
           .toList(growable: false);
-      return (headers: headers, rows: rows, numericCols: const [3, 5, 6]);
+      return (
+        headers: headers,
+        rows: rows,
+        numericCols: const [3, 5, 6],
+        moneyCols: const [5, 6],
+      );
     }
   }
 
@@ -231,6 +246,8 @@ class _InventoryValuationViewState
       sheetName: 'Valoración',
       headers: data.headers,
       rows: data.rows,
+      numericColumns: data.numericCols,
+      moneyColumns: data.moneyCols,
     );
     if (!mounted) return;
     AppToast.info(

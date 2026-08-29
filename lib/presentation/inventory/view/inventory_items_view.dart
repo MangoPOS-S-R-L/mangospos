@@ -31,10 +31,12 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../../../core/utils/app_toast.dart';
+import '../../../core/utils/export/report_exporter.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
 import '../../sales/widgets/pos_barcode_scanner.dart';
+import '../services/inventory_master_export.dart';
 import '../state/inventory_state.dart';
 import '../state/inventory_warehouse_scope.dart';
 import '../state/kardex_state.dart';
@@ -663,6 +665,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
                           isNarrow: isNarrow,
                           canCreate: canEditItems,
                           busy: showSkeleton,
+                          currency: currency,
                         ),
                         SizedBox(height: isCompact ? 12 : 16),
                         // Las bodegas llegan ANTES que la matriz (son dos
@@ -1161,6 +1164,59 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     );
   }
 
+  // ── Extracción del maestro ──────────────────────────────────────────────
+
+  /// Saca la ficha de cada insumo a un archivo: código, descripción, código
+  /// de barras y costo —lo que pide un contador— más la unidad, el empaque,
+  /// la existencia por bodega y su valor.
+  ///
+  /// Exporta lo que la pantalla está MOSTRANDO, filtros incluidos. Es la
+  /// única regla que no sorprende a nadie: si el usuario quiere el maestro
+  /// completo pone Estado = Todos y vuelve a exportar, y el aviso final le
+  /// dice cuántas filas salieron.
+  Future<void> _exportMaster({
+    required BusinessCurrency currency,
+    required bool asCsv,
+  }) async {
+    final items = _visibleItems();
+    if (items.isEmpty) {
+      AppToast.info(context, 'No hay insumos que exportar con estos filtros');
+      return;
+    }
+
+    final data = InventoryMasterExport.build(
+      items: items,
+      warehouses: _warehouses,
+      matrix: _matrix,
+      currencyCode: currency.code,
+    );
+    final filename = InventoryMasterExport.filename();
+
+    final saved = asCsv
+        ? await ReportExporter.exportCsv(
+            filename: filename,
+            headers: data.headers,
+            rows: data.rows,
+          )
+        : await ReportExporter.exportExcel(
+            filename: filename,
+            sheetName: 'Maestro de artículos',
+            headers: data.headers,
+            rows: data.rows,
+            numericColumns: data.numericColumns,
+            moneyColumns: data.moneyColumns,
+          );
+
+    if (!mounted) return;
+    final what = asCsv ? 'CSV' : 'Excel';
+    AppToast.info(
+      context,
+      saved
+          ? '$what exportado · ${items.length} insumo(s)'
+          : 'No se pudo descargar — copiado al portapapeles',
+    );
+  }
+
   // ── Header ──────────────────────────────────────────────────────────────
 
   Widget _header({
@@ -1168,6 +1224,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     required bool isNarrow,
     required bool canCreate,
     required bool busy,
+    required BusinessCurrency currency,
   }) {
     final title = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1205,6 +1262,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
               ),
               const SizedBox(width: 2),
               Expanded(child: title),
+              _exportButton(currency: currency, busy: busy, compact: true),
               if (canCreate)
                 IconButton(
                   tooltip: 'Nuevo insumo',
@@ -1226,6 +1284,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     final actions = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _exportButton(currency: currency, busy: busy, compact: false),
+        const SizedBox(width: 10),
         if (canCreate) ...[
           FilledButton.icon(
             onPressed: busy ? null : () => _openForm(),
@@ -1260,6 +1320,81 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         const SizedBox(height: 12),
         Align(alignment: Alignment.centerRight, child: actions),
       ],
+    );
+  }
+
+  /// Disparador de la extracción. Menú y no botón directo: el mismo maestro
+  /// se pide en Excel (lo normal) y en CSV (para cargarlo en otro sistema),
+  /// y son dos archivos distintos, no dos formas del mismo click.
+  Widget _exportButton({
+    required BusinessCurrency currency,
+    required bool busy,
+    required bool compact,
+  }) {
+    final enabled = !busy && _matrix.items.isNotEmpty;
+    return PopupMenuButton<String>(
+      enabled: enabled,
+      tooltip: 'Exportar maestro de artículos',
+      onSelected: (value) =>
+          _exportMaster(currency: currency, asCsv: value == 'csv'),
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: 'xlsx',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.grid_on, size: 18),
+            title: Text('Excel (.xlsx)'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'csv',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.description_outlined, size: 18),
+            title: Text('CSV'),
+          ),
+        ),
+      ],
+      child: compact
+          ? Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                Icons.file_download_outlined,
+                color: enabled
+                    ? AppColors.mutedForeground
+                    : AppColors.mutedForeground.withValues(alpha: 0.4),
+              ),
+            )
+          : Container(
+              height: 52,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+                color: AppColors.card,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.file_download_outlined,
+                    size: 18,
+                    color: AppColors.foreground,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Exportar',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.foreground,
+                    ),
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
