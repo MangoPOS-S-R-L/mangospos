@@ -4,7 +4,14 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { createAlanubeClient, AlanubeClient, AlanubeError } from "../_shared/alanube-client.ts";
-import { r2, roundAndReconcile } from "../_shared/dgii-rounding.ts";
+import { EcfTaxLine, summarizeEcfTaxLines } from "../_shared/ecf-tax-lines.ts";
+import {
+  buildAlanubePayload,
+  EcfTaxBreakdown,
+  FiscalDocument,
+  OrderItem,
+  Sender,
+} from "../_shared/ecf-payload.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -24,75 +31,10 @@ interface OutboxRow {
   attempts: number;
 }
 
-interface FiscalDocument {
-  id: string;
-  business_id: string;
-  order_id: string | null;
-  ncf_type: string;
-  ncf_number: string;
-  customer_rnc: string | null;
-  customer_name: string;
-  customer_address: string | null;
-  subtotal: number | null;
-  discount: number | null;
-  tax_exempt: number | null;
-  taxable_amount: number | null;
-  itbis_amount: number | null;
-  service_fee: number | null;
-  tip: number | null;
-  total: number | null;
-  is_electronic: boolean;
-  alanube_document_id: string | null;
-  issued_at: string | null;
-  idempotency_key: string | null;
-}
-
 interface Settings {
   alanube_company_id: string;
   environment: string;
   mode: string;
-}
-
-interface Sender {
-  rnc: string;
-  companyName: string;
-  tradename?: string;
-  address: string;
-  branchOffice?: string;
-  mail?: string;
-}
-
-interface OrderItem {
-  id: string;
-  product_id: string | null;
-  product_name: string | null;
-  sku: string | null;
-  quantity: number;
-  unit_price: number;
-  tax_rate: number;
-  tax: number | null;
-  subtotal: number | null;
-  discounts: number | null;
-}
-
-interface TaxLineRow {
-  order_item_id: string;
-  tax_rate: number | null;
-  amount: number | null;
-  // PostgREST devuelve la relacion FK como objeto cuando es many-to-one
-  // (order_item_tax_lines.tax_id → taxes.id, cada line apunta a 1 tax) y
-  // como array si la cardinalidad se detecta diferente. Manejamos ambos
-  // shapes en runtime para ser robustos a cambios de schema/PostgREST.
-  taxes:
-    | { include_in_ecf: boolean | null }
-    | { include_in_ecf: boolean | null }[]
-    | null;
-}
-
-interface EcfTaxBreakdown {
-  itbisAmount: number;
-  taxableAmount: number;
-  effectiveRatePct: number;
 }
 
 function getEndpointForNcfType(ncfType: string): string | null {
@@ -103,15 +45,6 @@ function getEndpointForNcfType(ncfType: string): string | null {
     case "E45": return "/gubernamentals";
     default: return null;
   }
-}
-
-function billingIndicatorFromTaxRate(rate: number | null | undefined): 1 | 2 | 3 | 4 {
-  if (rate == null || rate === 0) return 4;
-  const pct = rate > 1 ? rate : rate * 100;
-  if (pct >= 17 && pct <= 19) return 1;
-  if (pct >= 15 && pct <= 17) return 2;
-  if (pct === 0) return 3;
-  return 4;
 }
 
 interface AlanubeSubmitResponse {
@@ -142,9 +75,11 @@ async function computeEcfBreakdown(
   const itemIds = items.map((it) => it.id).filter(Boolean);
   if (itemIds.length === 0) return null;
 
+  // `name` y `rate` se traen para el fallback por nombre de la Ley 10% en los
+  // negocios que todavia no apagaron "Incluir en e-CF DGII" en ese impuesto.
   const { data, error } = await supabase
     .from("order_item_tax_lines")
-    .select("order_item_id, tax_rate, amount, taxes(include_in_ecf)")
+    .select("order_item_id, tax_rate, amount, taxes(include_in_ecf, name, rate)")
     .in("order_item_id", itemIds);
 
   if (error) {
@@ -152,177 +87,7 @@ async function computeEcfBreakdown(
     return null;
   }
 
-  const rows = (data ?? []) as TaxLineRow[];
-  if (rows.length === 0) return null;
-
-  const itemEcfTax = new Map<string, number>();
-  const itemEcfRateNumerator = new Map<string, number>();
-  const itemEcfRateDenominator = new Map<string, number>();
-
-  for (const r of rows) {
-    // PostgREST many-to-one: r.taxes es un objeto. PostgREST one-to-many u
-    // otros casos puede devolverlo como array. Manejamos ambos para
-    // robustez. Default `true` cuando el lookup falle (no romper docs
-    // legacy sin la columna include_in_ecf).
-    const taxesField = r.taxes;
-    const include =
-      (Array.isArray(taxesField)
-        ? taxesField[0]?.include_in_ecf
-        : taxesField?.include_in_ecf) ??
-      true;
-    if (!include) continue;
-    const amt = Number(r.amount ?? 0);
-    if (amt <= 0) continue;
-    const rate = Number(r.tax_rate ?? 0);
-    itemEcfTax.set(r.order_item_id, (itemEcfTax.get(r.order_item_id) ?? 0) + amt);
-    itemEcfRateNumerator.set(
-      r.order_item_id,
-      (itemEcfRateNumerator.get(r.order_item_id) ?? 0) + rate * amt,
-    );
-    itemEcfRateDenominator.set(
-      r.order_item_id,
-      (itemEcfRateDenominator.get(r.order_item_id) ?? 0) + amt,
-    );
-  }
-
-  let itbisAmount = 0;
-  let taxableAmount = 0;
-  let weightedRateNum = 0;
-  let weightedRateDen = 0;
-
-  for (const it of items) {
-    const ecfTax = itemEcfTax.get(it.id) ?? 0;
-    if (ecfTax <= 0) continue;
-    itbisAmount += ecfTax;
-    taxableAmount += Number(it.subtotal ?? 0);
-    weightedRateNum += itemEcfRateNumerator.get(it.id) ?? 0;
-    weightedRateDen += itemEcfRateDenominator.get(it.id) ?? 0;
-  }
-
-  if (itbisAmount <= 0) return null;
-
-  const effectiveRatePct = weightedRateDen > 0
-    ? Math.round(weightedRateNum / weightedRateDen)
-    : 18;
-
-  return {
-    itbisAmount: Number(itbisAmount.toFixed(2)),
-    taxableAmount: Number(taxableAmount.toFixed(2)),
-    effectiveRatePct,
-  };
-}
-
-function buildAlanubePayload(
-  doc: FiscalDocument,
-  sender: Sender,
-  items: OrderItem[],
-  ecfBreakdown: EcfTaxBreakdown | null,
-): Record<string, unknown> {
-  const stampDate = (doc.issued_at ?? new Date().toISOString()).slice(0, 10);
-  const isE31OrCreditDoc = doc.ncf_type === "E31";
-  const totalAbove250k = Number(doc.total ?? 0) >= 250_000;
-  const buyerRequired = isE31OrCreditDoc || (doc.ncf_type === "E32" && totalAbove250k);
-
-  const idDoc: Record<string, unknown> = {
-    encf: doc.ncf_number,
-    paymentType: 1,
-    incomeType: 1,
-  };
-  if (doc.ncf_type !== "E32") {
-    const oneYearAhead = new Date();
-    oneYearAhead.setFullYear(oneYearAhead.getFullYear() + 1);
-    idDoc.sequenceDueDate = oneYearAhead.toISOString().slice(0, 10);
-  }
-
-  const senderPayload: Record<string, unknown> = {
-    rnc: sender.rnc,
-    companyName: sender.companyName,
-    address: sender.address,
-    stampDate,
-  };
-  if (sender.tradename) senderPayload.tradename = sender.tradename;
-  if (sender.branchOffice) senderPayload.branchOffice = sender.branchOffice;
-  if (sender.mail) senderPayload.mail = sender.mail;
-
-  let buyer: Record<string, unknown> | undefined;
-  if (buyerRequired || doc.customer_rnc || (doc.customer_name && doc.customer_name !== "Consumidor Final")) {
-    buyer = { companyName: doc.customer_name || "Consumidor Final" };
-    if (doc.customer_rnc) buyer.rnc = doc.customer_rnc;
-    if (doc.customer_address) buyer.address = doc.customer_address;
-  }
-
-  const amountOf = (it: OrderItem): number =>
-    Number(it.subtotal ?? Number(it.quantity ?? 1) * Number(it.unit_price ?? 0));
-
-  // DGII rechaza lineas en cero o negativas (AP10073). Las lineas negativas
-  // vienen del modelo de ofertas, que mete la unidad gratis como linea en
-  // negativo. Un descuento va en el campo de descuento de la linea, nunca
-  // como una linea aparte, asi que aqui simplemente no se declaran.
-  const billable = items.filter((it) => amountOf(it) > 0);
-
-  const itbis = ecfBreakdown?.itbisAmount ?? Number(doc.itbis_amount ?? 0);
-  const taxable = ecfBreakdown?.taxableAmount ?? Number(doc.taxable_amount ?? 0);
-  const exempt = Number(doc.tax_exempt ?? 0);
-  const itbisRate = Math.round(ecfBreakdown?.effectiveRatePct ?? 18);
-
-  // Las lineas se reconcilian contra su propia suma redondeada, NO contra
-  // `taxable`. Cuando todo el pedido esta gravado las dos cifras son la
-  // misma (taxable es toFixed(2) de esa suma). Pero si el negocio tiene
-  // productos sin impuesto vinculado en menu_item_taxes, `taxable` solo
-  // cuenta los gravados y quedaria por debajo de la suma de lineas: forzar
-  // el ajuste contra ese numero deformaria montos que estan bien. La
-  // diferencia entre ambos es la porcion exenta y va en `exemptAmount`.
-  const reconcileTarget = r2(
-    billable.reduce((acc, it) => acc + amountOf(it), 0),
-  );
-
-  const amounts = roundAndReconcile(billable.map(amountOf), reconcileTarget);
-
-  const itemDetails = billable.length > 0
-    ? billable.map((it, idx) => ({
-        lineNumber: idx + 1,
-        billingIndicator: billingIndicatorFromTaxRate(it.tax_rate),
-        itemName: (it.product_name ?? "Producto").slice(0, 80),
-        goodServiceIndicator: 1,
-        quantityItem: Number(it.quantity ?? 1),
-        unitPriceItem: r2(Number(it.unit_price ?? 0)),
-        itemAmount: amounts[idx],
-      }))
-    : [{
-        lineNumber: 1,
-        billingIndicator: billingIndicatorFromTaxRate(0.18),
-        itemName: "Venta general",
-        goodServiceIndicator: 1,
-        quantityItem: 1,
-        unitPriceItem: r2(Number(doc.total ?? 0)),
-        itemAmount: r2(Number(doc.total ?? 0)),
-      }];
-
-  const declaredTotal = ecfBreakdown != null
-    ? r2(taxable + itbis + exempt)
-    : Number(doc.total ?? 0);
-
-  const totals: Record<string, unknown> = {
-    totalAmount: r2(declaredTotal),
-  };
-  if (taxable > 0) {
-    totals.totalTaxedAmount = r2(taxable);
-    totals.i1AmountTaxed = r2(taxable);
-    totals.itbisS1 = itbisRate;
-    totals.itbis1Total = r2(itbis);
-    totals.itbisTotal = r2(itbis);
-  }
-  if (exempt > 0) totals.exemptAmount = r2(exempt);
-
-  const payload: Record<string, unknown> = {
-    idDoc,
-    sender: senderPayload,
-    totals,
-    itemDetails,
-  };
-  if (buyer) payload.buyer = buyer;
-
-  return payload;
+  return summarizeEcfTaxLines(items, (data ?? []) as EcfTaxLine[]);
 }
 
 async function claimBatch(supabase: SupabaseClient): Promise<OutboxRow[]> {
@@ -483,7 +248,13 @@ async function submitOne(
   }
 
   const ecfBreakdown = await computeEcfBreakdown(supabase, doc.order_id, items);
-  const payload = buildAlanubePayload(doc, sender, items, ecfBreakdown);
+  const payload = buildAlanubePayload(
+    doc,
+    sender,
+    items,
+    ecfBreakdown,
+    settings.alanube_company_id,
+  );
   const idemKey = doc.idempotency_key ?? doc.id;
 
   let resp: AlanubeSubmitResponse;

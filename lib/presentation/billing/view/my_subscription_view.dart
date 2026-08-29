@@ -52,49 +52,73 @@ class MySubscriptionView extends ConsumerWidget {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
         ),
       ),
-      body: stateAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => _ErrorPanel(message: e.toString()),
-        data: (state) {
-          if (state == null) {
-            return const _NotSetUpPanel();
-          }
-          if (state.isSuspended) {
-            return SuspendedOverlay(state: state);
-          }
-          return RefreshIndicator(
-            onRefresh: () async {
-              ref.invalidate(billingStateProvider(businessId));
-              ref.invalidate(defaultPaymentMethodProvider(businessId));
-              ref.invalidate(chargesProvider(businessId));
-              await Future<void>.delayed(const Duration(milliseconds: 250));
-            },
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              children: [
-                _PlanStatusCard(state: state),
-                const SizedBox(height: 12),
-                if (state.billingStatus == BillingStatus.trial)
-                  _TrialCountdownCard(state: state)
-                else
-                  _NextBillingCard(state: state),
-                const SizedBox(height: 12),
-                _PaymentMethodSummary(
-                  paymentMethod: paymentMethodAsync.value,
-                ),
-                if (paymentMethodAsync.value != null &&
-                    state.canAttemptCharge) ...[
-                  const SizedBox(height: 12),
-                  PayNowButton(businessId: businessId, state: state),
-                ],
-                const SizedBox(height: 12),
-                _LastChargeCard(state: state),
-                const SizedBox(height: 20),
-                _ActionsList(state: state),
-              ],
-            ),
-          );
-        },
+      body: _body(
+        ref: ref,
+        businessId: businessId,
+        stateAsync: stateAsync,
+        paymentMethod: paymentMethodAsync.value,
+      ),
+    );
+  }
+
+  /// Regla de pintado: el dato manda sobre el error. Mientras haya un estado
+  /// cargado se sigue mostrando, aunque un refresco posterior falle — así un
+  /// hipo de red (o del canal Realtime) no vacía la pantalla ni la deja
+  /// parpadeando entre contenido y error.
+  Widget _body({
+    required WidgetRef ref,
+    required String businessId,
+    required AsyncValue<BillingState?> stateAsync,
+    required Object? paymentMethod,
+  }) {
+    if (!stateAsync.hasValue) {
+      if (stateAsync.hasError) {
+        return _ErrorPanel(
+          message: stateAsync.error.toString(),
+          onRetry: () {
+            ref.invalidate(billingStateProvider(businessId));
+            ref.invalidate(defaultPaymentMethodProvider(businessId));
+            ref.invalidate(chargesProvider(businessId));
+          },
+        );
+      }
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final state = stateAsync.value;
+    if (state == null) {
+      return const _NotSetUpPanel();
+    }
+    if (state.isSuspended) {
+      return SuspendedOverlay(state: state);
+    }
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(billingStateProvider(businessId));
+        ref.invalidate(defaultPaymentMethodProvider(businessId));
+        ref.invalidate(chargesProvider(businessId));
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: [
+          _PlanStatusCard(state: state),
+          const SizedBox(height: 12),
+          if (state.billingStatus == BillingStatus.trial)
+            _TrialCountdownCard(state: state)
+          else
+            _NextBillingCard(state: state),
+          const SizedBox(height: 12),
+          _PaymentMethodSummary(paymentMethod: paymentMethod),
+          if (paymentMethod != null && state.canAttemptCharge) ...[
+            const SizedBox(height: 12),
+            PayNowButton(businessId: businessId, state: state),
+          ],
+          const SizedBox(height: 12),
+          _LastChargeCard(state: state),
+          const SizedBox(height: 20),
+          _ActionsList(state: state),
+        ],
       ),
     );
   }
@@ -613,7 +637,8 @@ class _Card extends StatelessWidget {
 
 class _ErrorPanel extends StatelessWidget {
   final String message;
-  const _ErrorPanel({required this.message});
+  final VoidCallback? onRetry;
+  const _ErrorPanel({required this.message, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -636,6 +661,18 @@ class _ErrorPanel extends StatelessWidget {
               style: const TextStyle(fontSize: 13, color: MangoColors.muted),
               textAlign: TextAlign.center,
             ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: MangoColors.primaryOrange,
+                  foregroundColor: MangoColors.white,
+                ),
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Reintentar'),
+              ),
+            ],
           ],
         ),
       ),

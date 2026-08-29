@@ -7,8 +7,10 @@
 // session, cobrar, void) las ejecuta el backend vía Edge Functions o cron.
 // Acá invocamos las funciones — no hay UPDATE/INSERT directos desde el cliente.
 
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -54,7 +56,13 @@ class BillingRepository {
   /// Estado de billing para el business — busca la membership que es
   /// is_billing_anchor=true. Si no existe, devuelve null.
   Future<BillingState?> getBillingStateForBusiness(String businessId) async {
-    final row = await _client
+    final row = await _fetchBillingRow(businessId);
+    if (row == null) return null;
+    return BillingState.fromJson(row);
+  }
+
+  Future<Map<String, dynamic>?> _fetchBillingRow(String businessId) {
+    return _client
         .from('memberships')
         .select('''
           id, user_id, business_id, plan_id, is_billing_anchor, billing_status,
@@ -68,50 +76,198 @@ class BillingRepository {
         .eq('business_id', businessId)
         .eq('is_billing_anchor', true)
         .maybeSingle();
-    if (row == null) return null;
-    return BillingState.fromJson(row);
   }
 
-  /// Stream Realtime del estado de billing — cualquier UPDATE en la fila
-  /// de membership re-emite el nuevo BillingState. Permite que la UI
-  /// reaccione cuando el cron registra un nuevo cobro, o cuando el callback
-  /// inserta un payment_method y dispara el cambio de billing_status.
-  Stream<BillingState?> watchBillingStateForBusiness(String businessId) async* {
-    yield await getBillingStateForBusiness(businessId);
-    final stream = _client
-        .from('memberships')
-        .stream(primaryKey: ['id'])
-        .eq('business_id', businessId);
-    await for (final _ in stream) {
-      yield await getBillingStateForBusiness(businessId);
-    }
+  /// Stream del estado de billing — cualquier UPDATE en la fila de membership
+  /// re-emite el nuevo BillingState. Permite que la UI reaccione cuando el
+  /// cron registra un nuevo cobro, o cuando el callback inserta un
+  /// payment_method y dispara el cambio de billing_status.
+  Stream<BillingState?> watchBillingStateForBusiness(String businessId) {
+    return _watchTable<BillingState?>(
+      table: 'memberships',
+      businessId: businessId,
+      load: () async {
+        final row = await _fetchBillingRow(businessId);
+        if (row == null) return (_kEmptySignature, null);
+        return (jsonEncode(row), BillingState.fromJson(row));
+      },
+    );
   }
 
   /// Método de pago default del business. Null si no hay tarjeta tokenizada.
   Future<BillingPaymentMethod?> getDefaultPaymentMethod(
     String businessId,
   ) async {
-    final row = await _client
+    final row = await _fetchDefaultPaymentMethodRow(businessId);
+    if (row == null) return null;
+    return BillingPaymentMethod.fromJson(row);
+  }
+
+  Future<Map<String, dynamic>?> _fetchDefaultPaymentMethodRow(
+    String businessId,
+  ) {
+    return _client
         .from('azul_payment_methods_public')
         .select()
         .eq('business_id', businessId)
         .eq('is_default', true)
         .maybeSingle();
-    if (row == null) return null;
-    return BillingPaymentMethod.fromJson(row);
   }
 
-  Stream<BillingPaymentMethod?> watchDefaultPaymentMethod(
-    String businessId,
-  ) async* {
-    yield await getDefaultPaymentMethod(businessId);
-    final stream = _client
-        .from('azul_payment_methods')
-        .stream(primaryKey: ['id'])
-        .eq('business_id', businessId);
-    await for (final _ in stream) {
-      yield await getDefaultPaymentMethod(businessId);
+  Stream<BillingPaymentMethod?> watchDefaultPaymentMethod(String businessId) {
+    // Se lee de la vista `_public` (enmascarada) pero se escucha la tabla:
+    // Realtime solo publica cambios de tablas.
+    return _watchTable<BillingPaymentMethod?>(
+      table: 'azul_payment_methods',
+      businessId: businessId,
+      load: () async {
+        final row = await _fetchDefaultPaymentMethodRow(businessId);
+        if (row == null) return (_kEmptySignature, null);
+        return (jsonEncode(row), BillingPaymentMethod.fromJson(row));
+      },
+    );
+  }
+
+  /// Firma de "no hay fila". Cualquier JSON real empieza con `{`, así que no
+  /// colisiona con un payload legítimo.
+  static const String _kEmptySignature = '<null>';
+
+  /// Cuánto esperamos por una lectura antes de darla por perdida. Sin esto,
+  /// una petición que nunca resuelve deja la pantalla girando para siempre y
+  /// sin manera de salir.
+  static const Duration _readTimeout = Duration(seconds: 20);
+
+  /// Cada cuánto releer cuando Realtime no está disponible.
+  static const Duration _fallbackPollInterval = Duration(seconds: 45);
+
+  /// Fallos seguidos del canal Realtime tras los cuales lo damos por perdido.
+  static const int _maxRealtimeErrors = 3;
+
+  /// "Valor actual + refresco cuando la tabla cambia", blindado.
+  ///
+  /// Antes esto era un `async*` con `await for` sobre `.stream()`. El cliente
+  /// de Supabase mete un ERROR en ese stream cuando el canal Realtime da
+  /// `channelError` o `timedOut` (ver `supabase_stream_builder.dart`), y ese
+  /// error terminaba el generador: la pantalla de suscripción quedaba trabada
+  /// —girando o en error— hasta reiniciar la app. Acá:
+  ///
+  ///   * un fallo del canal Realtime NO mata el stream, solo se registra;
+  ///   * si Realtime no levanta, se cae a un poll lento para no quedar ciegos
+  ///     ante el alta de una tarjeta o un cambio de estado;
+  ///   * las re-emisiones idénticas se descartan. Realtime reenvía el snapshot
+  ///     completo en cada reconexión y cada reenvío repintaba la pantalla
+  ///     entera (parpadeo y taps que se pierden);
+  ///   * un refresco que falla cuando ya hay dato en pantalla se ignora: es
+  ///     preferible el dato de hace un minuto a vaciar la vista.
+  Stream<T> _watchTable<T>({
+    required String table,
+    required String businessId,
+    required Future<(String, T)> Function() load,
+  }) {
+    final controller = StreamController<T>();
+    StreamSubscription<List<Map<String, dynamic>>>? realtimeSub;
+    Timer? fallbackPoll;
+    String? lastSignature;
+    var emitted = false;
+    var busy = false;
+    var queued = false;
+    var realtimeErrors = 0;
+
+    Future<void> push() async {
+      if (controller.isClosed) return;
+      if (busy) {
+        // Un refresco ya está en vuelo; se encola uno solo al final para no
+        // disparar N consultas por una ráfaga de eventos.
+        queued = true;
+        return;
+      }
+      busy = true;
+      try {
+        final (signature, value) = await load().timeout(_readTimeout);
+        if (controller.isClosed) return;
+        if (!emitted || signature != lastSignature) {
+          lastSignature = signature;
+          emitted = true;
+          controller.add(value);
+        }
+      } catch (e, st) {
+        if (!emitted && !controller.isClosed) {
+          controller.addError(e, st);
+          // Sin dato que mostrar, la vista queda en error: el poll es la única
+          // vía para que se recupere sola cuando vuelva la red.
+          fallbackPoll ??= Timer.periodic(
+            _fallbackPollInterval,
+            (_) => push(),
+          );
+        } else {
+          debugPrint('[Billing] refresco de $table falló: $e');
+        }
+      } finally {
+        busy = false;
+        if (queued && !controller.isClosed) {
+          queued = false;
+          unawaited(push());
+        }
+      }
     }
+
+    controller.onListen = () {
+      unawaited(push());
+      try {
+        realtimeSub = _client
+            .from(table)
+            .stream(primaryKey: ['id'])
+            .eq('business_id', businessId)
+            .listen(
+              (_) => push(),
+              onError: (Object e) {
+                realtimeErrors++;
+                // Solo el primero: el canal reintenta con backoff y si la
+                // tabla no está publicada falla para siempre — no llenamos la
+                // consola con el mismo error cada pocos segundos.
+                if (realtimeErrors == 1) {
+                  debugPrint('[Billing] realtime $table: $e');
+                }
+                fallbackPoll ??= Timer.periodic(
+                  _fallbackPollInterval,
+                  (_) => push(),
+                );
+                // Tras varios fallos seguidos damos el canal por perdido y lo
+                // cerramos. Si la tabla no está en la publication
+                // `supabase_realtime`, reintentar es una tormenta de joins que
+                // nunca va a prosperar; el poll ya cubre el refresco.
+                if (realtimeErrors >= _maxRealtimeErrors) {
+                  final sub = realtimeSub;
+                  realtimeSub = null;
+                  unawaited(sub?.cancel() ?? Future<void>.value());
+                  debugPrint(
+                    '[Billing] realtime $table desactivado tras '
+                    '$realtimeErrors fallos; sigo por poll.',
+                  );
+                }
+              },
+              onDone: () {
+                fallbackPoll ??= Timer.periodic(
+                  _fallbackPollInterval,
+                  (_) => push(),
+                );
+              },
+            );
+      } catch (e) {
+        debugPrint('[Billing] no se pudo abrir realtime en $table: $e');
+        fallbackPoll ??= Timer.periodic(_fallbackPollInterval, (_) => push());
+      }
+    };
+
+    controller.onCancel = () async {
+      fallbackPoll?.cancel();
+      fallbackPoll = null;
+      await realtimeSub?.cancel();
+      realtimeSub = null;
+      await controller.close();
+    };
+
+    return controller.stream;
   }
 
   /// Lista de cobros recientes ordenados del más reciente al más viejo.

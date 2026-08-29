@@ -346,6 +346,12 @@ verify_jwt = true
 # la función valida que sea owner/admin del business. Recibe PAN/CVV (PCI SAQ D),
 # guarda SOLO el token.
 
+[functions.provision-ecf]
+verify_jwt = true
+# Activación de facturación electrónica. La app manda el JWT del usuario; la
+# función valida owner/admin del business y compara el RNC del negocio contra
+# el que Alanube tiene registrado para ese ULID antes de escribir nada.
+
 [analytics]
 enabled = true
 port = 54327
