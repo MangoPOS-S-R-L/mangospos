@@ -3568,6 +3568,49 @@ finally {
   static final Map<String, DateTime> _macCaptureLastAttempt = {};
   static const Duration _macCaptureCooldown = Duration(minutes: 10);
 
+  /// Captura y persiste el MAC AHORA, esperando el resultado — es el botón
+  /// "Detectar MAC" de Ajustes, donde el instalador está mirando la pantalla
+  /// y necesita saber si funcionó. El resto de caminos usan la versión
+  /// fire-and-forget [captureMacForPrinterIfMissing].
+  ///
+  /// Devuelve el MAC guardado, o null si no se pudo resolver (ni por agente
+  /// ni de forma nativa).
+  Future<String?> captureMacNow({
+    required String printerId,
+    String? ipAddress,
+  }) async {
+    if (kIsWeb) return null;
+    final ip = ipAddress?.trim();
+    if (ip == null || ip.isEmpty) return null;
+
+    var mac = await captureMacForIpViaAgent(ip);
+    mac ??= await LanMacRecovery.captureMacForIp(ip);
+    if (mac == null) return null;
+
+    await updatePrinter(printerId: printerId, mac: mac);
+    _clearLookupCaches();
+    debugPrint('[PrinterRecovery] MAC capturado manualmente para $printerId: $mac');
+    return mac;
+  }
+
+  /// MAC de una IP resuelto por el AGENTE local. Passthrough público para
+  /// el descubrimiento de Settings, que necesita el MAC antes de que exista
+  /// la fila en `printers` (y por tanto no puede usar
+  /// [captureMacForPrinterIfMissing], que persiste por printerId).
+  ///
+  /// Devuelve null si no hay agente o no pudo resolver; el caller decide si
+  /// intenta el capturador nativo.
+  Future<String?> captureMacForIpViaAgent(String ip) async {
+    if (kIsWeb) return null;
+    final target = ip.trim();
+    if (target.isEmpty) return null;
+    try {
+      return await _localService.captureMacForIp(target);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Versión pública/parametrizada para callers que tienen los campos sueltos
   /// (ej. tests de Settings que trabajan con un UI model en vez de
   /// [PrinterConfig]). Idéntica semántica: fire-and-forget, no throw.

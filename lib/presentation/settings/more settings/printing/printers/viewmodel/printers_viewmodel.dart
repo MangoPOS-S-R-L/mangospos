@@ -23,6 +23,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/network/android_net_lock.dart';
 import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
+import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
@@ -168,6 +169,26 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     await load(businessId: b, force: true);
   }
 
+  /// Detecta y guarda el MAC de una impresora de red ya dada de alta.
+  /// Devuelve el MAC o null si no se pudo resolver. Refresca la lista para
+  /// que la tarjeta muestre el valor nuevo.
+  Future<String?> detectMacForPrinter({
+    required String printerId,
+    String? ip,
+  }) async {
+    try {
+      final mac = await _repo.captureMacNow(printerId: printerId, ipAddress: ip);
+      if (mac != null) {
+        final b = await _ensureOrResolveBusiness();
+        await load(businessId: b, force: true);
+      }
+      return mac;
+    } catch (e, st) {
+      _log('detectMacForPrinter() ERROR: $e / $st');
+      return null;
+    }
+  }
+
   // ----------------- CRUD -----------------
   Future<bool> createPrinter({
     required String name,
@@ -212,7 +233,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         hostDeviceId = registered ? resolvedId : null;
       }
 
-      await _repo.createPrinter(
+      final created = await _repo.createPrinter(
         businessId: b,
         name: trimmed,
         ipAddress: (ip ?? '').trim().isEmpty ? null : (ip ?? '').trim(),
@@ -223,6 +244,25 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         type: t.name,
         hostDeviceId: hostDeviceId,
       );
+
+      // Capturar el MAC AL DAR DE ALTA, no solo tras la primera impresion.
+      //
+      // El descubrimiento nativo (barrido de subred y mDNS) no trae MAC —
+      // solo el escaneo via agente lo trae —, asi que una impresora agregada
+      // desde esos caminos nacia con `mac = NULL`. Sin MAC, el recovery
+      // automatico de IP por DHCP no puede dispararse nunca: sale en su
+      // primera linea. Aqui lo intentamos de una vez, en background.
+      //
+      // `force: true` porque es una accion manual del instalador, igual que
+      // "Probar impresion": no debe esperar el cooldown de 10 min.
+      if (t == PrinterType.network) {
+        _repo.captureMacForPrinterIfMissing(
+          printerId: created.id,
+          ipAddress: created.ipAddress,
+          existingMac: created.effectiveMac,
+          force: true,
+        );
+      }
 
       await load(businessId: b, force: true);
       return true;
@@ -594,6 +634,26 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     return merged;
   }
 
+  /// MAC de una impresora recien descubierta, para poder guardarla ya con
+  /// identidad estable. Agente local primero (es quien mejor resuelve en
+  /// escritorio) y si no esta, el capturador nativo de la app.
+  ///
+  /// Nunca lanza ni bloquea el escaneo: si no se puede resolver, la
+  /// impresora se agrega sin MAC como antes y queda el intento oportunista
+  /// tras la primera impresion.
+  Future<String?> _resolveMacForDiscovery(String ip) async {
+    if (kIsWeb) return null;
+    try {
+      final viaAgent = await _repo.captureMacForIpViaAgent(ip);
+      if (viaAgent != null) return viaAgent;
+    } catch (_) {}
+    try {
+      return await LanMacRecovery.captureMacForIp(ip);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<List<DiscoveredPrinter>> scanOnLAN({
     List<int> ports = const [9100, 631, 515],
     Duration timeout = const Duration(seconds: 1),
@@ -693,14 +753,23 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         await Future.delayed(Duration(milliseconds: remaining));
       }
 
-      for (final e in found.entries) {
-        final ip = e.key;
-        final p = e.value.toList()..sort();
+      // MAC de cada candidato encontrado. Los hosts con 9100 abierto son
+      // pocos (1-3 tipicamente), asi que resolverlos en paralelo cuesta
+      // menos de un segundo. Sin esto el alta guardaba `mac = NULL` y el
+      // recovery automatico de IP nunca podia arrancar.
+      final ips = found.keys.toList();
+      final macs = await Future.wait(
+        ips.map((ip) => _resolveMacForDiscovery(ip)),
+      );
+
+      for (var i = 0; i < ips.length; i++) {
+        final ip = ips[i];
+        final p = found[ip]!.toList()..sort();
         results.add(
           DiscoveredPrinter(
             name: 'Printer $ip:${p.join(",")}',
             ip: ip,
-            mac: null,
+            mac: macs[i],
             type: PrinterType.network,
             idHint: 'lan-$ip',
           ),
@@ -778,6 +847,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
                         : 'Network Printer',
                     type: PrinterType.network,
                     ip: addr,
+                    mac: await _resolveMacForDiscovery(addr),
                     idHint: addr,
                   ),
                 );

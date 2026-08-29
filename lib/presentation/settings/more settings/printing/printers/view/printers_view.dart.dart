@@ -241,6 +241,32 @@ class _PrintingPrintersViewState extends ConsumerState<PrintingPrintersView> {
                                           'No se pudo imprimir la muestra.'),
                               );
                             },
+                            onDetectMac: () async {
+                              AppToast.info(
+                                context,
+                                'Detectando MAC de ${printer.name}...',
+                              );
+                              final mac = await vmCtrl.detectMacForPrinter(
+                                printerId: printer.id,
+                                ip: printer.ip,
+                              );
+                              // `context.mounted` y no `mounted`: el context
+                              // que usa el toast es el del LayoutBuilder, no
+                              // el del State.
+                              if (!context.mounted) return;
+                              if (mac != null) {
+                                AppToast.success(
+                                  context,
+                                  'MAC detectado: $mac',
+                                );
+                              } else {
+                                AppToast.error(
+                                  context,
+                                  'No se pudo detectar el MAC. Verifica que la '
+                                  'impresora esté encendida y en la misma red.',
+                                );
+                              }
+                            },
                             onConfigure: () =>
                                 _openPrinterConfiguration(printer),
                             onDelete: () => _confirmDeletePrinter(
@@ -327,6 +353,7 @@ class _PrinterOverviewCard extends StatelessWidget {
     required this.onPrintSample,
     required this.onConfigure,
     required this.onDelete,
+    required this.onDetectMac,
   });
 
   final PrinterDevice printer;
@@ -334,13 +361,18 @@ class _PrinterOverviewCard extends StatelessWidget {
   final VoidCallback onPrintSample;
   final VoidCallback onConfigure;
   final VoidCallback onDelete;
+  final VoidCallback onDetectMac;
 
   @override
   Widget build(BuildContext context) {
     final ip = printer.ip?.isNotEmpty == true ? printer.ip! : 'No configurada';
-    final mac = printer.mac?.isNotEmpty == true
-        ? printer.mac!
-        : 'No disponible';
+    final hasMac = printer.mac?.isNotEmpty == true;
+    final mac = hasMac ? printer.mac! : 'sin detectar';
+    // El MAC es lo que permite recuperar la impresora cuando el router le
+    // cambia la IP. Sin el, ese recovery no puede arrancar — por eso la
+    // tarjeta lo marca en vez de mostrar un discreto "No disponible".
+    final isNetwork = printer.type == PrinterType.network;
+    final showMacWarning = isNetwork && !hasMac;
 
     return PrintingCardFrame(
       child: Column(
@@ -366,11 +398,23 @@ class _PrinterOverviewCard extends StatelessWidget {
                       'IP: $ip   MAC: $mac',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: MangoColors.muted,
+                        color: showMacWarning
+                            ? const Color(0xFFE4A928)
+                            : MangoColors.muted,
                       ),
                     ),
+                    if (showMacWarning)
+                      const Text(
+                        'Sin MAC no se recupera sola si cambia de IP',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFFE4A928),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -426,6 +470,16 @@ class _PrinterOverviewCard extends StatelessWidget {
                 background: Colors.transparent,
                 onPressed: onConfigure,
               ),
+              if (showMacWarning) ...[
+                const SizedBox(width: 8),
+                PrintingActionButton(
+                  label: 'Detectar MAC',
+                  icon: Icons.wifi_find_outlined,
+                  foreground: const Color(0xFFE4A928),
+                  background: Colors.transparent,
+                  onPressed: onDetectMac,
+                ),
+              ],
               const SizedBox(width: 8),
               PrintingActionButton(
                 label: 'Desvincular',

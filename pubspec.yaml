@@ -21,7 +21,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # Flutter lo deja en 1 en todos los builds, y Android no distingue una version de
 # otra: no reconoce las actualizaciones y Play Store las rechaza.
 # Convencion: MAJOR*10000 + MINOR*100 + PATCH  ->  1.8.1 = 10801 (siempre creciente).
-version: 1.8.1+10801
+version: 1.8.3+10803
 
 environment:
   sdk: ^3.8.1

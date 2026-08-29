@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -26,9 +27,23 @@ import 'package:flutter/foundation.dart';
 class LanMacRecovery {
   LanMacRecovery._();
 
-  /// El fallback nativo aplica solo a Android: escritorio tiene agente y en
-  /// iOS no existe `ip neigh` (y el caso de negocio son tablets Android).
-  static bool get isSupported => !kIsWeb && Platform.isAndroid;
+  /// Plataformas donde la app puede resolver MAC por su cuenta.
+  ///
+  /// Antes era solo Android, asumiendo que en escritorio siempre habria
+  /// agente. En la practica una caja Windows con el agente detenido (o
+  /// instalado sin el componente Agent) se quedaba SIN MAC para siempre: no
+  /// se capturaba al agregar, ni tras imprimir, ni con "Probar impresion", y
+  /// entonces el recovery por MAC nunca podia dispararse. Ahora el
+  /// capturador nativo cubre tambien Windows/macOS/Linux via `arp`, y el
+  /// agente queda como via preferente, no como unica.
+  ///
+  /// iOS queda fuera: no expone la tabla de vecinos a apps de terceros.
+  static bool get isSupported =>
+      !kIsWeb &&
+      (Platform.isAndroid ||
+          Platform.isWindows ||
+          Platform.isMacOS ||
+          Platform.isLinux);
 
   /// ifPhysAddress (1.3.6.1.2.1.2.2.1.6) — MAC por interfaz en MIB-2.
   static const List<int> _ifPhysAddressOid = [1, 3, 6, 1, 2, 1, 2, 2, 1, 6];
@@ -60,9 +75,68 @@ class LanMacRecovery {
       socket.destroy();
     } catch (_) {}
 
-    final viaNeigh = await _macFromIpNeigh(target);
-    if (viaNeigh != null) return viaNeigh;
+    final viaTable = await _macFromNeighborTable(target);
+    if (viaTable != null) return viaTable;
     return _macViaSnmp(target);
+  }
+
+  /// Tabla de vecinos del sistema, con el comando que corresponda a cada
+  /// plataforma. `ip neigh` en Android/Linux (en Android 10+ `/proc/net/arp`
+  /// esta bloqueado, pero `ip` sigue funcionando sin root) y `arp` en
+  /// Windows/macOS. Si el binario no existe o falla, devuelve null y el
+  /// caller cae a SNMP.
+  static Future<String?> _macFromNeighborTable(String ip) async {
+    if (Platform.isAndroid || Platform.isLinux) {
+      final viaNeigh = await _macFromIpNeigh(ip);
+      if (viaNeigh != null) return viaNeigh;
+    }
+    return _macFromArp(ip);
+  }
+
+  /// `arp -a <ip>` (Windows) / `arp -n <ip>` (macOS, Linux).
+  static Future<String?> _macFromArp(String ip) async {
+    final args = Platform.isWindows ? ['-a', ip] : ['-n', ip];
+    try {
+      final result =
+          await Process.run('arp', args).timeout(const Duration(seconds: 2));
+      // En Windows `arp -a` de una IP sin entrada devuelve exitCode != 0; en
+      // macOS imprime "no entry". Ambos casos caen a null via el parser.
+      return parseArpOutput(result.stdout?.toString() ?? '', ip);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Extrae el MAC de la linea de [ip] en la salida de `arp`. Publico para
+  /// tests porque el formato cambia por plataforma e idioma del sistema:
+  ///
+  ///   Windows es:  `  192.168.1.50          00-11-22-33-44-55     dinamico`
+  ///   macOS:       `? (192.168.1.50) at 0:11:22:33:44:55 on en0 ifscope`
+  ///   Linux:       `192.168.1.50  ether  00:11:22:33:44:55  C  eth0`
+  ///
+  /// macOS omite el cero a la izquierda de cada grupo, asi que hay que
+  /// rellenarlos antes de normalizar (si no, quedan 11 digitos y se
+  /// descarta un MAC valido).
+  @visibleForTesting
+  static String? parseArpOutput(String output, String ip) {
+    // Delimitar por la IP EXACTA: sin esto, buscar 192.168.1.5 casaba con la
+    // linea de 192.168.1.50 y se guardaba el MAC de otro equipo.
+    final ipPattern = RegExp(
+      '(^|[^0-9.])${RegExp.escape(ip)}([^0-9.]|\$)',
+    );
+    final macPattern =
+        RegExp(r'([0-9a-fA-F]{1,2}[:-]){5}[0-9a-fA-F]{1,2}');
+
+    for (final line in const LineSplitter().convert(output)) {
+      if (!ipPattern.hasMatch(line)) continue;
+      final match = macPattern.firstMatch(line);
+      if (match == null) continue;
+      final groups = match.group(0)!.split(RegExp('[:-]'));
+      final padded = groups.map((g) => g.padLeft(2, '0')).join(':');
+      final normalized = normalizeMac(padded);
+      if (normalized != null) return normalized;
+    }
+    return null;
   }
 
   /// Lee la tabla de vecinos del kernel vía `ip neigh show <ip>`.
@@ -112,7 +186,7 @@ class LanMacRecovery {
         excludeIp: excludeIp?.trim(),
       );
       for (final candidate in candidates) {
-        final found = await _macFromIpNeigh(candidate) ??
+        final found = await _macFromNeighborTable(candidate) ??
             await _macViaSnmp(candidate);
         if (found == wanted) {
           debugPrint(
