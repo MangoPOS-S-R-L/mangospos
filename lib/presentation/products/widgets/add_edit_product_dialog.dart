@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -16,11 +17,16 @@ import 'package:mangopos/data/repositories/modifiers_repository.dart';
 import 'package:mangopos/data/repositories/printing_v2_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
+import 'package:mangopos/presentation/inventory/view/widgets/item_form_dialog.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+const _kindProducto = 'producto';
+const _kindReceta = 'receta';
+const _kindInsumo = 'insumo';
 
 class AddEditProductDialog extends ConsumerStatefulWidget {
   final Map<String, dynamic>? product;
@@ -146,6 +152,25 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   ///  - Producto existente → se carga del repo en initState async.
   Set<String> _selectedPrintAreaIds = <String>{};
   bool _printAreasLoaded = false;
+
+  /// Qué se está creando: 'producto' | 'receta' | 'insumo'. Decide qué
+  /// campos tienen sentido y dónde termina la fila.
+  ///
+  ///  * producto → menu_items, opcionalmente con stock propio (link directo
+  ///    a un insumo). Es lo de siempre.
+  ///  * receta   → menu_items SIN stock propio: descuenta sus ingredientes
+  ///    vía `recipes`/`recipe_ingredients`. Marcarlo Inventariable es
+  ///    justamente el error que deja los cócteles en −22: se le crea un
+  ///    insumo fantasma que nadie compra nunca.
+  ///  * insumo   → inventory_items y NADA de menú: no se vende, se consume.
+  ///
+  /// Solo se elige al CREAR. En edición el producto ya existe y cambiarlo de
+  /// naturaleza es una operación distinta (se hace desde Recetas/Inventario).
+  String _kind = _kindProducto;
+
+  bool get _showKindSelector => widget.product == null;
+  bool get _isReceta => _showKindSelector && _kind == _kindReceta;
+  bool get _isInsumo => _showKindSelector && _kind == _kindInsumo;
 
   /// Si true, el producto consume stock al venderse. Al activarlo en un
   /// producto nuevo o existente sin tracking previo, se pide stock inicial
@@ -437,7 +462,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                     Text(
                       isEdit
                           ? 'Editar Elemento de Men\u00fa'
-                          : 'Agregar Elemento de Men\u00fa',
+                          : _isInsumo
+                              ? 'Agregar Insumo'
+                              : 'Agregar Elemento de Men\u00fa',
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.w800,
@@ -544,10 +571,238 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     );
   }
 
-  Widget _buildLeftColumn() {
+  /// Casilla "¿Qué es este artículo?". Va arriba del todo porque decide el
+  /// resto del formulario. Solo al crear.
+  Widget _buildKindSelector() {
+    Widget chip(String value, String label, IconData icon) {
+      final selected = _kind == value;
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          onTap: () => setState(() {
+            _kind = value;
+            // Una receta NO lleva stock propio: descuenta sus ingredientes.
+            // Dejar el flag encendido es lo que crea el insumo fantasma.
+            if (value != _kindProducto) _isInventoryTracked = false;
+          }),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              vertical: AppSpacing.sm,
+              horizontal: AppSpacing.xs,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.10)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              border: Border.all(
+                color: selected ? AppColors.primary : AppColors.border,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Icon(
+                  icon,
+                  size: 20,
+                  color: selected
+                      ? AppColors.primary
+                      : AppColors.mutedForeground,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected
+                        ? AppColors.primary
+                        : AppColors.foreground,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    const explicacion = {
+      _kindProducto:
+          'Se compra y se vende tal cual. Puede llevar su propio stock '
+          '(ej. una cerveza, un refresco).',
+      _kindReceta:
+          'Se prepara con insumos. No lleva stock propio: al venderse '
+          'descuenta sus ingredientes (ej. un Moscow Mule).',
+      _kindInsumo:
+          'No se vende ni va al menú: se consume desde las recetas '
+          '(ej. ron, lima, ginger beer).',
+    };
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _fieldLabel('¿Qué es este artículo?', required: true),
+        Row(
+          children: [
+            chip(_kindProducto, 'Producto', Icons.inventory_2_outlined),
+            const SizedBox(width: AppSpacing.sm),
+            chip(_kindReceta, 'Receta', Icons.local_bar_outlined),
+            const SizedBox(width: AppSpacing.sm),
+            chip(_kindInsumo, 'Insumo', Icons.science_outlined),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          explicacion[_kind] ?? '',
+          style: TextStyle(fontSize: 11, color: AppColors.mutedForeground),
+        ),
+      ],
+    );
+  }
+
+  /// Aviso de RECETA: se crea el producto normal, pero sin stock propio, y
+  /// los ingredientes se definen en el módulo de Recetas.
+  Widget _buildRecetaNote() {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Sin stock propio',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.foreground,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Una receta descuenta sus ingredientes, no a sí misma. Por eso no '
+            'se le pide stock. Cuando termines de crearlo, define los '
+            'ingredientes en Menú › Recetas.',
+            style: TextStyle(fontSize: 11, color: AppColors.mutedForeground),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Panel de INSUMO: aquí no se crea nada de menú. Reusa el formulario de
+  /// Inventario en vez de duplicarlo (unidades, empaque, mínimos, bodegas).
+  Widget _buildInsumoPanel() {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.accent,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Los insumos no van al menú',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: AppColors.foreground,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Un insumo no se vende: se consume desde las recetas. No lleva '
+            'precio, ni categoría, ni área de impresión.\n\n'
+            'Se crea en Inventario, donde puedes definir su unidad, el '
+            'empaque con que lo compras y el mínimo por bodega.',
+            style: TextStyle(fontSize: 11, color: AppColors.mutedForeground),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _openInsumoForm,
+              icon: const Icon(Icons.science_outlined, size: 18),
+              label: const Text('Continuar como insumo'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: AppColors.card,
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.button),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Cierra este diálogo y abre el formulario de insumo de Inventario con el
+  /// nombre ya tecleado. No duplicamos el formulario: ese ya sabe de
+  /// unidades, empaque, costeo y mínimos.
+  Future<void> _openInsumoForm() async {
+    // Mismo patrón que `_loadWarehouses` en este archivo: cliente directo,
+    // sin provider, para no arrastrar dependencias del módulo Inventario.
+    final client = Supabase.instance.client;
+    final businessId = await resolveBusinessIdOrNull(client, 'auto');
+    if (!mounted) return;
+    if (businessId == null || businessId.isEmpty) {
+      AppToast.error(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+    final nombre = _nameController.text.trim();
+    // El formulario de insumo se abre ENCIMA, no en reemplazo: si el usuario
+    // cancela vuelve aquí con lo que había tecleado. Solo cerramos este
+    // diálogo cuando el insumo se guardó de verdad (ItemFormDialog devuelve
+    // true al guardar).
+    final creado = await showDialog<bool>(
+      context: context,
+      builder: (_) => ItemFormDialog(
+        businessId: businessId,
+        repo: InventoryRepository(client),
+        initialName: nombre.isEmpty ? null : nombre,
+      ),
+    );
+    if (!mounted || creado != true) return;
+    Navigator.of(context).pop();
+  }
+
+  Widget _buildLeftColumn() {
+    // Un insumo no lleva descripción de menú, precio, categoría ni área de
+    // impresión. El formulario se corta aquí y sigue en Inventario, que ya
+    // sabe de unidades, empaque, costeo y mínimos por bodega.
+    if (_isInsumo) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildKindSelector(),
+          const SizedBox(height: AppSpacing.lg),
+          _fieldLabel('Nombre del insumo', required: true),
+          _buildTextField(
+            controller: _nameController,
+            hintText: 'Ej: Ron blanco',
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          _buildInsumoPanel(),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_showKindSelector) ...[
+          _buildKindSelector(),
+          const SizedBox(height: AppSpacing.lg),
+        ],
         _fieldLabel('Nombre del Art\u00edculo', required: true),
         _buildTextField(
           controller: _nameController,
@@ -779,11 +1034,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           onChanged: (v) => setState(() => _isActive = v),
         ),
         const SizedBox(height: AppSpacing.sm),
-        _switchRow(
-          title: 'Inventariable',
-          value: _isInventoryTracked,
-          onChanged: (v) => setState(() => _isInventoryTracked = v),
-        ),
+        // Una RECETA no se marca Inventariable: descuenta sus ingredientes,
+        // no a sí misma. Marcarla crea un insumo con su propio nombre que
+        // nadie compra nunca y el stock se va a negativo (caso real: los
+        // cócteles en −22). Por eso aquí se cambia el switch por el aviso.
+        if (_isReceta)
+          _buildRecetaNote()
+        else
+          _switchRow(
+            title: 'Inventariable',
+            value: _isInventoryTracked,
+            onChanged: (v) => setState(() => _isInventoryTracked = v),
+          ),
         if (_isInventoryTracked) ...[
           const SizedBox(height: AppSpacing.sm),
           _switchRow(
@@ -1673,6 +1935,12 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
   }
 
   void _submit() {
+    // Insumo: no hay producto de menú que crear. El botón principal hace lo
+    // mismo que el del panel, para que dé igual por dónde se toque.
+    if (_isInsumo) {
+      unawaited(_openInsumoForm());
+      return;
+    }
     if (_formKey.currentState?.validate() != true) return;
 
     if (_selectedMenuId == null || _selectedMenuId!.isEmpty) {
@@ -1853,7 +2121,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 foregroundColor: AppColors.card,
               ),
               onPressed: () => Navigator.pop(dialogCtx, controller.text.trim()),
-              child: const Text('Crear'),
+              child: Text(_isInsumo ? 'Continuar como insumo' : 'Crear'),
             ),
           ],
         );

@@ -1,0 +1,316 @@
+<title>API de Lectura Penda</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+<style>
+  :root{
+    --ground:#FAFAF7; --surface:#FFFFFF; --surface-2:#F3F4EF;
+    --ink:#16211E; --muted:#5E6D68; --line:#E2E5DF; --line-strong:#CBD2CB;
+    --accent:#0E6B5B; --accent-soft:#E4F0EC; --warn:#A8620C; --warn-soft:#F8EEDF;
+    --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+    --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1513; --surface:#141D1A; --surface-2:#1A2522;
+      --ink:#E7EDE9; --muted:#8FA09A; --line:#243230; --line-strong:#33443F;
+      --accent:#4FBFA6; --accent-soft:#122A25; --warn:#DDA05A; --warn-soft:#2A2015;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1513; --surface:#141D1A; --surface-2:#1A2522;
+    --ink:#E7EDE9; --muted:#8FA09A; --line:#243230; --line-strong:#33443F;
+    --accent:#4FBFA6; --accent-soft:#122A25; --warn:#DDA05A; --warn-soft:#2A2015;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);
+       font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .page{max-width:860px;margin:0 auto;padding:0 24px 96px;display:flex;flex-direction:column;gap:56px}
+
+  /* ---- carátula ---- */
+  .cover{padding-top:64px;display:flex;flex-direction:column;gap:28px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--muted);margin:0}
+  .cover h1{font-family:var(--serif);font-weight:600;font-size:clamp(32px,5.2vw,46px);
+            line-height:1.12;letter-spacing:-.015em;margin:0;text-wrap:balance}
+  .lede{font-size:17.5px;color:var(--muted);margin:0;max-width:62ch}
+  .lede strong{color:var(--ink);font-weight:600}
+
+  .ficha{border:1px solid var(--line);border-radius:3px;background:var(--surface);
+         display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+  .ficha div{padding:16px 18px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+             display:flex;flex-direction:column;gap:5px}
+  .ficha dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+            color:var(--muted)}
+  .ficha dd{margin:0;font-size:14.5px;font-weight:500;line-height:1.35}
+
+  /* ---- secciones ---- */
+  section{display:flex;flex-direction:column;gap:20px}
+  h2{font-family:var(--serif);font-weight:600;font-size:25px;letter-spacing:-.01em;margin:0;
+     padding-bottom:12px;border-bottom:2px solid var(--ink);text-wrap:balance}
+  h3{font-family:var(--sans);font-weight:600;font-size:15.5px;margin:0;letter-spacing:.005em}
+  p{margin:0;max-width:70ch}
+  ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:7px;max-width:70ch}
+  a{color:var(--accent)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+  code{font-family:var(--mono);font-size:.875em;background:var(--surface-2);
+       border:1px solid var(--line);border-radius:2px;padding:1px 5px}
+  pre{font-family:var(--mono);font-size:13px;line-height:1.7;background:var(--surface);
+      border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:2px;
+      padding:16px 18px;margin:0;overflow-x:auto}
+  pre code{background:none;border:none;padding:0;font-size:inherit}
+  .c-key{color:var(--accent);font-weight:500}
+  .c-dim{color:var(--muted)}
+
+  /* ---- pasos con secuencia real ---- */
+  .pasos{display:flex;flex-direction:column;gap:0;counter-reset:p}
+  .paso{display:grid;grid-template-columns:34px 1fr;gap:18px;padding:20px 0;
+        border-top:1px solid var(--line)}
+  .paso:last-child{border-bottom:1px solid var(--line)}
+  .paso::before{counter-increment:p;content:counter(p);font-family:var(--mono);font-size:12px;
+                font-weight:600;color:var(--accent);padding-top:2px}
+  .paso-b{display:flex;flex-direction:column;gap:10px;min-width:0}
+
+  /* ---- tablas ---- */
+  .wrap{overflow-x:auto;border:1px solid var(--line);border-radius:3px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--muted);font-weight:500;white-space:nowrap;background:var(--surface-2)}
+  tr:last-child td{border-bottom:none}
+  td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  td.t{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+
+  /* ---- avisos ---- */
+  .nota{border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--accent-soft);
+        border-radius:2px;padding:15px 18px;display:flex;flex-direction:column;gap:7px}
+  .nota.warn{border-left-color:var(--warn);background:var(--warn-soft)}
+  .nota p{font-size:14.5px}
+  .nota .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+             color:var(--accent);font-weight:500}
+  .nota.warn .tag{color:var(--warn)}
+
+  /* ---- catálogo ---- */
+  .cat{display:grid;grid-template-columns:repeat(auto-fit,minmax(238px,1fr));gap:1px;
+       background:var(--line);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+  .cat section{background:var(--surface);padding:15px 17px;gap:9px}
+  .cat h3{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+          color:var(--muted);font-weight:500}
+  .cat ul{list-style:none;padding:0;gap:3px;font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+
+  footer{border-top:1px solid var(--line);padding-top:22px;color:var(--muted);font-size:13.5px;
+         display:flex;flex-direction:column;gap:5px}
+  @media (max-width:560px){
+    .page{padding:0 18px 64px;gap:44px}
+    .cover{padding-top:44px}
+    .paso{grid-template-columns:26px 1fr;gap:12px}
+  }
+</style>
+
+<div class="page">
+
+  <header class="cover">
+    <p class="eyebrow">MangoPOS · Acceso de datos</p>
+    <h1>Acceso de lectura en vivo para Penda Express</h1>
+    <p class="lede">Conexión permanente de <strong>solo lectura</strong> a los datos de Penda
+      Express. Consulta en vivo, sin descargas programadas y sin copias locales: tu herramienta
+      de análisis pregunta, MangoPOS responde con lo que pediste en ese momento.</p>
+
+    <dl class="ficha">
+      <div><dt>Negocio</dt><dd>Penda Express</dd></div>
+      <div><dt>Alcance</dt><dd>Solo este negocio</dd></div>
+      <div><dt>Permisos</dt><dd>SELECT únicamente</dd></div>
+      <div><dt>Protocolo</dt><dd>REST · JSON o CSV</dd></div>
+      <div><dt>Zona horaria</dt><dd>America/Santo_Domingo</dd></div>
+      <div><dt>Moneda</dt><dd>DOP (RD$)</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <h2>Qué incluye y qué no</h2>
+    <p>La conexión expone <strong>88 vistas</strong> de reportería sobre los datos de Penda
+      Express: ventas, órdenes, productos, caja, fiscal DGII, inventario, compras, clientes y
+      auditoría. Cualquier consulta analítica sobre esas vistas es válida, en el momento que la
+      hagas.</p>
+    <div class="nota">
+      <span class="tag">Garantía técnica</span>
+      <p>La credencial se resuelve contra un rol de base de datos que <strong>no tiene ningún
+        permiso de escritura</strong>. No es una restricción por convención ni por configuración
+        de aplicación: un intento de <code>INSERT</code>, <code>UPDATE</code> o
+        <code>DELETE</code> es rechazado por PostgreSQL con <code>permission denied</code>.</p>
+    </div>
+    <p>No se exponen datos ajenos a la operación de Penda Express: medios de pago tokenizados,
+      credenciales de integraciones, tablas de respaldo, ni información de ningún otro negocio.
+      El filtro por negocio se aplica en la base de datos, no en la consulta.</p>
+  </section>
+
+  <section>
+    <h2>Cómo conectarse</h2>
+    <p>Toda petición va a la misma base y lleva tres encabezados. El tercero,
+      <code>Accept-Profile</code>, es el que selecciona el esquema de reportería.</p>
+<pre><code><span class="c-dim"># Base</span>
+https://supabase.mangopos.do/rest/v1/
+
+<span class="c-dim"># Encabezados obligatorios</span>
+<span class="c-key">apikey</span>:         eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...   <span class="c-dim">(clave pública de la plataforma)</span>
+<span class="c-key">Authorization</span>:  Bearer &lt;TU_API_KEY&gt;                       <span class="c-dim">(se entrega aparte)</span>
+<span class="c-key">Accept-Profile</span>: analytics</code></pre>
+    <div class="nota warn">
+      <span class="tag">Entrega de la credencial</span>
+      <p>La <code>API_KEY</code> viaja por un canal distinto a este documento y no debe pegarse en
+        repositorios, hojas de cálculo compartidas ni tickets. Si se expone, avísanos: la
+        revocamos y emitimos otra el mismo día.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>El feed contable</h2>
+    <p>El endpoint <code>/documentos</code> entrega el formato acordado <strong>más una columna
+      <code>LEY</code></strong>, para la Ley 10%. Sin ella no habría dónde ubicarla y quedaría
+      sumada al <code>BRUTO</code>, que es justo el campo que la DGII pide como base imponible.
+      Se cumple siempre <code>BRUTO + ITBIS + LEY = TOTAL</code>, y <code>ITBIS</code> es el 18%
+      de <code>BRUTO</code>.</p>
+<pre><code>GET /rest/v1/documentos?FECHA=gte.2026-08-01&amp;FECHA=lte.2026-08-31&amp;order=FECHA.asc
+
+[
+  { "TIPO_DOC": "Venta Contado", "NUMERO": 200001250, "FECHA": "2026-08-26",
+    "NOMBRE": "JUAN PEREZ", "BRUTO": 1000.00, "ITBIS": 180.00, "LEY": 100.00,
+    "TOTAL": 1280.00 },
+  { "TIPO_DOC": "Recibo Pago",   "NUMERO": 12,        "FECHA": "2026-08-26",
+    "NOMBRE": "MIGUEL FELIX", "BRUTO": 0, "ITBIS": 0, "LEY": 0, "TOTAL": 1180.00 }
+]</code></pre>
+
+    <h3>Los cinco tipos de documento</h3>
+    <div class="wrap">
+      <table>
+        <thead><tr><th>TIPO_DOC</th><th>Qué representa</th><th>Numeración</th></tr></thead>
+        <tbody>
+          <tr><td class="t">Venta Contado</td><td>Factura sin crédito asociado</td><td>Secuencia del NCF</td></tr>
+          <tr><td class="t">Venta Crédito</td><td>Factura con cuenta por cobrar</td><td>Secuencia del NCF</td></tr>
+          <tr><td class="t">Recibo Pago</td><td>Abono a una cuenta por cobrar. <code>BRUTO</code> e <code>ITBIS</code> en cero</td><td>Contador propio</td></tr>
+          <tr><td class="t">Devolución Contado</td><td>Anulación de una venta de contado</td><td>Contador propio</td></tr>
+          <tr><td class="t">Devolución Crédito</td><td>Anulación de una venta a crédito</td><td>Contador propio</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Una venta anulada aparece <strong>dos veces</strong>: la venta original en su fecha, y la
+      devolución en la fecha de anulación. La venta nunca se borra ni se modifica, y las
+      devoluciones se reportan en positivo.</p>
+
+    <div class="nota">
+      <span class="tag">De dónde salen los impuestos</span>
+      <p>El <code>ITBIS</code> y la <code>LEY</code> se calculan desde la configuración de
+        impuestos de tu negocio, línea por línea de cada venta — no desde un total guardado. Así
+        el <code>BRUTO</code> es la base imponible real que pide el 607.
+        <code>/documentos_detalle</code> trae además NCF, tipo de NCF, descuento, RNC y motivo
+        de anulación.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Consultar</h2>
+    <p>La API sigue la sintaxis de PostgREST: filtras, ordenas y paginas por parámetros de URL.</p>
+    <div class="pasos">
+      <div class="paso"><div class="paso-b">
+        <h3>Filtrar por fecha y tipo</h3>
+<pre><code>?FECHA=gte.2026-08-01&amp;FECHA=lte.2026-08-31
+?TIPO_DOC=eq.Venta%20Contado
+?TOTAL=gt.5000</code></pre>
+      </div></div>
+      <div class="paso"><div class="paso-b">
+        <h3>Elegir columnas y ordenar</h3>
+<pre><code>?select=FECHA,TIPO_DOC,TOTAL&amp;order=TOTAL.desc</code></pre>
+      </div></div>
+      <div class="paso"><div class="paso-b">
+        <h3>Paginar</h3>
+        <p>Por defecto se devuelve un bloque de filas. Para recorrer todo:</p>
+<pre><code>?limit=1000&amp;offset=0     <span class="c-dim"># luego offset=1000, 2000...</span></code></pre>
+      </div></div>
+      <div class="paso"><div class="paso-b">
+        <h3>Recibir CSV en vez de JSON</h3>
+        <p>Útil si vas directo a Excel; basta cambiar un encabezado.</p>
+<pre><code>Accept: text/csv</code></pre>
+      </div></div>
+    </div>
+    <p>El listado completo de vistas y sus columnas está publicado como OpenAPI en la raíz de la
+      API, así que tu herramienta puede descubrirlas sola.</p>
+  </section>
+
+  <section>
+    <h2>Catálogo de vistas</h2>
+    <p>Además del feed contable, estas son las áreas disponibles para consulta libre.</p>
+    <div class="cat">
+      <section>
+        <h3>Ventas y operación</h3>
+        <ul><li>orders</li><li>order_items</li><li>order_checks</li><li>payments</li>
+            <li>table_sessions</li><li>zones · dining_tables</li></ul>
+      </section>
+      <section>
+        <h3>Menú y productos</h3>
+        <ul><li>menu_items</li><li>categories</li><li>modifiers</li><li>recipes</li>
+            <li>promotions · coupons</li><li>taxes</li></ul>
+      </section>
+      <section>
+        <h3>Caja</h3>
+        <ul><li>cash_register_sessions</li><li>cash_transactions</li><li>cash_registers</li>
+            <li>cash_count_blind</li></ul>
+      </section>
+      <section>
+        <h3>Fiscal DGII</h3>
+        <ul><li>fiscal_documents</li><li>fiscal_document_items</li><li>ncf_sequences</li>
+            <li>comprobantes</li></ul>
+      </section>
+      <section>
+        <h3>Inventario y compras</h3>
+        <ul><li>inventory_items · stock</li><li>inventory_movements</li><li>warehouses</li>
+            <li>purchase_orders</li><li>suppliers</li><li>physical_count_sessions</li></ul>
+      </section>
+      <section>
+        <h3>Clientes</h3>
+        <ul><li>customers</li><li>customer_credits</li><li>credit_payments</li>
+            <li>loyalty_programs</li><li>gift_cards</li></ul>
+      </section>
+      <section>
+        <h3>Personas y auditoría</h3>
+        <ul><li>employees</li><li>shifts · attendance</li><li>roles · permissions</li>
+            <li>audit_logs</li></ul>
+      </section>
+      <section>
+        <h3>Negocio</h3>
+        <ul><li>businesses</li><li>business_settings</li><li>reservations</li>
+            <li>currencies</li></ul>
+      </section>
+    </div>
+  </section>
+
+  <section>
+    <h2>Parámetros confirmados</h2>
+    <div class="wrap">
+      <table>
+        <thead><tr><th>Punto</th><th>Confirmación</th></tr></thead>
+        <tbody>
+          <tr><td>Solo lectura</td><td>Confirmado a nivel de motor de base de datos. Sin permisos de escritura ni de operación.</td></tr>
+          <tr><td>Alcance</td><td>Restringido a Penda Express mediante doble filtro en la base de datos.</td></tr>
+          <tr><td>Zona horaria</td><td>El campo <code>FECHA</code> se calcula en <code>America/Santo_Domingo</code> (UTC−4). Las marcas de tiempo completas se devuelven en ISO 8601 UTC.</td></tr>
+          <tr><td>Moneda</td><td>Peso dominicano (DOP). Los importes son numéricos, sin símbolo.</td></tr>
+          <tr><td>Diccionario</td><td>OpenAPI en vivo en la raíz de la API, más este documento.</td></tr>
+          <tr><td>Límite de tasa</td><td>Sin límite configurado. Te avisaremos antes de introducir uno.</td></tr>
+          <tr><td>Vigencia</td><td>La credencial se emite por 365 días y se renueva sin cambiar la integración.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="nota warn">
+      <span class="tag">Conciliación</span>
+      <p>Solo entran al feed las ventas que generaron documento fiscal. La vista
+        <code>/ventas_sin_documento_fiscal</code> lista los cobros que no lo generaron: si trae
+        filas, revísalas antes de cerrar el período.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p>MangoPOS · soporte@mangopos.do · +1 849-267-8985</p>
+    <p>Documento de entrega técnica para Penda Express. La credencial se envía por separado.</p>
+  </footer>
+
+</div>

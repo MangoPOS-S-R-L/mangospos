@@ -17,11 +17,18 @@ class ItemFormDialog extends StatefulWidget {
   final InventoryRepository repo;
   final InventoryItemSummary? edit;
 
+  /// Nombre con el que arranca el campo cuando se crea un insumo desde otro
+  /// lado — hoy, desde el diálogo de productos cuando el usuario marca que lo
+  /// que está creando es un insumo y no un producto de menú. Ignorado en
+  /// edición (ahí manda el nombre guardado).
+  final String? initialName;
+
   const ItemFormDialog({
     super.key,
     required this.businessId,
     required this.repo,
     this.edit,
+    this.initialName,
   });
 
   @override
@@ -53,7 +60,9 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
   void initState() {
     super.initState();
     final e = widget.edit;
-    _nameCtrl = TextEditingController(text: e?.name ?? '');
+    _nameCtrl = TextEditingController(
+      text: e?.name ?? widget.initialName?.trim() ?? '',
+    );
     _skuCtrl = TextEditingController(text: e?.sku ?? '');
     _barcodeCtrl = TextEditingController(text: e?.barcode ?? '');
     _descCtrl = TextEditingController(text: e?.description ?? '');

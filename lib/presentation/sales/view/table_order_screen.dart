@@ -2357,6 +2357,41 @@ class _CartView extends ConsumerWidget {
 
     var currentOrderState = ref.read(currentOrderProvider);
 
+    // ── GUARD DE IDENTIDAD: la mesa se recicló bajo los pies del cajero ──
+    // `order` es el parámetro capturado cuando se tocó "Cobrar"; el reload de
+    // arriba acaba de traer la orden VIVA de la mesa, que puede ser OTRA (la
+    // anterior se cobró y se abrió una sesión nueva en la misma mesa). Si
+    // seguimos, `prePaymentOrder` se queda con la orden VIEJA mientras
+    // `prePaymentItems` sale de la NUEVA → la factura mezcla dos órdenes:
+    // encabezado, NCF, hora y pagos de una; productos y totales de la otra.
+    // Además `total` y `checkId` (parámetros) también quedarían stale, así que
+    // cobrar sería cobrar la orden equivocada. Abortamos: el cajero vuelve a
+    // entrar a la mesa y cobra lo que de verdad hay.
+    // Caso real 2026-08-30: MESA4, ticket con ORDEN/NCF de AA2686EE (537.60,
+    // ya cobrada) sobre los ítems de DB5FE207 (710.72, sin cobrar).
+    final freshOrder = currentOrderState.order;
+    if (freshOrder != null && freshOrder.id != order.id) {
+      await showDialog<void>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+          title: const Text('La mesa cambió'),
+          content: const Text(
+            'Esta mesa ya no tiene la misma cuenta que cuando abriste el '
+            'cobro: se cerró y se abrió una cuenta nueva.\n\n'
+            'No se cobró nada. Vuelve a entrar a la mesa para cobrar la '
+            'cuenta correcta.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dctx),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     // ── Gate de FEE DE DELIVERY PROPIO ───────────────────────────────────
     // En un delivery propio (origin 'delivery' + deliveryType 'own') el cajero
     // define el monto del envío como cargo EXENTO antes de cobrar. Obligatorio
@@ -2532,7 +2567,12 @@ class _CartView extends ConsumerWidget {
     final prePaymentItems = checkId == null
         ? List<OrderItem>.from(currentOrderState.items)
         : currentOrderState.items.where((i) => i.checkId == checkId).toList();
-    var prePaymentOrder = order;
+    // Cinturón y tirantes del guard de identidad de arriba: la orden que
+    // imprime el comprobante sale del MISMO estado fresco del que salen los
+    // ítems (`currentOrderState`), nunca del parámetro capturado. Así las dos
+    // mitades del ticket —encabezado/NCF/hora por `order.id`, productos y
+    // totales por los ítems— no pueden pertenecer a órdenes distintas.
+    var prePaymentOrder = currentOrderState.order ?? order;
     if (checkId != null) {
       try {
         final check = currentOrderState.checks.firstWhere(

@@ -1283,6 +1283,40 @@ class PrintTicketService {
     /// Viene de `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
   }) {
+    // ── CANDADO: los ítems TIENEN que ser de esta orden ──────────────────
+    // Una factura es un documento fiscal: el encabezado (nº de orden, NCF,
+    // hora) y los productos deben salir del MISMO pedido. Si un caller arma
+    // el ticket con una `order` y unos `items` de orígenes distintos, sale un
+    // comprobante que ampara mercancía que ese NCF no vendió — y como los
+    // totales se recalculan desde los ítems, ni siquiera cuadra consigo
+    // mismo. Pasó de verdad el 2026-08-30 (MESA4: encabezado, NCF y pagos de
+    // una orden ya cobrada sobre los productos de la cuenta siguiente).
+    //
+    // `generateInvoice` es el único punto por el que pasa TODA factura
+    // (cobro, copia post-pago, reimpresión del historial, replay de la cola
+    // offline, fan-out a impresoras extra), así que el candado va aquí y no
+    // en cada call site. Rompe fuerte a propósito: es preferible no imprimir
+    // a imprimir un comprobante fiscal falso.
+    //
+    // Tolerante con lo que legítimamente no trae orden: los ítems locales aún
+    // sin sincronizar y los snapshots armados a mano llevan `orderId` vacío.
+    if (order.id.isNotEmpty) {
+      final ajenos = items
+          .where((i) => i.orderId.isNotEmpty && i.orderId != order.id)
+          .toList(growable: false);
+      if (ajenos.isNotEmpty) {
+        final muestra = ajenos
+            .take(3)
+            .map((i) => '${i.productName} (orden ${i.orderId})')
+            .join(', ');
+        throw StateError(
+          'Factura inconsistente: ${ajenos.length} de ${items.length} '
+          'productos no pertenecen a la orden ${order.id}. $muestra. '
+          'No se imprime: el comprobante ampararía mercancía de otra cuenta.',
+        );
+      }
+    }
+
     _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: paperWidth);
     // 58mm = 32 columnas (16 a doble ancho). Los bloques que van en 2x
