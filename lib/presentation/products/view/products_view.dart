@@ -467,6 +467,26 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     );
   }
 
+  /// Traduce el error del borrado.
+  ///
+  /// Desde `20260902_0006` hay una foreign key de `order_items.product_id`
+  /// hacia `menu_items`, así que borrar un producto con ventas falla con
+  /// 23503. Es a propósito: antes el DELETE pasaba y el histórico quedaba
+  /// apuntando a un producto inexistente, con los reportes perdiendo esas
+  /// ventas en silencio. El mensaje tiene que decir qué hacer en su lugar.
+  static String _mensajeBorrado(Object e) {
+    final texto = e.toString();
+    final esFk = texto.contains('23503') ||
+        texto.contains('order_items_product_id_fkey') ||
+        texto.toLowerCase().contains('foreign key');
+    if (esFk) {
+      return 'Este producto tiene ventas registradas, así que no se puede '
+          'eliminar sin romper el histórico. Desactivalo en su ficha '
+          '(quitar "Activo") y deja de aparecer en la caja.';
+    }
+    return 'No se pudo eliminar el producto: $e';
+  }
+
   void _confirmDelete(
     BuildContext context,
     ProductsViewModel viewModel,
@@ -505,10 +525,7 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
                 await viewModel.deleteProduct(id);
                 AppToast.success(pageContext, 'Producto eliminado.');
               } catch (e) {
-                AppToast.error(
-                  pageContext,
-                  'No se pudo eliminar el producto: $e',
-                );
+                AppToast.error(pageContext, _mensajeBorrado(e));
               }
             },
             style: TextButton.styleFrom(foregroundColor: AppColors.destructive),

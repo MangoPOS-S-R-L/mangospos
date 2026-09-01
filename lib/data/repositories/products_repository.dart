@@ -239,6 +239,22 @@ class ProductsRepository {
     return Map<String, dynamic>.from(created);
   }
 
+  /// Id del insumo ligado a un producto inventariable, o null si el producto
+  /// no lleva stock propio.
+  ///
+  /// Lo usa el conteo físico: un producto recién creado se cuenta a través de
+  /// su insumo (`fn_menu_item_set_inventory_tracked` lo crea y deja el enlace
+  /// en `menu_items.inventory_item_id`), no del `menu_item`.
+  Future<String?> getLinkedInventoryItemId(String menuItemId) async {
+    final row = await _client
+        .from(ProductsQueries.tableMenuItems)
+        .select('inventory_item_id')
+        .eq('id', menuItemId)
+        .maybeSingle();
+    final id = row?['inventory_item_id']?.toString();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
   /// Ajusta la unidad base + empaque del insumo LIGADO a un producto
   /// (creado por `fn_menu_item_set_inventory_tracked`). No-op si no hay
   /// insumo ligado o no se pasó nada. Ver core/inventory/unit_conversion.

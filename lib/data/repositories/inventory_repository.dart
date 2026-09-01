@@ -905,6 +905,34 @@ class InventoryRepository {
     }
   }
 
+  /// Un insumo por id, para EDITAR su ficha desde una pantalla que no carga
+  /// el catálogo completo.
+  ///
+  /// POR QUÉ NO ALCANZA [getItems]: ese listado devuelve lo PRESENTE en una
+  /// bodega (más los huérfanos, si la bodega es la principal). Las líneas de
+  /// un conteo físico, en cambio, incluyen TODOS los insumos activos del
+  /// negocio, así que hay renglones que el listado no trae. Sin esto, editar
+  /// justo el insumo que falta corregir sería imposible.
+  ///
+  /// OJO: `stock` vuelve en 0 — no se consulta existencia. Sirve para el
+  /// formulario del maestro, no para mostrar cantidades.
+  Future<InventoryItemSummary?> getItemById(String itemId) async {
+    const columns =
+        'id, sku, name, description, unit, cost, min_stock, max_stock, '
+        'is_active, costing_method, barcode, tracks_lots, item_classification, '
+        'purchase_unit, pack_size';
+    final row = await _client
+        .from(InventoryQueries.tableInventoryItems)
+        .select(columns)
+        .eq('id', itemId)
+        .maybeSingle();
+    if (row == null) return null;
+    return InventoryItemSummary.fromMap(
+      Map<String, dynamic>.from(row),
+      stock: 0,
+    );
+  }
+
   /// Insumos del negocio con el stock DESGLOSADO por bodega (Insumos v2).
   ///
   /// A diferencia de [getItems] —que devuelve lo PRESENTE en una bodega—

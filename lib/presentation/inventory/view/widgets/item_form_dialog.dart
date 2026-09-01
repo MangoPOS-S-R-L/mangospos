@@ -23,12 +23,31 @@ class ItemFormDialog extends StatefulWidget {
   /// edición (ahí manda el nombre guardado).
   final String? initialName;
 
+  /// Arranca con el foco en el CÓDIGO DE BARRAS en vez del nombre. Lo usa el
+  /// conteo físico: se entra a la ficha justamente porque el insumo no tiene
+  /// código, y así se dispara la pistola sin tocar el mouse. Con el foco en
+  /// el nombre, un escaneo sobrescribiría el nombre del insumo.
+  final bool focusBarcode;
+
+  /// Código con el que arranca la ficha al CREARLA. Lo usa el conteo físico
+  /// cuando se escanea algo que no existe: se da de alta el insumo con ese
+  /// mismo código, que es el que la pistola va a volver a leer.
+  final String? initialBarcode;
+
+  /// Se llama con la fila recién insertada, ANTES de cerrar el diálogo. El
+  /// `pop` solo dice "se guardó"; quien necesita el id del insumo nuevo —el
+  /// conteo, para sumarlo a la sesión— lo recibe por acá.
+  final void Function(Map<String, dynamic> created)? onCreated;
+
   const ItemFormDialog({
     super.key,
     required this.businessId,
     required this.repo,
     this.edit,
     this.initialName,
+    this.focusBarcode = false,
+    this.initialBarcode,
+    this.onCreated,
   });
 
   @override
@@ -64,7 +83,9 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
       text: e?.name ?? widget.initialName?.trim() ?? '',
     );
     _skuCtrl = TextEditingController(text: e?.sku ?? '');
-    _barcodeCtrl = TextEditingController(text: e?.barcode ?? '');
+    _barcodeCtrl = TextEditingController(
+      text: e?.barcode ?? widget.initialBarcode?.trim() ?? '',
+    );
     _descCtrl = TextEditingController(text: e?.description ?? '');
     _unitCtrl = TextEditingController(text: e?.unit ?? 'unidad');
     _purchaseUnitCtrl = TextEditingController(text: e?.purchaseUnit ?? '');
@@ -216,7 +237,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           packSize: _packSizeForSave(),
         );
       } else {
-        await widget.repo.createItem(
+        final created = await widget.repo.createItem(
           businessId: widget.businessId,
           name: name,
           sku: _orNull(_skuCtrl.text),
@@ -235,6 +256,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           purchaseUnit: _orNull(_purchaseUnitCtrl.text),
           packSize: _packSizeForSave(),
         );
+        widget.onCreated?.call(created);
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -262,7 +284,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
               TextField(
                 controller: _nameCtrl,
                 decoration: const InputDecoration(labelText: 'Nombre *'),
-                autofocus: true,
+                autofocus: !widget.focusBarcode,
               ),
               const SizedBox(height: 12),
               Row(
@@ -277,6 +299,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
                   Expanded(
                     child: TextField(
                       controller: _barcodeCtrl,
+                      autofocus: widget.focusBarcode,
                       decoration: const InputDecoration(
                         labelText: 'Código de barras',
                         hintText: 'EAN-13, UPC, etc.',

@@ -114,6 +114,7 @@ class PhysicalCountSummary {
   PhysicalCountSummary withCounters({
     required int countedLines,
     required int pendingRecount,
+    int? linesCount,
   }) {
     return PhysicalCountSummary(
       id: id,
@@ -128,7 +129,7 @@ class PhysicalCountSummary {
       frozenAt: frozenAt,
       completedAt: completedAt,
       cancelledAt: cancelledAt,
-      linesCount: linesCount,
+      linesCount: linesCount ?? this.linesCount,
       countedLines: countedLines,
       adjustmentsCount: adjustmentsCount,
       pendingRecount: pendingRecount,
@@ -248,6 +249,32 @@ class PhysicalCountLine {
       firstCountQuantity: wasRecount ? countedQuantity : firstCountQuantity,
       recountRequested: false,
       recountedAt: wasRecount ? DateTime.now() : recountedAt,
+      stockAtComplete: stockAtComplete,
+      appliedVariance: appliedVariance,
+      unitCost: unitCost,
+      varianceValue: varianceValue,
+      unitCostCurrent: unitCostCurrent,
+      counterNotes: counterNotes,
+      appliedAdjustmentId: appliedAdjustmentId,
+    );
+  }
+
+  /// Copia con el nombre/SKU recién editados en la ficha del insumo. El
+  /// renglón no guarda esos datos: los une la vista desde el maestro, así que
+  /// al corregir la ficha desde el conteo la pantalla tiene que reflejarlo
+  /// sin volver a bajar la sesión entera.
+  PhysicalCountLine withItemInfo({required String name, String? sku}) {
+    return PhysicalCountLine(
+      id: id,
+      itemId: itemId,
+      itemName: name,
+      unit: unit,
+      snapshotQuantity: snapshotQuantity,
+      itemSku: sku,
+      countedQuantity: countedQuantity,
+      firstCountQuantity: firstCountQuantity,
+      recountRequested: recountRequested,
+      recountedAt: recountedAt,
       stockAtComplete: stockAtComplete,
       appliedVariance: appliedVariance,
       unitCost: unitCost,
@@ -412,6 +439,40 @@ class PhysicalCountRepository {
         'p_counted_quantity': countedQuantity,
         'p_notes': notes,
       },
+    );
+  }
+
+  /// Suma un insumo a una sesión YA CONGELADA.
+  ///
+  /// El congelado arma las líneas con los insumos activos de ese momento, así
+  /// que lo que aparece después —una ficha recién creada, o la mercancía que
+  /// nadie había dado de alta— no tiene dónde anotarse: `setCount` responde
+  /// `LINE_NOT_FOUND_IN_SESSION`. Ver migración `20260902_0004`.
+  ///
+  /// Idempotente: si la línea ya existía la devuelve con
+  /// `alreadyExisted = true` en vez de fallar.
+  Future<({String lineId, double snapshotQuantity, bool alreadyExisted})>
+      addItem({
+    required String sessionId,
+    required String itemId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_physical_count_add_item',
+      params: {
+        'p_session_id': sessionId,
+        'p_item_id': itemId,
+      },
+    );
+    final map = response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
+    final snapshot = map['snapshot_quantity'];
+    return (
+      lineId: map['line_id']?.toString() ?? '',
+      snapshotQuantity: snapshot is num
+          ? snapshot.toDouble()
+          : double.tryParse(snapshot?.toString() ?? '') ?? 0,
+      alreadyExisted: map['already_existed'] == true,
     );
   }
 

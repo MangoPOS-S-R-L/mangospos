@@ -100,6 +100,18 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
   })
   onUpdate;
 
+  /// Nombre y código con los que arranca la ficha al CREARLA. Los usa el
+  /// conteo físico cuando se escanea algo que no existe: el producto se da de
+  /// alta con el mismo código que la pistola acaba de leer. Ignorados en
+  /// edición (ahí manda lo guardado).
+  final String? initialName;
+  final String? initialBarcode;
+
+  /// Arranca con "Inventariable" encendido. Desde el conteo lo que se está
+  /// dando de alta es mercancía que hay que contar: sin stock propio el
+  /// producto no entra al inventario y no habría nada que contar.
+  final bool initialInventoryTracked;
+
   const AddEditProductDialog({
     super.key,
     this.product,
@@ -109,6 +121,9 @@ class AddEditProductDialog extends ConsumerStatefulWidget {
     this.onCreateCategory,
     required this.onAdd,
     required this.onUpdate,
+    this.initialName,
+    this.initialBarcode,
+    this.initialInventoryTracked = false,
   });
 
   @override
@@ -220,14 +235,18 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     super.initState();
     final p = widget.product;
     _categories = List<Map<String, dynamic>>.from(widget.categories);
-    _nameController = TextEditingController(text: p?['name'] ?? '');
+    _nameController = TextEditingController(
+      text: p?['name'] ?? widget.initialName?.trim() ?? '',
+    );
     _descController = TextEditingController(text: p?['description'] ?? '');
     _priceController = TextEditingController(
       text: p?['price']?.toString() ?? '0',
     );
     _costController = TextEditingController(text: p?['cost']?.toString() ?? '');
     _skuController = TextEditingController(text: p?['sku'] ?? '');
-    _barcodeController = TextEditingController(text: p?['barcode'] ?? '');
+    _barcodeController = TextEditingController(
+      text: p?['barcode'] ?? widget.initialBarcode?.trim() ?? '',
+    );
     _presentationController =
         TextEditingController(text: p?['presentation']?.toString() ?? '');
 
@@ -251,8 +270,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     _hasVariants = p?['has_variants'] ?? false;
     _itemType = p?['item_type']?.toString() ?? 'standard';
     _printAreaCode = p?['print_area_code']?.toString();
-    _isInventoryTracked = p?['is_inventory_tracked'] == true;
-    _wasInventoryTrackedInitially = _isInventoryTracked;
+    _isInventoryTracked = p == null
+        ? widget.initialInventoryTracked
+        : p['is_inventory_tracked'] == true;
+    // OJO: se mide contra lo GUARDADO, no contra el valor de arranque. En un
+    // alta siempre es false, y de eso depende que se muestre el bloque de
+    // stock inicial.
+    _wasInventoryTrackedInitially = p?['is_inventory_tracked'] == true;
     _initialStockController = TextEditingController(text: '0');
     _invPurchaseUnitController = TextEditingController();
     _invPackSizeController = TextEditingController();

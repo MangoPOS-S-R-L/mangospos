@@ -331,7 +331,11 @@ class ProductsViewModel extends ChangeNotifier {
     return const <String, dynamic>{};
   }
 
-  Future<void> addProduct({
+  /// Devuelve la fila del producto recién creado (o null si no hay negocio
+  /// resuelto). Quien lo llama desde otra pantalla —el conteo físico, para
+  /// sumar el producto al inventario que está contando— necesita el id; el
+  /// diálogo de productos lo ignora.
+  Future<Map<String, dynamic>?> addProduct({
     required String name,
     required double price,
     required String? categoryId,
@@ -364,7 +368,7 @@ class ProductsViewModel extends ChangeNotifier {
     String? purchaseUnit,
     double? packSize,
   }) async {
-    if (_businessId == null) return;
+    if (_businessId == null) return null;
 
     try {
       String? imagePath;
@@ -446,6 +450,7 @@ class ProductsViewModel extends ChangeNotifier {
       await _fetchProducts();
       _error = null;
       notifyListeners();
+      return Map<String, dynamic>.from(created);
     } catch (e) {
       debugPrint('Error adding product: $e');
       rethrow;

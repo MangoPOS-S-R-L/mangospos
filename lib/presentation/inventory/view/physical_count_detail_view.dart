@@ -10,6 +10,33 @@
 // "Diferencia" y "Valor" quedan ocultas mientras se cuenta, para que quien
 // cuenta no sepa lo que "debería" haber. Quien tiene permiso de completar
 // puede revelarlas para decidir recuentos; al completar se revelan siempre.
+//
+// EDITAR LA FICHA SIN SALIR: cada renglón lleva un botón al lado del nombre
+// que abre el formulario del maestro (el mismo de Insumos). Nació de un caso
+// concreto del piso: el insumo no tiene código de barras, la pistola no lo
+// encuentra y hay que teclearlo entre cientos de líneas. Con el botón se
+// escanea dentro de la ficha, se guarda, y de ahí en adelante la pistola
+// resuelve ese código en esta misma pantalla. El botón se pinta en ámbar
+// solo cuando el insumo no tiene NI código de barras NI SKU: con cualquiera
+// de los dos ya es escaneable.
+//
+// AGREGAR LO QUE NO ESTÁ: el congelado arma las líneas con los insumos
+// activos DE ESE MOMENTO, así que la mercancía que aparece en el anaquel sin
+// ficha —o el insumo dado de alta después de congelar— no tenía dónde
+// anotarse. Ahora se suma a la sesión en caliente (`fn_physical_count_add_item`,
+// migración 20260902_0004), sea desde el botón "Agregar" o desde un escaneo
+// que no resolvió.
+//
+// PRODUCTO O INSUMO — son dos altas distintas y las dos hacen falta:
+//   · INSUMO  (`inventory_items`): se cuenta y se consume, no se vende.
+//   · PRODUCTO (`menu_items`): se vende en la caja. Para poder contarlo tiene
+//     que ser INVENTARIABLE, porque lo que se cuenta no es el producto sino
+//     el insumo que el sistema le crea al activarle stock propio
+//     (`menu_items.inventory_item_id`). Por eso el diálogo se abre con
+//     "Inventariable" ya encendido y, si igual se apaga, el producto se crea
+//     pero NO entra a la sesión — y se avisa.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,9 +47,15 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/export/report_exporter.dart';
 import 'package:mangopos/data/repositories/physical_count_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../data/utils/business_id_resolver.dart';
+import '../../products/viewmodel/products_viewmodel.dart';
+import '../../products/widgets/add_edit_product_dialog.dart';
 import '../services/inventory_scan.dart';
+import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
+import 'widgets/item_form_dialog.dart';
 
 class PhysicalCountDetailView extends ConsumerStatefulWidget {
   final String sessionId;
@@ -46,6 +79,10 @@ class _PhysicalCountDetailViewState
   // Filtro: solo líneas con diferencia (para revisar antes de cerrar).
   bool _onlyDifferences = false;
   String _search = '';
+  // El escaneo (y el alta de un insumo) filtran la lista por su nombre. Sin
+  // controlador el campo quedaba vacío mientras la lista mostraba un solo
+  // renglón: parecía que la pantalla se había vaciado.
+  final TextEditingController _searchCtrl = TextEditingController();
 
   // El supervisor revela el stock del sistema en una sesión a ciegas para
   // poder decidir qué mandar a recuento.
@@ -54,6 +91,30 @@ class _PhysicalCountDetailViewState
   // Selección para pedir 2ª vuelta.
   final Set<String> _selected = {};
   bool _selectionMode = false;
+
+  // Con un diálogo encima, la pistola NO debe filtrar la lista de atrás: sus
+  // caracteres van al campo de texto enfocado (el despachador observa sin
+  // consumir). Se sigue escuchando —para que el escaneo no caiga en la
+  // pantalla de ventas, que queda viva en el shell— pero se ignora.
+  bool _dialogOpen = false;
+
+  /// Fichas editadas SIN salir del conteo. Pisan al catálogo del módulo y
+  /// además cubren al insumo que ese catálogo no trae (filtra por bodega;
+  /// el conteo incluye todos los activos del negocio).
+  final Map<String, InventoryItemSummary> _itemOverrides = {};
+
+  // Índice memoizado del catálogo: se rehace solo cuando cambia la lista de
+  // origen o se edita una ficha. Se recorre en cada build (buscar es teclear)
+  // y el catálogo tiene miles de insumos.
+  List<InventoryItemSummary>? _catalogoBase;
+  List<InventoryItemSummary> _catalogoParaEscaneo = const [];
+  Map<String, InventoryItemSummary> _catalogoPorId = const {};
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -93,6 +154,26 @@ class _PhysicalCountDetailViewState
         _loading = false;
       });
     }
+  }
+
+  /// Vuelve a bajar la sesión entera, a pedido.
+  ///
+  /// El conteo normal NO recarga (ver `_saveLine`): con mil líneas eso apaga
+  /// la pantalla y pierde el scroll. Pero cuando las líneas cambian por fuera
+  /// —otra terminal, o insumos nuevos metidos a la sesión— hace falta pedirlo
+  /// explícitamente. Se avisa cuántos renglones aparecieron.
+  Future<void> _recargar() async {
+    final antes = _detail?.lines.length ?? 0;
+    await _load();
+    if (!mounted) return;
+    final ahora = _detail?.lines.length ?? 0;
+    final nuevos = ahora - antes;
+    AppToast.info(
+      context,
+      nuevos > 0
+          ? '$nuevos item(s) nuevos en la sesión. Ahora son $ahora.'
+          : 'Sesión al día: $ahora item(s).',
+    );
   }
 
   /// Oculta el stock del sistema: sesión a ciegas, en conteo y sin revelar.
@@ -603,26 +684,565 @@ class _PhysicalCountDetailViewState
   /// renglones. No se escribe el número solo — el conteo es justamente el
   /// dato que aporta la persona.
   void _aislarLinea(String itemId, String nombre) {
+    if (_dialogOpen) return;
     final lineas = _detail?.lines ?? const [];
     if (!lineas.any((l) => l.itemId == itemId)) {
+      // Existe en el catálogo pero no en la sesión: se dio de alta DESPUÉS de
+      // congelar. En vez de rebotar al operador, se ofrece sumarlo.
+      final ficha = _fichaDe(itemId);
+      if (ficha != null && _puedeAgregarALaSesion) {
+        unawaited(_ofrecerAgregarExistente(ficha));
+        return;
+      }
       AppToast.warning(context, '$nombre no está en esta sesión de conteo.');
       return;
     }
-    setState(() => _search = nombre);
+    _filtrarPor(nombre);
+  }
+
+  /// Deja la lista en un solo renglón y lo dice en el buscador.
+  void _filtrarPor(String texto) {
+    _searchCtrl.text = texto;
+    setState(() => _search = texto);
+  }
+
+  /// ¿Se puede sumar mercancía a esta sesión? Hace falta que esté en conteo y
+  /// que la persona pueda dar de alta en ALGUNO de los dos catálogos: el
+  /// maestro de insumos o el de productos. Son permisos distintos y hay
+  /// gente que tiene uno solo.
+  bool get _puedeAgregarALaSesion {
+    if (_detail?.header.status != PhysicalCountStatus.inProgress) return false;
+    final sesion = ref.read(sessionProvider.notifier);
+    return sesion.hasPermission('inventario.productos.crear_editar') ||
+        sesion.hasPermission('productos.crear');
+  }
+
+  /// Rehace el índice del catálogo si cambió la lista o alguna ficha.
+  /// Se llama desde `build`: solo cachea datos derivados.
+  void _reindexarCatalogo(List<InventoryItemSummary> base) {
+    if (identical(base, _catalogoBase)) return;
+    _catalogoBase = base;
+    if (_itemOverrides.isEmpty) {
+      _catalogoParaEscaneo = base;
+      _catalogoPorId = {for (final i in base) i.id: i};
+      return;
+    }
+    final porId = <String, InventoryItemSummary>{
+      for (final i in base) i.id: _itemOverrides[i.id] ?? i,
+    };
+    // Las editadas acá que el listado no trae entran igual: son justo las que
+    // acaban de recibir código y la pistola tiene que resolver.
+    for (final entry in _itemOverrides.entries) {
+      porId.putIfAbsent(entry.key, () => entry.value);
+    }
+    _catalogoPorId = porId;
+    _catalogoParaEscaneo = porId.values.toList(growable: false);
+  }
+
+  /// La ficha del insumo de una línea, si se conoce. Null = el catálogo del
+  /// módulo no la trae todavía (y no se ha editado acá).
+  InventoryItemSummary? _fichaDe(String itemId) => _catalogoPorId[itemId];
+
+  /// Editar la ficha del insumo SIN salir del conteo.
+  ///
+  /// El caso que lo pide: el renglón no tiene código de barras, así que la
+  /// pistola no lo encuentra y hay que buscarlo tecleando entre cientos de
+  /// líneas. Se abre el MISMO formulario del maestro (Insumos), con el campo
+  /// del código enfocado cuando está vacío: se escanea, se guarda y se sigue
+  /// contando.
+  Future<void> _editarInsumo(PhysicalCountLine line) async {
+    if (_dialogOpen || _busy) return;
+    final repo = ref.read(inventoryRepositoryProvider);
+    final vm = ref.read(inventoryViewModelProvider);
+
+    var ficha = _fichaDe(line.itemId);
+    if (ficha == null) {
+      // El catálogo del módulo filtra por bodega; el conteo trae TODOS los
+      // insumos activos. El que falte se busca por id.
+      setState(() => _busy = true);
+      try {
+        ficha = await repo.getItemById(line.itemId);
+      } catch (e) {
+        ficha = null;
+        if (mounted) {
+          AppToast.error(context, 'No se pudo abrir "${line.itemName}": $e');
+        }
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (!mounted) return;
+      if (ficha == null) return;
+    }
+
+    final businessId = vm.state.businessId ??
+        await resolveBusinessIdOrNull(Supabase.instance.client, 'auto');
+    if (!mounted) return;
+    if (businessId == null) {
+      AppToast.error(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+
+    final sinCodigo = ficha.barcode.trim().isEmpty;
+    _dialogOpen = true;
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => ItemFormDialog(
+        businessId: businessId,
+        repo: repo,
+        edit: ficha,
+        focusBarcode: sinCodigo,
+      ),
+    );
+    _dialogOpen = false;
+    if (saved != true || !mounted) return;
+
+    // Se relee SOLO esa ficha. Recargar el catálogo entero —o la sesión, con
+    // sus mil líneas— por un renglón editado apaga la pantalla en medio del
+    // conteo y hace perder el scroll.
+    InventoryItemSummary? fresca;
+    try {
+      fresca = await repo.getItemById(line.itemId);
+    } catch (_) {
+      fresca = null; // Se guardó igual; solo se pierde el refresco en pantalla.
+    }
+    if (!mounted) return;
+    setState(() {
+      if (fresca != null) {
+        _itemOverrides[line.itemId] = fresca;
+        // El renglón muestra el nombre/SKU que la vista trae del maestro: si
+        // se renombró el insumo, la lista no puede seguir diciendo lo viejo.
+        final actual = _detail;
+        if (actual != null &&
+            (fresca.name != line.itemName ||
+                (fresca.sku.isEmpty ? null : fresca.sku) != line.itemSku)) {
+          _detail = PhysicalCountDetail(
+            header: actual.header,
+            lines: [
+              for (final l in actual.lines)
+                l.itemId == line.itemId
+                    ? l.withItemInfo(
+                        name: fresca.name,
+                        sku: fresca.sku.isEmpty ? null : fresca.sku,
+                      )
+                    : l,
+            ],
+          );
+        }
+      }
+      _catalogoBase = null; // fuerza reindexar con la ficha nueva
+    });
+    // La pistola resuelve por código de barras o por SKU: se avisa con el que
+    // haya quedado cargado, para que quien cuenta sepa que ya puede escanear.
+    final codigo = fresca?.barcode.trim() ?? '';
+    final sku = fresca?.sku.trim() ?? '';
+    final identificador = codigo.isNotEmpty ? codigo : sku;
+    AppToast.success(
+      context,
+      identificador.isEmpty
+          ? 'Ficha de "${line.itemName}" actualizada.'
+          : '${codigo.isNotEmpty ? 'Código' : 'SKU'} $identificador '
+              'guardado: la pistola ya encuentra "${line.itemName}".',
+    );
   }
 
   /// Sin catálogo cargado (o con un insumo que no está en él), se intenta el
   /// SKU de las líneas antes de darse por vencido.
   void _escaneoSinCatalogo(String code) {
+    if (_dialogOpen) return;
     final lower = code.toLowerCase();
     final lineas = _detail?.lines ?? const [];
     final hit = lineas
         .where((l) => (l.itemSku ?? '').trim().toLowerCase() == lower);
     if (hit.length == 1) {
-      setState(() => _search = hit.first.itemName);
+      _filtrarPor(hit.first.itemName);
+      return;
+    }
+    if (_puedeAgregarALaSesion) {
+      unawaited(_ofrecerAlta(code));
       return;
     }
     AppToast.warning(context, 'Ningún insumo con el código "$code".');
+  }
+
+  /// Escaneó algo que no existe: se ofrece darlo de alta con ESE código y
+  /// sumarlo al conteo. Es el caso del inventario de arranque, donde media
+  /// bodega nunca se cargó al sistema.
+  Future<void> _ofrecerAlta(String code) async {
+    if (_dialogOpen) return;
+    final sesion = ref.read(sessionProvider.notifier);
+    final canCrearProducto = sesion.hasPermission('productos.crear');
+    final canCrearInsumo =
+        sesion.hasPermission('inventario.productos.crear_editar');
+    _dialogOpen = true;
+    final que = await showDialog<_AltaTipo>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No encontrado'),
+        content: Text(
+          'Ningún artículo con el código "$code".\n\n'
+          '¿Qué querés dar de alta con ese código y agregar al conteo?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Cancelar'),
+          ),
+          if (canCrearInsumo)
+            OutlinedButton(
+              onPressed: () => Navigator.pop(ctx, _AltaTipo.insumo),
+              child: const Text('Insumo'),
+            ),
+          if (canCrearProducto)
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: MangoColors.primaryOrange,
+              ),
+              onPressed: () => Navigator.pop(ctx, _AltaTipo.producto),
+              child: const Text('Producto'),
+            ),
+        ],
+      ),
+    );
+    _dialogOpen = false;
+    if (que == null || !mounted) return;
+    if (que == _AltaTipo.producto) {
+      await _crearProductoNuevo(codigo: code);
+    } else {
+      await _crearInsumoNuevo(codigo: code);
+    }
+  }
+
+  /// El insumo existe en el catálogo pero quedó fuera del congelado.
+  Future<void> _ofrecerAgregarExistente(InventoryItemSummary item) async {
+    if (_dialogOpen) return;
+    _dialogOpen = true;
+    final agregar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No está en esta sesión'),
+        content: Text(
+          '"${item.name}" existe en el catálogo pero no entró en este conteo '
+          '(se dio de alta después de congelar).\n\n'
+          '¿Agregarlo a la sesión para contarlo?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: MangoColors.primaryOrange,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Agregar al conteo'),
+          ),
+        ],
+      ),
+    );
+    _dialogOpen = false;
+    if (agregar != true || !mounted) return;
+    await _agregarLineaSesion(item);
+  }
+
+  /// Da de alta un PRODUCTO de menú (se vende en la caja) y lo suma al
+  /// conteo a través del insumo que le crea el tracking de inventario.
+  ///
+  /// Se abre el mismo diálogo de la pantalla de Productos: precio, categoría,
+  /// menú, impuestos y áreas de impresión no se pueden inventar acá.
+  Future<void> _crearProductoNuevo({String? codigo}) async {
+    if (_dialogOpen || _busy) return;
+    final productsVm = ref.read(productsViewModelProvider);
+    // El diálogo necesita categorías y menús; el conteo no los carga. Se
+    // traen recién ahora, no al abrir la pantalla.
+    if (productsVm.categories.isEmpty || productsVm.menus.isEmpty) {
+      setState(() => _busy = true);
+      try {
+        await productsVm.init();
+      } catch (e) {
+        if (mounted) {
+          AppToast.error(context, 'No se pudo cargar el catálogo: $e');
+        }
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      if (!mounted) return;
+      if (productsVm.categories.isEmpty) {
+        AppToast.warning(
+          context,
+          'No hay categorías de producto todavía. Creá una en Productos.',
+        );
+        return;
+      }
+    }
+
+    _dialogOpen = true;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AddEditProductDialog(
+        categories: productsVm.categories,
+        menus: productsVm.menus,
+        existingPresentations: productsVm.presentationOptions,
+        onCreateCategory: (name) => productsVm.createCategory(name: name),
+        initialBarcode: codigo,
+        // Lo que se da de alta en un conteo es mercancía que hay que contar.
+        initialInventoryTracked: true,
+        onAdd: ({
+          required name,
+          required price,
+          required categoryId,
+          taxMode = 'exclusive',
+          sku,
+          description,
+          menuId,
+          cost,
+          barcode,
+          hasVariants = false,
+          isActive = true,
+          itemType = 'standard',
+          printAreaCode,
+          presentation,
+          printAreaIds,
+          imageFile,
+          imageBytes,
+          taxIds = const [],
+          isInventoryTracked = false,
+          initialStock = 0,
+          initialStockByWarehouse,
+          allowNegativeSale = false,
+          baseUnit,
+          purchaseUnit,
+          packSize,
+        }) async {
+          // El diálogo NO espera esta llamada: se cierra apenas la dispara.
+          // El alta y el alta-en-la-sesión siguen acá, con la pantalla del
+          // conteo ya de vuelta al frente.
+          try {
+            final creado = await productsVm.addProduct(
+              name: name,
+              price: price,
+              categoryId: categoryId,
+              taxMode: taxMode,
+              sku: sku,
+              description: description,
+              menuId: menuId,
+              cost: cost,
+              barcode: barcode,
+              hasVariants: hasVariants,
+              isActive: isActive,
+              itemType: itemType,
+              printAreaCode: printAreaCode,
+              presentation: presentation,
+              printAreaIds: printAreaIds,
+              imageFile: imageFile,
+              imageBytes: imageBytes,
+              taxIds: taxIds,
+              isInventoryTracked: isInventoryTracked,
+              initialStock: initialStock,
+              initialStockByWarehouse: initialStockByWarehouse,
+              allowNegativeSale: allowNegativeSale,
+              baseUnit: baseUnit,
+              purchaseUnit: purchaseUnit,
+              packSize: packSize,
+            );
+            await _sumarProductoAlConteo(creado, name);
+          } catch (e) {
+            if (mounted) {
+              AppToast.error(context, 'No se pudo crear "$name": $e');
+            }
+          }
+        },
+        // Nunca se llama: acá siempre se CREA (product == null).
+        onUpdate:
+            ({
+              required id,
+              required name,
+              required price,
+              required categoryId,
+              taxMode = 'exclusive',
+              sku,
+              required isActive,
+              description,
+              menuId,
+              cost,
+              barcode,
+              hasVariants = false,
+              itemType = 'standard',
+              printAreaCode,
+              presentation,
+              printAreaIds,
+              imageFile,
+              imageBytes,
+              taxIds = const [],
+              isInventoryTracked,
+              initialStock = 0,
+              initialStockByWarehouse,
+              allowNegativeSale,
+            }) {},
+      ),
+    );
+    _dialogOpen = false;
+  }
+
+  /// Puente producto → conteo: lo que se cuenta es el INSUMO ligado.
+  Future<void> _sumarProductoAlConteo(
+    Map<String, dynamic>? creado,
+    String nombre,
+  ) async {
+    if (!mounted) return;
+    final productId = creado?['id']?.toString();
+    if (productId == null || productId.isEmpty) {
+      AppToast.warning(
+        context,
+        '"$nombre" se creó, pero no se pudo agregar al conteo. Buscalo tras '
+        'volver a abrir la sesión.',
+      );
+      return;
+    }
+    String? invId;
+    try {
+      invId = await ref
+          .read(productsRepositoryProvider)
+          .getLinkedInventoryItemId(productId);
+    } catch (_) {
+      invId = null;
+    }
+    if (!mounted) return;
+    if (invId == null) {
+      // Se creó sin stock propio: no hay insumo que contar.
+      AppToast.warning(
+        context,
+        '"$nombre" se creó como producto, pero sin inventario propio: no '
+        'entra en el conteo. Activale "Inventariable" en Productos.',
+      );
+      return;
+    }
+    InventoryItemSummary? item;
+    try {
+      item = await ref.read(inventoryRepositoryProvider).getItemById(invId);
+    } catch (_) {
+      item = null;
+    }
+    if (!mounted) return;
+    if (item == null) {
+      AppToast.warning(
+        context,
+        '"$nombre" se creó, pero no se pudo leer su insumo para agregarlo al '
+        'conteo.',
+      );
+      return;
+    }
+    await _agregarLineaSesion(item);
+  }
+
+  /// Da de alta un insumo que no existía y lo suma al conteo.
+  Future<void> _crearInsumoNuevo({String? codigo}) async {
+    if (_dialogOpen || _busy) return;
+    final repo = ref.read(inventoryRepositoryProvider);
+    final businessId = ref.read(inventoryViewModelProvider).state.businessId ??
+        await resolveBusinessIdOrNull(Supabase.instance.client, 'auto');
+    if (!mounted) return;
+    if (businessId == null) {
+      AppToast.error(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+    Map<String, dynamic>? creado;
+    _dialogOpen = true;
+    await showDialog<bool>(
+      context: context,
+      builder: (_) => ItemFormDialog(
+        businessId: businessId,
+        repo: repo,
+        // El código ya viene puesto; lo que falta escribir es el nombre.
+        initialBarcode: codigo,
+        onCreated: (row) => creado = row,
+      ),
+    );
+    _dialogOpen = false;
+    final row = creado;
+    if (row == null || !mounted) return;
+    final item = InventoryItemSummary.fromMap(row, stock: 0);
+    await _agregarLineaSesion(item);
+  }
+
+  /// Suma la línea a la sesión congelada y la deja aislada, lista para
+  /// teclear la cantidad.
+  ///
+  /// La línea se arma en memoria con lo que devuelve el RPC: recargar la
+  /// sesión entera —mil renglones— por uno agregado apaga la pantalla en
+  /// medio del conteo, igual que pasaba al guardar cada cantidad.
+  Future<void> _agregarLineaSesion(InventoryItemSummary item) async {
+    final d = _detail;
+    if (d == null) return;
+    if (d.header.status != PhysicalCountStatus.inProgress) {
+      AppToast.info(context, 'La sesión no está en conteo.');
+      return;
+    }
+    if (d.lines.any((l) => l.itemId == item.id)) {
+      _filtrarPor(item.name);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final res = await ref.read(physicalCountRepositoryProvider).addItem(
+            sessionId: widget.sessionId,
+            itemId: item.id,
+          );
+      if (!mounted) return;
+      final nueva = PhysicalCountLine(
+        id: res.lineId,
+        itemId: item.id,
+        itemName: item.name,
+        unit: item.unit,
+        snapshotQuantity: res.snapshotQuantity,
+        itemSku: item.sku.trim().isEmpty ? null : item.sku.trim(),
+        unitCostCurrent: item.cost,
+      );
+      // Mismo orden que trae la vista (por nombre), para que no aparezca al
+      // final de la lista.
+      final lineas = [...d.lines, nueva]
+        ..sort((a, b) =>
+            a.itemName.toLowerCase().compareTo(b.itemName.toLowerCase()));
+      _dirty = true;
+      setState(() {
+        _detail = PhysicalCountDetail(
+          header: d.header.withCounters(
+            countedLines:
+                lineas.where((l) => l.countedQuantity != null).length,
+            pendingRecount: lineas.where((l) => l.recountRequested).length,
+            linesCount: lineas.length,
+          ),
+          lines: lineas,
+        );
+        // La ficha nueva entra al catálogo del escaneo: el próximo disparo de
+        // la pistola sobre ese código ya cae en su renglón.
+        _itemOverrides[item.id] = item;
+        _catalogoBase = null;
+      });
+      _filtrarPor(item.name);
+      AppToast.success(
+        context,
+        res.alreadyExisted
+            ? '"${item.name}" ya estaba en la sesión.'
+            : '"${item.name}" agregado al conteo. Escribí la cantidad.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final texto = e.toString();
+      // Sin la migración aplicada el insumo QUEDA CREADO en el maestro: hay
+      // que decirlo, o se intenta de nuevo y se duplica la ficha.
+      final faltaMigracion = texto.contains('PGRST202') ||
+          texto.contains('fn_physical_count_add_item');
+      AppToast.error(
+        context,
+        faltaMigracion
+            ? '"${item.name}" quedó creado en Insumos, pero falta aplicar la '
+                'migración 20260902_0004 para sumarlo a este conteo.'
+            : 'No se pudo agregar "${item.name}" a la sesión: $e',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   List<PhysicalCountLine> _visibleLines(List<PhysicalCountLine> lines) {
@@ -657,15 +1277,24 @@ class _PhysicalCountDetailViewState
     final canComplete =
         sessionCtrl.hasPermission('inventario.conteo.completar');
     final canCancel = sessionCtrl.hasPermission('inventario.conteo.anular');
+    // El maestro de insumos va bajo su propio permiso: quien cuenta en el
+    // piso no necesariamente puede tocar la ficha.
+    final canEditItems = sessionCtrl.hasPermission(
+      'inventario.productos.crear_editar',
+    );
+    // Alta de producto de menú: es el permiso de Productos, no el de
+    // inventario. Son dos catálogos distintos.
+    final canCreateProducts = sessionCtrl.hasPermission('productos.crear');
 
     // El catálogo del módulo trae los códigos de barras; las líneas del
     // conteo no. Si todavía no está cargado, el escaneo cae al SKU de la
     // propia línea, que cubre al negocio que etiqueta por SKU.
     final catalogo = ref.watch(inventoryViewModelProvider).state.items;
+    _reindexarCatalogo(catalogo);
 
     return InventoryScanListener(
       enabled: !_loading && !_busy,
-      items: catalogo,
+      items: _catalogoParaEscaneo,
       onItem: (item) => _aislarLinea(item.id, item.name),
       onUnresolved: _escaneoSinCatalogo,
       child: PopScope(
@@ -686,6 +1315,15 @@ class _PhysicalCountDetailViewState
             onPressed: () => Navigator.of(context).pop(_dirty),
           ),
           actions: [
+            // Las líneas pueden crecer POR FUERA de esta pantalla: otra
+            // terminal contando, o insumos dados de alta durante el conteo
+            // (activar "Inventariable" en Productos crea uno por producto).
+            // Sin esto había que salir y volver a entrar para verlos.
+            IconButton(
+              tooltip: 'Recargar sesión',
+              icon: const Icon(Icons.refresh_rounded),
+              onPressed: _busy || _loading ? null : _recargar,
+            ),
             if (_detail != null &&
                 _detail!.header.status != PhysicalCountStatus.draft)
               IconButton(
@@ -704,13 +1342,25 @@ class _PhysicalCountDetailViewState
               )
             : _error != null
                 ? Center(child: Text(_error!))
-                : _buildContent(canCreate, canComplete, canCancel),
+                : _buildContent(
+                    canCreate,
+                    canComplete,
+                    canCancel,
+                    canEditItems,
+                    canCreateProducts,
+                  ),
       ),
       ),
     );
   }
 
-  Widget _buildContent(bool canCreate, bool canComplete, bool canCancel) {
+  Widget _buildContent(
+    bool canCreate,
+    bool canComplete,
+    bool canCancel,
+    bool canEditItems,
+    bool canCreateProducts,
+  ) {
     final d = _detail!;
     final h = d.header;
     final canActOnDraft = h.status == PhysicalCountStatus.draft;
@@ -754,7 +1404,15 @@ class _PhysicalCountDetailViewState
                 onlyDifferences: _onlyDifferences,
                 onToggleDifferences: (v) =>
                     setState(() => _onlyDifferences = v),
+                searchCtrl: _searchCtrl,
                 onSearch: (v) => setState(() => _search = v),
+                onAddItem: canActOnInProgress && canEditItems
+                    ? () => _crearInsumoNuevo()
+                    : null,
+                onAddProduct:
+                    canActOnInProgress && canCreateProducts
+                        ? () => _crearProductoNuevo()
+                        : null,
                 selectionMode: _selectionMode && canActOnInProgress,
               ),
             ),
@@ -789,6 +1447,10 @@ class _PhysicalCountDetailViewState
                     child: _LineRow(
                       key: ValueKey(l.id),
                       line: l,
+                      item: _fichaDe(l.itemId),
+                      onEdit: canEditItems
+                          ? () => _editarInsumo(l)
+                          : null,
                       editable: editable,
                       hideSystem: _hideSystem,
                       selectionMode: _selectionMode && canActOnInProgress,
@@ -1362,6 +2024,18 @@ class _LinesCardTop extends StatelessWidget {
   final bool onlyDifferences;
   final ValueChanged<bool> onToggleDifferences;
   final ValueChanged<String> onSearch;
+
+  /// El texto lo maneja el padre: al escanear (o al dar de alta un insumo) la
+  /// lista se filtra sola y el campo tiene que mostrarlo.
+  final TextEditingController searchCtrl;
+
+  /// Da de alta un insumo que no está en el conteo. Null = sesión cerrada o
+  /// sin permiso sobre el maestro.
+  final VoidCallback? onAddItem;
+
+  /// Da de alta un producto de menú inventariable. Null = sesión cerrada o
+  /// sin permiso de Productos.
+  final VoidCallback? onAddProduct;
   final bool selectionMode;
 
   const _LinesCardTop({
@@ -1376,6 +2050,9 @@ class _LinesCardTop extends StatelessWidget {
     required this.onlyDifferences,
     required this.onToggleDifferences,
     required this.onSearch,
+    required this.searchCtrl,
+    required this.onAddItem,
+    required this.onAddProduct,
     required this.selectionMode,
   });
 
@@ -1410,6 +2087,11 @@ class _LinesCardTop extends StatelessWidget {
                       ),
                     ),
                     const Spacer(),
+                    if (onAddItem != null || onAddProduct != null)
+                      _AddMenuButton(
+                        onAddProduct: onAddProduct,
+                        onAddItem: onAddItem,
+                      ),
                     if (canReveal)
                       TextButton.icon(
                         onPressed: onToggleReveal,
@@ -1428,6 +2110,7 @@ class _LinesCardTop extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 TextField(
+                  controller: searchCtrl,
                   onChanged: onSearch,
                   decoration: const InputDecoration(
                     isDense: true,
@@ -1605,6 +2288,13 @@ class _LinesHeaderRow extends StatelessWidget {
 
 class _LineRow extends StatefulWidget {
   final PhysicalCountLine line;
+
+  /// Ficha del insumo, cuando se conoce. Solo se usa para saber si ya tiene
+  /// código de barras: la línea del conteo no lo trae.
+  final InventoryItemSummary? item;
+
+  /// Abre la ficha del insumo. Null = sin permiso para editar el maestro.
+  final VoidCallback? onEdit;
   final bool editable;
   final bool hideSystem;
   final bool selectionMode;
@@ -1614,6 +2304,8 @@ class _LineRow extends StatefulWidget {
   const _LineRow({
     super.key,
     required this.line,
+    required this.item,
+    required this.onEdit,
     required this.editable,
     required this.hideSystem,
     required this.selectionMode,
@@ -1752,6 +2444,17 @@ class _LineRowState extends State<_LineRow> {
                         color: Color(0xFF6B7280),
                       ),
                     ],
+                    if (widget.onEdit != null) ...[
+                      const SizedBox(width: 2),
+                      _EditItemButton(
+                        // Sin ficha cargada no se puede afirmar que falte el
+                        // código: se muestra el botón neutro.
+                        missingCode: widget.item != null &&
+                            widget.item!.barcode.trim().isEmpty &&
+                            widget.item!.sku.trim().isEmpty,
+                        onPressed: widget.onEdit!,
+                      ),
+                    ],
                   ],
                 ),
                 if (line.wasRecounted && !widget.hideSystem)
@@ -1868,6 +2571,126 @@ class _LineRowState extends State<_LineRow> {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// Qué se da de alta cuando el código escaneado no existe.
+enum _AltaTipo { producto, insumo }
+
+/// Menú «Agregar» de la barra de líneas. Un solo botón con las dos altas:
+/// producto (se vende y se cuenta) e insumo (solo inventario). Van juntas
+/// porque quien está contando no siempre sabe cuál de las dos es, y en la
+/// barra no hay lugar para dos botones más.
+class _AddMenuButton extends StatelessWidget {
+  final VoidCallback? onAddProduct;
+  final VoidCallback? onAddItem;
+  const _AddMenuButton({
+    required this.onAddProduct,
+    required this.onAddItem,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_AltaTipo>(
+      tooltip: 'Agregar algo que no está en el conteo',
+      position: PopupMenuPosition.under,
+      onSelected: (tipo) {
+        if (tipo == _AltaTipo.producto) {
+          onAddProduct?.call();
+        } else {
+          onAddItem?.call();
+        }
+      },
+      itemBuilder: (context) => [
+        if (onAddProduct != null)
+          const PopupMenuItem(
+            value: _AltaTipo.producto,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.sell_outlined, size: 18),
+              title: Text('Agregar producto'),
+              subtitle: Text(
+                'Se vende en la caja y se cuenta',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+          ),
+        if (onAddItem != null)
+          const PopupMenuItem(
+            value: _AltaTipo.insumo,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.inventory_2_outlined, size: 18),
+              title: Text('Agregar insumo'),
+              subtitle: Text(
+                'Solo inventario, no se vende',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+          ),
+      ],
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add_rounded, size: 18, color: MangoColors.primaryOrange),
+            SizedBox(width: 4),
+            Text(
+              'Agregar',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: MangoColors.primaryOrange,
+              ),
+            ),
+            Icon(Icons.arrow_drop_down, size: 18,
+                color: MangoColors.primaryOrange),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Botón «Modificar» del renglón: abre la ficha del insumo sin salir del
+/// conteo. Cambia de cara cuando el insumo NO TIENE con qué ser escaneado —es
+/// el motivo por el que se entra: agregarle el código y que la pistola lo
+/// encuentre en el próximo renglón.
+///
+/// El aviso mira código de barras Y SKU: `resolveScannedItem` resuelve por
+/// cualquiera de los dos (código exacto primero, SKU exacto después), así que
+/// un insumo etiquetado por SKU ya es escaneable y no hay nada que corregir.
+class _EditItemButton extends StatelessWidget {
+  final bool missingCode;
+  final VoidCallback onPressed;
+  const _EditItemButton({
+    required this.missingCode,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: Icon(
+        missingCode ? Icons.qr_code_scanner_rounded : Icons.edit_outlined,
+        size: 18,
+        color: missingCode
+            ? const Color(0xFFD97706)
+            : MangoColors.muted,
+      ),
+      tooltip: missingCode
+          ? 'Sin código de barras ni SKU — editar ficha para agregarlo'
+          : 'Editar ficha del insumo',
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
+      // Blanco de toque usable con el dedo en tablet, sin engordar la fila.
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+      splashRadius: 18,
     );
   }
 }
