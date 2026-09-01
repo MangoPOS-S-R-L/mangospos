@@ -454,6 +454,25 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                         _features.copyWith(requireGoodsReceipt: v),
                       ),
                     ),
+                    _FlagTile(
+                      icon: Icons.warehouse_outlined,
+                      label: 'Almacenes por área de producción',
+                      subtitle:
+                          'Cada producto muestra y descuenta la existencia '
+                          'del almacén de SU área. Sirve cuando el mismo '
+                          'insumo se vende de dos formas: "Brugal botella" '
+                          'sale del Food Shop y "Brugal trago" del Bar, cada '
+                          'uno con su propio número. Requiere que los '
+                          'productos estén ruteados a un área y que cada '
+                          'almacén tenga la suya asignada en Inventario → '
+                          'Bodegas. PRENDERLA SOLO cuando esos almacenes ya '
+                          'tengan existencia real: si arrancan en cero, el '
+                          'menú se bloquea entero.',
+                      value: _features.warehouseSectionsEnabled,
+                      onChanged: (v) => _update(
+                        _features.copyWith(warehouseSectionsEnabled: v),
+                      ),
+                    ),
                     _InventoryModeSelector(
                       selected: _features.inventoryMode,
                       onChanged: (mode) async {

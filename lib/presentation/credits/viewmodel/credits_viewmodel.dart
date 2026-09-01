@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/credits_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import '../state/credit_payment_receipt.dart';
 
 final creditsRepositoryProvider = Provider<CreditsRepository>((ref) {
   return CreditsRepository(Supabase.instance.client);
@@ -116,7 +117,13 @@ class CreditsViewModel extends ChangeNotifier {
 
   /// Abono a una CxC. Si es en efectivo necesita la caja abierta del usuario
   /// (el RPC registra el depósito en esa sesión).
-  Future<void> registerReceivableAbono({
+  /// Registra un abono y devuelve el recibo para imprimirlo.
+  ///
+  /// Devuelve `null` cuando la BD todavía no tiene `fn_register_credit_abono_v2`
+  /// (mig 20260902_0002 sin aplicar): el abono SÍ quedó registrado, lo único
+  /// que no hay es número de recibo. Quien llama tiene que distinguir esos
+  /// dos casos y no decirle al cajero que el abono falló.
+  Future<CreditPaymentReceipt?> registerReceivableAbono({
     required String creditId,
     required double amount,
     required String paymentMethodCode,
@@ -125,7 +132,7 @@ class CreditsViewModel extends ChangeNotifier {
     final sessionId = await _resolveCashSessionId(
       requiredForCash: paymentMethodCode == 'cash',
     );
-    await _repository.registerReceivableAbono(
+    final result = await _repository.registerReceivableAbono(
       creditId: creditId,
       amount: amount,
       paymentMethodCode: paymentMethodCode,
@@ -133,6 +140,10 @@ class CreditsViewModel extends ChangeNotifier {
       sessionId: sessionId,
     );
     await reload();
+
+    final payment = result['payment'];
+    if (payment is! Map) return null;
+    return CreditPaymentReceipt.fromRpc(Map<String, dynamic>.from(payment));
   }
 
   /// Pago/abono a una CxP. El efectivo sale de caja solo si hay caja abierta.

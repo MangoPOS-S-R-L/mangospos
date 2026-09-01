@@ -13,6 +13,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../state/lots_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -46,7 +47,13 @@ class _InventoryLotsViewState extends ConsumerState<InventoryLotsView> {
     final lstate = lvm.state;
     final istate = ivm.state;
 
-    return Scaffold(
+    return InventoryScanListener(
+      enabled: !lstate.loading,
+      items: istate.items,
+      // En Lotes, escanear es "mostrame los lotes de ESTE insumo".
+      onItem: (item) =>
+          lvm.applyFilters(lstate.filters.copyWith(itemId: item.id)),
+      child: Scaffold(
       backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -88,6 +95,7 @@ class _InventoryLotsViewState extends ConsumerState<InventoryLotsView> {
                   ),
           ),
         ],
+      ),
       ),
     );
   }

@@ -139,6 +139,12 @@ class BusinessFeatures {
   /// el stock de una vez).
   final bool requireGoodsReceipt;
 
+  /// Almacenes por sección (F0/F1): el consumo de la venta sale del almacén
+  /// del ÁREA del producto en vez del principal. Default false = como
+  /// siempre. No prenderla hasta que los almacenes de producción tengan
+  /// existencia real — ver docs/PRD_ALMACENES_REQUISICION_COMPRAS.md.
+  final bool warehouseSectionsEnabled;
+
   final bool kitchenBannerDineIn;
   final bool kitchenBannerTakeout;
 
@@ -172,6 +178,7 @@ class BusinessFeatures {
     this.multimeseroEnabled = false,
     this.transfersRequireApproval = false,
     this.requireGoodsReceipt = false,
+    this.warehouseSectionsEnabled = false,
     this.kitchenBannerDineIn = true,
     this.kitchenBannerTakeout = true,
     this.deliveryAddressEnabled = false,
@@ -202,6 +209,7 @@ class BusinessFeatures {
       multimeseroEnabled: map['multimesero_enabled'] == true,
       transfersRequireApproval: map['transfers_require_approval'] == true,
       requireGoodsReceipt: map['require_goods_receipt'] == true,
+      warehouseSectionsEnabled: map['warehouse_sections_enabled'] == true,
       // Default `true` cuando la columna no viene en el SELECT o vale
       // NULL: preserva el comportamiento histórico (ambas franjas).
       kitchenBannerDineIn: map['kitchen_banner_dine_in'] != false,
@@ -247,6 +255,7 @@ class BusinessFeatures {
     bool? multimeseroEnabled,
     bool? transfersRequireApproval,
     bool? requireGoodsReceipt,
+    bool? warehouseSectionsEnabled,
     bool? kitchenBannerDineIn,
     bool? kitchenBannerTakeout,
     bool? deliveryAddressEnabled,
@@ -273,6 +282,8 @@ class BusinessFeatures {
       transfersRequireApproval:
           transfersRequireApproval ?? this.transfersRequireApproval,
       requireGoodsReceipt: requireGoodsReceipt ?? this.requireGoodsReceipt,
+      warehouseSectionsEnabled:
+          warehouseSectionsEnabled ?? this.warehouseSectionsEnabled,
       kitchenBannerDineIn: kitchenBannerDineIn ?? this.kitchenBannerDineIn,
       kitchenBannerTakeout: kitchenBannerTakeout ?? this.kitchenBannerTakeout,
       deliveryAddressEnabled:
@@ -1102,6 +1113,7 @@ class PosSettingsRepository {
       'delivery_fee_min': features.deliveryFeeMin,
       'delivery_fee_presets': features.deliveryFeePresets,
       'require_goods_receipt': features.requireGoodsReceipt,
+      'warehouse_sections_enabled': features.warehouseSectionsEnabled,
     };
 
     try {
@@ -1109,13 +1121,15 @@ class PosSettingsRepository {
           .from('business_settings')
           .upsert(payload, onConflict: 'business_id');
     } on PostgrestException catch (e) {
-      // `require_goods_receipt` llega con la migración 20260828_0001. En un
-      // servidor que no la aplicó, mandarla tumbaría el guardado de TODAS
-      // las banderas: se reintenta sin ella. Perder una opción que ese
-      // servidor no puede honrar es aceptable; perder el resto no.
+      // Banderas jóvenes: `require_goods_receipt` llega con la migración
+      // 20260828_0001 y `warehouse_sections_enabled` con 20260901_0001. En
+      // un servidor que no las aplicó, mandarlas tumbaría el guardado de
+      // TODAS las banderas: se reintenta sin ellas. Perder una opción que
+      // ese servidor no puede honrar es aceptable; perder el resto no.
       final missingColumn = e.code == '42703' || e.code == 'PGRST204';
       if (!missingColumn) rethrow;
       payload.remove('require_goods_receipt');
+      payload.remove('warehouse_sections_enabled');
       await _client
           .from('business_settings')
           .upsert(payload, onConflict: 'business_id');

@@ -112,6 +112,68 @@ class InventorySupplierDetail {
 /// PRD 9 Fase 1B — Versión completa de bodega para CRUD (incluye address,
 /// is_active, created_at). La virtual `__IN_TRANSIT__` se identifica por
 /// el `name` para que la UI la pueda mostrar como read-only.
+/// Clase de almacén (F0 Almacenes por sección, migración 20260901_0001).
+///
+/// `general` es el valor por defecto y el comportamiento de siempre: en un
+/// negocio de una sola bodega, todo es general y nada cambia.
+enum WarehouseType {
+  general,
+  production,
+  waste,
+  loan;
+
+  static WarehouseType fromWire(String? raw) {
+    switch (raw) {
+      case 'production':
+        return WarehouseType.production;
+      case 'waste':
+        return WarehouseType.waste;
+      case 'loan':
+        return WarehouseType.loan;
+      default:
+        return WarehouseType.general;
+    }
+  }
+
+  String get wire => name;
+
+  String get label {
+    switch (this) {
+      case WarehouseType.general:
+        return 'General';
+      case WarehouseType.production:
+        return 'Producción';
+      case WarehouseType.waste:
+        return 'Mermas';
+      case WarehouseType.loan:
+        return 'Préstamos';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case WarehouseType.general:
+        return 'Depósito común: guarda y despacha a los demás';
+      case WarehouseType.production:
+        return 'Abastece un área (Cocina, Bar) y de ahí sale lo que se vende';
+      case WarehouseType.waste:
+        return 'Destino de lo dañado, vencido o perdido';
+      case WarehouseType.loan:
+        return 'Mercancía prestada, pendiente de devolución';
+    }
+  }
+}
+
+/// Opción de un selector del formulario de almacén: el área de producción
+/// a la que sirve, o el empleado que responde por él. Los dos son "id +
+/// nombre" y no vale la pena una clase por cada uno.
+class WarehouseAssignmentOption {
+  final String id;
+  final String name;
+
+  const WarehouseAssignmentOption({required this.id, required this.name});
+}
+
 class InventoryWarehouseDetail {
   final String id;
   final String name;
@@ -120,6 +182,36 @@ class InventoryWarehouseDetail {
   final bool isActive;
   final DateTime? createdAt;
 
+  // ── F0 Almacenes por sección (migración 20260901_0001) ─────────────────
+  //
+  // Las cuatro llegan con esa migración. Mientras no esté aplicada, el
+  // SELECT las omite y acá caen en el default: tipo `general`, sin área,
+  // sin responsable. La pantalla sigue funcionando igual que antes — la
+  // app tiene que andar contra las dos versiones del esquema porque los
+  // negocios se actualizan en tiempos distintos.
+
+  final WarehouseType warehouseType;
+
+  /// Área de producción (`print_areas`) que abastece. Null = ninguna.
+  final String? productionAreaId;
+
+  /// Nombre del área, resuelto en el mismo SELECT para no pedirlo aparte.
+  final String productionAreaName;
+
+  /// Empleado que responde por el almacén. Null = sin responsable.
+  final String? keeperEmployeeId;
+
+  /// Nombre del responsable, resuelto en el mismo SELECT.
+  final String keeperName;
+
+  /// Solo recibe por requisición aprobada (lo hace cumplir F2).
+  final bool requiresRequisition;
+
+  /// El punto de venta muestra Y descuenta la existencia de ESTA bodega
+  /// para los productos que no resuelven por área. Una sola por negocio.
+  /// Migración 20260901_0005.
+  final bool showsInPos;
+
   const InventoryWarehouseDetail({
     required this.id,
     required this.name,
@@ -127,11 +219,42 @@ class InventoryWarehouseDetail {
     required this.isMain,
     required this.isActive,
     required this.createdAt,
+    this.warehouseType = WarehouseType.general,
+    this.productionAreaId,
+    this.productionAreaName = '',
+    this.keeperEmployeeId,
+    this.keeperName = '',
+    this.requiresRequisition = false,
+    this.showsInPos = false,
   });
 
   bool get isInTransit => name == '__IN_TRANSIT__';
 
+  bool get isProduction => warehouseType == WarehouseType.production;
+  bool get isWaste => warehouseType == WarehouseType.waste;
+  bool get isLoan => warehouseType == WarehouseType.loan;
+
+  /// True si tiene algo que mostrar de la Fase 0 (para no pintar chips
+  /// vacíos en un negocio que todavía no configuró nada).
+  bool get hasSectionInfo =>
+      warehouseType != WarehouseType.general ||
+      productionAreaId != null ||
+      keeperEmployeeId != null ||
+      showsInPos;
+
   factory InventoryWarehouseDetail.fromMap(Map<String, dynamic> map) {
+    // El nombre del área y del responsable pueden venir embebidos por el
+    // join de PostgREST (`print_areas(name)`, `employees(first_name,...)`)
+    // o no venir del todo si la migración no está aplicada.
+    final area = map['print_areas'];
+    final keeper = map['employees'];
+    final keeperName = keeper is Map
+        ? [
+            keeper['first_name']?.toString().trim() ?? '',
+            keeper['last_name']?.toString().trim() ?? '',
+          ].where((p) => p.isNotEmpty).join(' ')
+        : '';
+
     return InventoryWarehouseDetail(
       id: map['id']?.toString() ?? '',
       name: map['name']?.toString() ?? 'Almacen',
@@ -139,6 +262,21 @@ class InventoryWarehouseDetail {
       isMain: map['is_main'] == true,
       isActive: map['is_active'] != false,
       createdAt: DateTime.tryParse(map['created_at']?.toString() ?? ''),
+      warehouseType:
+          WarehouseType.fromWire(map['warehouse_type']?.toString()),
+      productionAreaId: (map['production_area_id']?.toString().isNotEmpty ??
+              false)
+          ? map['production_area_id'].toString()
+          : null,
+      productionAreaName:
+          area is Map ? (area['name']?.toString() ?? '') : '',
+      keeperEmployeeId: (map['keeper_employee_id']?.toString().isNotEmpty ??
+              false)
+          ? map['keeper_employee_id'].toString()
+          : null,
+      keeperName: keeperName,
+      requiresRequisition: map['requires_requisition'] == true,
+      showsInPos: map['shows_in_pos'] == true,
     );
   }
 }

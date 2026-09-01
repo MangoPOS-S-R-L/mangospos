@@ -10,7 +10,14 @@ class CreditsQueries {
       'original_amount, balance, due_date, status, notes, created_at, '
       'customers(name, phone)';
 
+  // `code` es el número del recibo (mig 20260902_0002). El historial lo
+  // necesita para poder reimprimir un abono ya cobrado.
   static const selectReceivablePayments =
+      'id, credit_id, code, amount, reference, session_id, created_at, '
+      'payment_methods(name, code)';
+
+  /// Selección sin `code`, para ambientes donde 20260902_0002 no se aplicó.
+  static const selectReceivablePaymentsLegacy =
       'id, credit_id, amount, reference, session_id, created_at, '
       'payment_methods(name, code)';
 
@@ -34,6 +41,14 @@ class CreditsQueries {
       'session_id, created_at';
 
   static const rpcRegisterCreditAbono = 'fn_register_credit_abono';
+
+  /// Mismo motor que la v1 pero devuelve `{credit, payment}`: el recibo con
+  /// su número, para imprimirlo sin una segunda consulta.
+  static const rpcRegisterCreditAbonoV2 = 'fn_register_credit_abono_v2';
+
+  /// Abonos de un turno, por método y en detalle, para el cierre de caja.
+  static const rpcCashSessionCreditPayments =
+      'fn_cash_session_credit_payments';
   static const rpcRegisterSupplierCreditPayment =
       'fn_register_supplier_credit_payment';
   static const rpcEnsureCreditPaymentMethod = 'fn_ensure_credit_payment_method';

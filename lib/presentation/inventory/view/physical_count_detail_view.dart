@@ -21,6 +21,8 @@ import 'package:mangopos/core/utils/export/report_exporter.dart';
 import 'package:mangopos/data/repositories/physical_count_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import '../services/inventory_scan.dart';
+import '../viewmodel/inventory_viewmodel.dart';
 
 class PhysicalCountDetailView extends ConsumerStatefulWidget {
   final String sessionId;
@@ -57,6 +59,14 @@ class _PhysicalCountDetailViewState
   void initState() {
     super.initState();
     Future.microtask(_load);
+    // El catálogo del módulo es lo único que trae los CÓDIGOS DE BARRAS: las
+    // líneas del conteo sólo tienen nombre y SKU. Sin esto, entrar directo a
+    // una sesión —que es lo que se hace un día de inventario— dejaba la
+    // pistola resolviendo únicamente por SKU.
+    //
+    // No bloquea la pantalla: el conteo se puede empezar mientras carga, y
+    // si falla se sigue con el respaldo por SKU.
+    Future.microtask(() => ref.read(inventoryViewModelProvider).init());
   }
 
   Future<void> _load() async {
@@ -195,6 +205,64 @@ class _PhysicalCountDetailViewState
     }
   }
 
+  int get _pendientesSinContar =>
+      (_detail?.lines ?? const []).where((l) => l.countedQuantity == null).length;
+
+  /// Pone en cero todas las líneas sin contar.
+  ///
+  /// Es lo que hace que un conteo REEMPLACE el inventario: al completar, sólo
+  /// se ajustan las líneas con cantidad, así que lo que quede en blanco
+  /// conserva su existencia vieja. En un catálogo de mil insumos eso es
+  /// existencia fantasma garantizada.
+  ///
+  /// Va aparte del cierre a propósito: contar por partes es un caso legítimo
+  /// y ahí las líneas en blanco NO se deben tocar. La decisión la toma quien
+  /// cierra, no la función.
+  Future<void> _ponerEnCeroPendientes() async {
+    final cuantas = _pendientesSinContar;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Poner en cero lo no contado'),
+        content: Text(
+          'Vas a marcar $cuantas insumo(s) en CERO: los que nadie encontró '
+          'físicamente.\n\n'
+          'Hacelo solo si este conteo cubre TODO el almacén. Si estás '
+          'contando por partes, cancelá: lo que dejes en blanco conserva su '
+          'existencia actual, que es lo correcto en un conteo parcial.\n\n'
+          'Todavía podés corregir cualquier línea antes de completar.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Poner $cuantas en cero'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _busy = true);
+    try {
+      final n = await ref
+          .read(physicalCountRepositoryProvider)
+          .zeroPending(widget.sessionId);
+      _dirty = true;
+      await _load();
+      if (!mounted) return;
+      AppToast.success(context, '$n insumo(s) quedaron en cero.');
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _requestRecount() async {
     if (_selected.isEmpty) return;
     setState(() => _busy = true);
@@ -280,6 +348,7 @@ class _PhysicalCountDetailViewState
   }
 
   Future<void> _saveLine(PhysicalCountLine line, double value) async {
+    final eraRecuento = line.recountRequested && line.countedQuantity != null;
     try {
       await ref.read(physicalCountRepositoryProvider).setCount(
             sessionId: widget.sessionId,
@@ -287,12 +356,48 @@ class _PhysicalCountDetailViewState
             countedQuantity: value,
           );
       _dirty = true;
-      // Recargar para actualizar contadores en header.
-      await _load();
+      if (!mounted) return;
+      // Se actualiza en memoria, NO se recarga la sesión.
+      //
+      // Recargar tras cada número tecleado volvía a bajar TODAS las líneas
+      // —en un catálogo de mil insumos, mil veces— y además ponía la
+      // pantalla en spinner: se perdía el foco y el scroll en cada renglón.
+      // El servidor ya guardó; la pantalla solo tiene que reflejarlo.
+      _aplicarConteoLocal(line, value, wasRecount: eraRecuento);
     } catch (e) {
       if (!mounted) return;
-      AppToast.error(context, 'No se pudo guardar el conteo: $e');
+      // El conteo NO quedó guardado: hay que decirlo fuerte, porque el
+      // número sigue escrito en el campo y parece que sí entró.
+      AppToast.error(
+        context,
+        'NO se guardó el conteo de ${line.itemName}. Revisá la conexión y '
+        'volvé a escribirlo.',
+      );
     }
+  }
+
+  /// Refleja el conteo recién guardado sin ir a la red: reemplaza la línea y
+  /// recalcula los contadores del encabezado.
+  void _aplicarConteoLocal(
+    PhysicalCountLine line,
+    double value, {
+    required bool wasRecount,
+  }) {
+    final actual = _detail;
+    if (actual == null) return;
+    final lineas = [
+      for (final l in actual.lines)
+        l.itemId == line.itemId ? l.withCount(value, wasRecount: wasRecount) : l,
+    ];
+    setState(() {
+      _detail = PhysicalCountDetail(
+        header: actual.header.withCounters(
+          countedLines: lineas.where((l) => l.countedQuantity != null).length,
+          pendingRecount: lineas.where((l) => l.recountRequested).length,
+        ),
+        lines: lineas,
+      );
+    });
   }
 
   /// Hoja de conteo para llenar a mano. Si la sesión es a ciegas sale sin
@@ -493,6 +598,33 @@ class _PhysicalCountDetailViewState
   }
 
 
+  /// Escanear en el conteo AÍSLA la línea: quien cuenta pasa la pistola por
+  /// el anaquel y teclea la cantidad, sin buscar a mano entre cientos de
+  /// renglones. No se escribe el número solo — el conteo es justamente el
+  /// dato que aporta la persona.
+  void _aislarLinea(String itemId, String nombre) {
+    final lineas = _detail?.lines ?? const [];
+    if (!lineas.any((l) => l.itemId == itemId)) {
+      AppToast.warning(context, '$nombre no está en esta sesión de conteo.');
+      return;
+    }
+    setState(() => _search = nombre);
+  }
+
+  /// Sin catálogo cargado (o con un insumo que no está en él), se intenta el
+  /// SKU de las líneas antes de darse por vencido.
+  void _escaneoSinCatalogo(String code) {
+    final lower = code.toLowerCase();
+    final lineas = _detail?.lines ?? const [];
+    final hit = lineas
+        .where((l) => (l.itemSku ?? '').trim().toLowerCase() == lower);
+    if (hit.length == 1) {
+      setState(() => _search = hit.first.itemName);
+      return;
+    }
+    AppToast.warning(context, 'Ningún insumo con el código "$code".');
+  }
+
   List<PhysicalCountLine> _visibleLines(List<PhysicalCountLine> lines) {
     final counting = _detail?.header.status == PhysicalCountStatus.inProgress;
     var out = lines;
@@ -526,7 +658,17 @@ class _PhysicalCountDetailViewState
         sessionCtrl.hasPermission('inventario.conteo.completar');
     final canCancel = sessionCtrl.hasPermission('inventario.conteo.anular');
 
-    return PopScope(
+    // El catálogo del módulo trae los códigos de barras; las líneas del
+    // conteo no. Si todavía no está cargado, el escaneo cae al SKU de la
+    // propia línea, que cubre al negocio que etiqueta por SKU.
+    final catalogo = ref.watch(inventoryViewModelProvider).state.items;
+
+    return InventoryScanListener(
+      enabled: !_loading && !_busy,
+      items: catalogo,
+      onItem: (item) => _aislarLinea(item.id, item.name),
+      onUnresolved: _escaneoSinCatalogo,
+      child: PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
@@ -563,6 +705,7 @@ class _PhysicalCountDetailViewState
             : _error != null
                 ? Center(child: Text(_error!))
                 : _buildContent(canCreate, canComplete, canCancel),
+      ),
       ),
     );
   }
@@ -712,6 +855,20 @@ class _PhysicalCountDetailViewState
                               : () => setState(() => _selectionMode = true),
                           icon: const Icon(Icons.replay_rounded, size: 18),
                           label: const Text('Marcar recuento'),
+                        ),
+                      // Solo aparece si hay algo sin contar: es la pieza que
+                      // convierte el conteo en un reemplazo del inventario.
+                      if (!_selectionMode && _pendientesSinContar > 0)
+                        OutlinedButton.icon(
+                          onPressed: _busy ? null : _ponerEnCeroPendientes,
+                          icon: const Icon(
+                            Icons.exposure_zero_rounded,
+                            size: 18,
+                          ),
+                          label: Text(
+                            'Poner en cero lo no contado '
+                            '($_pendientesSinContar)',
+                          ),
                         ),
                     ],
                     if (h.status == PhysicalCountStatus.completed)

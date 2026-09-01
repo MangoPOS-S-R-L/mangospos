@@ -180,6 +180,14 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   available: true,
                 ),
                 _HubCard(
+                  icon: Icons.assignment_outlined,
+                  title: 'Requisiciones',
+                  subtitle:
+                      'La cocina pide, el almacén despacha lo que hay',
+                  route: AppRoutes.inventoryRequisitions,
+                  available: true,
+                ),
+                _HubCard(
                   icon: Icons.swap_horiz_outlined,
                   title: 'Transferencias',
                   subtitle: 'Movimientos entre bodegas',

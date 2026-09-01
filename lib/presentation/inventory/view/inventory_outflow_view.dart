@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
@@ -1158,7 +1159,17 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredItems;
-    return AlertDialog(
+    return InventoryScanListener(
+      enabled: true,
+      items: widget.items,
+      // En una salida, escanear elige el insumo y lo deja visible: la
+      // cantidad y el motivo los pone la persona, que es el punto de
+      // registrar una merma.
+      onItem: (item) {
+        _searchController.text = item.name;
+        setState(() => _selectedItemId = item.id);
+      },
+      child: AlertDialog(
       title: const Text('Registrar salida de inventario'),
       content: SizedBox(
         width: 420,
@@ -1281,6 +1292,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
           child: Text(_saving ? 'Guardando...' : 'Registrar'),
         ),
       ],
+      ),
     );
   }
 

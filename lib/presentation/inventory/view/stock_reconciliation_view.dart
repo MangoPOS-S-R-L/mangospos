@@ -5,6 +5,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
+import '../services/inventory_scan.dart';
 import '../state/adjust_reasons.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -60,7 +61,16 @@ class _StockReconciliationViewState
     final state = ref.watch(inventoryViewModelProvider).state;
     final items = _applyFilter(state.items);
 
-    return Scaffold(
+    return InventoryScanListener(
+      enabled: true,
+      items: state.items,
+      // En el cuadre, escanear aísla el insumo para teclear su conteo real.
+      // No se escribe la cantidad sola: acá el número lo pone quien cuenta.
+      onItem: (item) {
+        _searchController.text = item.name;
+        setState(() => _query = item.name);
+      },
+      child: Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: Column(
@@ -143,6 +153,7 @@ class _StockReconciliationViewState
             ),
           ],
         ),
+      ),
       ),
     );
   }

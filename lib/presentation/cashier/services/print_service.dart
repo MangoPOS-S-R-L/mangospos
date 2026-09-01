@@ -48,6 +48,13 @@ class CashClosePrintService {
         ? await _loadProductsByAreaIfEnabled(sessionId)
         : const <Map<String, dynamic>>[];
 
+    // Abonos a crédito cobrados en el turno. Best-effort igual que los
+    // desgloses de arriba: si la RPC no existe (mig 20260902_0002 sin
+    // aplicar) o falla, el cierre sale como siempre, sin esta sección.
+    final creditPayments = sessionId != null && sessionId.isNotEmpty
+        ? await _loadCreditPayments(sessionId)
+        : null;
+
     // El ticket se arma DESPUÉS de resolver la impresora: el layout depende
     // de si el papel es de 58mm o de 80mm (`printers.paper_width`).
     await _printThermalOrThrow(
@@ -59,6 +66,7 @@ class CashClosePrintService {
         recountCount: recountCount,
         salesByArea: salesByArea,
         productsByArea: productsByArea,
+        creditPayments: creditPayments,
         reprint: reprint,
         paperWidth: paperWidth,
       ),
@@ -425,6 +433,11 @@ class CashClosePrintService {
     int recountCount = 0,
     List<Map<String, dynamic>> salesByArea = const [],
     List<Map<String, dynamic>> productsByArea = const [],
+
+    /// Abonos a crédito del turno, tal como los devuelve
+    /// `fn_cash_session_credit_payments`. `null` = no se pudo cargar o la
+    /// migración no está aplicada: la sección no se imprime.
+    Map<String, dynamic>? creditPayments,
     bool reprint = false,
     /// Ancho del papel de la impresora del cierre (58 u 80). Default 80 =
     /// comportamiento histórico.
@@ -558,6 +571,11 @@ class CashClosePrintService {
         sign: '-',
       );
     }
+
+    // Abonos a crédito del turno. Va pegado a los movimientos porque el
+    // abono en efectivo ES uno de los depósitos que acaban de listarse: acá
+    // se explica cuánto de ese renglón fue cobro de fiao.
+    _renderCreditPaymentsSection(gen, creditPayments);
 
     // Desglose de ventas por área de producción (toggle por negocio). Va
     // tras los movimientos y antes de los datos del cajero/firma.
@@ -709,6 +727,99 @@ class CashClosePrintService {
     final subtotalLabel = gen.paperWidth <= 58 ? 'Subtotal' : 'Subtotal $title';
     gen.textRow(subtotalLabel, '$sign ${formatRD(total)}');
     gen.setBold(false);
+    gen.doubleSeparator();
+  }
+
+  /// Abonos a crédito cobrados durante el turno.
+  ///
+  /// Devuelve `null` —y la sección no se imprime— si la RPC no existe o
+  /// falla. El cierre de caja NUNCA se cae por este bloque: es informativo y
+  /// no participa del cuadre.
+  Future<Map<String, dynamic>?> _loadCreditPayments(String sessionId) async {
+    try {
+      final resp = await _client.rpc(
+        'fn_cash_session_credit_payments',
+        params: {'p_session_id': sessionId},
+      );
+      if (resp is! Map) return null;
+      final data = Map<String, dynamic>.from(resp);
+      final count = (data['count'] as num?)?.toInt() ?? 0;
+      return count == 0 ? null : data;
+    } catch (e) {
+      debugPrint('[CashClosePrint] abonos a crédito fallaron: $e');
+      return null;
+    }
+  }
+
+  /// Sección "ABONOS A CREDITO" del cierre.
+  ///
+  /// Responde la pregunta que el turno no podía contestar: cuánto se cobró de
+  /// lo fiado, y por qué vía. Dos cosas que el papel tiene que dejar claras:
+  ///
+  ///   1. El efectivo YA está contado dentro de los depósitos de arriba. Se
+  ///      dice explícitamente en el ticket, porque si no el que cuadra la
+  ///      caja lo suma otra vez y le sobra dinero en el papel que no existe
+  ///      en la gaveta.
+  ///   2. Los abonos con tarjeta o transferencia NO entran a la gaveta. Antes
+  ///      no aparecían en ninguna parte: se cobraban y el cierre ni se
+  ///      enteraba.
+  void _renderCreditPaymentsSection(
+    EscPosGenerator gen,
+    Map<String, dynamic>? data,
+  ) {
+    if (data == null) return;
+    final payments = (data['payments'] as List?) ?? const [];
+    if (payments.isEmpty) return;
+
+    final narrow = gen.paperWidth <= 58;
+    gen.setBold(true);
+    gen.text('ABONOS A CREDITO');
+    gen.setBold(false);
+
+    for (final raw in payments) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+      final amount = (row['amount'] as num?)?.toDouble() ?? 0;
+      final code = (row['code'] ?? '').toString().trim();
+      final customer = (row['customer_name'] ?? '').toString().trim();
+
+      // Renglón principal: a quién se le cobró y cuánto. El nombre del
+      // cliente manda sobre el número del recibo — es por quien pregunta el
+      // dueño cuando revisa el cierre.
+      final label = customer.isNotEmpty
+          ? customer
+          : (code.isNotEmpty ? code : 'Cliente');
+      gen.textRow(_capLabel(gen, label), formatRD(amount));
+
+      // Línea secundaria: recibo y forma de pago, que es lo que permite
+      // encontrar el papel si alguien reclama.
+      final method = (row['method_name'] ?? 'Efectivo').toString().trim();
+      final detail = [
+        if (code.isNotEmpty) code,
+        method,
+      ].join(narrow ? ' ' : '  ·  ');
+      if (detail.isNotEmpty) gen.text('  $detail');
+    }
+
+    gen.separator();
+
+    final cash = (data['cash'] as num?)?.toDouble() ?? 0;
+    final other = (data['other'] as num?)?.toDouble() ?? 0;
+    final total = (data['total'] as num?)?.toDouble() ?? 0;
+
+    gen.setBold(true);
+    gen.textRow('Total abonos', formatRD(total));
+    gen.setBold(false);
+
+    if (cash > 0) {
+      gen.textRow('  En efectivo', formatRD(cash));
+      // La advertencia que evita que el cuadre se descuadre a mano.
+      gen.text(narrow ? '  (ya en depositos)' : '  (ya incluido en depositos)');
+    }
+    if (other > 0) {
+      gen.textRow('  Otras formas', formatRD(other));
+      gen.text(narrow ? '  (no entra a caja)' : '  (no entra a la gaveta)');
+    }
     gen.doubleSeparator();
   }
 

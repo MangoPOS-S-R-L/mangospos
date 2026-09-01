@@ -12,6 +12,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/direct_receipts_viewmodel.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -103,6 +104,27 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
               i.sku.toLowerCase().contains(q),
         )
         .toList(growable: false);
+  }
+
+  /// Escanear suma UNA unidad de lo que se está recibiendo y lo deja
+  /// visible. Recibir mercancía es contar bultos: la pistola sirve
+  /// exactamente para eso, un disparo por bulto.
+  void _onScannedItem(InventoryItemSummary item) {
+    setState(() {
+      final actual = _drafts[item.id];
+      final nueva = (actual?.quantity ?? 0) + 1;
+      _drafts[item.id] = actual == null
+          ? _LineDraft(quantity: nueva)
+          : actual.copyWith(quantity: nueva);
+      _searchController.text = item.name;
+    });
+    final total = _drafts[item.id]!.quantity;
+    AppToast.success(
+      context,
+      '${item.name}: '
+      '${total == total.roundToDouble() ? total.toStringAsFixed(0) : total.toStringAsFixed(2)} '
+      '${item.unit}',
+    );
   }
 
   int get _selectedCount =>
@@ -215,7 +237,11 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
     final warehouses = inv.warehouses;
     final suppliers = _suppliers;
 
-    return AlertDialog(
+    return InventoryScanListener(
+      enabled: !_submitting,
+      items: _items,
+      onItem: _onScannedItem,
+      child: AlertDialog(
       backgroundColor: AppColors.card,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.card),
@@ -444,9 +470,12 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
               : Text('Registrar ($_selectedCount)'),
         ),
       ],
+      ),
     );
   }
 }
+
+// ── fin del diálogo ──
 
 class _LineDraft {
   final double quantity;

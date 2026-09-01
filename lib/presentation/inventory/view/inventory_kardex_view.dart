@@ -21,6 +21,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../../../core/utils/export/report_exporter.dart';
+import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../state/kardex_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -198,7 +199,15 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
     final kstate = kvm.state;
     final istate = ivm.state;
 
-    return Scaffold(
+    return InventoryScanListener(
+      enabled: !kstate.loading,
+      items: istate.items,
+      // Escanear en el Kardex es "mostrame el historial de ESTE insumo":
+      // filtra, no agrega nada.
+      onItem: (item) => kvm.applyFilters(
+        kstate.filters.copyWith(itemId: item.id),
+      ),
+      child: Scaffold(
       backgroundColor: AppColors.background,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -260,6 +269,7 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
                   ),
           ),
         ],
+      ),
       ),
     );
   }

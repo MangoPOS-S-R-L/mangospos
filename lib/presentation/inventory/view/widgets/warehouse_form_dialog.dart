@@ -110,7 +110,25 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
   String? _copySource;
   List<InventoryWarehouseDetail> _sources = const [];
 
+  // ── F0 Almacenes por sección ─────────────────────────────────────────
+  //
+  // La pregunta que manda es "¿este almacén sirve a un área de producción?".
+  // Si la respuesta es sí, el tipo queda en `production` y hay que decir a
+  // qué área: de ahí saldrá el consumo de la venta cuando F1 esté activa.
+  // Si es no, el almacén puede ser general, de mermas o de préstamos.
+  late bool _servesProductionArea;
+  String? _productionAreaId;
+  late WarehouseType _nonProductionType;
+  String? _keeperEmployeeId;
+  late bool _showsInPos;
+  List<WarehouseAssignmentOption> _areas = const [];
+  List<WarehouseAssignmentOption> _keepers = const [];
+
   bool get _isEdit => widget.edit != null;
+
+  /// Tipo que se va a guardar, resuelto desde los dos controles.
+  WarehouseType get _effectiveType =>
+      _servesProductionArea ? WarehouseType.production : _nonProductionType;
 
   @override
   void initState() {
@@ -119,6 +137,15 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
     _addressCtrl = TextEditingController(text: widget.edit?.address ?? '');
     _isMain = widget.edit?.isMain ?? false;
     _isActive = widget.edit?.isActive ?? true;
+    final edit = widget.edit;
+    _servesProductionArea = edit?.isProduction ?? false;
+    _productionAreaId = edit?.productionAreaId;
+    _nonProductionType = (edit != null && !edit.isProduction)
+        ? edit.warehouseType
+        : WarehouseType.general;
+    _keeperEmployeeId = edit?.keeperEmployeeId;
+    _showsInPos = edit?.showsInPos ?? false;
+    _loadAssignments();
     if (!_isEdit) _loadSources();
   }
 
@@ -150,6 +177,28 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
     });
   }
 
+  /// Áreas de producción y empleados para los dos selectores. Los dos son
+  /// opcionales: si fallan, el formulario sigue sirviendo para lo de siempre.
+  Future<void> _loadAssignments() async {
+    final results = await Future.wait([
+      widget.repo.getProductionAreas(widget.businessId),
+      widget.repo.getKeeperCandidates(widget.businessId),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _areas = results[0];
+      _keepers = results[1];
+    });
+  }
+
+  /// Un id que ya no está en la lista (área desactivada, empleado dado de
+  /// baja) rompe el Dropdown de Flutter. Se muestra vacío en vez de tumbar
+  /// el diálogo; guardar vuelve a escribir lo que se elija.
+  String? _valueIfPresent(String? id, List<WarehouseAssignmentOption> list) {
+    if (id == null) return null;
+    return list.any((o) => o.id == id) ? id : null;
+  }
+
   Future<void> _save() async {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
@@ -158,6 +207,12 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
     }
     if (name == '__IN_TRANSIT__') {
       setState(() => _error = 'Ese nombre está reservado por el sistema.');
+      return;
+    }
+    if (_servesProductionArea && _productionAreaId == null) {
+      setState(() => _error =
+          'Elegí a qué área de producción sirve este almacén, o desmarcá la '
+          'casilla.');
       return;
     }
     setState(() {
@@ -174,7 +229,12 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
           address: address.isEmpty ? null : address,
           isMain: _isMain,
           isActive: _isActive,
+          warehouseType: _effectiveType,
+          productionAreaId: _servesProductionArea ? _productionAreaId : null,
+          keeperEmployeeId: _keeperEmployeeId,
+          showsInPos: _showsInPos,
         );
+        _warnIfSectionsNotSupported(name);
       } else {
         final created = await widget.repo.createWarehouse(
           businessId: widget.businessId,
@@ -182,7 +242,12 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
           address: address.isEmpty ? null : address,
           isMain: _isMain,
           isActive: _isActive,
+          warehouseType: _effectiveType,
+          productionAreaId: _servesProductionArea ? _productionAreaId : null,
+          keeperEmployeeId: _keeperEmployeeId,
+          showsInPos: _showsInPos,
         );
+        _warnIfSectionsNotSupported(name);
         if (_copyItems) await _copyList(created.id, name);
       }
       if (mounted) Navigator.pop(context, true);
@@ -194,6 +259,33 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
         });
       }
     }
+  }
+
+  /// El almacén se guarda igual contra un servidor sin la migración de la
+  /// Fase 0, pero el tipo, el área y el responsable se pierden en silencio.
+  /// Si el usuario configuró algo de eso, tiene que enterarse.
+  void _warnIfSectionsNotSupported(String name) {
+    // Servidor sin 20260901_0006: se guardó, pero desmarcando la anterior.
+    // Decirlo, o el usuario cree que quedaron las dos marcadas.
+    if (_showsInPos && widget.repo.posSourceSingleOnly && mounted) {
+      AppToast.warning(
+        context,
+        'Este servidor solo admite UNA bodega en el punto de venta, así que '
+        'se desmarcó la anterior. Para usar varias hay que aplicar la '
+        'migración 20260901_0006_pos_multi_warehouse.',
+      );
+    }
+    if (widget.repo.warehouseSectionsSupported) return;
+    final configuro = _effectiveType != WarehouseType.general ||
+        _productionAreaId != null ||
+        _keeperEmployeeId != null ||
+        _showsInPos;
+    if (!configuro || !mounted) return;
+    AppToast.warning(
+      context,
+      '$name se guardó, pero el área y el responsable necesitan la '
+      'migración 20260901_0001_warehouse_sections aplicada en Supabase.',
+    );
   }
 
   /// La copia NO puede tumbar el alta: la bodega ya existe, así que un fallo
@@ -279,7 +371,12 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
               ),
-              if (!_isEdit) _copySection(),
+              const SizedBox(height: 12),
+              _sectionBlock(),
+              if (!_isEdit) ...[
+                const SizedBox(height: 12),
+                _copySection(),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -310,6 +407,156 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
               : Text(_isEdit ? 'Guardar' : 'Crear'),
         ),
       ],
+    );
+  }
+
+  /// F0: qué clase de almacén es, a qué área sirve y quién responde por él.
+  ///
+  /// La casilla del área es la pregunta principal —es lo que decide de dónde
+  /// va a salir el consumo de la venta cuando F1 esté activa— así que va
+  /// arriba y el resto de los usos queda para cuando la respuesta es "no".
+  Widget _sectionBlock() {
+    final areaValue = _valueIfPresent(_productionAreaId, _areas);
+    final keeperValue = _valueIfPresent(_keeperEmployeeId, _keepers);
+
+    return Material(
+      color: AppColors.background,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        side: BorderSide(color: AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CheckboxListTile(
+              value: _showsInPos,
+              onChanged: (v) => setState(() => _showsInPos = v ?? false),
+              title: const Text(
+                'Mostrar los productos de esta bodega en el punto de venta',
+              ),
+              subtitle: const Text(
+                'El punto de venta suma la existencia de todas las bodegas '
+                'marcadas y descuenta de la principal primero; cuando se '
+                'acaba, sigue con la siguiente. Podés marcar varias. Los '
+                'productos que tengan área de producción no pasan por acá: '
+                'salen de la bodega de su área.',
+              ),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+            if (_showsInPos) ...[
+              const SizedBox(height: 2),
+              Text(
+                'Antes de guardar: si ninguna de las bodegas marcadas tiene '
+                'existencia de un producto, ese producto se bloquea en la '
+                'venta. Revisá que entre todas cubran el catálogo.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: AppColors.destructive,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            Divider(color: AppColors.border, height: 20),
+            CheckboxListTile(
+              value: _servesProductionArea,
+              onChanged: (v) => setState(() {
+                _servesProductionArea = v ?? false;
+                if (!_servesProductionArea) _productionAreaId = null;
+              }),
+              title: const Text('Está asignado a un área de producción'),
+              subtitle: const Text(
+                'Cocina, Bar, Food Shop. Lo que se venda de esa área va a '
+                'descontar de este almacén.',
+              ),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+            if (_servesProductionArea) ...[
+              const SizedBox(height: 4),
+              if (_areas.isEmpty)
+                Text(
+                  'Este negocio todavía no tiene áreas configuradas. Se crean '
+                  'en Ajustes → Impresión → Áreas.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.mutedForeground,
+                  ),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  initialValue: areaValue,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Área que abastece *',
+                    isDense: true,
+                  ),
+                  items: [
+                    for (final a in _areas)
+                      DropdownMenuItem(
+                        value: a.id,
+                        child: Text(a.name, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => _productionAreaId = v),
+                ),
+            ] else ...[
+              const SizedBox(height: 4),
+              DropdownButtonFormField<WarehouseType>(
+                initialValue: _nonProductionType,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Uso del almacén',
+                  isDense: true,
+                ),
+                items: [
+                  for (final t in const [
+                    WarehouseType.general,
+                    WarehouseType.waste,
+                    WarehouseType.loan,
+                  ])
+                    DropdownMenuItem(
+                      value: t,
+                      child: Text(
+                        '${t.label} — ${t.description}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (v) => setState(
+                  () => _nonProductionType = v ?? WarehouseType.general,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              initialValue: keeperValue,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Responsable',
+                isDense: true,
+                helperText: 'Quién responde por lo que entra y sale de acá.',
+              ),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('Sin responsable'),
+                ),
+                for (final k in _keepers)
+                  DropdownMenuItem<String?>(
+                    value: k.id,
+                    child: Text(k.name, overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _keeperEmployeeId = v),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

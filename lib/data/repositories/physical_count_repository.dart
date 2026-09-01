@@ -109,6 +109,34 @@ class PhysicalCountSummary {
     this.cancelledAt,
   });
 
+  /// Contadores recalculados en memoria tras guardar una línea. Evita
+  /// recargar la sesión completa sólo para refrescar el encabezado.
+  PhysicalCountSummary withCounters({
+    required int countedLines,
+    required int pendingRecount,
+  }) {
+    return PhysicalCountSummary(
+      id: id,
+      code: code,
+      status: status,
+      isBlind: isBlind,
+      warehouseId: warehouseId,
+      warehouseName: warehouseName,
+      notes: notes,
+      cancellationReason: cancellationReason,
+      startedAt: startedAt,
+      frozenAt: frozenAt,
+      completedAt: completedAt,
+      cancelledAt: cancelledAt,
+      linesCount: linesCount,
+      countedLines: countedLines,
+      adjustmentsCount: adjustmentsCount,
+      pendingRecount: pendingRecount,
+      varianceValueTotal: varianceValueTotal,
+      shrinkageValue: shrinkageValue,
+    );
+  }
+
   factory PhysicalCountSummary.fromMap(Map<String, dynamic> map) {
     DateTime? parseDate(dynamic v) {
       if (v == null) return null;
@@ -201,6 +229,34 @@ class PhysicalCountLine {
     this.counterNotes,
     this.appliedAdjustmentId,
   });
+
+  /// Copia con el conteo recién guardado, para actualizar la pantalla SIN
+  /// volver a bajar la sesión entera. En un conteo de mil líneas, recargar
+  /// tras cada número tecleado hace parpadear la pantalla, pierde el foco y
+  /// tarda más en cada renglón.
+  PhysicalCountLine withCount(double value, {required bool wasRecount}) {
+    return PhysicalCountLine(
+      id: id,
+      itemId: itemId,
+      itemName: itemName,
+      unit: unit,
+      snapshotQuantity: snapshotQuantity,
+      itemSku: itemSku,
+      countedQuantity: value,
+      // La 1ª vuelta se preserva cuando la línea venía marcada para recuento
+      // — mismo criterio que aplica el RPC del servidor.
+      firstCountQuantity: wasRecount ? countedQuantity : firstCountQuantity,
+      recountRequested: false,
+      recountedAt: wasRecount ? DateTime.now() : recountedAt,
+      stockAtComplete: stockAtComplete,
+      appliedVariance: appliedVariance,
+      unitCost: unitCost,
+      varianceValue: varianceValue,
+      unitCostCurrent: unitCostCurrent,
+      counterNotes: counterNotes,
+      appliedAdjustmentId: appliedAdjustmentId,
+    );
+  }
 
   /// Diferencia contra el snapshot congelado. Es la que se muestra mientras
   /// la sesión está en conteo, cuando todavía no existe `appliedVariance`.
@@ -376,6 +432,20 @@ class PhysicalCountRepository {
     final flagged = map['flagged'];
     if (flagged is num) return flagged.toInt();
     return int.tryParse(flagged?.toString() ?? '') ?? 0;
+  }
+
+  /// Pone en CERO las líneas que quedaron sin contar. Devuelve cuántas.
+  ///
+  /// Es el paso que convierte un conteo en un REEMPLAZO del inventario: lo
+  /// que nadie encontró físicamente deja de existir. Sin esto, cada línea en
+  /// blanco conserva su existencia vieja.
+  Future<int> zeroPending(String sessionId) async {
+    final response = await _client.rpc(
+      'fn_physical_count_zero_pending',
+      params: {'p_session_id': sessionId},
+    );
+    if (response is int) return response;
+    return int.tryParse(response?.toString() ?? '') ?? 0;
   }
 
   Future<Map<String, dynamic>> complete(String sessionId) async {

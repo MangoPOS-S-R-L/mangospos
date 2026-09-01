@@ -32,6 +32,7 @@ import '../../../core/utils/app_toast.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
+import '../state/inventory_state.dart';
 import '../state/warehouse_overview_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import 'transfer_send_dialog.dart';
@@ -732,15 +733,29 @@ class _WarehouseCard extends StatelessWidget {
   }
 
   Widget _identity(String name) {
-    final badge = overview.isActive
-        ? (overview.isMain
-              ? _Badge(text: 'PRINCIPAL', color: AppColors.primary, dense: true)
-              : null)
-        : _Badge(
+    final wh = overview.warehouse;
+    // Prioridad del distintivo: inactiva manda sobre todo, después la
+    // principal, y si no, el uso especial del almacén (mermas, préstamos).
+    // Producción no lleva distintivo: su área ya se lee en la línea de abajo.
+    final badge = !overview.isActive
+        ? _Badge(
             text: 'INACTIVA',
             color: AppColors.mutedForeground,
             dense: true,
-          );
+          )
+        : overview.isMain
+            ? _Badge(
+                text: 'PRINCIPAL',
+                color: AppColors.primary,
+                dense: true,
+              )
+            : (wh.isWaste || wh.isLoan)
+                ? _Badge(
+                    text: wh.warehouseType.label.toUpperCase(),
+                    color: AppColors.mutedForeground,
+                    dense: true,
+                  )
+                : null;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -778,9 +793,7 @@ class _WarehouseCard extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                overview.warehouse.address.isEmpty
-                    ? 'Sin dirección'
-                    : overview.warehouse.address,
+                _subtitle(wh),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -794,6 +807,21 @@ class _WarehouseCard extends StatelessWidget {
         _menu(),
       ],
     );
+  }
+
+  /// Qué se lee debajo del nombre. El área que abastece y quién responde
+  /// dicen más de un almacén que su dirección, así que mandan; la dirección
+  /// queda de respaldo para el negocio que no configuró nada.
+  String _subtitle(InventoryWarehouseDetail wh) {
+    final partes = <String>[
+      // Va primero: de todas las bodegas, la que alimenta la venta es la que
+      // hay que poder identificar de un vistazo.
+      if (wh.showsInPos) 'Punto de venta',
+      if (wh.productionAreaName.isNotEmpty) wh.productionAreaName,
+      if (wh.keeperName.isNotEmpty) wh.keeperName,
+    ];
+    if (partes.isNotEmpty) return partes.join(' · ');
+    return wh.address.isEmpty ? 'Sin dirección' : wh.address;
   }
 
   Widget _menu() {

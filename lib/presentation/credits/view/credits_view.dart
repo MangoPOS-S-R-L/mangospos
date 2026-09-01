@@ -9,6 +9,11 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/credits/viewmodel/credits_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
+import 'package:mangopos/presentation/cashier/utils/invoice_reprint.dart';
+
+import '../state/credit_payment_receipt.dart';
+import '../utils/credit_payment_printing.dart';
+
 /// Sección Créditos: cuentas por cobrar (ventas a crédito) y cuentas por
 /// pagar (compras a crédito a proveedores), con abonos e historial.
 class CreditsView extends ConsumerStatefulWidget {
@@ -263,6 +268,9 @@ class _CreditsViewState extends ConsumerState<CreditsView>
               filtered[index],
               isPayable: isPayable,
             ),
+            onReprintInvoice: isPayable
+                ? null
+                : () => _reprintCreditInvoice(filtered[index]),
           ),
     );
   }
@@ -286,15 +294,78 @@ class _CreditsViewState extends ConsumerState<CreditsView>
           reference: result.reference,
           affectCashSession: result.affectCash,
         );
+        if (mounted) AppToast.success(context, 'Abono registrado.');
       } else {
-        await vm.registerReceivableAbono(
+        final receipt = await vm.registerReceivableAbono(
           creditId: credit['id'] as String,
           amount: result.amount,
           paymentMethodCode: result.methodCode,
           reference: result.reference,
         );
+        if (!mounted) return;
+
+        // El abono YA está cobrado. De acá en adelante nada puede presentarse
+        // como un fallo del cobro: si el recibo no sale, el mensaje tiene que
+        // decir que falló la IMPRESIÓN, no el abono.
+        AppToast.success(
+          context,
+          receipt == null || receipt.code.isEmpty
+              ? 'Abono registrado.'
+              : 'Abono ${receipt.code} registrado.',
+        );
+
+        if (receipt != null) {
+          // Sale pague como pague: efectivo, tarjeta o transferencia.
+          await CreditPaymentPrinting.printThermal(
+            context,
+            ref,
+            receipt: receipt,
+          );
+        }
       }
-      if (mounted) AppToast.success(context, 'Abono registrado.');
+    } catch (e) {
+      if (mounted) AppToast.error(context, _friendlyError(e));
+    }
+  }
+
+  /// Reimprime la factura de la venta que quedó a crédito.
+  ///
+  /// Reusa el MISMO camino que el historial de ventas
+  /// ([reprintInvoiceFromPayment]): resuelve el scope del comprobante, el
+  /// desglose de impuestos, el QR y el estado del e-CF. Una segunda
+  /// implementación acá divergiría en el primer cambio de la DGII.
+  Future<void> _reprintCreditInvoice(Map<String, dynamic> credit) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('creditos.reimprimir')) {
+      if (mounted) {
+        AppToast.info(context, 'No tienes permiso para reimprimir facturas.');
+      }
+      return;
+    }
+
+    try {
+      final repo = ref.read(creditsRepositoryProvider);
+      final payload = await repo.getCreditInvoiceContext(
+        orderId: credit['order_id']?.toString(),
+        fiscalDocumentId: credit['fiscal_document_id']?.toString(),
+      );
+      if (!mounted) return;
+      if (payload == null) {
+        // Una CxC creada a mano, o una venta anterior al trigger, no tiene
+        // comprobante. Decirlo es mejor que abrir un diálogo vacío.
+        AppToast.info(
+          context,
+          'Esta cuenta no tiene una factura asociada para reimprimir.',
+        );
+        return;
+      }
+      await reprintInvoiceFromPayment(
+        context,
+        ref,
+        payload,
+        permissionCode: 'creditos.reimprimir',
+      );
     } catch (e) {
       if (mounted) AppToast.error(context, _friendlyError(e));
     }
@@ -521,6 +592,10 @@ class _CreditCard extends ConsumerWidget {
   final Map<String, dynamic> credit;
   final bool isPayable;
   final VoidCallback onAbono;
+
+  /// Solo CxC: reimprime la factura que originó la deuda. En CxP no existe
+  /// —la factura de una compra la emite el proveedor, no nosotros—.
+  final VoidCallback? onReprintInvoice;
   final VoidCallback onHistory;
   final VoidCallback onCancel;
 
@@ -528,6 +603,7 @@ class _CreditCard extends ConsumerWidget {
     required this.credit,
     required this.isPayable,
     required this.onAbono,
+    this.onReprintInvoice,
     required this.onHistory,
     required this.onCancel,
   });
@@ -672,12 +748,22 @@ class _CreditCard extends ConsumerWidget {
             onSelected: (value) {
               if (value == 'history') onHistory();
               if (value == 'cancel') onCancel();
+              if (value == 'invoice') onReprintInvoice?.call();
             },
             itemBuilder: (_) => [
               const PopupMenuItem(
                 value: 'history',
                 child: Text('Ver historial de abonos'),
               ),
+              // La factura de la venta que quedó a crédito. Es el papel que
+              // el cliente viene a reclamar cuando discute el monto de la
+              // deuda, y hasta ahora había que ir a buscarlo al historial de
+              // ventas sabiendo la fecha.
+              if (onReprintInvoice != null)
+                const PopupMenuItem(
+                  value: 'invoice',
+                  child: Text('Reimprimir factura'),
+                ),
               // Cancelar (condonar) solo para quien el RLS deja escribir:
               // CxC = owner/admin; CxP = también supervisor (manager).
               if (isOpen && _canCancel(ref))
@@ -953,6 +1039,7 @@ class _HistoryDialog extends ConsumerWidget {
                               (p['payment_methods'] as Map?)?['code']
                                   as String?));
                   final reference = p['reference'] as String?;
+                  final code = (p['code'] ?? '').toString();
                   return ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
@@ -962,18 +1049,35 @@ class _HistoryDialog extends ConsumerWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     subtitle: Text([
+                      if (code.isNotEmpty) code,
                       method,
                       if (reference != null && reference.isNotEmpty)
                         'Ref: $reference',
                     ].join(' · ')),
-                    trailing: Text(
-                      createdAt != null
-                          ? dateFmt.format(createdAt.toLocal())
-                          : '',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.mutedForeground,
-                      ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          createdAt != null
+                              ? dateFmt.format(createdAt.toLocal())
+                              : '',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.mutedForeground,
+                          ),
+                        ),
+                        // Solo CxC: el pago a proveedor no le entrega recibo a
+                        // nadie, el comprobante en ese caso lo da el proveedor.
+                        // Y solo si el abono tiene número: los anteriores a
+                        // 20260902_0002 nunca se numeraron y un recibo sin
+                        // número no se puede reclamar.
+                        if (!isPayable && code.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(Icons.print_outlined, size: 18),
+                            tooltip: 'Reimprimir recibo',
+                            onPressed: () => _reprintReceipt(context, ref, p),
+                          ),
+                      ],
                     ),
                   );
                 },
@@ -988,6 +1092,35 @@ class _HistoryDialog extends ConsumerWidget {
           child: const Text('Cerrar'),
         ),
       ],
+    );
+  }
+
+  /// Reimprime el recibo de un abono ya cobrado.
+  ///
+  /// El saldo que sale impreso es el VIGENTE del crédito, no el que había
+  /// justo después de aquel abono: `credit_payments` no guarda el saldo
+  /// posterior de cada línea. Es además lo que el cliente quiere saber
+  /// cuando pide el papel de nuevo.
+  Future<void> _reprintReceipt(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> payment,
+  ) async {
+    if (!ref
+        .read(sessionProvider.notifier)
+        .hasPermission('creditos.reimprimir')) {
+      AppToast.info(context, 'No tienes permiso para reimprimir recibos.');
+      return;
+    }
+    final receipt = CreditPaymentReceipt.fromHistoryRow(
+      payment,
+      credit: credit,
+    );
+    await CreditPaymentPrinting.printThermal(
+      context,
+      ref,
+      receipt: receipt,
+      isReprint: true,
     );
   }
 

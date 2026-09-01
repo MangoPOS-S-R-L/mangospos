@@ -126,6 +126,7 @@ class AppRoutes {
   static const inventorySupplierDetail = '$inventorySuppliers/:supplierId';
   static const inventoryReceipts = '$inventoryHome/receipts';
   static const inventoryTransfers = '$inventoryHome/transfers';
+  static const inventoryRequisitions = '$inventoryHome/requisitions';
   static const inventoryAdjustments = '$inventoryHome/adjustments';
   static const inventoryProduction = '$inventoryHome/production';
   static const inventoryPhysicalCount = '$inventoryHome/physical-count';

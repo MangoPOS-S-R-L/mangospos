@@ -8,6 +8,7 @@ import '../../core/network/connectivity_service.dart';
 import '../../core/offline/inventory_offline_cache.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../presentation/inventory/state/inventory_state.dart';
+import '../../presentation/inventory/state/requisitions_state.dart';
 import '../../presentation/inventory/state/warehouse_overview_state.dart';
 import '../../presentation/inventory/state/transfers_state.dart';
 import '../datasources/queries/inventory_queries.dart';
@@ -70,21 +71,101 @@ class InventoryRepository {
     return rows.map(InventoryWarehouse.fromMap).toList(growable: false);
   }
 
+  // ── F0 Almacenes por sección ────────────────────────────────────────────
+
+  /// Columnas de siempre. Es el SELECT que corre contra un servidor que
+  /// todavía no aplicó `20260901_0001_warehouse_sections`.
+  static const _warehouseBaseColumns =
+      'id, name, address, is_main, is_active, created_at';
+
+  /// Columnas de siempre + las de la Fase 0, con el nombre del área y del
+  /// responsable resueltos por el join de PostgREST en la misma ida.
+  static const _warehouseSectionColumns =
+      '$_warehouseBaseColumns, warehouse_type, production_area_id, '
+      'keeper_employee_id, requires_requisition, shows_in_pos, '
+      'print_areas(name), employees(first_name, last_name)';
+
+  /// Tri-estado del soporte de almacenes por sección: `null` = no se probó,
+  /// `true/false` = respuesta del esquema. Mismo criterio que los mínimos
+  /// por bodega: se prueba una vez por sesión y no se vuelve a insistir.
+  bool? _warehouseSectionsSupported;
+
+  bool get warehouseSectionsSupported => _warehouseSectionsSupported == true;
+
+  /// True si el error es "acá no existe eso": columna desconocida (42703),
+  /// relación desconocida para el embed (PGRST200) o columna que no está en
+  /// el caché de esquema al escribir (PGRST204). Los tres significan lo
+  /// mismo para nosotros: este servidor no tiene la migración.
+  static bool _isMissingSectionsSchema(Object e) {
+    if (e is PostgrestException) {
+      return e.code == '42703' ||
+          e.code == 'PGRST200' ||
+          e.code == 'PGRST204';
+    }
+    return false;
+  }
+
   /// PRD 9 Fase 1B: lista todas las bodegas del business (incluye inactivas
   /// y la virtual `__IN_TRANSIT__`), con dirección y flag is_active para CRUD.
+  /// F0: agrega tipo, área de producción y responsable cuando el esquema los
+  /// tiene; si no, devuelve lo mismo que antes y la pantalla no se entera.
   Future<List<InventoryWarehouseDetail>> getAllWarehouses(
     String businessId,
   ) async {
-    final response = await _client
-        .from(InventoryQueries.tableWarehouses)
-        .select('id, name, address, is_main, is_active, created_at')
-        .eq('business_id', businessId)
-        .order('is_main', ascending: false)
-        .order('name');
+    Future<List<InventoryWarehouseDetail>> run(String columns) async {
+      final response = await _client
+          .from(InventoryQueries.tableWarehouses)
+          .select(columns)
+          .eq('business_id', businessId)
+          .order('is_main', ascending: false)
+          .order('name');
+      return List<Map<String, dynamic>>.from(response)
+          .map(InventoryWarehouseDetail.fromMap)
+          .toList(growable: false);
+    }
 
-    return List<Map<String, dynamic>>.from(response)
-        .map(InventoryWarehouseDetail.fromMap)
-        .toList(growable: false);
+    if (_warehouseSectionsSupported != false) {
+      try {
+        final rows = await run(_warehouseSectionColumns);
+        _warehouseSectionsSupported = true;
+        return rows;
+      } catch (e) {
+        if (!_isMissingSectionsSchema(e)) rethrow;
+        _warehouseSectionsSupported = false;
+        debugPrint(
+          '[bodegas] sin secciones: falta la migración '
+          '20260901_0001_warehouse_sections',
+        );
+      }
+    }
+    return run(_warehouseBaseColumns);
+  }
+
+  /// Campos de la Fase 0 que van en el INSERT/UPDATE. Se arman aparte para
+  /// poder sacarlos de un saque cuando el servidor no los conoce.
+  Map<String, dynamic> _sectionPayload({
+    required WarehouseType? warehouseType,
+    required String? productionAreaId,
+    required String? keeperEmployeeId,
+    required bool? requiresRequisition,
+    required bool? showsInPos,
+  }) {
+    // Área y responsable van SIEMPRE, incluso en null: "sin área" es un
+    // valor que hay que escribir para desasignar, no un campo ausente.
+    final payload = <String, dynamic>{
+      'production_area_id': productionAreaId,
+      'keeper_employee_id': keeperEmployeeId,
+    };
+    if (warehouseType != null) {
+      payload['warehouse_type'] = warehouseType.wire;
+    }
+    if (requiresRequisition != null) {
+      payload['requires_requisition'] = requiresRequisition;
+    }
+    if (showsInPos != null) {
+      payload['shows_in_pos'] = showsInPos;
+    }
+    return payload;
   }
 
   Future<InventoryWarehouseDetail> createWarehouse({
@@ -93,6 +174,11 @@ class InventoryRepository {
     String? address,
     bool isMain = false,
     bool isActive = true,
+    WarehouseType warehouseType = WarehouseType.general,
+    String? productionAreaId,
+    String? keeperEmployeeId,
+    bool requiresRequisition = false,
+    bool showsInPos = false,
   }) async {
     if (isMain) {
       // Sólo una bodega principal por business: bajar la marca de la actual.
@@ -102,20 +188,61 @@ class InventoryRepository {
           .eq('business_id', businessId)
           .eq('is_main', true);
     }
-    final response = await _client
-        .from(InventoryQueries.tableWarehouses)
-        .insert({
-          'business_id': businessId,
-          'name': name,
-          'address': address,
-          'is_main': isMain,
-          'is_active': isActive,
-        }..removeWhere((key, value) => value == null))
-        .select('id, name, address, is_main, is_active, created_at')
-        .single();
-    return InventoryWarehouseDetail.fromMap(
-      Map<String, dynamic>.from(response),
-    );
+
+    final base = <String, dynamic>{
+      'business_id': businessId,
+      'name': name,
+      'address': address,
+      'is_main': isMain,
+      'is_active': isActive,
+    }..removeWhere((key, value) => value == null);
+
+    Future<InventoryWarehouseDetail> insert(
+      Map<String, dynamic> payload,
+      String columns,
+    ) async {
+      final response = await _client
+          .from(InventoryQueries.tableWarehouses)
+          .insert(payload)
+          .select(columns)
+          .single();
+      return InventoryWarehouseDetail.fromMap(
+        Map<String, dynamic>.from(response),
+      );
+    }
+
+    if (_warehouseSectionsSupported != false) {
+      try {
+        final payload = {
+          ...base,
+          ..._sectionPayload(
+            warehouseType: warehouseType,
+            productionAreaId: productionAreaId,
+            keeperEmployeeId: keeperEmployeeId,
+            requiresRequisition: requiresRequisition,
+            showsInPos: showsInPos,
+          ),
+        };
+        InventoryWarehouseDetail created;
+        try {
+          created = await insert(payload, _warehouseSectionColumns);
+        } catch (e) {
+          // Servidor sin 20260901_0006: solo admite una bodega marcada.
+          // Se desmarca la anterior y se reintenta, para no dejar al usuario
+          // con un error que no puede resolver desde la pantalla.
+          if (!_isPosSourceConflict(e)) rethrow;
+          _posSourceSingleOnly = true;
+          await _clearPosSource(businessId, null);
+          created = await insert(payload, _warehouseSectionColumns);
+        }
+        _warehouseSectionsSupported = true;
+        return created;
+      } catch (e) {
+        if (!_isMissingSectionsSchema(e)) rethrow;
+        _warehouseSectionsSupported = false;
+      }
+    }
+    return insert(base, _warehouseBaseColumns);
   }
 
   Future<void> updateWarehouse({
@@ -125,6 +252,11 @@ class InventoryRepository {
     String? address,
     required bool isMain,
     required bool isActive,
+    WarehouseType? warehouseType,
+    String? productionAreaId,
+    String? keeperEmployeeId,
+    bool? requiresRequisition,
+    bool? showsInPos,
   }) async {
     if (isMain) {
       await _client
@@ -134,15 +266,133 @@ class InventoryRepository {
           .eq('is_main', true)
           .neq('id', warehouseId);
     }
-    await _client
+
+    final base = <String, dynamic>{
+      'name': name,
+      'address': address,
+      'is_main': isMain,
+      'is_active': isActive,
+    };
+
+    Future<void> write(Map<String, dynamic> payload) async {
+      await _client
+          .from(InventoryQueries.tableWarehouses)
+          .update(payload)
+          .eq('id', warehouseId);
+    }
+
+    // `warehouseType == null` = la pantalla no está editando la Fase 0
+    // (llamada vieja): no se manda nada de sección y no se pisa lo guardado.
+    if (warehouseType != null && _warehouseSectionsSupported != false) {
+      try {
+        final payload = {
+          ...base,
+          ..._sectionPayload(
+            warehouseType: warehouseType,
+            productionAreaId: productionAreaId,
+            keeperEmployeeId: keeperEmployeeId,
+            requiresRequisition: requiresRequisition,
+            showsInPos: showsInPos,
+          ),
+        };
+        try {
+          await write(payload);
+        } catch (e) {
+          if (!_isPosSourceConflict(e)) rethrow;
+          _posSourceSingleOnly = true;
+          await _clearPosSource(businessId, warehouseId);
+          await write(payload);
+        }
+        _warehouseSectionsSupported = true;
+        return;
+      } catch (e) {
+        if (!_isMissingSectionsSchema(e)) rethrow;
+        _warehouseSectionsSupported = false;
+      }
+    }
+    await write(base);
+  }
+
+  /// True cuando el servidor todavía tiene el índice único de una sola
+  /// bodega de punto de venta (falta `20260901_0006_pos_multi_warehouse`).
+  /// La pantalla lo consulta después de guardar para poder explicarlo.
+  bool _posSourceSingleOnly = false;
+
+  bool get posSourceSingleOnly => _posSourceSingleOnly;
+
+  /// El índice único `uq_warehouses_pos_source` protestando: este servidor
+  /// no admite varias bodegas marcadas.
+  static bool _isPosSourceConflict(Object e) =>
+      e is PostgrestException &&
+      (e.code == '23505' &&
+          (e.message.contains('uq_warehouses_pos_source') ||
+              (e.details?.toString().contains('uq_warehouses_pos_source') ??
+                  false)));
+
+  /// Baja la marca de punto de venta de las demás bodegas del negocio.
+  /// Solo se usa como salida cuando el servidor todavía tiene el índice
+  /// único: con `20260901_0006` aplicada pueden convivir varias y esto no
+  /// se llama nunca.
+  Future<void> _clearPosSource(String businessId, String? exceptId) async {
+    var q = _client
         .from(InventoryQueries.tableWarehouses)
-        .update({
-          'name': name,
-          'address': address,
-          'is_main': isMain,
-          'is_active': isActive,
-        })
-        .eq('id', warehouseId);
+        .update({'shows_in_pos': false})
+        .eq('business_id', businessId)
+        .eq('shows_in_pos', true);
+    if (exceptId != null) q = q.neq('id', exceptId);
+    await q;
+  }
+
+  /// Áreas de producción del negocio, para el selector del formulario de
+  /// almacén. Son las mismas `print_areas` que rutean las comandas.
+  Future<List<WarehouseAssignmentOption>> getProductionAreas(
+    String businessId,
+  ) async {
+    try {
+      final rows = await _client
+          .from('print_areas')
+          .select('id, name')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('name');
+      return List<Map<String, dynamic>>.from(rows)
+          .map((r) => WarehouseAssignmentOption(
+                id: r['id']?.toString() ?? '',
+                name: r['name']?.toString() ?? '',
+              ))
+          .where((o) => o.id.isNotEmpty && o.name.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('getProductionAreas error: $e');
+      return const [];
+    }
+  }
+
+  /// Empleados activos, para elegir el responsable del almacén.
+  Future<List<WarehouseAssignmentOption>> getKeeperCandidates(
+    String businessId,
+  ) async {
+    try {
+      final rows = await _client
+          .from('employees')
+          .select('id, first_name, last_name')
+          .eq('business_id', businessId)
+          .eq('status', 'active')
+          .order('first_name');
+      return List<Map<String, dynamic>>.from(rows)
+          .map((r) => WarehouseAssignmentOption(
+                id: r['id']?.toString() ?? '',
+                name: [
+                  r['first_name']?.toString().trim() ?? '',
+                  r['last_name']?.toString().trim() ?? '',
+                ].where((p) => p.isNotEmpty).join(' '),
+              ))
+          .where((o) => o.id.isNotEmpty && o.name.isNotEmpty)
+          .toList(growable: false);
+    } catch (e) {
+      debugPrint('getKeeperCandidates error: $e');
+      return const [];
+    }
   }
 
   // ── Fase 2 Bodegas — el mapa y el interior de cada almacén ─────────────
@@ -1724,6 +1974,175 @@ class InventoryRepository {
   /// (`from_business_id`) o como target (`to_business_id`). De esta forma
   /// el negocio activo ve tanto las transferencias que envió como las
   /// inter-sucursal entrantes que debe recibir.
+  /// Nombre del negocio para encabezar documentos. `businesses` NO tiene
+  /// columna `name`: la columna es `business_name`.
+  Future<String> getBusinessName(String businessId) async {
+    try {
+      final row = await _client
+          .from('businesses')
+          .select('business_name')
+          .eq('id', businessId)
+          .maybeSingle();
+      final nombre = row?['business_name']?.toString().trim();
+      return (nombre == null || nombre.isEmpty) ? 'Negocio' : nombre;
+    } catch (e) {
+      debugPrint('getBusinessName error: $e');
+      return 'Negocio';
+    }
+  }
+
+  // ── F2 Requisiciones ────────────────────────────────────────────────────
+
+  /// Columnas de la bandeja. Las dos bodegas se resuelven por el nombre de su
+  /// FK porque `requisitions` apunta DOS veces a `warehouses`: sin
+  /// desambiguar, PostgREST no sabe cuál es cuál.
+  static const _requisitionColumns =
+      'id, business_id, code, status, from_warehouse_id, to_warehouse_id, '
+      'transfer_id, requested_at, dispatched_at, received_at, cancel_reason, '
+      'notes, '
+      'from_warehouse:warehouses!requisitions_from_warehouse_id_fkey(name), '
+      'to_warehouse:warehouses!requisitions_to_warehouse_id_fkey(name)';
+
+  /// True si el error es "acá no existe la tabla/relación": el servidor no
+  /// aplicó `20260902_0001_requisitions`. La pantalla lo explica en vez de
+  /// mostrar un error crudo.
+  static bool _isMissingRequisitions(Object e) {
+    if (e is PostgrestException) {
+      return e.code == '42P01' ||
+          e.code == 'PGRST205' ||
+          e.code == 'PGRST202' ||
+          e.code == 'PGRST200';
+    }
+    return false;
+  }
+
+  bool _requisitionsSupported = true;
+  bool get requisitionsSupported => _requisitionsSupported;
+
+  Future<List<Requisition>> listRequisitions({
+    required String businessId,
+    List<RequisitionStatus>? statuses,
+    String? fromWarehouseId,
+    String? toWarehouseId,
+    int limit = 50,
+  }) async {
+    try {
+      var q = _client
+          .from(InventoryQueries.tableRequisitions)
+          .select(_requisitionColumns)
+          .eq('business_id', businessId);
+      if (statuses != null && statuses.isNotEmpty) {
+        q = q.inFilter(
+          'status',
+          statuses.map((s) => s.wire).toList(growable: false),
+        );
+      }
+      if (fromWarehouseId != null) {
+        q = q.eq('from_warehouse_id', fromWarehouseId);
+      }
+      if (toWarehouseId != null) q = q.eq('to_warehouse_id', toWarehouseId);
+      final rows =
+          await q.order('requested_at', ascending: false).limit(limit);
+      _requisitionsSupported = true;
+      return List<Map<String, dynamic>>.from(rows)
+          .map(Requisition.fromMap)
+          .toList(growable: false);
+    } catch (e) {
+      if (!_isMissingRequisitions(e)) rethrow;
+      _requisitionsSupported = false;
+      debugPrint(
+        '[requisiciones] falta la migración 20260902_0001_requisitions',
+      );
+      return const [];
+    }
+  }
+
+  Future<List<RequisitionLine>> getRequisitionLines(
+    String requisitionId,
+  ) async {
+    final rows = await _client
+        .from(InventoryQueries.tableRequisitionLines)
+        .select(
+          'id, item_id, requested_qty, dispatched_qty, received_qty, unit, '
+          'line_notes, inventory_items(name, unit)',
+        )
+        .eq('requisition_id', requisitionId)
+        .order('id');
+    return List<Map<String, dynamic>>.from(rows)
+        .map(RequisitionLine.fromMap)
+        .toList(growable: false);
+  }
+
+  /// Crea la solicitud. [lines] son mapas `{item_id, requested_qty, unit,
+  /// line_notes?}`. NO mueve stock: eso pasa en el despacho.
+  Future<Requisition> createRequisition({
+    required String businessId,
+    required String fromWarehouseId,
+    required String toWarehouseId,
+    required List<Map<String, dynamic>> lines,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRequisitionCreate,
+      params: {
+        'p_business_id': businessId,
+        'p_from_warehouse_id': fromWarehouseId,
+        'p_to_warehouse_id': toWarehouseId,
+        'p_lines': lines,
+        'p_notes': notes,
+      },
+    );
+    return Requisition.fromMap(Map<String, dynamic>.from(response as Map));
+  }
+
+  /// Despacha. [lines] son `{item_id, dispatched_qty}`; una línea ausente se
+  /// despacha en CERO, que es "la miré y no había". Acá sí se mueve el stock,
+  /// vía la transferencia que dispara el RPC.
+  Future<Requisition> dispatchRequisition({
+    required String requisitionId,
+    required List<Map<String, dynamic>> lines,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRequisitionDispatch,
+      params: {
+        'p_requisition_id': requisitionId,
+        'p_lines': lines,
+        'p_notes': notes,
+      },
+    );
+    return Requisition.fromMap(Map<String, dynamic>.from(response as Map));
+  }
+
+  /// Confirma la recepción. [lines] (`{item_id, received_qty}`) solo hace
+  /// falta para declarar una diferencia: por defecto se recibe lo despachado.
+  Future<Requisition> receiveRequisition({
+    required String requisitionId,
+    List<Map<String, dynamic>>? lines,
+    String? notes,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRequisitionReceive,
+      params: {
+        'p_requisition_id': requisitionId,
+        'p_lines': lines,
+        'p_notes': notes,
+      },
+    );
+    return Requisition.fromMap(Map<String, dynamic>.from(response as Map));
+  }
+
+  Future<Requisition> cancelRequisition({
+    required String requisitionId,
+    String? reason,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcRequisitionCancel,
+      params: {'p_requisition_id': requisitionId, 'p_reason': reason},
+    );
+    return Requisition.fromMap(Map<String, dynamic>.from(response as Map));
+  }
+
   Future<List<StockTransfer>> listTransfers({
     required String businessId,
     String? status,

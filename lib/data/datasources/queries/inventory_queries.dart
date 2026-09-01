@@ -9,6 +9,14 @@ class InventoryQueries {
   static const rpcTransferReceive = 'fn_inventory_transfer_receive';
   static const rpcTransferCancel = 'fn_inventory_transfer_cancel';
   static const tableStockTransferItems = 'stock_transfer_items';
+
+  // F2 — Requisiciones (migración 20260902_0001).
+  static const tableRequisitions = 'requisitions';
+  static const tableRequisitionLines = 'requisition_lines';
+  static const rpcRequisitionCreate = 'fn_requisition_create';
+  static const rpcRequisitionDispatch = 'fn_requisition_dispatch';
+  static const rpcRequisitionReceive = 'fn_requisition_receive';
+  static const rpcRequisitionCancel = 'fn_requisition_cancel';
   static const viewTransfersLog = 'v_inventory_transfers_log';
   static const viewMovementsKardex = 'v_inventory_movements_with_balance';
   static const viewLowStock = 'v_inventory_low_stock';

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 
+import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../utils/transfer_validation.dart';
 import '../viewmodel/inventory_viewmodel.dart';
@@ -267,7 +268,11 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
               .map((w) => (id: w.id, name: w.name))
               .toList(growable: false);
 
-    return AlertDialog(
+    return InventoryScanListener(
+      enabled: !_submitting && !_loadingItems,
+      items: _sourceItems,
+      onItem: _onScannedItem,
+      child: AlertDialog(
       backgroundColor: AppColors.card,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.card),
@@ -580,8 +585,29 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
               : Text('Enviar ($selectedCount)'),
         ),
       ],
+      ),
     );
   }
+
+  /// Escanear suma UNA unidad del insumo y lo deja visible en la lista.
+  ///
+  /// Sumar en vez de fijar es lo que hace útil la pistola cargando una
+  /// transferencia: se pasa caja por caja. Y el aviso dice el TOTAL que
+  /// quedó, no un "agregado" a secas — sin el número, nadie sabe si el
+  /// disparo entró.
+  void _onScannedItem(InventoryItemSummary item) {
+    setState(() {
+      _quantities[item.id] = (_quantities[item.id] ?? 0) + 1;
+      _searchController.text = item.name;
+    });
+    AppToast.success(
+      context,
+      '${item.name}: ${_fmtEscaneo(_quantities[item.id]!)} ${item.unit}',
+    );
+  }
+
+  String _fmtEscaneo(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 
   List<InventoryItemSummary> get _filteredItems {
     final q = _searchController.text.trim().toLowerCase();
