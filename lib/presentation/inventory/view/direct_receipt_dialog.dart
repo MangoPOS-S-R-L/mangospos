@@ -130,29 +130,30 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
   int get _selectedCount =>
       _drafts.values.where((d) => d.quantity > 0).length;
 
+  /// Costo unitario que se va a REGISTRAR: el que el usuario tipeó o, si lo
+  /// dejó en blanco, el costo maestro del insumo.
+  ///
+  /// Antes el total en pantalla aplicaba este respaldo pero el payload de
+  /// `_submit` mandaba `draft.unitCost` crudo, o sea `null`. Resultado: la
+  /// línea entraba sin costo, el total de la recepción quedaba en cero y el
+  /// trigger de recosteo no disparaba porque exige `cost_per_unit > 0`. Es el
+  /// hallazgo 3 de la auditoría DH del 02-09-2026 (436 de 454 líneas de
+  /// recepción directa sin costo unitario, 10,459 unidades). Una sola fuente
+  /// para pantalla y payload para que no vuelvan a divergir.
+  double _resolvedUnitCost(String itemId, double? typed) {
+    if (typed != null) return typed;
+    for (final item in _items) {
+      if (item.id == itemId) return item.cost;
+    }
+    return 0;
+  }
+
   double get _grandTotal {
     var total = 0.0;
     for (final entry in _drafts.entries) {
       final qty = entry.value.quantity;
       if (qty <= 0) continue;
-      // Costo: si el user tipeó explícito, lo usa; sino el costo del item.
-      final item = _items.firstWhere(
-        (i) => i.id == entry.key,
-        orElse: () => const InventoryItemSummary(
-          id: '',
-          sku: '',
-          name: '',
-          description: '',
-          unit: '',
-          cost: 0,
-          minStock: 0,
-          maxStock: null,
-          isActive: true,
-          stock: 0,
-        ),
-      );
-      final cost = entry.value.unitCost ?? item.cost;
-      total += qty * cost;
+      total += qty * _resolvedUnitCost(entry.key, entry.value.unitCost);
     }
     return total;
   }
@@ -173,7 +174,7 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
       items.add({
         'item_id': entry.key,
         'quantity': draft.quantity,
-        'unit_cost': draft.unitCost,
+        'unit_cost': _resolvedUnitCost(entry.key, draft.unitCost),
         if (draft.lotNumber != null && draft.lotNumber!.isNotEmpty)
           'lot_number': draft.lotNumber,
         if (draft.expiryDate != null)

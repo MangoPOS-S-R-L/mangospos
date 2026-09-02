@@ -45,6 +45,8 @@ class OrderOutOfScopeException implements Exception {
 ///   MP401 — la cuenta ya se cobró (hay pagos o NCF): no se resucita.
 ///   MP402 — la mesa ya la tomó otra sesión mientras esta estaba cerrada.
 ///   MP403 — la orden ya no existe.
+///   MP404 — se intentó BORRAR un ítem de una cuenta ya facturada
+///           (migración `20260902_0010_block_item_delete_on_invoiced`).
 ///
 /// El caso feliz (la mesa la cerró el barrendero de mesas fantasma y nadie la
 /// reabrió) NO llega aquí: el trigger resucita orden + sesión + mesa y el ítem
@@ -63,6 +65,9 @@ String? closedOrderErrorMessage(Object error) {
           'cuenta activa.';
     case 'MP403':
       return 'La orden ya no existe. Vuelve al salón y abre la mesa de nuevo.';
+    case 'MP404':
+      return 'Esta cuenta ya está facturada. Anula el producto en vez de '
+          'borrarlo, o anula la factura completa.';
     default:
       return null;
   }
@@ -1646,6 +1651,14 @@ class SalesRepository {
       // Intentar directo primero para rapidez y evitar timeout de funcion compleja
       await _client.from('order_items').delete().eq('id', itemId);
     } catch (e) {
+      // El candado de cuentas facturadas (MP404) NO es un fallo transitorio:
+      // es una negativa deliberada. Si cayéramos al RPC de respaldo lo
+      // esquivaríamos —corre como SECURITY DEFINER, o sea fuera del alcance
+      // del trigger— y el ítem se borraría igual. Cortar aquí.
+      final blocked = closedOrderErrorMessage(e);
+      if (blocked != null) {
+        throw Exception(blocked);
+      }
       // Fallback a RPC si falla por permisos o triggers complejos (aunque delete directo suele ser mejor)
       try {
         await _client.rpc(
@@ -2081,7 +2094,14 @@ class SalesRepository {
     if (check == null || check['order_id'] == null) return;
     final orderId = check['order_id'] as String;
 
-    await _client.from('order_items').delete().eq('check_id', checkId);
+    try {
+      await _client.from('order_items').delete().eq('check_id', checkId);
+    } catch (e) {
+      // Misma negativa que en deleteItem: si la subcuenta ya tiene NCF, no se
+      // vacía. Se anula.
+      final blocked = closedOrderErrorMessage(e);
+      throw Exception(blocked ?? 'Error al eliminar la cuenta: $e');
+    }
     await _client.from('order_checks').delete().eq('id', checkId);
     await _recomputeOrderTotals(orderId);
   }

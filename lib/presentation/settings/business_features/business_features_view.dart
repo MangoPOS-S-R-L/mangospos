@@ -101,6 +101,60 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
     }
   }
 
+  /// Cambiar el método de costeo no es una casilla más: enciende (o apaga) el
+  /// motor de capas para todo el negocio. Si se enciende sin haber sembrado la
+  /// apertura, cada venta sale contra capas que no existen y el inventario
+  /// entero aparece como faltante. Por eso se confirma y se dice qué falta.
+  Future<bool> _confirmCostingMethod(InventoryCostingMethod next) async {
+    final enciende =
+        next.usesCostLayers && !_features.inventoryCostingMethod.usesCostLayers;
+    final apaga =
+        !next.usesCostLayers && _features.inventoryCostingMethod.usesCostLayers;
+
+    final String cuerpo;
+    if (enciende) {
+      cuerpo =
+          'A partir de ahora cada entrada de inventario crea una capa de '
+          'costo y cada salida consume capas.\n\n'
+          'ANTES de activarlo tiene que existir el inventario de apertura. '
+          'Si no, las ventas van a salir contra capas que no existen y todo '
+          'el inventario va a aparecer como faltante.\n\n'
+          '¿Ya se sembró la apertura desde el conteo físico?';
+    } else if (apaga) {
+      cuerpo =
+          'El inventario vuelve a costearse al precio de la última compra. '
+          'Las capas ya construidas se conservan, pero dejan de moverse: '
+          'mientras esté apagado, las ventas no descargan costo y las '
+          'compras no crean capas nuevas.\n\n'
+          'Al volver a encenderlo las capas van a estar desfasadas contra la '
+          'existencia real y habrá que sembrar la apertura otra vez.';
+    } else {
+      cuerpo =
+          'Cambia la forma de consumir las capas de aquí en adelante. La '
+          'historia ya costeada NO se recalcula: las salidas anteriores '
+          'conservan el costo con el que se registraron.';
+    }
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Cambiar a ${next.label}'),
+        content: SingleChildScrollView(child: Text(cuerpo)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Cambiar'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
   Future<void> _update(BusinessFeatures next) async {
     if (_saving || _resolvedBusinessId == null) return;
     final previous = _features;
@@ -493,6 +547,29 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                       },
                     ),
 
+                    // El método de costeo solo tiene sentido si se lleva
+                    // inventario. Sin stock que valorar no hay nada que
+                    // costear.
+                    if (_features.inventoryMode.isEnabled) ...[
+                      const SizedBox(height: 16),
+                      _Section(title: 'Método de costeo'),
+                      _CostingMethodSelector(
+                        selected: _features.inventoryCostingMethod,
+                        onChanged: (method) async {
+                          if (method == _features.inventoryCostingMethod) {
+                            return;
+                          }
+                          final ok = await _confirmCostingMethod(method);
+                          if (!ok || !mounted) return;
+                          await _update(
+                            _features.copyWith(
+                              inventoryCostingMethod: method,
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+
                     if (!_features.hasAnySalesMode)
                       Container(
                         margin: const EdgeInsets.only(top: 16),
@@ -627,6 +704,126 @@ class _DeliveryPresetsTile extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _CostingMethodSelector extends StatelessWidget {
+  final InventoryCostingMethod selected;
+  final ValueChanged<InventoryCostingMethod> onChanged;
+  const _CostingMethodSelector({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final method in InventoryCostingMethod.values)
+          _CostingMethodOption(
+            icon: switch (method) {
+              InventoryCostingMethod.lastPrice => Icons.receipt_long_outlined,
+              InventoryCostingMethod.average => Icons.balance_outlined,
+              InventoryCostingMethod.fifo => Icons.low_priority_outlined,
+              InventoryCostingMethod.lifo => Icons.swap_vert_outlined,
+            },
+            label: method.label,
+            subtitle: method.help,
+            value: method,
+            selected: selected,
+            onTap: onChanged,
+          ),
+      ],
+    );
+  }
+}
+
+class _CostingMethodOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final InventoryCostingMethod value;
+  final InventoryCostingMethod selected;
+  final ValueChanged<InventoryCostingMethod> onTap;
+
+  const _CostingMethodOption({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isSelected = selected == value;
+    return InkWell(
+      onTap: () => onTap(value),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFFF7ED) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected
+                ? MangoColors.primaryOrange
+                : MangoColors.cardBorder,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? const Color(0xFFFFEDD5)
+                    : const Color(0xFFF3F4F6),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                icon,
+                color: isSelected
+                    ? MangoColors.primaryOrange
+                    : MangoColors.muted,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected
+                          ? MangoColors.primaryOrange
+                          : MangoColors.darkGray,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

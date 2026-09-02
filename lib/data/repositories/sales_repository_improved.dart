@@ -8,6 +8,7 @@ import '../datasources/queries/sales_queries.dart';
 import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
 import '../../core/network/database_operation_wrapper.dart';
+import 'sales_repository.dart' show closedOrderErrorMessage;
 
 /// 🥭 MangoPOS - Sales Repository (Mejorado)
 /// Repositorio con manejo robusto de errores, timeouts y reintentos
@@ -297,7 +298,14 @@ class SalesRepositoryImproved {
     if (check == null || check['order_id'] == null) return;
     final orderId = check['order_id'] as String;
 
-    await _client.from('order_items').delete().eq('check_id', checkId);
+    try {
+      await _client.from('order_items').delete().eq('check_id', checkId);
+    } catch (e) {
+      // Candado de cuentas facturadas (MP404): si la subcuenta ya tiene NCF,
+      // no se vacía. Se anula.
+      final blocked = closedOrderErrorMessage(e);
+      throw Exception(blocked ?? 'Error al eliminar la cuenta: $e');
+    }
     await _client.from('order_checks').delete().eq('id', checkId);
     await _recomputeOrderTotals(orderId);
   }

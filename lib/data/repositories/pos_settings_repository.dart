@@ -91,6 +91,75 @@ extension InventoryModeX on InventoryMode {
   bool get hasRecipeEditor => this == InventoryMode.advanced;
 }
 
+/// Método de costeo del inventario (`business_settings.inventory_costing_method`,
+/// migración 20260902_0012).
+///
+/// `lastPrice` es el default y el comportamiento histórico: el costo maestro
+/// del insumo queda en el precio de la última compra y no hay capas. Los otros
+/// tres encienden el motor de capas para ese negocio.
+enum InventoryCostingMethod { lastPrice, average, fifo, lifo }
+
+extension InventoryCostingMethodX on InventoryCostingMethod {
+  String get wireValue {
+    switch (this) {
+      case InventoryCostingMethod.lastPrice:
+        return 'last_price';
+      case InventoryCostingMethod.average:
+        return 'average';
+      case InventoryCostingMethod.fifo:
+        return 'fifo';
+      case InventoryCostingMethod.lifo:
+        return 'lifo';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case InventoryCostingMethod.lastPrice:
+        return 'Último precio de compra';
+      case InventoryCostingMethod.average:
+        return 'Promedio ponderado';
+      case InventoryCostingMethod.fifo:
+        return 'PEPS (primero en entrar, primero en salir)';
+      case InventoryCostingMethod.lifo:
+        return 'UEPS (último en entrar, primero en salir)';
+    }
+  }
+
+  String get help {
+    switch (this) {
+      case InventoryCostingMethod.lastPrice:
+        return 'Sin capas de costo. El costo del insumo queda en el de la '
+            'última compra, aunque esa compra haya sido de una unidad.';
+      case InventoryCostingMethod.average:
+        return 'Cada salida se costea al promedio de lo que queda en '
+            'existencia. Útil para gestión interna.';
+      case InventoryCostingMethod.fifo:
+        return 'Cada salida consume primero la mercancía más antigua.';
+      case InventoryCostingMethod.lifo:
+        return 'Cada salida consume primero la mercancía más reciente. Es el '
+            'método que exige el Art. 303 del Código Tributario.';
+    }
+  }
+
+  /// True cuando el motor de capas de costo trabaja para este negocio.
+  bool get usesCostLayers => this != InventoryCostingMethod.lastPrice;
+}
+
+InventoryCostingMethod _costingMethodFromWire(String? raw) {
+  switch (raw) {
+    case 'average':
+      return InventoryCostingMethod.average;
+    case 'fifo':
+      return InventoryCostingMethod.fifo;
+    case 'lifo':
+      return InventoryCostingMethod.lifo;
+    case 'last_price':
+    default:
+      return InventoryCostingMethod.lastPrice;
+  }
+}
+
 InventoryMode _inventoryModeFromWire(String? raw) {
   switch (raw) {
     case 'basic':
@@ -139,6 +208,11 @@ class BusinessFeatures {
   /// el stock de una vez).
   final bool requireGoodsReceipt;
 
+  /// Método de costeo del inventario. Default `lastPrice` = comportamiento
+  /// histórico. Cambiarlo NO recalcula la historia: las capas ya construidas
+  /// conservan el costo con el que se crearon.
+  final InventoryCostingMethod inventoryCostingMethod;
+
   /// Almacenes por sección (F0/F1): el consumo de la venta sale del almacén
   /// del ÁREA del producto en vez del principal. Default false = como
   /// siempre. No prenderla hasta que los almacenes de producción tengan
@@ -178,6 +252,7 @@ class BusinessFeatures {
     this.multimeseroEnabled = false,
     this.transfersRequireApproval = false,
     this.requireGoodsReceipt = false,
+    this.inventoryCostingMethod = InventoryCostingMethod.lastPrice,
     this.warehouseSectionsEnabled = false,
     this.kitchenBannerDineIn = true,
     this.kitchenBannerTakeout = true,
@@ -209,6 +284,9 @@ class BusinessFeatures {
       multimeseroEnabled: map['multimesero_enabled'] == true,
       transfersRequireApproval: map['transfers_require_approval'] == true,
       requireGoodsReceipt: map['require_goods_receipt'] == true,
+      inventoryCostingMethod: _costingMethodFromWire(
+        map['inventory_costing_method']?.toString(),
+      ),
       warehouseSectionsEnabled: map['warehouse_sections_enabled'] == true,
       // Default `true` cuando la columna no viene en el SELECT o vale
       // NULL: preserva el comportamiento histórico (ambas franjas).
@@ -255,6 +333,7 @@ class BusinessFeatures {
     bool? multimeseroEnabled,
     bool? transfersRequireApproval,
     bool? requireGoodsReceipt,
+    InventoryCostingMethod? inventoryCostingMethod,
     bool? warehouseSectionsEnabled,
     bool? kitchenBannerDineIn,
     bool? kitchenBannerTakeout,
@@ -282,6 +361,8 @@ class BusinessFeatures {
       transfersRequireApproval:
           transfersRequireApproval ?? this.transfersRequireApproval,
       requireGoodsReceipt: requireGoodsReceipt ?? this.requireGoodsReceipt,
+      inventoryCostingMethod:
+          inventoryCostingMethod ?? this.inventoryCostingMethod,
       warehouseSectionsEnabled:
           warehouseSectionsEnabled ?? this.warehouseSectionsEnabled,
       kitchenBannerDineIn: kitchenBannerDineIn ?? this.kitchenBannerDineIn,
@@ -1113,6 +1194,7 @@ class PosSettingsRepository {
       'delivery_fee_min': features.deliveryFeeMin,
       'delivery_fee_presets': features.deliveryFeePresets,
       'require_goods_receipt': features.requireGoodsReceipt,
+      'inventory_costing_method': features.inventoryCostingMethod.wireValue,
       'warehouse_sections_enabled': features.warehouseSectionsEnabled,
     };
 
@@ -1122,14 +1204,16 @@ class PosSettingsRepository {
           .upsert(payload, onConflict: 'business_id');
     } on PostgrestException catch (e) {
       // Banderas jóvenes: `require_goods_receipt` llega con la migración
-      // 20260828_0001 y `warehouse_sections_enabled` con 20260901_0001. En
-      // un servidor que no las aplicó, mandarlas tumbaría el guardado de
-      // TODAS las banderas: se reintenta sin ellas. Perder una opción que
-      // ese servidor no puede honrar es aceptable; perder el resto no.
+      // 20260828_0001, `warehouse_sections_enabled` con 20260901_0001 y
+      // `inventory_costing_method` con 20260902_0012. En un servidor que no
+      // las aplicó, mandarlas tumbaría el guardado de TODAS las banderas: se
+      // reintenta sin ellas. Perder una opción que ese servidor no puede
+      // honrar es aceptable; perder el resto no.
       final missingColumn = e.code == '42703' || e.code == 'PGRST204';
       if (!missingColumn) rethrow;
       payload.remove('require_goods_receipt');
       payload.remove('warehouse_sections_enabled');
+      payload.remove('inventory_costing_method');
       await _client
           .from('business_settings')
           .upsert(payload, onConflict: 'business_id');

@@ -666,16 +666,134 @@ class _PhysicalCountDetailViewState
   Future<void> _openExport() async {
     final h = _detail?.header;
     if (h == null) return;
-    if (h.status != PhysicalCountStatus.completed) {
-      await _exportCountSheet();
-      return;
-    }
-    final onlyDiff = await showDialog<bool>(
+    final completada = h.status == PhysicalCountStatus.completed;
+    final elegido = await showDialog<_ExportKind>(
       context: context,
-      builder: (_) => const _ExportChoiceDialog(),
+      builder: (_) => _ExportChoiceDialog(completada: completada),
     );
-    if (onlyDiff == null) return;
-    await _exportComparison(onlyDifferences: onlyDiff);
+    if (elegido == null) return;
+    switch (elegido) {
+      case _ExportKind.hojaConteo:
+        await _exportCountSheet();
+      case _ExportKind.soloDiferencias:
+        await _exportComparison(onlyDifferences: true);
+      case _ExportKind.todos:
+        await _exportComparison(onlyDifferences: false);
+      case _ExportKind.excel:
+        await _exportExcel();
+    }
+  }
+
+  /// Deja un texto usable como nombre de archivo. La nota del área viene
+  /// escrita a mano y trae barras y acentos ("Conteo Foodshop/Rosayra"), que
+  /// en Windows rompen el guardado.
+  static String _paraNombreDeArchivo(String texto) {
+    final limpio = texto
+        .replaceAll(RegExp(r'[^A-Za-z0-9áéíóúÁÉÍÓÚñÑ ]'), ' ')
+        .replaceAll(RegExp(r'\s+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    if (limpio.isEmpty) return 'area';
+    return limpio.length > 40 ? limpio.substring(0, 40) : limpio;
+  }
+
+  /// Detalle de la sesión a Excel.
+  ///
+  /// Es lo que pide un auditor: UNA hoja por sesión con lo que contó esa
+  /// área, antes de combinar nada. El PDF sirve para firmar; el .xlsx sirve
+  /// para que alguien sume, filtre y cruce por su cuenta.
+  ///
+  /// Sale la sesión COMPLETA, sin los filtros de pantalla: un respaldo con
+  /// filtros aplicados a medias no es un respaldo. Las columnas del sistema
+  /// se omiten si la sesión sigue a ciegas y sin revelar, igual que la
+  /// pantalla.
+  Future<void> _exportExcel() async {
+    final d = _detail;
+    if (d == null) return;
+    final h = d.header;
+    final mostrarSistema = !_hideSystem;
+
+    // La identificación viaja en CADA fila, no en un encabezado suelto: con
+    // una sesión por área son varios archivos, y sin esto no se distinguen
+    // entre sí ni se pueden apilar en una sola hoja sin perder el origen.
+    final area = (h.notes ?? '').trim().isEmpty
+        ? '(sin nombre de área)'
+        : h.notes!.trim();
+
+    final headers = <String>[
+      'Sesión',
+      'Área',
+      'Bodega',
+      'Item',
+      'SKU',
+      'Unidad',
+      if (mostrarSistema) 'Sistema',
+      'Contado',
+      'Estado',
+      if (mostrarSistema) ...['Diferencia', 'Costo unit.', 'Valor dif.'],
+      'Notas',
+    ];
+
+    final rows = <ExportRow>[];
+    for (final l in d.lines) {
+      final base = l.stockAtComplete ?? l.snapshotQuantity;
+      final diff = l.displayVariance;
+      final valor = l.displayVarianceValue;
+      rows.add(<String>[
+        h.code,
+        area,
+        h.warehouseName,
+        l.itemName,
+        l.itemSku ?? '',
+        l.unit,
+        if (mostrarSistema) _fmtQty(base),
+        l.countedQuantity == null ? '' : _fmtQty(l.countedQuantity!),
+        l.countedQuantity == null ? 'sin contar' : 'contado',
+        if (mostrarSistema) ...[
+          diff == null ? '' : _fmtQty(diff),
+          _fmtQty(l.unitCost ?? l.unitCostCurrent),
+          valor == null ? '' : _fmtQty(valor),
+        ],
+        l.counterNotes ?? '',
+      ]);
+    }
+
+    // Índices de las columnas que tienen que llegar como NÚMERO. El SKU se
+    // queda como texto a propósito: un código numérico pierde los ceros a la
+    // izquierda en cuanto Excel lo toma por número.
+    //
+    // Con las 3 columnas de identificación al frente, el bloque de números
+    // arranca en la 6 (Sistema) o en la 7 (Contado) según se muestre el
+    // sistema o no.
+    final numericas = mostrarSistema
+        ? <int>[6, 7, 9]        // Sistema, Contado, Diferencia
+        : <int>[6];             // Contado
+    final montos = mostrarSistema
+        ? <int>[10, 11]         // Costo unit., Valor dif.
+        : const <int>[];
+
+    setState(() => _busy = true);
+    try {
+      final ok = await ReportExporter.exportExcel(
+        filename: 'conteo_${h.code}_${_paraNombreDeArchivo(area)}',
+        sheetName: h.code,
+        headers: headers,
+        rows: rows,
+        numericColumns: numericas,
+        moneyColumns: montos,
+      );
+      if (!mounted) return;
+      AppToast.success(
+        context,
+        ok
+            ? 'Excel de ${h.code} generado (${rows.length} items).'
+            : 'No se pudo descargar; el detalle quedó en el portapapeles.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo generar el Excel: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
 
@@ -3011,46 +3129,82 @@ class _CompletedDialog extends StatelessWidget {
 
 /// Elige el alcance del reporte de comparación. Devuelve `true` para
 /// "solo diferencias", `false` para el listado completo.
+/// Qué se exporta desde el botón de la barra.
+enum _ExportKind { hojaConteo, soloDiferencias, todos, excel }
+
 class _ExportChoiceDialog extends StatelessWidget {
-  const _ExportChoiceDialog();
+  /// La comparación solo tiene sentido con la sesión cerrada: antes de
+  /// completar no hay ajustes aplicados y el "impacto" sería provisorio.
+  final bool completada;
+  const _ExportChoiceDialog({required this.completada});
 
   @override
   Widget build(BuildContext context) {
     return SimpleDialog(
-      title: const Text('Reporte de comparación'),
+      title: const Text('Exportar'),
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
-          child: Text(
-            'Los totales del pie son siempre los de la sesión completa.',
-            style: TextStyle(fontSize: 12, color: MangoColors.muted),
-          ),
-        ),
         SimpleDialogOption(
-          onPressed: () => Navigator.of(context).pop(true),
+          onPressed: () => Navigator.of(context).pop(_ExportKind.excel),
           child: const ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.filter_alt_outlined,
-                color: MangoColors.primaryOrange),
-            title: Text('Solo diferencias'),
+            leading: Icon(Icons.table_view_outlined,
+                color: Color(0xFF059669)),
+            title: Text('Detalle en Excel (.xlsx)'),
             subtitle: Text(
-              'Los items que no cuadraron. Es el documento de cierre.',
+              'La sesión completa, para auditoría. Se puede sumar y filtrar.',
               style: TextStyle(fontSize: 12),
             ),
           ),
         ),
         SimpleDialogOption(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Navigator.of(context).pop(_ExportKind.hojaConteo),
           child: const ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.list_alt_outlined, color: MangoColors.muted),
-            title: Text('Todos los items'),
+            leading: Icon(Icons.print_outlined, color: MangoColors.muted),
+            title: Text('Hoja de conteo (PDF)'),
             subtitle: Text(
-              'La sesión completa, cuadre o no. Sirve de respaldo.',
+              'Para llenar a mano. Respeta los filtros de la pantalla.',
               style: TextStyle(fontSize: 12),
             ),
           ),
         ),
+        if (completada) ...[
+          const Divider(height: 1),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 12, 24, 8),
+            child: Text(
+              'Reporte de comparación — los totales del pie son siempre los '
+              'de la sesión completa.',
+              style: TextStyle(fontSize: 12, color: MangoColors.muted),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () =>
+                Navigator.of(context).pop(_ExportKind.soloDiferencias),
+            child: const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.filter_alt_outlined,
+                  color: MangoColors.primaryOrange),
+              title: Text('Solo diferencias (PDF)'),
+              subtitle: Text(
+                'Los items que no cuadraron. Es el documento de cierre.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop(_ExportKind.todos),
+            child: const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.list_alt_outlined, color: MangoColors.muted),
+              title: Text('Todos los items (PDF)'),
+              subtitle: Text(
+                'La sesión completa, cuadre o no. Sirve de respaldo.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }

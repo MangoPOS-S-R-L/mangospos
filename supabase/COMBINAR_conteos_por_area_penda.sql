@@ -2,9 +2,18 @@
 -- LA PENDA EXPRESS — combinar los 4 conteos por área en UNO solo
 -- business_id = 35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6
 --
--- CÓMO SE ESTÁ CONTANDO: cuatro sesiones abiertas a la vez (PC-2026-000002,
--- -000003, -000004, -000005) sobre la MISMA bodega, una por área, para
--- repartir el recorrido. Después se combinan.
+-- CÓMO SE ESTÁ CONTANDO: varias sesiones abiertas a la vez sobre la MISMA
+-- bodega, una por área, para repartir el recorrido. Al 2026-09-01 son CINCO:
+--   PC-2026-000002  Diego · Furgón · Almacén principal
+--   PC-2026-000003  Almacén Cocina  (se cuenta en PAPEL, hay que teclearla)
+--   PC-2026-000004  Foodshop · Winnifer
+--   PC-2026-000005  Foodshop · Rosayra   ← destino de la combinación
+--   PC-2026-000006  Bar · DH             (abierta después que las otras)
+--
+-- OJO: el número de sesiones cambió sobre la marcha. Antes de combinar,
+-- correr el paso 1 de este archivo para ver cuántas hay REALMENTE abiertas —
+-- las sentencias de abajo trabajan sobre todas las `in_progress`, así que no
+-- se les escapa ninguna, pero conviene saber qué se está sumando.
 --
 -- ⚠️ LO MÁS IMPORTANTE: NO CERRAR LAS CUATRO SESIONES.
 --    `fn_physical_count_complete` deja el stock IGUAL a lo contado, no le
