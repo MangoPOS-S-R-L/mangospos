@@ -10,6 +10,7 @@ import 'package:mangopos/data/models/zone.dart';
 import '../viewmodel/zones_tables_viewmodel.dart';
 import 'zone_floor_editor.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class ZonesTablesView extends ConsumerStatefulWidget {
   /// Puede venir 'auto' o un UUID real. El VM lo resuelve antes de consultar.
@@ -1381,7 +1382,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
 
   void _showSuccess(ScaffoldMessengerState messenger, String text) {
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnackBar(
       SnackBar(
         content: Text(text),
         backgroundColor: const Color(0xFF22C55E),
@@ -1393,7 +1394,7 @@ class _ZonesTablesViewState extends ConsumerState<ZonesTablesView> {
 
   void _showError(ScaffoldMessengerState messenger, String text) {
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
+    messenger.showAppSnackBar(
       SnackBar(
         content: Text(text),
         backgroundColor: Colors.red[600],

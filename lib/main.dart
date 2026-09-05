@@ -36,6 +36,8 @@ import 'app/theme/mango_theme.dart';
 import 'app/theme/ui_scale.dart';
 import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
+import 'core/network/mango_http_overrides.dart';
+import 'core/network/network_time.dart';
 import 'core/network/supabase_config.dart';
 import 'core/network/network_keep_alive_service.dart';
 import 'core/agent/mobile_print_agent.dart';
@@ -489,6 +491,43 @@ Future<void> _bootstrapApp() async {
     );
 
     if (kIsWeb) usePathUrlStrategy();
+
+    // ── TLS antes que cualquier cliente HTTP ──────────────────────────────
+    // Va aqui a proposito: `HttpOverrides.global` solo aplica a los
+    // `HttpClient` creados despues, y Supabase (postgrest, gotrue y el socket
+    // de realtime) crea el suyo mas abajo. Dos cosas se resuelven aca:
+    //   * raices empacadas -> equipos con el almacen de confianza incompleto
+    //     (tipico en Windows, que baja las raices bajo demanda por CryptoAPI,
+    //     mecanismo que Dart no dispara);
+    //   * hora de red -> el certificado se valida contra la hora real y no
+    //     contra el reloj del equipo, que en un POS suele estar corrido.
+    // Todo best-effort y con presupuesto de tiempo: si falla, la app arranca
+    // igual con el comportamiento de siempre.
+    if (!kIsWeb) {
+      _logStep('TLS: instalando politica de certificados...');
+      try {
+        await MangoHttpOverrides.install(backendOrigin: Env.supabaseUrl)
+            .timeout(const Duration(seconds: 5));
+        // Sondeo en claro (puerto 80): no usa TLS, asi que funciona justo
+        // cuando TLS esta fallando. Normalmente responde en ~150 ms.
+        final synced = await NetworkTime.sync(
+          Env.supabaseUrl,
+        ).timeout(const Duration(seconds: 5), onTimeout: () => false);
+        _logStep(
+          'TLS: politica lista (hora de red: ${synced ? "ok" : "no disponible"}'
+          '${NetworkTime.isDeviceClockWrong ? ", RELOJ DEL EQUIPO CORRIDO" : ""})',
+        );
+        if (NetworkTime.isDeviceClockWrong) {
+          AppLogger.w(
+            'El reloj del equipo esta corrido ${NetworkTime.skew}. TLS seguira '
+            'funcionando, pero las fechas de ventas y cierres saldran mal '
+            'hasta que se corrija.',
+          );
+        }
+      } catch (e) {
+        _logStep('TLS: politica no instalada (no fatal): $e');
+      }
+    }
 
     if (!kIsWeb &&
         (Platform.isMacOS || Platform.isLinux) &&

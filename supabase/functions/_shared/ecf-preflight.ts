@@ -238,7 +238,7 @@ export function buildChecks(input: PreflightInput): Check[] {
     // E32 (consumo) va SIN fecha de vencimiento a proposito: la DGII no se la
     // asigna (la autorizacion dice "N/A") y el emisor tampoco manda
     // sequenceDueDate para ese tipo. Solo se avisa por los tipos que si la
-    // exigen, donde el emisor hoy se inventa "hoy + 1 anio".
+    // exigen, donde emit-document bloquea la emision hasta que se cargue.
     const sinVencimiento = live.filter(
       (s) => s.ncf_type !== "E32" && s.expiration_date == null,
     );
@@ -247,8 +247,9 @@ export function buildChecks(input: PreflightInput): Check[] {
       level: sinVencimiento.length > 0 ? "warn" : "ok",
       message: sinVencimiento.length > 0
         ? `Secuencias activas: ${live.map((s) => s.ncf_type).join(", ")}. Sin fecha de ` +
-          `vencimiento: ${sinVencimiento.map((s) => s.ncf_type).join(", ")} — el emisor ` +
-          `inventa "hoy + 1 anio" en los tipos que la exigen.`
+          `vencimiento: ${sinVencimiento.map((s) => s.ncf_type).join(", ")} — esos tipos ` +
+          `NO se pueden emitir (la DGII los rechaza con el codigo 145). Carga la fecha ` +
+          `de la autorizacion en Ajustes > Comprobantes fiscales.`
         : `Secuencias activas: ${live.map((s) => s.ncf_type).join(", ")}.`,
       detail: live.map((s) => ({
         ncf_type: s.ncf_type,
@@ -257,6 +258,31 @@ export function buildChecks(input: PreflightInput): Check[] {
       })),
     });
   }
+
+  // ── Secuencia de notas de credito ─────────────────────────────────────
+  // Anular una factura electronica ya aceptada solo se puede con una nota de
+  // credito E34. Sin secuencia cargada, la anulacion ocurre igual pero la nota
+  // queda pendiente y el negocio termina declarando ITBIS que devolvio.
+  const creditNoteSeq = sequences.find(
+    (s) =>
+      s.ncf_type === "E34" &&
+      s.is_active === true &&
+      Number(s.current_number) < Number(s.range_end),
+  );
+  checks.push({
+    key: "credit_note_sequence",
+    level: creditNoteSeq ? "ok" : "warn",
+    message: creditNoteSeq
+      ? `Secuencia E34 (notas de credito) disponible: ${
+        Number(creditNoteSeq.range_end) - Number(creditNoteSeq.current_number)
+      } numeros.`
+      : "No hay secuencia E34 (nota de credito). Sin ella no se puede anular " +
+        "ante la DGII una factura electronica ya aceptada: la anulacion queda " +
+        "solo en el POS y la nota, pendiente.",
+    detail: creditNoteSeq
+      ? { disponibles: Number(creditNoteSeq.range_end) - Number(creditNoteSeq.current_number) }
+      : undefined,
+  });
 
   // ── Paso de certificacion segun Alanube ───────────────────────────────
   // Informativo: la semantica del contador es de Alanube, y el negocio puede

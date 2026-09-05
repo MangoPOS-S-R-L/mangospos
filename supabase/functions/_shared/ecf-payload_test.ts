@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { buildAlanubePayload, FiscalDocument, OrderItem, Sender } from "./ecf-payload.ts";
 import { EcfTaxLine, summarizeEcfTaxLines } from "./ecf-tax-lines.ts";
+import { r2 } from "./dgii-rounding.ts";
 
 const ITBIS = { include_in_ecf: true, name: "ITBIS", rate: 18 };
 const LEY = { include_in_ecf: true, name: "Ley 10%", rate: 10 };
@@ -158,8 +159,9 @@ Deno.test("lineas negativas (unidad gratis de oferta) no se declaran", () => {
   assertEquals(lines.filter((l) => l.billingIndicator === 0).length, 1);
 });
 
-Deno.test("E32 no manda sequenceDueDate; E31 si", () => {
-  const e32 = buildAlanubePayload(doc(), sender, [itemLocal], null);
+Deno.test("E32 no manda sequenceDueDate; E31 manda LA DE LA AUTORIZACION", () => {
+  // E32 lo ignora aunque la secuencia tenga fecha: la DGII no le asigna una.
+  const e32 = buildAlanubePayload(doc(), sender, [itemLocal], null, null, "2027-12-31");
   assertEquals((e32.idDoc as Record<string, unknown>).sequenceDueDate, undefined);
 
   const e31 = buildAlanubePayload(
@@ -167,8 +169,150 @@ Deno.test("E32 no manda sequenceDueDate; E31 si", () => {
     sender,
     [itemLocal],
     null,
+    null,
+    "2027-12-31",
   );
-  assertEquals(typeof (e31.idDoc as Record<string, unknown>).sequenceDueDate, "string");
+  assertEquals((e31.idDoc as Record<string, unknown>).sequenceDueDate, "2027-12-31");
+});
+
+Deno.test("sin fecha de secuencia el payload NO se la inventa", () => {
+  // Inventarla (era "hoy + 1 anio") es exactamente lo que hacia que la DGII
+  // devolviera el codigo 145. Mejor omitirla: emit-document ni siquiera manda.
+  const e31 = buildAlanubePayload(
+    doc({ ncf_type: "E31", customer_rnc: "131234567", customer_name: "Cliente SRL" }),
+    sender,
+    [itemLocal],
+    null,
+  );
+  assertEquals((e31.idDoc as Record<string, unknown>).sequenceDueDate, undefined);
+});
+
+Deno.test("la fecha de secuencia se recorta a YYYY-MM-DD", () => {
+  // Postgres puede devolver la fecha con hora si la columna cambia de tipo.
+  const e31 = buildAlanubePayload(
+    doc({ ncf_type: "E31", customer_rnc: "131234567", customer_name: "Cliente SRL" }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    "2027-12-31T00:00:00.000Z",
+  );
+  assertEquals((e31.idDoc as Record<string, unknown>).sequenceDueDate, "2027-12-31");
+});
+
+// ── IndicadorMontoGravado (DGII 176) ────────────────────────────────────
+Deno.test("E31 con ITBIS declara taxAmountIndicator = 0", () => {
+  // 0 = las lineas NO llevan el impuesto adentro. Es lo que manda este
+  // emisor: itemAmount es la base imponible.
+  const breakdown = summarizeEcfTaxLines([itemLocal], lineasLocal);
+  const e31 = buildAlanubePayload(
+    doc({ ncf_type: "E31", customer_rnc: "131234567", customer_name: "Cliente SRL" }),
+    sender,
+    [itemLocal],
+    breakdown,
+    null,
+    "2027-12-31",
+  );
+  assertEquals((e31.idDoc as Record<string, unknown>).taxAmountIndicator, 0);
+});
+
+Deno.test("E32 NO lleva taxAmountIndicator: en produccion pasa sin el", () => {
+  const breakdown = summarizeEcfTaxLines([itemLocal], lineasLocal);
+  const e32 = buildAlanubePayload(doc(), sender, [itemLocal], breakdown);
+  assertEquals((e32.idDoc as Record<string, unknown>).taxAmountIndicator, undefined);
+});
+
+Deno.test("sin ITBIS no se manda el indicador: es condicional", () => {
+  // Venta 100% exenta: el campo no aplica.
+  const e31 = buildAlanubePayload(
+    doc({
+      ncf_type: "E31",
+      customer_rnc: "131234567",
+      customer_name: "Cliente SRL",
+      itbis_amount: 0,
+      taxable_amount: 0,
+    }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    "2027-12-31",
+  );
+  assertEquals((e31.idDoc as Record<string, unknown>).taxAmountIndicator, undefined);
+});
+
+// ── Nota de credito (E34) ───────────────────────────────────────────────
+const modificado = { ncf_number: "E320000000123", issued_at: "2026-08-29" };
+
+Deno.test("E34 referencia el comprobante que anula", () => {
+  const nota = buildAlanubePayload(
+    doc({
+      ncf_type: "E34",
+      ncf_number: "E340000000001",
+      modification_code: 1,
+      modification_reason: "Cliente devolvio el pedido",
+    }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    null,
+    modificado,
+  );
+  const ref = nota.informationReference as Record<string, unknown>;
+  assertEquals(ref.ncfModified, "E320000000123");
+  assertEquals(ref.ncfModificationDate, "2026-08-29");
+  assertEquals(ref.modificationCode, 1);
+  assertEquals(ref.modificationReason, "Cliente devolvio el pedido");
+});
+
+Deno.test("E34 no manda sequenceDueDate: su esquema no lo tiene", () => {
+  const nota = buildAlanubePayload(
+    doc({ ncf_type: "E34", ncf_number: "E340000000001" }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    "2027-12-31",
+    modificado,
+  );
+  assertEquals((nota.idDoc as Record<string, unknown>).sequenceDueDate, undefined);
+});
+
+Deno.test("creditNoteIndicator: 0 dentro de 30 dias, 1 pasados", () => {
+  // El doc de prueba se emite el 2026-08-29, mismo dia del comprobante.
+  const aTiempo = buildAlanubePayload(
+    doc({ ncf_type: "E34", ncf_number: "E340000000001" }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    null,
+    modificado,
+  );
+  assertEquals((aTiempo.idDoc as Record<string, unknown>).creditNoteIndicator, 0);
+
+  // Pasados los 30 dias la DGII ya no deja rebajar el ITBIS.
+  const tarde = buildAlanubePayload(
+    doc({
+      ncf_type: "E34",
+      ncf_number: "E340000000001",
+      issued_at: "2026-10-15T10:00:00Z",
+    }),
+    sender,
+    [itemLocal],
+    null,
+    null,
+    null,
+    modificado,
+  );
+  assertEquals((tarde.idDoc as Record<string, unknown>).creditNoteIndicator, 1);
+});
+
+Deno.test("una factura normal no lleva informationReference", () => {
+  const factura = buildAlanubePayload(doc(), sender, [itemLocal], null);
+  assertEquals(factura.informationReference, undefined);
+  assertEquals((factura.idDoc as Record<string, unknown>).creditNoteIndicator, undefined);
 });
 
 Deno.test("el emisor va con la razon social y el RNC del negocio", () => {
@@ -303,10 +447,15 @@ Deno.test("la Ley 10% se declara como linea NO FACTURABLE, no en la base", () =>
   assertEquals(totals.exemptAmount, 45.45);
   assertEquals(totals.itbis1Total, 4.22);
 
-  // Y el valor cobrado cuadra con el ticket.
+  // Y el valor cobrado cuadra con el ticket. MontoPeriodo tiene que ir junto
+  // a ValorPagar: sin el, la DGII cuadra contra MontoTotal y devuelve la
+  // observacion 11153 (le sobra la propina).
   assertEquals(totals.nonBillableAmount, 6.89);
+  assertEquals(totals.amountPeriod, 80);
   assertEquals(totals.payValue, 80);
+  assertEquals(totals.amountPeriod, r2(totals.totalAmount + totals.nonBillableAmount));
 });
+
 
 Deno.test("sin impuestos excluidos no aparece nonBillableAmount ni payValue", () => {
   const breakdown = summarizeEcfTaxLines([itemLocal], [
@@ -317,6 +466,9 @@ Deno.test("sin impuestos excluidos no aparece nonBillableAmount ni payValue", ()
   assertEquals(totals.nonBillableAmount, undefined);
   assertEquals(totals.payValue, undefined);
   assertEquals((payload.itemDetails as Line[]).length, 1);
+  // MontoPeriodo viaja con ellos: sin monto no facturable no hay periodo
+  // que declarar, y mandarlo igual al total es ruido que la DGII observa.
+  assertEquals((payload.totals as Record<string, unknown>).amountPeriod, undefined);
 });
 
 Deno.test("venta de puro exento con Ley: ya no cae al camino legacy", () => {
@@ -340,4 +492,106 @@ Deno.test("venta de puro exento con Ley: ya no cae al camino legacy", () => {
   assertEquals(totals.exemptAmount, 45.45);
   assertEquals(totals.totalTaxedAmount, undefined);
   assertEquals(totals.payValue, 50);         // lo que pago el cliente
+});
+
+// ---------------------------------------------------------------------------
+// e-CF E310000000002 (Tropella, 02-09-2026): el ticket real que destapo el
+// centavo. Cinco lineas cuyo desglose guardado NO reconstruye el precio de
+// menu, porque cada pieza se redondeo por separado.
+// ---------------------------------------------------------------------------
+
+/** qty 1, con el desglose ya redondeado tal como lo guarda la BD. */
+function linea(id: string, nombre: string, menu: number, base: number): OrderItem {
+  return { id, product_id: id, product_name: nombre, sku: null, quantity: 1,
+    unit_price: menu, tax_rate: 28, tax: r2(menu - base), subtotal: base, discounts: 0 };
+}
+
+const ticketTropella: OrderItem[] = [
+  linea("c", "CACHAPA DE POLLO", 475, 371.09),
+  linea("e", "EXPRESSO DOBLE", 125, 97.66),
+  linea("a", "ALL INKLUSIVE", 100, 78.13),
+  { ...linea("w1", "AGUA", 50, 45.45), tax_rate: 10 },
+  { ...linea("w2", "AGUA", 50, 45.45), tax_rate: 10 },
+];
+
+const lineasTropella: EcfTaxLine[] = [
+  { order_item_id: "c", tax_rate: 18, amount: 66.80, taxes: ITBIS },
+  { order_item_id: "c", tax_rate: 10, amount: 37.11, taxes: LEY },
+  { order_item_id: "e", tax_rate: 18, amount: 17.58, taxes: ITBIS },
+  { order_item_id: "e", tax_rate: 10, amount: 9.77, taxes: LEY },
+  { order_item_id: "a", tax_rate: 18, amount: 14.06, taxes: ITBIS },
+  { order_item_id: "a", tax_rate: 10, amount: 7.81, taxes: LEY },
+  { order_item_id: "w1", tax_rate: 10, amount: 4.55, taxes: LEY },
+  { order_item_id: "w2", tax_rate: 10, amount: 4.55, taxes: LEY },
+];
+
+function docTropella(): FiscalDocument {
+  return doc({ ncf_type: "E31", ncf_number: "E310000000002", customer_rnc: "132453131",
+    customer_name: "FRANCO & ASOCIADOS CONSULTING", subtotal: 701.57,
+    taxable_amount: 546.88, itbis_amount: 98.44, tax_exempt: 0, total: 800 });
+}
+
+Deno.test("E310000000002: payValue declara los 800.00 cobrados, no 800.01", () => {
+  const breakdown = summarizeEcfTaxLines(ticketTropella, lineasTropella)!;
+
+  // La BD suma 63.79 de Ley: el EXPRESSO de 125.00 quedo como
+  // 97.66 + 17.58 + 9.77 = 125.01. Un centavo que no se cobro.
+  assertEquals(breakdown.excludedTaxAmount, 63.79);
+  assertEquals(breakdown.taxableAmount, 546.88);
+  assertEquals(breakdown.itbisAmount, 98.44);
+
+  const payload = buildAlanubePayload(
+    docTropella(), sender, ticketTropella, breakdown, null, "2027-12-31",
+  );
+  const totals = payload.totals as Record<string, number>;
+  const lines = payload.itemDetails as Line[];
+
+  // Lo que la DGII liquida no se mueve ni un centavo.
+  assertEquals(totals.totalTaxedAmount, 546.88);
+  assertEquals(totals.exemptAmount, 90.90);
+  assertEquals(totals.itbis1Total, 98.44);
+  assertEquals(totals.itbisS1, 18);
+  assertEquals(totals.totalAmount, 736.22);
+
+  // El residuo se absorbe en la linea no facturable: 63.79 -> 63.78.
+  assertEquals(totals.nonBillableAmount, 63.78);
+  assertEquals(lines.length, 6);
+  assertEquals(lines[5].billingIndicator, 0);
+  assertEquals(lines[5].itemAmount, 63.78); // la linea cuadra con el total
+
+  // Y ValorPagar es exactamente lo que pago el cliente.
+  assertEquals(totals.payValue, 800);
+  assertEquals(totals.amountPeriod, 800);
+});
+
+Deno.test("E310000000002: las 3 gravadas van con indicador 1, no exentas", () => {
+  const breakdown = summarizeEcfTaxLines(ticketTropella, lineasTropella)!;
+  const payload = buildAlanubePayload(
+    docTropella(), sender, ticketTropella, breakdown, null, "2027-12-31",
+  );
+  const lines = payload.itemDetails as Line[];
+  assertEquals(lines.slice(0, 3).map((l) => l.billingIndicator), [1, 1, 1]);
+  assertEquals(lines.slice(3, 5).map((l) => l.billingIndicator), [4, 4]);
+});
+
+Deno.test("un descuadre grande NO se esconde en la propina de ley", () => {
+  const breakdown = summarizeEcfTaxLines(ticketTropella, lineasTropella)!;
+  // total 850 = 50 pesos que el desglose no explica (una propina voluntaria,
+  // un concepto suelto). Absorberlos declararia mal la propina de ley.
+  const payload = buildAlanubePayload(
+    doc({ ncf_type: "E31", taxable_amount: 546.88, itbis_amount: 98.44, total: 850 }),
+    sender, ticketTropella, breakdown, null, "2027-12-31",
+  );
+  const totals = payload.totals as Record<string, number>;
+  assertEquals(totals.nonBillableAmount, 63.79); // sin tocar
+  assertEquals(totals.payValue, 800.01);
+});
+
+Deno.test("sin doc.total utilizable el monto no facturable no se toca", () => {
+  const breakdown = summarizeEcfTaxLines(ticketTropella, lineasTropella)!;
+  const payload = buildAlanubePayload(
+    doc({ ncf_type: "E31", taxable_amount: 546.88, itbis_amount: 98.44, total: 0 }),
+    sender, ticketTropella, breakdown, null, "2027-12-31",
+  );
+  assertEquals((payload.totals as Record<string, number>).nonBillableAmount, 63.79);
 });

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Catálogo en lista. Alternativa al mosaico para cartas largas.
 ///
@@ -49,7 +50,7 @@ class CatalogProductList extends ConsumerWidget {
           blocked: blockedByStock,
           onTap: () {
             if (blockedByStock) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(context).showAppSnackBar(
                 SnackBar(
                   content: Text(
                     '${product.name} está agotado. Recibe stock o activa '

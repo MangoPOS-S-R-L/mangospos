@@ -12,6 +12,7 @@ import '../../../data/repositories/inventory_repository.dart';
 import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../state/requisitions_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Abre el diálogo de despacho. Devuelve `true` si se despachó.
 Future<bool> showRequisitionDispatchDialog(
@@ -106,7 +107,7 @@ class _RequisitionDispatchDialogState
       if (!mounted) return;
       setState(() {
         _cargando = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -161,7 +162,7 @@ class _RequisitionDispatchDialogState
       if (!mounted) return;
       setState(() {
         _guardando = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

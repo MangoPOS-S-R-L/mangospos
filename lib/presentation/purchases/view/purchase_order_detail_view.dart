@@ -23,6 +23,7 @@ import '../utils/purchase_status.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../utils/goods_receipt_printing.dart';
 import 'goods_receipt_dialog.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PurchaseOrderDetailView extends ConsumerStatefulWidget {
   final String orderId;
@@ -71,7 +72,7 @@ class _PurchaseOrderDetailViewState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la factura: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la factura: $e');
         _loading = false;
       });
     }
@@ -126,6 +127,9 @@ class _PurchaseOrderDetailViewState
       date: order.receivedDate ?? order.createdAt,
       status: order.status == 'partial' ? 'partial' : 'complete',
       lines: lines,
+      // Quien registró la compra firma «Realizado por» también acá: es el
+      // mismo dato de la orden que dio origen a la mercancía.
+      issuedByName: detail.createdByName,
     );
   }
 
@@ -212,6 +216,20 @@ class _PurchaseOrderDetailViewState
 
   // ── Encabezado ───────────────────────────────────────────────────────────
 
+  /// Abre la ORDEN DE COMPRA impresa de esta factura: el mismo papel que sale
+  /// al registrarla, con las firmas «Realizado por» y «Recibido por».
+  Future<void> _openOrderDocument(PurchaseOrderDetail detail) {
+    return showGoodsReceiptDialog(
+      context,
+      ref,
+      receipt: GoodsReceipt.fromOrderDetail(
+        detail,
+        issuedByName: detail.createdByName,
+      ),
+      isReprint: true,
+    );
+  }
+
   Widget _header(PurchaseOrderDetail? detail, bool wide) {
     final order = detail?.order;
     final sessionCtrl = ref.watch(sessionProvider.notifier);
@@ -267,6 +285,12 @@ class _PurchaseOrderDetailViewState
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Actualizar',
               ),
+              if (detail != null)
+                OutlinedButton.icon(
+                  onPressed: () => _openOrderDocument(detail),
+                  icon: const Icon(Icons.print_outlined, size: 18),
+                  label: const Text('Imprimir orden'),
+                ),
               if (canReceive && receivable)
                 FilledButton.icon(
                   onPressed: () => _openReceiveDialog(order),

@@ -9,6 +9,8 @@ import {
   buildAlanubePayload,
   EcfTaxBreakdown,
   FiscalDocument,
+  isCreditNoteType,
+  ModifiedDocumentRef,
   OrderItem,
   Sender,
 } from "../_shared/ecf-payload.ts";
@@ -43,6 +45,8 @@ function getEndpointForNcfType(ncfType: string): string | null {
     case "E32": return "/invoices";
     case "E44": return "/special-regimes";
     case "E45": return "/gubernamentals";
+    // Nota de credito: es como se anula un e-CF que la DGII ya acepto.
+    case "E34": return "/credit-notes";
     default: return null;
   }
 }
@@ -130,15 +134,73 @@ async function claimBatch(supabase: SupabaseClient): Promise<OutboxRow[]> {
   return claimed;
 }
 
+/**
+ * Fecha de vencimiento de la secuencia e-NCF, como la autorizo la DGII.
+ *
+ * La DGII valida `FechaVencimientoSecuencia` contra la autorizacion del rango:
+ * si no es la de la autorizacion devuelve el codigo 145 ("Fecha de vencimiento
+ * de secuencia invalida") y RECHAZA el comprobante. Por eso sale de
+ * `ncf_sequences.expiration_date` y nunca se calcula.
+ *
+ * Un negocio puede tener varias filas del mismo tipo (varias autorizaciones);
+ * se elige la que cubre el numero de este e-NCF, y si ninguna lo cubre, la
+ * activa.
+ */
+async function loadSequenceDueDate(
+  supabase: SupabaseClient,
+  businessId: string,
+  doc: FiscalDocument,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("ncf_sequences")
+    .select("ncf_type, range_start, range_end, expiration_date, is_active")
+    .eq("business_id", businessId)
+    .eq("ncf_type", doc.ncf_type);
+
+  if (error) {
+    console.error(`load ncf_sequences failed for ${businessId}/${doc.ncf_type}:`, error);
+    return null;
+  }
+  const rows = (data ?? []) as Array<{
+    range_start: number;
+    range_end: number;
+    expiration_date: string | null;
+    is_active: boolean | null;
+  }>;
+  if (rows.length === 0) return null;
+
+  const digits = /(\d+)$/.exec(doc.ncf_number ?? "");
+  const seq = digits ? Number(digits[1]) : NaN;
+  const covering = Number.isFinite(seq)
+    ? rows.find((r) => Number(r.range_start) <= seq && seq <= Number(r.range_end))
+    : undefined;
+  const row = covering ?? rows.find((r) => r.is_active === true) ?? rows[0];
+  const raw = row.expiration_date;
+  return raw ? String(raw).slice(0, 10) : null;
+}
+
 async function loadContext(
   supabase: SupabaseClient,
   outbox: OutboxRow,
-): Promise<{ doc: FiscalDocument; settings: Settings; sender: Sender; items: OrderItem[] } | null> {
+): Promise<
+  {
+    doc: FiscalDocument;
+    settings: Settings;
+    sender: Sender;
+    items: OrderItem[];
+    modifiedDoc: ModifiedDocumentRef | null;
+  } | null
+> {
   const [docRes, settingsRes, fiscalSettingsRes, businessRes] = await Promise.all([
     supabase
       .from("fiscal_documents")
       .select(
-        "id, business_id, order_id, ncf_type, ncf_number, customer_rnc, customer_name, customer_address, subtotal, discount, tax_exempt, taxable_amount, itbis_amount, service_fee, tip, total, is_electronic, alanube_document_id, issued_at, idempotency_key",
+        // OJO: aqui NO van las columnas de la nota de credito
+        // (modification_code/modification_reason). Son nuevas, y pedirlas en
+        // este select haria que PostgREST tumbe la emision de TODAS las
+        // facturas si la funcion se despliega antes que su migracion. Se leen
+        // aparte, solo cuando el documento es una nota.
+        "id, business_id, order_id, ncf_type, ncf_number, customer_rnc, customer_name, customer_address, subtotal, discount, tax_exempt, taxable_amount, itbis_amount, service_fee, tip, total, is_electronic, alanube_document_id, issued_at, idempotency_key, related_document_id",
       )
       .eq("id", outbox.fiscal_document_id)
       .single(),
@@ -196,14 +258,23 @@ async function loadContext(
 
   let items: OrderItem[] = [];
   if (doc.order_id) {
-    const { data: itemRows, error: itemsErr } = await supabase
+    let query = supabase
       .from("order_items")
       .select(
         "id, product_id, product_name, sku, quantity, unit_price, tax_rate, tax, subtotal, discounts",
       )
-      .eq("order_id", doc.order_id)
-      // Un item anulado no se vendio: declararlo a DGII es sobre-facturar.
-      .neq("status", "void");
+      .eq("order_id", doc.order_id);
+
+    // Un item anulado no se vendio: declararlo a DGII es sobre-facturar.
+    // EXCEPCION: la nota de credito. Anular la venta es justo lo que puso los
+    // items en 'void', asi que ese filtro dejaria la nota sin una sola linea
+    // (Alanube exige entre 1 y 1000). La nota declara lo mismo que declaro el
+    // comprobante que anula.
+    if (!isCreditNoteType(doc.ncf_type)) {
+      query = query.neq("status", "void");
+    }
+
+    const { data: itemRows, error: itemsErr } = await query;
 
     if (itemsErr) {
       console.error("load order_items failed:", itemsErr);
@@ -212,7 +283,47 @@ async function loadContext(
     items = (itemRows ?? []) as OrderItem[];
   }
 
-  return { doc, settings: settingsRes.data as Settings, sender, items };
+  // Datos propios de la nota de credito, en su propia consulta por la razon
+  // de arriba: una factura normal ni los pide.
+  if (isCreditNoteType(doc.ncf_type)) {
+    const { data: noteRow, error: noteErr } = await supabase
+      .from("fiscal_documents")
+      .select("modification_code, modification_reason")
+      .eq("id", doc.id)
+      .maybeSingle();
+
+    if (noteErr) {
+      console.error("load credit note fields failed:", noteErr);
+      return null;
+    }
+    if (noteRow) {
+      doc.modification_code = (noteRow as Record<string, unknown>)
+        .modification_code as number | null;
+      doc.modification_reason = (noteRow as Record<string, unknown>)
+        .modification_reason as string | null;
+    }
+  }
+
+  // El comprobante que la nota anula: su e-NCF y su fecha van dentro de la
+  // nota (informationReference).
+  let modifiedDoc: ModifiedDocumentRef | null = null;
+  if (isCreditNoteType(doc.ncf_type) && doc.related_document_id) {
+    const { data: refRow, error: refErr } = await supabase
+      .from("fiscal_documents")
+      .select("ncf_number, issued_at")
+      .eq("id", doc.related_document_id)
+      .maybeSingle();
+
+    if (refErr) {
+      console.error("load referenced document failed:", refErr);
+      return null;
+    }
+    if (refRow) {
+      modifiedDoc = refRow as ModifiedDocumentRef;
+    }
+  }
+
+  return { doc, settings: settingsRes.data as Settings, sender, items, modifiedDoc };
 }
 
 async function submitOne(
@@ -224,7 +335,7 @@ async function submitOne(
   if (!ctx) {
     return { ok: false, retryable: false, error: "context load failed" };
   }
-  const { doc, settings, sender, items } = ctx;
+  const { doc, settings, sender, items, modifiedDoc } = ctx;
 
   if (doc.alanube_document_id) {
     console.log(`doc ${doc.id} already submitted (alanube_id=${doc.alanube_document_id})`);
@@ -247,6 +358,37 @@ async function submitOne(
     };
   }
 
+  // La DGII exige la fecha de vencimiento de la secuencia en todos los tipos
+  // menos E32. Sin ella el comprobante vuelve rechazado con el codigo 145, asi
+  // que se para AQUI: un e-NCF rechazado es un numero quemado y un cliente sin
+  // factura valida.
+  const sequenceDueDate = await loadSequenceDueDate(supabase, outbox.business_id, doc);
+  const needsDueDate = doc.ncf_type !== "E32" && !isCreditNoteType(doc.ncf_type);
+  if (needsDueDate && !sequenceDueDate) {
+    return {
+      ok: false,
+      retryable: true,
+      error:
+        `La secuencia ${doc.ncf_type} no tiene fecha de vencimiento cargada ` +
+        `(ncf_sequences.expiration_date). La DGII la valida contra la autorizacion ` +
+        `del rango y rechazaria el comprobante con el codigo 145. Carga la fecha de ` +
+        `la autorizacion en Ajustes > Comprobantes fiscales y reintenta.`,
+    };
+  }
+
+  // Una nota sin el comprobante referenciado no es emitible: la DGII no sabria
+  // que esta anulando. Es reintentable porque el enlace se arregla con un
+  // UPDATE, no re-emitiendo.
+  if (isCreditNoteType(doc.ncf_type) && !modifiedDoc) {
+    return {
+      ok: false,
+      retryable: true,
+      error:
+        "La nota de credito no tiene el comprobante que anula " +
+        "(fiscal_documents.related_document_id). No se puede declarar sin el.",
+    };
+  }
+
   const ecfBreakdown = await computeEcfBreakdown(supabase, doc.order_id, items);
   const payload = buildAlanubePayload(
     doc,
@@ -254,6 +396,8 @@ async function submitOne(
     items,
     ecfBreakdown,
     settings.alanube_company_id,
+    sequenceDueDate,
+    modifiedDoc,
   );
   const idemKey = doc.idempotency_key ?? doc.id;
 

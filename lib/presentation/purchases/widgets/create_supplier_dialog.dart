@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Muestra el diálogo de alta de proveedor. Devuelve el proveedor creado o
 /// `null` si se canceló (o falló; el error queda en el state del viewmodel).
@@ -93,7 +94,7 @@ class _CreateSupplierDialogState extends State<_CreateSupplierDialog> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = 'Error creando proveedor: $e';
+        _error = FriendlyError.humanize('Error creando proveedor: $e');
       });
     }
   }

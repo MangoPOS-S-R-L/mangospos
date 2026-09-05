@@ -1204,20 +1204,84 @@ class PosSettingsRepository {
           .upsert(payload, onConflict: 'business_id');
     } on PostgrestException catch (e) {
       // Banderas jóvenes: `require_goods_receipt` llega con la migración
-      // 20260828_0001, `warehouse_sections_enabled` con 20260901_0001 y
+      // 20260828_0001, `warehouse_sections_enabled` con 20260901_0001 e
       // `inventory_costing_method` con 20260902_0012. En un servidor que no
-      // las aplicó, mandarlas tumbaría el guardado de TODAS las banderas: se
-      // reintenta sin ellas. Perder una opción que ese servidor no puede
-      // honrar es aceptable; perder el resto no.
-      final missingColumn = e.code == '42703' || e.code == 'PGRST204';
-      if (!missingColumn) rethrow;
-      payload.remove('require_goods_receipt');
-      payload.remove('warehouse_sections_enabled');
-      payload.remove('inventory_costing_method');
-      await _client
-          .from('business_settings')
-          .upsert(payload, onConflict: 'business_id');
+      // aplicó alguna, mandarla tumbaría el guardado de TODAS las banderas.
+      //
+      // Antes se quitaban las tres de un saque, y eso hacía daño: en un
+      // servidor al que solo le falta UNA, el reintento se llevaba también
+      // las que sí existen. En Penda, con `warehouse_sections_enabled`
+      // ausente e `inventory_costing_method` aplicada, cambiar el método de
+      // costeo desde Ajustes no guardaba nada y no avisaba. Ahora se quita
+      // SOLO la columna que el servidor nombra en el error, y se reintenta.
+      if (!_isMissingColumn(e)) rethrow;
+
+      final dropped = <String>{};
+      var lastError = e;
+
+      // Cada reintento cae con la siguiente columna faltante, si hay varias.
+      // El tope evita un ciclo infinito si el mensaje no trae el nombre.
+      for (var attempt = 0; attempt < 6; attempt++) {
+        final column = _missingColumnName(lastError, payload.keys);
+        if (column == null || !payload.containsKey(column)) {
+          // No se pudo identificar cuál falta: se cae al comportamiento
+          // viejo y se quitan las tres jóvenes de una vez.
+          payload.remove('require_goods_receipt');
+          payload.remove('warehouse_sections_enabled');
+          payload.remove('inventory_costing_method');
+          await _client
+              .from('business_settings')
+              .upsert(payload, onConflict: 'business_id');
+          return;
+        }
+
+        payload.remove(column);
+        dropped.add(column);
+
+        try {
+          await _client
+              .from('business_settings')
+              .upsert(payload, onConflict: 'business_id');
+          return;
+        } on PostgrestException catch (retryError) {
+          if (!_isMissingColumn(retryError)) rethrow;
+          lastError = retryError;
+        }
+      }
+
+      throw StateError(
+        'business_settings sigue rechazando columnas después de quitar '
+        '${dropped.join(", ")}. Revisar migraciones del servidor.',
+      );
     }
+  }
+
+  /// 42703 = la columna no existe (Postgres). PGRST204 = PostgREST no la ve
+  /// en su caché de esquema. Las dos significan lo mismo para el guardado.
+  static bool _isMissingColumn(PostgrestException e) =>
+      e.code == '42703' || e.code == 'PGRST204';
+
+  /// Saca el nombre de la columna del mensaje del servidor. Postgres dice
+  /// `column business_settings.foo does not exist` y PostgREST
+  /// `Could not find the 'foo' column of 'business_settings'`. Si ninguno
+  /// calza, se busca cuál de las claves del payload aparece citada.
+  static String? _missingColumnName(
+    PostgrestException e,
+    Iterable<String> candidates,
+  ) {
+    final message = '${e.message} ${e.details ?? ''}';
+
+    final pg = RegExp(r'column\s+(?:[\w".]+\.)?"?([a-z0-9_]+)"?\s+does not exist')
+        .firstMatch(message);
+    if (pg != null) return pg.group(1);
+
+    final pgrst = RegExp(r"find the '([a-z0-9_]+)' column").firstMatch(message);
+    if (pgrst != null) return pgrst.group(1);
+
+    for (final candidate in candidates) {
+      if (message.contains(candidate)) return candidate;
+    }
+    return null;
   }
 }
 

@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/mango_tokens.dart';
 import '../../../data/repositories/billing_repository.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class AzulCardForm extends ConsumerStatefulWidget {
   final String businessId;
@@ -112,7 +113,7 @@ class _AzulCardFormState extends ConsumerState<AzulCardForm> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = e.message;
+        _error = FriendlyError.from(e);
       });
     } catch (_) {
       if (!mounted) return;

@@ -27,6 +27,7 @@ import '../../../../core/theme/app_radius.dart';
 import '../../../../data/repositories/suppliers_repository.dart';
 import '../../state/inventory_state.dart';
 import '../../state/supplier_overview_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Abre el formulario. Devuelve `true` si se guardó algo.
 Future<bool> showSupplierFormDialog(
@@ -230,7 +231,7 @@ class _SupplierFormDialogState extends State<SupplierFormDialog> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

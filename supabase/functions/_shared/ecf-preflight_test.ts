@@ -35,6 +35,8 @@ function tropella(over: Partial<PreflightInput> = {}): PreflightInput {
     sequences: [
       { ncf_type: "E32", range_start: 1, range_end: 1000, current_number: 1, expiration_date: "2027-12-31", is_active: true },
       { ncf_type: "B02", range_start: 1, range_end: 100000, current_number: 9833, expiration_date: null, is_active: true },
+      // E34: sin ella no se puede anular ante la DGII una factura ya aceptada.
+      { ncf_type: "E34", range_start: 1, range_end: 500, current_number: 0, expiration_date: null, is_active: true },
     ],
     itemTaxes: { total: 46, sinImpuesto: 0, soloExcluidos: 0 },
     webhookPath: WEBHOOK_PATH,
@@ -157,6 +159,25 @@ Deno.test("E31 con su fecha cargada queda en verde", () => {
 });
 
 // ── Direccion: el caso Tropella (fiscal != operacion) ───────────────────
+Deno.test("sin secuencia E34 avisa: no se podria anular ante la DGII", () => {
+  const input = tropella({
+    sequences: tropella().sequences.filter((s) => s.ncf_type !== "E34"),
+  });
+  assertEquals(levelOf(input, "credit_note_sequence"), "warn");
+  // Avisa, pero NO impide activar: el negocio puede facturar igual.
+  assertEquals(worstLevel(buildChecks(input)), "warn");
+});
+
+Deno.test("E34 agotada cuenta como si no estuviera", () => {
+  const input = tropella({
+    sequences: [
+      ...tropella().sequences.filter((s) => s.ncf_type !== "E34"),
+      { ncf_type: "E34", range_start: 1, range_end: 500, current_number: 500, expiration_date: null, is_active: true },
+    ],
+  });
+  assertEquals(levelOf(input, "credit_note_sequence"), "warn");
+});
+
 Deno.test("direccion distinta avisa pero NO bloquea", () => {
   // Domicilio fiscal en Gurabo, local en Real Food Park. Ambas legitimas.
   const input = tropella({ business: { address: "Reparto Universitario, Real Food Park, Santiago" } });

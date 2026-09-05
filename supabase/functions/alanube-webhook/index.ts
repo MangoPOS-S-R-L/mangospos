@@ -198,6 +198,18 @@ async function processWebhook(
     updates.accepted_at =
       (updates.ecf_signed_at as string | undefined) ??
         new Date().toISOString();
+
+    // "Aceptado con observaciones": el comprobante ES valido, pero la DGII
+    // senala algo mal armado. Si no se guarda, la observacion solo se ve
+    // entrando al portal de Alanube — y un negocio puede pasar meses
+    // emitiendo con el mismo defecto sin enterarse. Se deja en last_error
+    // para que quede a la vista, marcado como observacion y no como fallo.
+    if (rawLegalStatus.toUpperCase().includes("OBSERVA")) {
+      const detalle = extractRejectionReason(data);
+      updates.last_error = detalle !== null
+        ? `[Aceptado con observaciones] ${detalle}`
+        : `[Aceptado con observaciones] ${rawLegalStatus}`;
+    }
   }
   if (newStatus === "rejected") {
     updates.last_error = extractRejectionReason(data) ?? `DGII rejected: ${rawLegalStatus}`;

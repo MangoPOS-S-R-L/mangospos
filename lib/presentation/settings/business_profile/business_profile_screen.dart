@@ -21,6 +21,7 @@ import '../../../core/utils/app_toast.dart';
 import '../../../data/models/business_profile.dart';
 import '../../../data/repositories/business_profile_repository.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class BusinessProfileScreen extends ConsumerStatefulWidget {
   final String businessId;
@@ -117,7 +118,7 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
       });
     } catch (e) {
       setState(() {
-        _error = 'Error cargando perfil: $e';
+        _error = FriendlyError.humanize('Error cargando perfil: $e');
         _loading = false;
       });
     }

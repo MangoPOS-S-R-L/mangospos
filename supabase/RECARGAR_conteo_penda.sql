@@ -16,7 +16,7 @@
 -- 1. ¿Qué sesiones hay y cuántas líneas tienen?
 -- ---------------------------------------------------------------------------
 select
-  s.id,x
+  s.id,
   s.code,
   s.status,
   w.name                                  as bodega,

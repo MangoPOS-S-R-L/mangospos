@@ -44,6 +44,7 @@ import 'item_adjust_dialog.dart';
 import 'transfer_send_dialog.dart';
 import 'widgets/warehouse_form_dialog.dart';
 import 'widgets/warehouse_visuals.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 enum WarehouseTab { stock, movements, transfers }
 
@@ -174,7 +175,7 @@ class _WarehouseDetailViewState extends ConsumerState<WarehouseDetailView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -261,7 +262,7 @@ class _WarehouseDetailViewState extends ConsumerState<WarehouseDetailView> {
       setState(() {
         _loading = false;
         _refreshing = false;
-        _error = _matrix.items.isEmpty ? e.toString() : null;
+        _error = _matrix.items.isEmpty ? FriendlyError.from(e) : null;
       });
       if (_matrix.items.isNotEmpty && mounted) {
         AppToast.warning(context, 'No se pudo actualizar: ${_short(e)}');
@@ -340,7 +341,7 @@ class _WarehouseDetailViewState extends ConsumerState<WarehouseDetailView> {
         if (!mounted) return;
         setState(() {
           _movementsLoading = false;
-          _movementsError = e.toString();
+          _movementsError = FriendlyError.from(e);
         });
       }
       return;
@@ -372,7 +373,7 @@ class _WarehouseDetailViewState extends ConsumerState<WarehouseDetailView> {
         if (!mounted) return;
         setState(() {
           _transfersLoading = false;
-          _transfersError = e.toString();
+          _transfersError = FriendlyError.from(e);
         });
       }
     }

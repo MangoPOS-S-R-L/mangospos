@@ -8,6 +8,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class OpenCashDialog extends ConsumerStatefulWidget {
   const OpenCashDialog({super.key});
@@ -118,7 +119,7 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
       HapticFeedback.mediumImpact();
       if (mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             content: Row(
               children: [

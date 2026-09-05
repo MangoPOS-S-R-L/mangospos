@@ -1,9 +1,14 @@
-// Conduce de recepción de mercancía — versión térmica (ESC/POS).
+// El papel de la compra — versión térmica (ESC/POS).
+//
+// Imprime los DOS documentos que produce una compra, según [GoodsReceipt.kind]:
+// la ORDEN DE COMPRA (al registrarla) y la RECEPCIÓN DE MERCANCÍA (al
+// recibirla en almacén). Mismo cuerpo, mismas firmas, distinto título y
+// distinto bloque de totales.
 //
 // Vive en su propio archivo y no dentro de PrintTicketService porque ese ya
 // pasa de 2,900 líneas y este documento no comparte nada con la factura: no
-// tiene impuestos, ni pagos, ni NCF propio. Lo que comparte —EscPosGenerator
-// y BusinessCurrency— lo importa.
+// tiene pagos ni NCF propio. Lo que comparte —EscPosGenerator y
+// BusinessCurrency— lo importa.
 //
 // El mismo contenido sale también en PDF carta (goods_receipt_pdf.dart) para
 // el archivo del contable. Los dos leen el MISMO [GoodsReceipt], así que el
@@ -67,9 +72,9 @@ class GoodsReceiptTicket {
     // ── Título ──
     gen.setTextSize(width: narrow ? 1 : 2, height: 2);
     gen.setBold(true);
-    gen.textCentered(narrow ? 'RECEPCION' : 'RECEPCION DE MERCANCIA');
+    gen.textCentered(narrow ? receipt.shortTitle : receipt.documentTitle);
     gen.setTextSize();
-    gen.textCentered('CONDUCE DE ALMACEN');
+    gen.textCentered(receipt.documentSubtitle);
     gen.setBold(false);
     // Una recepción parcial deja mercancía pendiente: quien archiva el papel
     // tiene que verlo sin leer las líneas.
@@ -99,9 +104,12 @@ class GoodsReceiptTicket {
     field('Fecha:', _formatDate(receipt.date));
     field('Hora:', _formatTime(receipt.createdAt));
     field('Almacen:', receipt.warehouseName);
-    field('Orden:', receipt.orderNumber);
+    // En la orden, el número del documento YA es el de la orden: repetirlo
+    // debajo solo gasta papel.
+    if (!receipt.isOrder) field('Orden:', receipt.orderNumber);
     field('Factura:', receipt.invoiceNumber);
     field('NCF:', receipt.ncf);
+    field('Realizado por:', receipt.issuedByName.toUpperCase());
     field('Recibido por:', receipt.receivedByName.toUpperCase());
     gen.separator();
 
@@ -143,9 +151,23 @@ class GoodsReceiptTicket {
     // ── Totales ──
     gen.textRow('Renglones:', receipt.lines.length.toString());
     gen.textRow('Unidades:', _formatQty(receipt.totalUnits));
+    // La orden declara el dinero de la factura del suplidor; el conduce solo
+    // declara mercancía. Sin desglose no se inventan renglones en cero.
+    if (receipt.hasAmountBreakdown) {
+      gen.textRow('Subtotal:', money.formatAmount(receipt.subtotal ?? 0));
+      if ((receipt.taxTotal ?? 0) != 0) {
+        gen.textRow('ITBIS:', money.formatAmount(receipt.taxTotal ?? 0));
+      }
+      if ((receipt.discountTotal ?? 0) != 0) {
+        gen.textRow(
+          'Descuento:',
+          '-${money.formatAmount(receipt.discountTotal ?? 0)}',
+        );
+      }
+    }
     gen.setBold(true);
     gen.setTextSize(width: narrow ? 1 : 2, height: 2);
-    gen.textRow('TOTAL:', money.formatAmount(receipt.total));
+    gen.textRow('TOTAL:', money.formatAmount(receipt.grandTotal));
     gen.setTextSize();
     gen.setBold(false);
 
@@ -160,12 +182,17 @@ class GoodsReceiptTicket {
     gen.doubleSeparator();
 
     // ── Firmas ──
-    // El conduce sin firmas no prueba nada: el valor del papel es que alguien
-    // reconoce que entregó y alguien reconoce que recibió.
+    // El papel sin firmas no prueba nada: el valor del documento es que
+    // alguien reconoce que lo hizo y alguien reconoce que recibió. Los dos
+    // documentos llevan las MISMAS dos firmas (pedido del dueño), y el nombre
+    // impreso debajo de la raya no reemplaza a la firma: la identifica.
     final signWidth = narrow ? width : 30;
     gen.lineFeed(2);
     gen.text('_' * signWidth);
-    gen.text('Entregado por');
+    gen.text('Realizado por');
+    if (receipt.issuedByName.trim().isNotEmpty) {
+      gen.text(receipt.issuedByName.toUpperCase());
+    }
     gen.lineFeed(2);
     gen.text('_' * signWidth);
     gen.text('Recibido por');
@@ -179,7 +206,7 @@ class GoodsReceiptTicket {
     gen.cut();
 
     return PrintTicket(
-      type: 'goods_receipt',
+      type: receipt.isOrder ? 'purchase_order' : 'goods_receipt',
       escPosCommands: gen.getCommands(),
       rawText: gen.getPlainText(),
     );

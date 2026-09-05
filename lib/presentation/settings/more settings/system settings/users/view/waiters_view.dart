@@ -11,6 +11,7 @@ import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class SettingsWaitersView extends StatefulWidget {
   final String businessId;
@@ -242,7 +243,7 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Error al cargar mozos: $e';
+        _error = FriendlyError.humanize('Error al cargar mozos: $e');
       });
     }
   }

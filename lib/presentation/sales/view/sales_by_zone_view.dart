@@ -27,6 +27,7 @@ import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Delega al helper compartido [isTableEffectivelyEmpty] para que grid y
 /// floor map apliquen el mismo criterio de "ocupada fantasma".
@@ -1274,7 +1275,7 @@ Future<void> _handleMergeTable(
     final messenger = ScaffoldMessenger.of(context);
     final sessionId = ts.sessionId;
     if (sessionId == null || sessionId.isEmpty) {
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         const SnackBar(
           content: Text('Esta mesa no tiene cuenta abierta para unir.'),
         ),
@@ -1288,7 +1289,7 @@ Future<void> _handleMergeTable(
       businessId = await BusinessResolver.ensure('auto');
     } catch (e) {
       if (!context.mounted) return;
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         SnackBar(
           content: Text('No se pudo identificar el negocio: $e'),
         ),
@@ -1330,7 +1331,7 @@ Future<void> _handleMergeTable(
     final isCashOpen = await cashierVm.ensureCashOpenFast();
     if (!isCashOpen) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('Debes abrir la caja antes de abrir una mesa.'),
           backgroundColor: Colors.red,
@@ -1431,7 +1432,7 @@ Future<void> _handleMergeTable(
         byZone.setOpening(ts.tableId, false);
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text(
             'Solo administradores, supervisores, cajeros u otro mesero con PIN pueden abrir esta mesa.',

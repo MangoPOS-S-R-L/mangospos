@@ -8,6 +8,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class CashCloseModeView extends ConsumerStatefulWidget {
   const CashCloseModeView({super.key, this.businessId = 'auto'});
@@ -54,7 +55,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la preferencia: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la preferencia: $e');
         _loading = false;
       });
     }
@@ -87,7 +88,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       setState(() {
         _allowRecount = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }
@@ -124,7 +125,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       setState(() {
         _printSalesByArea = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }
@@ -161,7 +162,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       setState(() {
         _printProductsByArea = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }
@@ -191,7 +192,7 @@ class _CashCloseModeViewState extends ConsumerState<CashCloseModeView> {
       setState(() {
         _selected = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }

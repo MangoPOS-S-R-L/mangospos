@@ -11,6 +11,7 @@ import '../../../data/repositories/inventory_repository.dart';
 import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import 'widgets/item_search_field.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Abre el formulario. Devuelve `true` si se creó la requisición.
 Future<bool> showRequisitionFormDialog(
@@ -113,7 +114,7 @@ class _RequisitionFormDialogState extends State<_RequisitionFormDialog> {
       if (!mounted) return;
       setState(() {
         _cargandoItems = false;
-        _error = 'No se pudieron cargar los insumos: $e';
+        _error = FriendlyError.humanize('No se pudieron cargar los insumos: $e');
       });
     }
   }
@@ -184,7 +185,7 @@ class _RequisitionFormDialogState extends State<_RequisitionFormDialog> {
       if (!mounted) return;
       setState(() {
         _guardando = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

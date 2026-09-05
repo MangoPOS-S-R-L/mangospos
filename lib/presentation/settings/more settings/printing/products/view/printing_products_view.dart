@@ -24,6 +24,7 @@ import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PrintingProductsView extends ConsumerStatefulWidget {
   const PrintingProductsView({super.key, this.businessId = 'auto'});
@@ -84,7 +85,7 @@ class _PrintingProductsViewState extends ConsumerState<PrintingProductsView> {
     } catch (e) {
       setState(() {
         _loading = false;
-        _errorMessage = 'No se pudieron cargar los productos. $e';
+        _errorMessage = FriendlyError.humanize('No se pudieron cargar los productos. $e');
       });
     }
   }

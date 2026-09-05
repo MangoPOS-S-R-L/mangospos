@@ -40,6 +40,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/supplier_form_dialog.dart';
 import 'widgets/supplier_visuals.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Debajo de este ancho la tabla se vuelve tarjetas. Siete columnas en una
 /// tablet de 1024 quedan ilegibles mucho antes de desbordar.
@@ -114,7 +115,7 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -140,7 +141,7 @@ class _SuppliersViewState extends ConsumerState<SuppliersView> {
         _loading = false;
         _refreshing = false;
         // Con algo pintado, un fallo de red no borra la pantalla.
-        _error = _overview.suppliers.isEmpty ? e.toString() : null;
+        _error = _overview.suppliers.isEmpty ? FriendlyError.from(e) : null;
       });
       if (_overview.suppliers.isNotEmpty && mounted) {
         AppToast.warning(context, 'No se pudo actualizar: ${_short(e)}');

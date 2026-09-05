@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/friendly_error.dart';
 import 'cookie_local_storage.dart';
 
 /// 🔧 Configuración personalizada de Supabase
@@ -140,69 +141,10 @@ class SupabaseConfig {
     return false;
   }
 
-  /// Obtener mensaje de error amigable
-  static String getFriendlyErrorMessage(dynamic error) {
-    if (isAuthRefreshSchemaMismatchError(error)) {
-      return 'Tu sesion vencio y el servidor de autenticacion no pudo renovarla. Inicia sesion de nuevo.';
-    }
-
-    if (isTlsCertificateError(error)) {
-      return 'No se pudo validar el certificado del servidor. Revisa la fecha y hora del equipo y actualiza Windows o el navegador.';
-    }
-
-    if (error is PostgrestException) {
-      switch (error.code) {
-        case '57014':
-          return 'La operación tardó demasiado. Por favor, intenta de nuevo.';
-        case '08000':
-        case '08003':
-        case '08006':
-          return 'Error de conexión. Verifica tu conexión a internet.';
-        case '23505':
-          return 'Este registro ya existe.';
-        case '23503':
-          return 'No se puede eliminar porque está siendo usado.';
-        case '42501':
-          return 'No tienes permisos para realizar esta acción.';
-        case '40001':
-        case '40P01':
-          return 'Conflicto de datos. Por favor, intenta de nuevo.';
-        case '53300':
-          return 'Demasiadas conexiones activas. Intenta más tarde.';
-        default:
-          return error.message;
-      }
-    }
-
-    if (error.toString().contains('SocketException')) {
-      return 'No se pudo conectar al servidor. Verifica tu conexión.';
-    }
-
-    if (error.toString().contains('TimeoutException')) {
-      return 'La operación tardó demasiado. Por favor, intenta de nuevo.';
-    }
-
-    if (error is FormatException) {
-      return 'Se detectaron datos locales corruptos. Cierra la app y vuelvela a abrir; el siguiente arranque se repara solo. Si persiste, reinstala MangoPOS.';
-    }
-
-    return 'Error inesperado: ${_sanitizeErrorText(error.toString())}';
-  }
-
-  /// Limpia bytes no imprimibles para que un error con contenido binario
-  /// (por ejemplo `FormatException` con `source` binario) no se muestre como
-  /// cuadritos ilegibles en la UI.
-  static String _sanitizeErrorText(String text) {
-    final buffer = StringBuffer();
-    for (final rune in text.runes) {
-      // Conservar tabs, saltos de linea y caracteres imprimibles ASCII/Unicode.
-      if (rune == 9 || rune == 10 || rune == 13 || (rune >= 32 && rune != 0xFFFD)) {
-        buffer.writeCharCode(rune);
-      } else {
-        buffer.write('?');
-      }
-    }
-    final cleaned = buffer.toString();
-    return cleaned.length > 280 ? '${cleaned.substring(0, 280)}...' : cleaned;
-  }
+  /// Obtener mensaje de error amigable.
+  ///
+  /// Delega en [FriendlyError] para que toda la app hable el mismo idioma y
+  /// para no filtrar nunca el texto crudo de la excepcion a la pantalla.
+  static String getFriendlyErrorMessage(dynamic error) =>
+      FriendlyError.from(error);
 }

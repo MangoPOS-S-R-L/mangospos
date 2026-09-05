@@ -16,6 +16,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/production_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ProductionOrderDetailView extends ConsumerStatefulWidget {
   final String orderId;
@@ -57,7 +58,7 @@ class _ProductionOrderDetailViewState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la orden: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la orden: $e');
         _loading = false;
       });
     }
@@ -716,7 +717,7 @@ class _CompleteProductionDialogState
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = 'No se pudo completar: $e';
+        _error = FriendlyError.humanize('No se pudo completar: $e');
       });
     }
   }

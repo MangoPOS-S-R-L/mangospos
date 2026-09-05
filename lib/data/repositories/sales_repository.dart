@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/sales_queries.dart';
+import '../models/credit_note_result.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../utils/business_id_resolver.dart';
@@ -306,7 +307,9 @@ class SalesRepository {
     };
   }
 
-  Future<void> annulPayment({
+  /// Devuelve los `fiscal_documents` que quedaron cancelados, para emitirles
+  /// la nota de crédito ([issueCreditNote]).
+  Future<List<String>> annulPayment({
     required String paymentId,
     required String orderId,
     String? checkId,
@@ -385,8 +388,7 @@ class SalesRepository {
         .any((p) => !salePaymentIds.contains(p['id'].toString()));
 
     if (!hasCheck && !hasSurvivors) {
-      await annulOrder(orderId: trimmedOrderId, reason: reason);
-      return;
+      return annulOrder(orderId: trimmedOrderId, reason: reason);
     }
 
     try {
@@ -446,16 +448,23 @@ class SalesRepository {
       // piernas comparten fiscal_document_id y `fd.payment_id` apunta solo
       // al pivote, así que filtrar por payment_id dejaba fuera el resto.
       final fdPatch = _cancelledFiscalDocumentPatch(reason);
+      final List<String> cancelledDocIds;
       if (fiscalDocumentId != null && fiscalDocumentId.isNotEmpty) {
-        await _client
-            .from('fiscal_documents')
-            .update(fdPatch)
-            .eq('id', fiscalDocumentId);
+        cancelledDocIds = _idsOf(
+          await _client
+              .from('fiscal_documents')
+              .update(fdPatch)
+              .eq('id', fiscalDocumentId)
+              .select('id'),
+        );
       } else {
-        await _client
-            .from('fiscal_documents')
-            .update(fdPatch)
-            .inFilter('payment_id', salePaymentIds.toList(growable: false));
+        cancelledDocIds = _idsOf(
+          await _client
+              .from('fiscal_documents')
+              .update(fdPatch)
+              .inFilter('payment_id', salePaymentIds.toList(growable: false))
+              .select('id'),
+        );
       }
 
       // Reabrir items y check sólo para el flujo basado en checks. En split
@@ -523,6 +532,8 @@ class SalesRepository {
       if (hasCreditLeg) {
         await _cancelOpenCreditsForOrder(trimmedOrderId);
       }
+
+      return cancelledDocIds;
     } catch (e) {
       throw Exception('Error al anular pago: $e');
     }
@@ -2846,8 +2857,15 @@ class SalesRepository {
     }
   }
 
-  /// Anular orden y sus pagos
-  Future<void> annulOrder({required String orderId, String? reason}) async {
+  /// Anular orden y sus pagos.
+  ///
+  /// Devuelve los `fiscal_documents` que quedaron cancelados. Son los que
+  /// necesitan nota de crédito: un NCF que ya se declaró no se borra, se
+  /// reversa con una nota ([issueCreditNote]).
+  Future<List<String>> annulOrder({
+    required String orderId,
+    String? reason,
+  }) async {
     try {
       // 0. Venta a crédito con abonos: bloquear ANTES de cerrar/anular nada
       // (el trigger de payments también bloquearía, pero ya con la orden
@@ -2887,16 +2905,81 @@ class SalesRepository {
       }
 
       // 5. Anular Documentos Fiscales asociados
-      await _client
+      final cancelledDocs = await _client
           .from('fiscal_documents')
           .update(_cancelledFiscalDocumentPatch(reason))
-          .eq('order_id', orderId);
+          .eq('order_id', orderId)
+          .select('id');
 
       // 6. Cancelar CxC abiertas de la orden (venta a crédito anulada).
       await _cancelOpenCreditsForOrder(orderId);
+
+      return _idsOf(cancelledDocs);
     } catch (e) {
       throw Exception('Error al anular orden: $e');
     }
+  }
+
+  /// Ids de un resultado de PostgREST con `.select('id')`.
+  List<String> _idsOf(dynamic rows) {
+    if (rows is! List) return const [];
+    return rows
+        .map((r) => (r as Map<String, dynamic>)['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  /// Emite la NOTA DE CRÉDITO que reversa un comprobante fiscal anulado.
+  ///
+  /// Un e-CF que la DGII ya aceptó no se puede "descancelar": la única forma
+  /// de reversarlo es una nota de crédito (E34) que lo referencie. Sin ella
+  /// el negocio termina pagando el ITBIS de una venta que devolvió.
+  ///
+  /// NO lanza: si falta la secuencia E34/B04 o falla la red, devuelve el
+  /// estado correspondiente y la anulación —que ya ocurrió— se queda como
+  /// está. El caso queda visible en `v_fiscal_docs_pending_credit_note` y se
+  /// reintenta desde el historial.
+  Future<CreditNoteResult> issueCreditNote({
+    required String fiscalDocumentId,
+    String? reason,
+  }) async {
+    try {
+      final res = await _client.rpc(
+        'fn_issue_credit_note',
+        params: {
+          'p_fiscal_document_id': fiscalDocumentId,
+          'p_reason': reason,
+          'p_modification_code': 1,
+        },
+      );
+      if (res is Map) {
+        return CreditNoteResult.fromRpc(
+          fiscalDocumentId,
+          Map<String, dynamic>.from(res),
+        );
+      }
+      return CreditNoteResult.failure(
+        fiscalDocumentId,
+        'Respuesta inesperada del servidor',
+      );
+    } catch (e) {
+      return CreditNoteResult.failure(fiscalDocumentId, e);
+    }
+  }
+
+  /// Comprobantes anulados que todavía NO tienen su nota de crédito.
+  /// Casi siempre es que falta cargar la secuencia E34/B04 del negocio.
+  Future<List<Map<String, dynamic>>> getDocsPendingCreditNote(
+    String businessId, {
+    int limit = 50,
+  }) async {
+    final rows = await _client
+        .from('v_fiscal_docs_pending_credit_note')
+        .select()
+        .eq('business_id', businessId)
+        .order('cancelled_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(rows as List);
   }
 
   // ============================================================

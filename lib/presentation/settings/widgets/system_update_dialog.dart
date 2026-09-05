@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'dart:io' show Platform;
 import 'package:auto_updater/auto_updater.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class SystemUpdateDialog extends StatefulWidget {
   const SystemUpdateDialog({super.key});
@@ -56,7 +57,7 @@ class _SystemUpdateDialogState extends State<SystemUpdateDialog> {
         setState(() {
           _isChecking = false;
           _hasError = true;
-          _errorMessage = 'No se pudo verificar actualizaciones: $e';
+          _errorMessage = FriendlyError.humanize('No se pudo verificar actualizaciones: $e');
         });
       }
     }

@@ -11,6 +11,7 @@ import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/printing/agent_discovery.dart';
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../services/session/session_controller.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Ajustes → "Red local (Hub)". Configura el modo híbrido LAN-first:
 /// - Política del local (cloud / hub) — solo el dueño.
@@ -189,7 +190,7 @@ class _HubNetworkSettingsViewState
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showAppSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override

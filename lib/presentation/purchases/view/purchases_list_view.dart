@@ -5,12 +5,14 @@ import 'package:intl/intl.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../services/session/session_controller.dart';
+import '../state/goods_receipt.dart';
 import '../state/purchases_state.dart';
 import '../utils/purchase_status.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
 import 'goods_receipt_dialog.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class PurchasesListView extends ConsumerStatefulWidget {
   const PurchasesListView({super.key});
@@ -387,6 +389,19 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
                                             ],
                                           ],
                                         ),
+                                        // El papel de la compra, sin tener
+                                        // que abrir la factura: es lo que
+                                        // pide quien archiva o quien va a
+                                        // recibir la mercancía.
+                                        IconButton(
+                                          tooltip: 'Imprimir orden de compra',
+                                          icon: const Icon(
+                                            Icons.print_outlined,
+                                            size: 20,
+                                          ),
+                                          onPressed: () =>
+                                              _openOrderDocument(order),
+                                        ),
                                         // Afordancia de "esto se abre": la
                                         // fila lleva a la factura completa.
                                         const Icon(
@@ -516,6 +531,32 @@ class _PurchasesListViewState extends ConsumerState<PurchasesListView> {
     // Recibir → emitir conduce → imprimirlo. El flujo completo vive en
     // showPurchaseReceiveFlow para que el listado y el detalle hagan lo mismo.
     await showPurchaseReceiveFlow(context, ref, order);
+  }
+
+  /// Orden de compra impresa desde el listado. El listado solo tiene el
+  /// resumen (no las líneas), así que la factura se relee antes de armar el
+  /// papel: un documento a medias no sirve para recibir contra él.
+  Future<void> _openOrderDocument(PurchaseOrderSummary order) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final detail = await ref
+          .read(purchasesViewModelProvider)
+          .loadOrderDetail(order.id);
+      if (!mounted) return;
+      await showGoodsReceiptDialog(
+        context,
+        ref,
+        receipt: GoodsReceipt.fromOrderDetail(
+          detail,
+          issuedByName: detail.createdByName,
+        ),
+        isReprint: true,
+      );
+    } catch (e) {
+      messenger.showAppSnackBar(
+        SnackBar(content: Text('No se pudo abrir la orden de compra: $e')),
+      );
+    }
   }
 }
 

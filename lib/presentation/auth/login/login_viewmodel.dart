@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/network/supabase_config.dart';
 import '../../../core/utils/display_name_utils.dart';
+import '../../../core/utils/friendly_error.dart';
 import '../../../core/utils/logger.dart';
 import '../../../services/session/session_controller.dart';
 import 'login_state.dart';
@@ -33,11 +34,27 @@ class LoginViewModel extends Notifier<LoginState> {
     }
   }
 
-  void setConfirmationCode(String v) => _safeSet(state.copyWith(confirmationCode: v));
+  void setConfirmationCode(String v) =>
+      _safeSet(state.copyWith(confirmationCode: v));
+
+  /// Unico camino para reportar un fallo: mensaje ya traducido y `errorTick`
+  /// nuevo para que la pantalla vuelva a avisar aunque el texto se repita.
+  void _fail(String message, {bool needsEmailConfirmation = false}) {
+    _safeSet(
+      state.copyWith(
+        isLoading: false,
+        error: message,
+        errorTick: state.errorTick + 1,
+        needsEmailConfirmation: needsEmailConfirmation
+            ? true
+            : state.needsEmailConfirmation,
+      ),
+    );
+  }
 
   Future<void> submit() async {
     if (state.email.isEmpty || state.password.isEmpty) {
-      _safeSet(state.copyWith(error: 'Ingresa correo y contraseña'));
+      _fail('Ingresa tu correo y tu contraseña.');
       return;
     }
     _safeSet(state.copyWith(isLoading: true, error: null));
@@ -56,45 +73,29 @@ class LoginViewModel extends Notifier<LoginState> {
 
       final msg = e.message.toLowerCase();
       if (msg.contains('email not confirmed') || msg.contains('verificar')) {
-        _safeSet(
-          state.copyWith(
-            isLoading: false,
-            needsEmailConfirmation: true,
-            error: 'Tu correo no ha sido verificado. Ingresa el código que recibiste.',
-          ),
+        _fail(
+          'Tu correo no ha sido verificado. Ingresa el código que recibiste.',
+          needsEmailConfirmation: true,
         );
         return;
       }
 
-      final message =
-          SupabaseConfig.isAuthRefreshSchemaMismatchError(e) ||
-                  SupabaseConfig.isTlsCertificateError(e)
-              ? SupabaseConfig.getFriendlyErrorMessage(e)
-              : e.message;
-      _safeSet(state.copyWith(isLoading: false, error: message));
+      // Nunca se muestra `e.message` crudo: ahi es donde venia el
+      // `ClientException ... uri=https://...` que veia el usuario.
+      _fail(FriendlyError.from(e));
     } on TimeoutException catch (e, st) {
       AppLogger.w('Timeout en auth', error: e, stackTrace: st);
-      _safeSet(
-        state.copyWith(
-          isLoading: false,
-          error: 'Tiempo de espera agotado. Revisa tu conexión de red.',
-        ),
-      );
+      _fail(FriendlyError.timeout);
     } catch (e, st) {
       AppLogger.e('Error no controlado en login', error: e, stackTrace: st);
       await _resetBrokenSessionIfNeeded(e);
-      _safeSet(
-        state.copyWith(
-          isLoading: false,
-          error: SupabaseConfig.getFriendlyErrorMessage(e),
-        ),
-      );
+      _fail(SupabaseConfig.getFriendlyErrorMessage(e));
     }
   }
 
   Future<void> verifyOTP() async {
     if (state.confirmationCode.length < 6) {
-      _safeSet(state.copyWith(error: 'El código debe tener 6 dígitos'));
+      _fail('El código debe tener 6 dígitos.');
       return;
     }
     _safeSet(state.copyWith(isLoading: true, error: null));
@@ -110,12 +111,14 @@ class LoginViewModel extends Notifier<LoginState> {
       if (response.user != null) {
         await _handleSuccessfulLogin(response.user);
       } else {
-        _safeSet(state.copyWith(isLoading: false, error: 'Código inválido o expirado.'));
+        _fail('Código inválido o expirado.');
       }
-    } on AuthException catch (e) {
-      _safeSet(state.copyWith(isLoading: false, error: e.message));
-    } catch (e) {
-      _safeSet(state.copyWith(isLoading: false, error: 'Error verificando el código.'));
+    } on AuthException catch (e, st) {
+      AppLogger.w('AuthException verificando OTP', error: e, stackTrace: st);
+      _fail(FriendlyError.from(e));
+    } catch (e, st) {
+      AppLogger.w('Error verificando el código', error: e, stackTrace: st);
+      _fail(FriendlyError.from(e));
     }
   }
 
@@ -125,12 +128,7 @@ class LoginViewModel extends Notifier<LoginState> {
       AppLogger.w(
         'Login exitoso pero usuario es null en la respuesta de Supabase',
       );
-      _safeSet(
-        state.copyWith(
-          isLoading: false,
-          error: 'Credenciales inválidas o usuario no encontrado',
-        ),
-      );
+      _fail('Correo o contraseña incorrectos.');
       return;
     }
 
@@ -157,12 +155,8 @@ class LoginViewModel extends Notifier<LoginState> {
         'Usuario sin perfil de negocio asignado (user_businesses esta vacia)',
       );
       await supabase.auth.signOut();
-      _safeSet(
-        state.copyWith(
-          isLoading: false,
-          error:
-              'Tu usuario no tiene negocio o rol asignado. Contacta al administrador.',
-        ),
+      _fail(
+        'Tu usuario no tiene negocio o rol asignado. Contacta al administrador.',
       );
       return;
     }
@@ -171,9 +165,7 @@ class LoginViewModel extends Notifier<LoginState> {
       AppLogger.i(
         'Usuario con multiples negocios (${businessesList.length}). Mostrando selector interno.',
       );
-      _safeSet(
-        state.copyWith(isLoading: false, needsBusinessSelection: true),
-      );
+      _safeSet(state.copyWith(isLoading: false, needsBusinessSelection: true));
       return;
     }
 
@@ -187,12 +179,7 @@ class LoginViewModel extends Notifier<LoginState> {
         'Atributos criticos faltantes en Login -> businessId: $businessId',
       );
       await supabase.auth.signOut();
-      _safeSet(
-        state.copyWith(
-          isLoading: false,
-          error: 'Tu acceso no está configurado correctamente.',
-        ),
-      );
+      _fail('Tu acceso no está configurado correctamente.');
       return;
     }
 

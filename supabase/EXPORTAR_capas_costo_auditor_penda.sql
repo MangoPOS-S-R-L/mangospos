@@ -2,12 +2,18 @@
 -- LA PENDA EXPRESS — entrega a DH de las capas de costo
 -- business_id = 35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6
 --
--- QUÉ ES: las mismas cuatro consultas que expondría la API de lectura, en
--- forma de exportación. Se usa esto y NO el esquema `analytics` porque la API
--- de lectura (20260829_0002) nunca se aplicó en producción: no existe el
--- esquema, ni los roles, ni la key firmada. Montarla es un despliegue aparte,
--- con usuario propio y exposición en PostgREST; no se mezcla con la entrega
--- del motor de costeo.
+-- QUÉ ES: las mismas cuatro consultas que expone la API de lectura, en forma
+-- de exportación a CSV.
+--
+-- ESTE ES EL RESPALDO, NO EL CANAL PRINCIPAL. La API de lectura SÍ está en
+-- producción (verificado 2026-09-02: el esquema `analytics` tiene 92 vistas,
+-- los roles existen y `analytics.documentos` responde 200 con la key de DH).
+-- El canal normal es la migración 20260902_0014, que expone las capas por esa
+-- misma API y le evita a DH pedir hojas cada vez.
+--
+-- Este archivo sirve cuando hace falta una foto en Excel: para adjuntar a un
+-- informe, para el cierre contable, o si por lo que sea la API no está
+-- disponible.
 --
 -- CÓMO SE USA: correr UNA consulta a la vez en el SQL Editor y exportar cada
 -- resultado a CSV con el botón de descarga. Cuatro hojas, una por consulta.

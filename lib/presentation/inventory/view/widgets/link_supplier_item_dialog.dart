@@ -21,6 +21,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_radius.dart';
 import '../../../../data/repositories/suppliers_repository.dart';
 import '../../state/inventory_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Abre el diálogo. Devuelve `true` si algo cambió.
 Future<bool> showLinkSupplierItemDialog(
@@ -107,7 +108,7 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'No se pudo leer el catálogo de insumos: $e';
+        _error = FriendlyError.humanize('No se pudo leer el catálogo de insumos: $e');
       });
     }
   }
@@ -175,7 +176,7 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

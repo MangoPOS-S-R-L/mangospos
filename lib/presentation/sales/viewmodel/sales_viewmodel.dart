@@ -35,6 +35,7 @@ import '../../cashier/viewmodel/cashier_viewmodel.dart'
 import '../../inventory/viewmodel/inventory_viewmodel.dart' show inventoryRepositoryProvider;
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
@@ -4423,7 +4424,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
         loadedByBundle = order != null;
       } catch (e) {
-        loadError = e.toString();
+        loadError = FriendlyError.from(e);
       }
     }
 
@@ -4559,7 +4560,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         clearFiscalSequencesLoadError = true;
       } catch (e) {
         debugPrint('Error loading fiscal sequences: $e');
-        fiscalSequencesLoadError = e.toString();
+        fiscalSequencesLoadError = FriendlyError.from(e);
       }
     }
 

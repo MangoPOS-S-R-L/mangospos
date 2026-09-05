@@ -21,6 +21,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class CashSessionsHealthView extends ConsumerStatefulWidget {
   const CashSessionsHealthView({super.key});
@@ -79,7 +80,7 @@ class _CashSessionsHealthViewState
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

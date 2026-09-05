@@ -1,4 +1,4 @@
-// Impresión del conduce de recepción.
+// Impresión del papel de la compra: orden de compra y conduce de recepción.
 //
 // Un solo camino para las tres salidas del mismo documento:
 //   - térmica (la impresora del POS, la que tiene el almacén a mano),
@@ -23,6 +23,7 @@ import '../../../services/session/session_controller.dart';
 import '../../printing/widgets/ticket_preview_dialog.dart';
 import '../../settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import '../state/goods_receipt.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Qué nombre va en el encabezado del conduce.
 ///
@@ -123,6 +124,10 @@ class GoodsReceiptPrinting {
     WidgetRef ref, {
     required GoodsReceipt receipt,
     bool isReprint = false,
+    /// En modo sin impresora, ¿mostrar el ticket en pantalla? Se apaga cuando
+    /// el llamador ya va a abrir el documento en un diálogo: dos ventanas
+    /// seguidas con el mismo papel solo estorban.
+    bool fallbackOnScreen = true,
   }) async {
     final messenger = ScaffoldMessenger.maybeOf(context);
     try {
@@ -157,14 +162,17 @@ class GoodsReceiptPrinting {
         isReprint: isReprint,
       );
 
+      final slug = receipt.isOrder ? 'orden' : 'conduce';
+
       if (printerless || printer == null) {
+        if (!fallbackOnScreen) return false;
         if (!context.mounted) return false;
         await showPrintTicketOnScreen(
           context,
           ticket: ticket,
-          title: 'Conduce ${receipt.number}',
+          title: '${receipt.isOrder ? "Orden" : "Conduce"} ${receipt.number}',
           subtitle: receipt.supplierName,
-          fileNamePrefix: 'conduce',
+          fileNamePrefix: slug,
         );
         return true;
       }
@@ -172,20 +180,25 @@ class GoodsReceiptPrinting {
       await repo.printEscPos(
         printer: printer,
         data: ticket.escPosCommands,
-        kind: 'goods_receipt',
+        kind: receipt.isOrder ? 'purchase_order' : 'goods_receipt',
         areaCode: 'cashier',
         // La reimpresión lleva sufijo propio: con la misma clave que el
         // original, la cola la descarta por idempotente y el usuario se
         // queda esperando un papel que nunca sale.
         idempotencyKey: isReprint
-            ? 'conduce-${receipt.id}-reprint-'
+            ? '$slug-${receipt.id}-reprint-'
                 '${DateTime.now().millisecondsSinceEpoch}'
-            : 'conduce-${receipt.id}',
+            : '$slug-${receipt.id}',
       );
       return true;
     } catch (e) {
-      messenger?.showSnackBar(
-        SnackBar(content: Text('El conduce no se pudo imprimir: $e')),
+      messenger?.showAppSnackBar(
+        SnackBar(
+          content: Text(
+            'El ${receipt.isOrder ? "documento de compra" : "conduce"} no se '
+            'pudo imprimir: $e',
+          ),
+        ),
       );
       return false;
     }

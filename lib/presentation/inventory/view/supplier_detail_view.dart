@@ -38,6 +38,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import 'widgets/link_supplier_item_dialog.dart';
 import 'widgets/supplier_form_dialog.dart';
 import 'widgets/supplier_visuals.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 enum SupplierTab { items, orders, account }
 
@@ -106,7 +107,7 @@ class _SupplierDetailViewState extends ConsumerState<SupplierDetailView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -134,7 +135,7 @@ class _SupplierDetailViewState extends ConsumerState<SupplierDetailView> {
       setState(() {
         _loading = false;
         _refreshing = false;
-        _error = _detail == null ? e.toString() : null;
+        _error = _detail == null ? FriendlyError.from(e) : null;
       });
       if (_detail != null && mounted) {
         AppToast.warning(context, 'No se pudo actualizar: ${_short(e)}');

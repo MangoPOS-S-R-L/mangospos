@@ -44,6 +44,7 @@ import '../viewmodel/inventory_viewmodel.dart';
 import 'item_adjust_dialog.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/item_form_dialog.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Estado del filtro de actividad. `min_stock` y las bajas viven en el
 /// maestro, así que el default es "solo activos": lo dado de baja no debería
@@ -214,7 +215,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -285,7 +286,7 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         _loading = false;
         _refreshing = false;
         _awaitingFresh = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

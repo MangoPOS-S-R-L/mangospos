@@ -6,6 +6,7 @@ import '../state/transfers_state.dart';
 import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class TransferReceiveDialog extends ConsumerStatefulWidget {
   final StockTransfer transfer;
@@ -55,7 +56,7 @@ class _TransferReceiveDialogState
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _errorMessage = 'Error cargando ítems: $e';
+        _errorMessage = FriendlyError.humanize('Error cargando ítems: $e');
       });
     }
   }

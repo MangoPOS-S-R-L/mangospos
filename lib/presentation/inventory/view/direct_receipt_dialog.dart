@@ -4,6 +4,10 @@
 // cantidades a recibir por insumo (con costo unitario opcional). Al
 // confirmar, llama fn_inventory_direct_receipt que crea atómicamente el
 // header + items + movimientos de inventario tipo 'purchase'.
+//
+// Al cerrar devuelve el documento de la recepción (`GoodsReceipt`) para que
+// quien lo abrió lo imprima: una compra manual también deja papel, con las
+// mismas firmas que el conduce de una orden de compra.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +16,8 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../../services/session/session_controller.dart';
+import '../../purchases/state/goods_receipt.dart';
 import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/direct_receipts_viewmodel.dart';
@@ -188,7 +194,7 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
     });
     final navigator = Navigator.of(context);
     try {
-      await ref
+      final header = await ref
           .read(directReceiptsViewModelProvider)
           .createReceipt(
             warehouseId: _warehouseId!,
@@ -199,11 +205,9 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
                 : _notesController.text.trim(),
           );
       if (!mounted) return;
-      navigator.pop();
-      AppToast.info(
-        context,
-        'Recepción directa registrada. Stock actualizado.',
-      );
+      // El documento se arma acá, con lo que se acaba de recibir, y viaja
+      // como resultado del diálogo: quien lo abrió lo imprime.
+      navigator.pop(_buildDocument(header));
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -211,6 +215,68 @@ class _DirectReceiptDialogState extends ConsumerState<DirectReceiptDialog> {
         _errorMessage = _humanize(e.toString());
       });
     }
+  }
+
+  /// Documento de la recepción directa: el papel que prueba la entrada.
+  ///
+  /// Es el MISMO documento que el conduce de una orden de compra —mismo
+  /// formato, mismas firmas— pero sin orden detrás: la mercancía entró sin OC
+  /// previa, así que no hay número de orden ni factura que declarar.
+  GoodsReceipt _buildDocument(Map<String, dynamic> header) {
+    final inv = ref.read(inventoryViewModelProvider).state;
+    final warehouseName = inv.warehouses
+            .where((w) => w.id == _warehouseId)
+            .map((w) => w.name)
+            .firstOrNull ??
+        'Almacén';
+    final supplierName = _suppliers
+            .where((sup) => sup.id == _supplierId)
+            .map((sup) => sup.name)
+            .firstOrNull ??
+        'Sin proveedor';
+
+    final lines = <GoodsReceiptLine>[];
+    for (final entry in _drafts.entries) {
+      final draft = entry.value;
+      if (draft.quantity <= 0) continue;
+      final item = _items.where((i) => i.id == entry.key).firstOrNull;
+      lines.add(
+        GoodsReceiptLine(
+          code: item?.sku ?? '',
+          reference: '',
+          description: item?.name ?? 'Artículo',
+          // Las cantidades del borrador ya están en unidad BASE: es lo que se
+          // manda a la RPC y lo que entra al kardex.
+          quantity: draft.quantity,
+          unit: item?.unit ?? 'unidad',
+          unitCost: _resolvedUnitCost(entry.key, draft.unitCost),
+        ),
+      );
+    }
+
+    final createdAt =
+        DateTime.tryParse(header['created_at']?.toString() ?? '')?.toLocal() ??
+            DateTime.now();
+
+    return GoodsReceipt(
+      id: header['id']?.toString() ?? '',
+      number: header['receipt_number']?.toString() ?? '',
+      date: createdAt,
+      createdAt: createdAt,
+      status: header['status']?.toString() ?? 'received',
+      orderId: null,
+      orderNumber: '',
+      invoiceNumber: '',
+      ncf: '',
+      supplierName: supplierName,
+      supplierRnc: '',
+      warehouseName: warehouseName,
+      // En una compra manual quien registra es quien recibió: la RPC guarda
+      // su `auth.uid()` en `received_by` y el papel dice lo mismo.
+      receivedByName: (ref.read(sessionProvider).userName ?? '').trim(),
+      notes: _notesController.text.trim(),
+      lines: lines,
+    );
   }
 
   String _humanize(String raw) {

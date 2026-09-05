@@ -18,6 +18,7 @@ import '../../../data/models/sales_models.dart';
 import '../../../data/utils/order_pricing_utils.dart';
 import '../viewmodel/split_bill_viewmodel.dart';
 import '../state/split_bill_state.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// 📄 Modal de división de cuenta
 class SplitBillModal extends ConsumerStatefulWidget {
@@ -181,7 +182,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       );
 
       if (context.mounted) {
-        scaffold.showSnackBar(
+        scaffold.showAppSnackBar(
           SnackBar(
               content: Text(
                   'Precuenta ${check.label} enviada a impresora.')),
@@ -189,7 +190,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       }
     } catch (e) {
       if (context.mounted) {
-        scaffold.showSnackBar(
+        scaffold.showAppSnackBar(
           SnackBar(
             content: Text('Error imprimiendo precuenta: $e'),
             backgroundColor: Colors.red,
@@ -235,7 +236,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
       if (next) {
         Navigator.of(context).pop();
         widget.onSplitApplied();
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Text('División aplicada exitosamente'),
             backgroundColor: Color(0xFF22C55E),

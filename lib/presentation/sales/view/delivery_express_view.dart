@@ -12,6 +12,7 @@ import 'package:mangopos/presentation/sales/state/delivery_state.dart';
 import 'package:mangopos/presentation/sales/viewmodel/delivery_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class DeliveryExpressView extends ConsumerStatefulWidget {
   const DeliveryExpressView({super.key});
@@ -186,7 +187,7 @@ class _NewDeliveryButton extends ConsumerWidget {
           onCreated(result);
         } catch (e) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            ScaffoldMessenger.of(context).showAppSnackBar(
               SnackBar(content: Text('Error creando delivery: $e')),
             );
           }

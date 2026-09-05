@@ -17,6 +17,7 @@ import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class OfflineQueueSyncResult {
   const OfflineQueueSyncResult({
@@ -1207,7 +1208,7 @@ class OfflinePosService {
         }
       } catch (e) {
         final attempts = ((processing['attempts'] as num?)?.toInt() ?? 0) + 1;
-        lastError = e.toString();
+        lastError = FriendlyError.from(e);
         final isConnectivity = _isConnectivityError(e);
         // Dead-letter: si una acción NO de conectividad agotó sus
         // reintentos, deja de reintentar sola y pasa a estado terminal
@@ -1349,7 +1350,7 @@ class OfflinePosService {
         }
       } catch (e) {
         failed++;
-        lastError = e.toString();
+        lastError = FriendlyError.from(e);
         // Si volvió a caer la red, cortamos: el resto fallaría igual y se
         // reintenta en el próximo uplink (los completados se saltan).
         if (_isConnectivityError(e)) break;

@@ -7,6 +7,7 @@ import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_colors.dart';
 import '../../../../../../../data/repositories/combos_repository.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 final combosRepositoryProvider = Provider<CombosRepository>((ref) {
   return CombosRepository(Supabase.instance.client);
@@ -56,7 +57,7 @@ class _CombosViewState extends ConsumerState<CombosView> {
           ? const []
           : await _repo.getComboConfig(_selectedComboId!);
     } catch (e) {
-      _error = '$e';
+      _error = FriendlyError.humanize('$e');
     } finally {
       if (mounted) {
         setState(() => _loading = false);

@@ -39,6 +39,7 @@ import 'transfer_send_dialog.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/warehouse_form_dialog.dart';
 import 'widgets/warehouse_visuals.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Ancho al que caben tres tarjetas cómodas; por debajo se baja a dos y
 /// después a una. Son anchos de CONTENIDO (ya descontado el padding).
@@ -95,7 +96,7 @@ class _WarehousesViewState extends ConsumerState<WarehousesView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -143,7 +144,7 @@ class _WarehousesViewState extends ConsumerState<WarehousesView> {
         _awaitingFresh = false;
         // Con algo pintado desde el caché, un fallo de red no borra la
         // pantalla: se avisa arriba y se deja lo que hay.
-        _error = _overview.warehouses.isEmpty ? e.toString() : null;
+        _error = _overview.warehouses.isEmpty ? FriendlyError.from(e) : null;
       });
       if (_overview.warehouses.isNotEmpty && mounted) {
         AppToast.warning(context, 'No se pudo actualizar: ${_shortError(e)}');

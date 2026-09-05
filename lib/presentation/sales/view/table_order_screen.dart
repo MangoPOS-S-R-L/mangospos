@@ -70,6 +70,7 @@ import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/order_taxes_dialog.dart';
 import 'payment_split_screen.dart';
 import 'package:mangopos/presentation/payments/widgets/payment_modal.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 const Color _salesSurface = Color(0xFFFFFFFF);
 const Color _salesDivider = Color(0xFFE9E6E2);
@@ -595,13 +596,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final messenger = ScaffoldMessenger.of(context);
 
     if (order == null || order.sessionId.isEmpty) {
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         const SnackBar(content: Text('No hay cuenta activa para transferir.')),
       );
       return;
     }
     if (widget.origin != OrderOrigin.table) {
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         const SnackBar(
           content: Text('La transferencia solo aplica a cuentas de mesa.'),
         ),
@@ -621,7 +622,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final tableLabel = _currentTableCode ?? widget.tableCode ?? 'Mesa';
     final sourceTableId = widget.tableId ?? '';
     if (sourceTableId.isEmpty) {
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         const SnackBar(content: Text('No se pudo identificar la mesa origen.')),
       );
       return;
@@ -673,7 +674,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final orderState = ref.read(currentOrderProvider);
     final order = orderState.order;
     if (order == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('No hay una orden activa.')),
       );
       return;
@@ -688,7 +689,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return !inClosedCheck;
     }).toList();
     if (pendingItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('No hay productos pendientes de cobrar.'),
         ),
@@ -697,7 +698,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     final total = summarizeOrderPricing(order, pendingItems).total;
     if (total <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('La cuenta no tiene monto a cobrar.')),
       );
       return;
@@ -752,14 +753,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (orderState.order == null) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('No hay una orden activa.')));
+      ).showAppSnackBar(const SnackBar(content: Text('No hay una orden activa.')));
       return;
     }
     final openItems = orderState.items
         .where((i) => i.status != 'paid' && i.status != 'void')
         .toList(growable: false);
     if (openItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('La orden no tiene items para marcar.')),
       );
       return;
@@ -797,7 +798,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     try {
       await ref.read(currentOrderProvider.notifier).toggleTakeout(newValue);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           content: Text(
             newValue
@@ -812,7 +813,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('No se pudo actualizar: $e')));
+      ).showAppSnackBar(SnackBar(content: Text('No se pudo actualizar: $e')));
     }
   }
 
@@ -874,7 +875,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (!context.mounted) return;
 
     final reasonText = dialogResult.reason.trim();
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         content: Text(
           reasonText.isEmpty
@@ -978,7 +979,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // Asignar cliente a la cuenta define a quién se le factura (y con qué
     // RNC): va bajo `clientes.asignar_a_mesa`, que hasta acá nadie leía.
     if (!operatorHasPermission(ref, 'clientes.asignar_a_mesa')) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('No tienes permiso para asignar clientes a la cuenta.'),
         ),
@@ -1028,7 +1029,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     if (!context.mounted) return;
     final scopeLabel = selectedCheckId != null ? ' a la subcuenta' : '';
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(content: Text('Cliente asignado$scopeLabel: $customerName')),
     );
   }
@@ -1039,7 +1040,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         .where(_isOpenItem)
         .toList(growable: false);
     if (orderState.order == null || openItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('No hay productos abiertos para descontar.'),
         ),
@@ -1068,7 +1069,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         : result.selectedItemIds;
     if (targetIds.isEmpty) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('Selecciona al menos un producto.')),
       );
       return;
@@ -1094,12 +1095,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       final appliedLabel = result.mode == _DiscountMode.percent
           ? 'Descuento ${result.value.toStringAsFixed(0)}% aplicado.'
           : 'Descuento de ${currentBusinessCurrencyOrFallback(ref).formatAmount(result.value)} aplicado.';
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text(appliedLabel)),
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text('No se pudo aplicar descuento: $e')),
       );
     }
@@ -1111,7 +1112,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         .where(_isOpenItem)
         .toList(growable: false);
     if (orderState.order == null || openItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('No hay productos abiertos para cortesía.'),
         ),
@@ -1145,7 +1146,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             preAuthorized: true,
           );
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           content: Text(
             result.reason.trim().isEmpty
@@ -1156,7 +1157,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       );
     } catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text('No se pudo aplicar cortesía: $e')),
       );
     }
@@ -1290,7 +1291,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               onProductTap: (product) {
                 final orderState = ref.read(currentOrderProvider);
                 if (orderState.loading) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context).showAppSnackBar(
                     const SnackBar(
                       content: Text('Cargando orden. Intenta de nuevo.'),
                     ),
@@ -1300,7 +1301,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                 if (orderState.order == null) {
                   final errorMsg =
                       orderState.error ?? 'No hay una orden activa.';
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context).showAppSnackBar(
                     SnackBar(
                       content: Text(
                         'Error: $errorMsg\nPor favor envíame una captura de este mensaje.',
@@ -1963,7 +1964,7 @@ class _VoidOrderDialogState extends ConsumerState<_VoidOrderDialog> {
           onPressed: () {
             final reason = _reasonCtrl.text.trim();
             if (reason.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
+              ScaffoldMessenger.of(context).showAppSnackBar(
                 const SnackBar(
                   content: Text('Indica el motivo de la anulación.'),
                 ),
@@ -2413,7 +2414,7 @@ class _CartView extends ConsumerWidget {
       if (chosenFee == null) {
         // Canceló. Si es obligatorio, no se puede cobrar sin fee.
         if (features.deliveryFeeRequired) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          ScaffoldMessenger.of(context).showAppSnackBar(
             const SnackBar(
               content: Text(
                 'Debes indicar el monto del delivery para cobrar.',
@@ -2430,7 +2431,7 @@ class _CartView extends ConsumerWidget {
               .setDeliveryFee(chosenFee);
         } catch (e) {
           if (!context.mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
+          ScaffoldMessenger.of(context).showAppSnackBar(
             SnackBar(
               content: Text('No se pudo fijar el fee de delivery: $e'),
               backgroundColor: Colors.red,
@@ -2498,7 +2499,7 @@ class _CartView extends ConsumerWidget {
 
     final fiscalConfigError = _buildFiscalConfigError(currentOrderState);
     if (fiscalConfigError != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           content: Text(fiscalConfigError),
           backgroundColor: Colors.redAccent,
@@ -2529,7 +2530,7 @@ class _CartView extends ConsumerWidget {
           c.rnc == null ||
           c.rnc!.trim().isEmpty;
       if (customerMissing(fc)) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Text(
               'Para comprobante fiscal se requiere un cliente con RNC/Cédula.',
@@ -2859,7 +2860,7 @@ class _CartView extends ConsumerWidget {
                   );
                 });
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context).showAppSnackBar(
                     SnackBar(
                       backgroundColor: const Color(0xFF10B981),
                       behavior: SnackBarBehavior.floating,
@@ -2872,7 +2873,7 @@ class _CartView extends ConsumerWidget {
                 }
               } catch (e) {
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  ScaffoldMessenger.of(context).showAppSnackBar(
                     SnackBar(
                       backgroundColor: const Color(0xFFEF4444),
                       content: Text('No se pudo imprimir el comprobante: $e'),
@@ -2924,7 +2925,7 @@ class _CartView extends ConsumerWidget {
                 forcePicker: false,
               );
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(context).showAppSnackBar(
                   const SnackBar(
                     backgroundColor: Color(0xFFF59E0B),
                     behavior: SnackBarBehavior.floating,
@@ -2936,7 +2937,7 @@ class _CartView extends ConsumerWidget {
               }
             } catch (e) {
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(context).showAppSnackBar(
                   SnackBar(
                     backgroundColor: const Color(0xFFEF4444),
                     content: Text('No se pudo imprimir la precuenta: $e'),
@@ -3354,7 +3355,7 @@ class _CartView extends ConsumerWidget {
                           .selectedCategoryId,
                     );
                 if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(context).showAppSnackBar(
                   SnackBar(
                     content: Text(
                       '${item.productName} quedó marcado como agotado',
@@ -4657,7 +4658,7 @@ class _CartView extends ConsumerWidget {
                                           .join(', ');
                                       ScaffoldMessenger.of(
                                         context,
-                                      ).showSnackBar(
+                                      ).showAppSnackBar(
                                         SnackBar(
                                           backgroundColor: const Color(
                                             0xFFF59E0B,
@@ -4676,7 +4677,7 @@ class _CartView extends ConsumerWidget {
                                     } else {
                                       ScaffoldMessenger.of(
                                         context,
-                                      ).showSnackBar(
+                                      ).showAppSnackBar(
                                         const SnackBar(
                                           backgroundColor: Color(0xFF22C55E),
                                           content: Text(
@@ -4701,7 +4702,7 @@ class _CartView extends ConsumerWidget {
                                         if (context.mounted) {
                                           ScaffoldMessenger.of(
                                             context,
-                                          ).showSnackBar(
+                                          ).showAppSnackBar(
                                             const SnackBar(
                                               content: Text(
                                                 'Orden cerrada automaticamente (pagada externamente)',
@@ -4729,7 +4730,7 @@ class _CartView extends ConsumerWidget {
                                     );
                                   } catch (e) {
                                     if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
+                                    ScaffoldMessenger.of(context).showAppSnackBar(
                                       SnackBar(
                                         content: Text(
                                           'Error al enviar el pedido: ${e.toString()}',
@@ -4801,7 +4802,7 @@ class _CartView extends ConsumerWidget {
                               // cajero pueda seguir vendiendo de inmediato.
                               await notifier.openQuick(forceRestart: true);
                               if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
+                                ScaffoldMessenger.of(context).showAppSnackBar(
                                   const SnackBar(
                                     content: Text('Venta descartada'),
                                   ),
@@ -4996,7 +4997,7 @@ class _CartView extends ConsumerWidget {
                                       if (features.deliveryFeeRequired) {
                                         ScaffoldMessenger.of(
                                           context,
-                                        ).showSnackBar(
+                                        ).showAppSnackBar(
                                           const SnackBar(
                                             content: Text(
                                               'Debes indicar el monto del delivery para imprimir la precuenta.',
@@ -5015,7 +5016,7 @@ class _CartView extends ConsumerWidget {
                                         if (!context.mounted) return;
                                         ScaffoldMessenger.of(
                                           context,
-                                        ).showSnackBar(
+                                        ).showAppSnackBar(
                                           SnackBar(
                                             content: Text(
                                               'No se pudo fijar el fee de delivery: $e',
@@ -5281,7 +5282,7 @@ class _CartView extends ConsumerWidget {
 
     // Mostrar feedback inmediato al usuario.
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
           content: Text(
@@ -5316,7 +5317,7 @@ class _CartView extends ConsumerWidget {
     )).whereType<String>().toList(growable: false);
 
     if (context.mounted && errors.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           backgroundColor: const Color(0xFFEF4444),
           duration: const Duration(seconds: 4),
@@ -6023,7 +6024,7 @@ class _CartView extends ConsumerWidget {
       // ve "Imprimiendo..." con spinner — sensación de respuesta
       // inmediata. Después actualizamos según el outcome real.
       if (showSnackBar && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             duration: const Duration(seconds: 2),
             content: Row(
@@ -6101,7 +6102,7 @@ class _CartView extends ConsumerWidget {
           showSnackBar &&
           context.mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             duration: const Duration(seconds: 4),
             content: Text(
@@ -6195,7 +6196,7 @@ class _CartView extends ConsumerWidget {
       futures,
     )).whereType<String>().toList(growable: false);
     if (errors.isNotEmpty && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           duration: const Duration(seconds: 4),
           backgroundColor: const Color(0xFFF59E0B),
@@ -7192,7 +7193,7 @@ Future<void> _editOrderTaxes(
   if (setEquals(result, orderState.excludedTaxIds)) return;
 
   final error = await vm.setExcludedTaxes(result);
-  messenger.showSnackBar(
+  messenger.showAppSnackBar(
     SnackBar(
       content: Text(error ?? 'Impuestos actualizados.'),
       backgroundColor: error == null ? null : Colors.red.shade700,
@@ -9043,7 +9044,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
   Future<void> _createCustomer() async {
     final payload = _buildPayload();
     if ((payload['name'] as String).isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('El nombre y apellido del cliente son obligatorios.'),
         ),
@@ -9060,7 +9061,7 @@ class _CreateCustomerDialogState extends ConsumerState<_CreateCustomerDialog> {
       Navigator.of(context).pop(created);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text('No se pudo crear el cliente: $e')),
       );
     } finally {
@@ -10064,7 +10065,7 @@ class _ProductsGrid extends ConsumerWidget {
                 return GestureDetector(
                   onTap: blockedByStock
                       ? () {
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          ScaffoldMessenger.of(context).showAppSnackBar(
                             SnackBar(
                               content: Text(
                                 '${product.name} está agotado. '
@@ -10879,7 +10880,7 @@ class _ModifiersSelectionDialogState
       final minSelect = (group['min_select'] as num?)?.toInt() ?? 0;
       final selected = _selectedByGroup[groupId] ?? <String>{};
       if (selected.length < minSelect) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(content: Text('Debes completar: ${group['name']}')),
         );
         return;

@@ -14,6 +14,7 @@ import '../../../data/repositories/printing_repository.dart';
 import '../../../data/models/printing_models.dart';
 import '../../../services/printing/esc_pos_generator.dart' show EscPosGenerator;
 import '../../../widgets/error_handler_widget.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// 🖨️ Pantalla de Configuración de Impresoras y Áreas
 class PrinterConfigurationScreen extends ConsumerStatefulWidget {
@@ -561,7 +562,7 @@ class _AddPrinterDialogState extends State<_AddPrinterDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _btScanError =
-            'Error al escanear Bluetooth: ${e.toString()}');
+            FriendlyError.humanize('Error al escanear Bluetooth: ${e.toString()}'));
       }
     } finally {
       await _scanSub?.cancel();

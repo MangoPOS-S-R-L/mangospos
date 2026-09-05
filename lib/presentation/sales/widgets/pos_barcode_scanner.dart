@@ -10,6 +10,7 @@ import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/sales_viewmodel.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Escucha un lector de código de barras USB/HID (RF-R1). Un lector HID se
 /// comporta como un teclado: emite los caracteres del código en ráfaga rápida
@@ -385,7 +386,7 @@ class _PosBarcodeScannerState extends ConsumerState<PosBarcodeScanner> {
     if (messenger == null) return;
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(
+      ..showAppSnackBar(
         SnackBar(
           content: Text(message),
           duration: const Duration(milliseconds: 1400),

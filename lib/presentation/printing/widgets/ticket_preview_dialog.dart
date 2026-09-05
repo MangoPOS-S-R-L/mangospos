@@ -16,6 +16,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../data/models/printing.dart' show PrintTicket;
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Muestra [ticket] en pantalla. No-op silencioso si el ticket no trae
 /// texto plano (caso de tickets 100% gráficos), para no dejar al cajero
@@ -222,7 +223,7 @@ class _TicketPreviewDialogState extends State<_TicketPreviewDialog> {
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.plainText));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       const SnackBar(
         duration: Duration(seconds: 2),
         content: Text('Ticket copiado al portapapeles'),
@@ -265,7 +266,7 @@ class _TicketPreviewDialogState extends State<_TicketPreviewDialog> {
 
   void _reportFailure(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         backgroundColor: const Color(0xFFEF4444),
         duration: const Duration(seconds: 4),

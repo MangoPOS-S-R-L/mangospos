@@ -15,6 +15,7 @@ import '../../../../core/theme/app_radius.dart';
 import '../../../../core/utils/app_toast.dart';
 import '../../../../data/repositories/inventory_repository.dart';
 import '../../state/inventory_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Valor del selector que significa "todo el catálogo de insumos del
 /// negocio" en vez de una bodega concreta.
@@ -255,7 +256,7 @@ class _WarehouseFormDialogState extends State<WarehouseFormDialog> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = e.toString();
+          _error = FriendlyError.from(e);
         });
       }
     }

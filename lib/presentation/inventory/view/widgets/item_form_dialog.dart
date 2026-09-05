@@ -11,6 +11,7 @@ import '../../../../core/inventory/unit_conversion.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../data/repositories/inventory_repository.dart';
 import '../../state/inventory_state.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ItemFormDialog extends StatefulWidget {
   final String businessId;
@@ -263,7 +264,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = e.toString();
+          _error = FriendlyError.from(e);
         });
       }
     }

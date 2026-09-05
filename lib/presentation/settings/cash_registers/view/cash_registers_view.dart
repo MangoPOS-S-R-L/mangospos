@@ -10,6 +10,7 @@ import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class CashRegistersView extends ConsumerStatefulWidget {
   const CashRegistersView({super.key});
@@ -60,7 +61,7 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
     } catch (e) {
       setState(() {
         _loading = false;
-        _error = 'Error al cargar cajas: $e';
+        _error = FriendlyError.humanize('Error al cargar cajas: $e');
       });
     }
   }

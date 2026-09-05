@@ -3,6 +3,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class ProductDetailModal extends StatefulWidget {
   final OrderItem item;
@@ -308,7 +309,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       final authorized = await widget.onAuthorizeDiscount!();
       if (!authorized) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Text(
               'Descuento no autorizado: requiere permiso o PIN de supervisor.',
@@ -357,7 +358,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text('No se pudo guardar el producto: $e')),
       );
     } finally {
@@ -386,7 +387,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       final groups = await widget.loadModifierGroups!(widget.item.productId!);
       if (!mounted) return;
       if (groups.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Text('Este producto no tiene modificadores asignados.'),
           ),
@@ -412,7 +413,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       if (!mounted || result == null) return;
       await widget.onReplaceModifiers!(widget.item.id, result);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('Modificadores actualizados.')),
       );
     } finally {

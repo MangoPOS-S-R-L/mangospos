@@ -10,6 +10,7 @@ import '../../../data/repositories/customers_repository.dart';
 import '../../../data/repositories/zones_repository.dart';
 import '../../../domain/repositories/i_reservations_repository.dart';
 import '../viewmodel/reservations_viewmodel.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Abre el formulario de crear/editar reserva. Devuelve `true` si se guardó.
 Future<bool?> showReservationForm(
@@ -223,7 +224,7 @@ class _ReservationFormDialogState
   }
 
   void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         content: Text(msg),
         behavior: SnackBarBehavior.floating,

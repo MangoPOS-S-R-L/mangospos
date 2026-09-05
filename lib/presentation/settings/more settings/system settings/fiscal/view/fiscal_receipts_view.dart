@@ -498,9 +498,41 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
           ),
           Expanded(
             flex: 3,
-            child: Text(
-              _getTipoNombre(s.tipo),
-              style: const TextStyle(fontWeight: FontWeight.w500),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _getTipoNombre(s.tipo),
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+                // Sin la fecha de la autorización, la DGII rechaza el e-CF con
+                // el código 145 y el e-NCF queda quemado: se avisa AQUÍ, no
+                // cuando el cliente ya está esperando su factura.
+                if (s.needsExpirationDate)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Falta el vencimiento de la DGII — no se puede emitir',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.red,
+                      ),
+                    ),
+                  )
+                else if (s.expirationDate != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Vence ${_formatDate(s.expirationDate!)}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: MangoColors.muted,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           Expanded(
@@ -548,10 +580,16 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     );
   }
 
+  String _formatDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/'
+      '${d.month.toString().padLeft(2, '0')}/${d.year}';
+
   String _getTipoNombre(String tipo) {
     final map = {
       '01': 'Factura de Crédito Fiscal',
       '02': 'Factura de Consumo',
+      '03': 'Nota de Débito',
+      '04': 'Nota de Crédito',
       '14': 'Regímenes Especiales',
       '15': 'Gubernamental',
       '16': 'Exportación',
@@ -593,6 +631,12 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
   final _ultimoController = TextEditingController();
   final _maximoController = TextEditingController();
   bool _activo = true;
+  DateTime? _expiration;
+  String? _formError;
+
+  /// e-CF distinto de E32: la DGII exige la fecha de vencimiento de la
+  /// secuencia en el comprobante y la valida contra la autorización del rango.
+  bool get _expirationRequired => selectedSerie == 'E' && selectedTipo != '32';
 
   @override
   void initState() {
@@ -604,6 +648,7 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
       _ultimoController.text = e.ultimoSeq.toString();
       _maximoController.text = e.maximoSeq.toString();
       _activo = e.activo;
+      _expiration = e.expirationDate;
     } else {
       selectedSerie = 'B';
       selectedTipo = '01';
@@ -682,6 +727,9 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                                   ? {
                                       '01': '01 - Crédito Fiscal',
                                       '02': '02 - Consumo',
+                                      // La nota de crédito es la que anula una
+                                      // factura de papel ya entregada.
+                                      '04': '04 - Nota de Crédito',
                                       '14': '14 - Reg. Especial',
                                       '15': '15 - Gubernamental',
                                       '16': '16 - Exportación',
@@ -736,6 +784,56 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                 ),
               ],
             ),
+            const SizedBox(height: 20),
+            _buildLabelField(
+              _expirationRequired
+                  ? 'Vencimiento de la secuencia (DGII) *'
+                  : 'Vencimiento de la secuencia (DGII)',
+              InkWell(
+                onTap: _pickExpiration,
+                borderRadius: BorderRadius.circular(12),
+                child: InputDecorator(
+                  decoration: _inputDeco().copyWith(
+                    suffixIcon: _expiration == null
+                        ? const Icon(Icons.calendar_today_rounded, size: 18)
+                        : IconButton(
+                            tooltip: 'Quitar fecha',
+                            icon: const Icon(Icons.clear_rounded, size: 18),
+                            onPressed: () => setState(() => _expiration = null),
+                          ),
+                    helperText: _expirationRequired
+                        ? 'Tal como aparece en la autorización de la DGII. Sin '
+                              'ella la DGII rechaza el e-CF (código 145).'
+                        : 'Opcional. Déjala vacía si la autorización dice N/A.',
+                    helperMaxLines: 3,
+                  ),
+                  child: Text(
+                    _expiration == null
+                        ? 'Sin fecha'
+                        : '${_expiration!.day.toString().padLeft(2, '0')}/'
+                              '${_expiration!.month.toString().padLeft(2, '0')}/'
+                              '${_expiration!.year}',
+                    style: TextStyle(
+                      color: _expiration == null
+                          ? MangoColors.muted
+                          : MangoColors.darkGray,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (_formError != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _formError!,
+                style: const TextStyle(
+                  color: Colors.red,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -841,14 +939,42 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
     );
   }
 
+  Future<void> _pickExpiration() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _expiration ?? DateTime(now.year, 12, 31),
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 10),
+      helpText: 'Vencimiento de la secuencia',
+    );
+    if (picked != null) setState(() => _expiration = picked);
+  }
+
   Future<void> _save() async {
     final ultimo = int.tryParse(_ultimoController.text) ?? 0;
     final maximo = int.tryParse(_maximoController.text) ?? 1000;
 
+    // Guardar un e-CF sin vencimiento es guardar una secuencia que no puede
+    // emitir: la DGII la rechaza con el código 145.
+    if (_expirationRequired && _expiration == null) {
+      setState(() {
+        _formError =
+            'Los e-CF $selectedSerie$selectedTipo necesitan la fecha de '
+            'vencimiento de la autorización de la DGII.';
+      });
+      return;
+    }
+
     if (widget.editing != null) {
       await ref.read(fiscalVmProvider.notifier).saveSequence(
         widget.editing!.id!,
-        {'current_number': ultimo, 'range_end': maximo, 'is_active': _activo},
+        {
+          'current_number': ultimo,
+          'range_end': maximo,
+          'is_active': _activo,
+          'expiration_date': _expiration?.toIso8601String().substring(0, 10),
+        },
       );
     } else {
       await ref
@@ -859,8 +985,10 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
             serie: selectedSerie,
             ultimoSeq: ultimo,
             maximoSeq: maximo,
+            expirationDate: _expiration,
           );
     }
+    if (!mounted) return;
     Navigator.pop(context, true);
   }
 }

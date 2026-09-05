@@ -351,12 +351,19 @@ class PurchaseOrderDetail {
 
   final List<PurchaseOrderLine> lines;
 
+  /// Quién REGISTRÓ la compra (`purchase_orders.created_by` resuelto a
+  /// nombre de empleado). Va en la firma «Realizado por» del documento
+  /// impreso. Vacío cuando el usuario no tiene ficha de empleado: el papel
+  /// sale igual, con la raya en blanco.
+  final String createdByName;
+
   const PurchaseOrderDetail({
     required this.order,
     required this.subtotal,
     required this.tax,
     required this.discount,
     required this.lines,
+    this.createdByName = '',
   });
 
   /// Suma de los descuentos POR LÍNEA (informativo: los costos ya vienen

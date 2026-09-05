@@ -49,6 +49,10 @@ winsparkle_keys/
 sparkle_keys/
 *.pem
 
+# Excepcion: las raices de confianza TLS son publicas y SI van al repo. Es un
+# asset declarado en pubspec.yaml, asi que sin el la app no compila.
+!assets/certs/roots.pem
+
 # Herramientas OSINT clonadas dentro del repo (no son parte de MangoPOS)
 /Osintgram/
 /SoIG/

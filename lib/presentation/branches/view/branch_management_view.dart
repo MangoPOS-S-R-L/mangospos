@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 final branchManagementProvider =
     ChangeNotifierProvider<BranchManagementController>((ref) {
@@ -60,7 +61,7 @@ class BranchManagementController extends ChangeNotifier {
           .toList(growable: false);
       _error = null;
     } catch (e) {
-      _error = 'No se pudieron cargar las sucursales: $e';
+      _error = FriendlyError.humanize('No se pudieron cargar las sucursales: $e');
     } finally {
       _loading = false;
       notifyListeners();
@@ -111,7 +112,7 @@ class BranchManagementController extends ChangeNotifier {
 
       await load();
     } catch (e) {
-      _error = 'No se pudo crear la sucursal: $e';
+      _error = FriendlyError.humanize('No se pudo crear la sucursal: $e');
     } finally {
       _saving = false;
       notifyListeners();
@@ -136,7 +137,7 @@ class BranchManagementController extends ChangeNotifier {
 
       await load();
     } catch (e) {
-      _error = e.toString().replaceAll('Exception: ', '');
+      _error = FriendlyError.from(e);
       rethrow;
     } finally {
       _saving = false;

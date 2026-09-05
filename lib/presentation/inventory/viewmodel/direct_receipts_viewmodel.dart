@@ -169,7 +169,10 @@ class DirectReceiptsViewModel extends ChangeNotifier {
 
   /// Crea una recepción directa nueva. [items] formato:
   /// `[{item_id, quantity, unit_cost?, notes?}]`.
-  Future<void> createReceipt({
+  /// Devuelve el header creado (`receipt_number`, `id`, `total`…): es lo que
+  /// necesita la pantalla para imprimir el documento de la recepción sin
+  /// tener que releerlo del servidor.
+  Future<Map<String, dynamic>> createReceipt({
     required String warehouseId,
     required List<Map<String, dynamic>> items,
     String? supplierId,
@@ -182,7 +185,7 @@ class DirectReceiptsViewModel extends ChangeNotifier {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
     try {
-      await _repository.createDirectReceipt(
+      final header = await _repository.createDirectReceipt(
         businessId: businessId,
         warehouseId: warehouseId,
         items: items,
@@ -191,6 +194,7 @@ class DirectReceiptsViewModel extends ChangeNotifier {
       );
       _state = _state.copyWith(saving: false);
       await _reload();
+      return header;
     } catch (e) {
       _state = _state.copyWith(
         saving: false,

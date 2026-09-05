@@ -114,11 +114,13 @@ class PurchasesRepository {
 
   static const _orderColumns =
       'id, supplier_id, warehouse_id, order_number, invoice_number, ncf, '
-      'status, total, expected_date, received_date, created_at, notes';
+      'status, total, expected_date, received_date, created_at, created_by, '
+      'notes';
 
   static const _orderColumnsLegacy =
       'id, supplier_id, warehouse_id, order_number, invoice_number, '
-      'status, total, expected_date, received_date, created_at, notes';
+      'status, total, expected_date, received_date, created_at, created_by, '
+      'notes';
 
   Future<List<PurchaseOrderSummary>> getOrders({
     required String businessId,
@@ -581,6 +583,7 @@ class PurchasesRepository {
       tax: toDouble(row['tax']),
       discount: toDouble(row['discount']),
       lines: lines,
+      createdByName: await _employeeName(row['created_by']?.toString()),
     );
   }
 
@@ -694,7 +697,16 @@ class PurchasesRepository {
       'id, reception_number, reception_date, status, notes, created_at, '
       'purchase_order_id, received_by, '
       'suppliers(name, rnc), warehouses(name), '
-      'purchase_orders(order_number, invoice_number, ncf)';
+      'purchase_orders(order_number, invoice_number, ncf, created_by)';
+
+  /// Quién REALIZÓ la compra que dio origen a esta recepción. Sale de la
+  /// orden (`created_by`), no de la recepción: el conduce lo lleva en la
+  /// firma «Realizado por» y quien recibe firma al lado.
+  Future<String> _orderIssuerName(Map<String, dynamic> header) {
+    final order = header['purchase_orders'];
+    if (order is! Map) return Future.value('');
+    return _employeeName(order['created_by']?.toString());
+  }
 
   /// Conduce completo (cabecera + líneas) listo para imprimir o reimprimir.
   Future<GoodsReceipt> getGoodsReceipt(String receptionId) async {
@@ -710,7 +722,8 @@ class PurchasesRepository {
     return _receiptFromMaps(
       Map<String, dynamic>.from(header),
       lines,
-      await _receiverName(header['received_by']?.toString()),
+      await _employeeName(header['received_by']?.toString()),
+      await _orderIssuerName(header),
     );
   }
 
@@ -743,7 +756,8 @@ class PurchasesRepository {
         _receiptFromMaps(
           row,
           lines,
-          await _receiverName(row['received_by']?.toString()),
+          await _employeeName(row['received_by']?.toString()),
+          await _orderIssuerName(row),
         ),
       );
     }
@@ -779,11 +793,18 @@ class PurchasesRepository {
     }
   }
 
-  /// Nombre de quien recibió. Best-effort: el conduce vale igual sin él, y
-  /// no hay razón para tumbar una impresión porque el usuario no tenga ficha
-  /// de empleado.
-  Future<String> _receiverName(String? userId) async {
+  /// Nombres ya resueltos en esta instancia. Una orden con tres recepciones
+  /// del mismo almacenista no tiene por qué preguntar tres veces.
+  final Map<String, String> _employeeNames = {};
+
+  /// Nombre del empleado detrás de un `user_id` (quien recibió, quien
+  /// registró la compra). Best-effort: el papel vale igual sin él, y no hay
+  /// razón para tumbar una impresión porque el usuario no tenga ficha de
+  /// empleado.
+  Future<String> _employeeName(String? userId) async {
     if (userId == null || userId.isEmpty) return '';
+    final cached = _employeeNames[userId];
+    if (cached != null) return cached;
     try {
       final row = await _client
           .from(PurchasesQueries.tableEmployees)
@@ -791,9 +812,10 @@ class PurchasesRepository {
           .eq('user_id', userId)
           .limit(1)
           .maybeSingle();
-      if (row == null) return '';
-      final full =
-          '${row['first_name'] ?? ''} ${row['last_name'] ?? ''}'.trim();
+      final full = row == null
+          ? ''
+          : '${row['first_name'] ?? ''} ${row['last_name'] ?? ''}'.trim();
+      _employeeNames[userId] = full;
       return full;
     } catch (_) {
       return '';
@@ -804,6 +826,7 @@ class PurchasesRepository {
     Map<String, dynamic> header,
     List<Map<String, dynamic>> lines,
     String receiverName,
+    String issuerName,
   ) {
     final supplier = header['suppliers'];
     final warehouse = header['warehouses'];
@@ -837,6 +860,7 @@ class PurchasesRepository {
           ? 'Almacén'
           : rel(warehouse, 'name'),
       receivedByName: receiverName,
+      issuedByName: issuerName,
       notes: header['notes']?.toString() ?? '',
       lines: lines.map(GoodsReceiptLine.fromMap).toList(growable: false),
     );

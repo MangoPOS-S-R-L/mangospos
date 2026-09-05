@@ -15,7 +15,9 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
+import '../../purchases/utils/goods_receipt_printing.dart';
 import '../state/direct_receipts_state.dart';
+import '../utils/direct_receipt_document.dart';
 import '../viewmodel/direct_receipts_viewmodel.dart';
 import 'receive_source_dialog.dart';
 import 'widgets/inventory_back_button.dart';
@@ -652,12 +654,12 @@ class _ReceiptCard extends StatelessWidget {
   }
 }
 
-class _ReceiptDetailDialog extends StatelessWidget {
+class _ReceiptDetailDialog extends ConsumerWidget {
   final DirectReceipt receipt;
   const _ReceiptDetailDialog({required this.receipt});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final currency = NumberFormat.currency(
       locale: 'en_US',
       symbol: 'RD\$',
@@ -784,7 +786,30 @@ class _ReceiptDetailDialog extends StatelessWidget {
           ],
         ),
       ),
+      actionsOverflowButtonSpacing: 6,
       actions: [
+        // El papel de una compra manual se reimprime igual que el conduce de
+        // una orden: el documento es el mismo.
+        TextButton.icon(
+          onPressed: () => GoodsReceiptPrinting.printThermal(
+            context,
+            ref,
+            receipt: directReceiptDocument(receipt),
+            isReprint: true,
+          ),
+          icon: const Icon(Icons.print_outlined, size: 18),
+          label: const Text('Ticket'),
+        ),
+        TextButton.icon(
+          onPressed: () => GoodsReceiptPrinting.printPdf(
+            context,
+            ref,
+            receipt: directReceiptDocument(receipt),
+            isReprint: true,
+          ),
+          icon: const Icon(Icons.local_printshop_outlined, size: 18),
+          label: const Text('Imprimir hoja'),
+        ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cerrar'),

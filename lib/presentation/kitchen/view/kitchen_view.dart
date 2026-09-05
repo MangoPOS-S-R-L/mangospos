@@ -11,6 +11,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_shadows.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Hora corta HH:mm para las tarjetas del KDS. Recibe la fecha ya en la zona
 /// que se quiera mostrar (los timestamps vienen en UTC del server).
@@ -200,7 +201,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     if (notice != null && mounted) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(
+        ..showAppSnackBar(
           SnackBar(
             content: Text(notice),
             duration: const Duration(seconds: 6),
@@ -398,7 +399,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
                             if (notice != null && context.mounted) {
                               ScaffoldMessenger.of(context)
                                 ..hideCurrentSnackBar()
-                                ..showSnackBar(
+                                ..showAppSnackBar(
                                   SnackBar(
                                     content: Text(notice),
                                     duration: const Duration(seconds: 6),
@@ -959,7 +960,7 @@ class _KitchenViewState extends ConsumerState<KitchenView> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(
+      ..showAppSnackBar(
         SnackBar(
           content: Text(notice ?? 'Comanda reimpresa.'),
           duration: const Duration(seconds: 4),

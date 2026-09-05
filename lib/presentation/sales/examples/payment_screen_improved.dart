@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../../widgets/error_handler_widget.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// 📱 Ejemplo de cómo usar el manejo de errores mejorado en una pantalla
 /// Este es un EJEMPLO - adapta según tu implementación actual
@@ -47,7 +48,7 @@ class _PaymentScreenImprovedExampleState
 
       if (mounted) {
         // Mostrar éxito
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Row(
               children: [

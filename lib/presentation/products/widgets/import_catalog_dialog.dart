@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/utils/catalog_csv_parser.dart';
 import 'package:mangopos/data/repositories/catalog_import_repository.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Diálogo de carga masiva de catálogo desde CSV (fase R3 retail).
 ///
@@ -65,7 +66,7 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
         result = CatalogCsvParser.parse(content);
       }
     } catch (e) {
-      setState(() => _error = 'No se pudo leer el archivo: $e');
+      setState(() => _error = FriendlyError.humanize('No se pudo leer el archivo: $e'));
       return;
     }
     await _loadTaxes();
@@ -152,7 +153,7 @@ class _ImportCatalogDialogState extends ConsumerState<ImportCatalogDialog> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error durante el import: $e';
+        _error = FriendlyError.humanize('Error durante el import: $e');
         _stage = _Stage.parsed;
       });
     }

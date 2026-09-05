@@ -16,6 +16,7 @@ import '../viewmodel/reservations_viewmodel.dart';
 import '../widgets/reservation_card.dart';
 import '../widgets/reservation_floor_map.dart';
 import 'reservation_form.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 const _weekdaysLong = [
   'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo',
@@ -148,7 +149,7 @@ class _ReservationsViewState extends ConsumerState<ReservationsView> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         content: Text(msg),
         behavior: SnackBarBehavior.floating,

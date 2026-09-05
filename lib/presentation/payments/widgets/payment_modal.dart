@@ -25,6 +25,7 @@ import '../state/payment_state.dart';
 import '../viewmodel/payment_viewmodel.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../../settings/payment_methods/viewmodel/bank_accounts_viewmodel.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class PaymentModal extends ConsumerStatefulWidget {
   final Order order;
@@ -207,7 +208,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
           unawaited(cashierVM.refreshSilently());
         } catch (_) {}
         widget.onPaymentSuccess();
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             content: Text(
               state.offlineQueued

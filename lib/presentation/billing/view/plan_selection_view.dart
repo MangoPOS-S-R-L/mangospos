@@ -21,6 +21,7 @@ import '../../../data/repositories/billing_repository.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PlanSelectionView extends ConsumerWidget {
   const PlanSelectionView({super.key});
@@ -53,7 +54,7 @@ class PlanSelectionView extends ConsumerWidget {
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text('No pudimos cargar los planes: $e'),
+            child: Text(FriendlyError.humanize('No pudimos cargar los planes: $e')),
           ),
         ),
         data: (plans) {

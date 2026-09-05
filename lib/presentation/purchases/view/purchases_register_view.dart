@@ -12,13 +12,17 @@ import '../../../core/inventory/pack_conversion.dart';
 import '../../../data/repositories/credits_repository.dart';
 import '../../../services/session/session_controller.dart';
 import '../../sales/widgets/pos_barcode_scanner.dart' show BarcodeScanListener;
+import '../state/goods_receipt.dart';
 import '../state/purchases_state.dart';
 import '../utils/discount_input.dart';
+import '../utils/goods_receipt_printing.dart';
 import '../utils/ncf_format.dart';
 import '../utils/payment_terms.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
+import 'goods_receipt_dialog.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Cómo trae el ITBIS cada línea de la factura del proveedor.
 /// - [included]: el costo digitado YA trae el ITBIS → se desglosa con el %
@@ -1962,8 +1966,117 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       }
     }
 
+    // El papel de la compra sale solo: quien la registró no debería tener que
+    // pedirlo. Va de último y no puede tumbar nada — la compra ya está
+    // guardada y la CxP ya nació.
+    await _printPurchaseDocument(
+      orderId: orderId,
+      orderNumber: orderNumber,
+      invoiceNumber: invoiceNumber,
+      ncf: ncf,
+      notes: notes,
+      discount: orderDiscount,
+    );
+
     if (!mounted) return;
     context.go(AppRoutes.purchasesList);
+  }
+
+  /// Arma la ORDEN DE COMPRA de lo que se acaba de guardar y la saca en
+  /// papel: primero por la impresora del POS y después en pantalla, desde
+  /// donde también salen el PDF carta y el compartir.
+  ///
+  /// El documento se construye con los datos LOCALES —no se relee la orden—
+  /// para que el papel salga de inmediato y sin otra ida al servidor: son
+  /// exactamente los valores que acaban de guardarse.
+  ///
+  /// El conduce de recepción es OTRO papel y nace en su momento (al recibir
+  /// la mercancía en almacén); acá todavía no hay mercancía que declarar.
+  Future<void> _printPurchaseDocument({
+    required String orderId,
+    required String orderNumber,
+    required String invoiceNumber,
+    required String ncf,
+    required String notes,
+    required double discount,
+  }) async {
+    try {
+      final state = ref.read(purchasesViewModelProvider).state;
+      final supplier = _selectedSupplier(state);
+      final warehouseName = state.warehouses
+              .where((w) => w.id == _warehouseId)
+              .map((w) => w.name)
+              .firstOrNull ??
+          'Almacén';
+
+      final lines = <GoodsReceiptLine>[];
+      double subtotal = 0;
+      double tax = 0;
+      for (final row in _lines) {
+        final draft = row.toDraftItem();
+        final named =
+            draft.description.trim().isNotEmpty || draft.inventoryItemId != null;
+        if (!named || draft.quantity <= 0) continue;
+        subtotal += draft.total;
+        tax += draft.taxValue;
+        lines.add(
+          GoodsReceiptLine(
+            // Lo escaneado se imprime como código: es lo que permite casar el
+            // renglón con la caja física cuando llegue.
+            code: row.scannedCode,
+            reference: '',
+            description: draft.description,
+            // Cantidad y costo van en unidad BASE, igual que en el conduce.
+            quantity: draft.quantity,
+            unit: row.baseUnit.trim().isEmpty ? 'unidad' : row.baseUnit.trim(),
+            unitCost: draft.unitCost,
+          ),
+        );
+      }
+      if (lines.isEmpty) return;
+
+      final now = DateTime.now();
+      final document = GoodsReceipt(
+        id: orderId,
+        number: orderNumber,
+        date: now,
+        createdAt: now,
+        status: _status,
+        orderId: orderId,
+        orderNumber: orderNumber,
+        invoiceNumber: invoiceNumber,
+        ncf: ncf,
+        supplierName: supplier?.name ?? 'Proveedor no asignado',
+        supplierRnc: '',
+        warehouseName: warehouseName,
+        // Quién recibe se firma a mano sobre la raya: al registrar la compra
+        // todavía no hay nadie que haya recibido nada.
+        receivedByName: '',
+        notes: notes,
+        lines: lines,
+        kind: PurchaseDocumentKind.order,
+        issuedByName: (ref.read(sessionProvider).userName ?? '').trim(),
+        subtotal: subtotal,
+        taxTotal: tax,
+        discountTotal: discount,
+      );
+
+      if (!mounted) return;
+      // Sin impresora asignada NO se abre el visor por su cuenta: el diálogo
+      // de abajo ya muestra el documento y ofrece las mismas salidas.
+      await GoodsReceiptPrinting.printThermal(
+        context,
+        ref,
+        receipt: document,
+        fallbackOnScreen: false,
+      );
+      if (!mounted) return;
+      await showGoodsReceiptDialog(context, ref, receipt: document);
+    } catch (e) {
+      // La compra YA está guardada: un fallo imprimiendo no puede parecer un
+      // fallo del registro. Se avisa y se sigue.
+      _snack('La compra se guardó, pero el documento no se pudo imprimir: $e');
+    }
   }
 
   /// Avisa que la deuda nació y ofrece ir a verla. Si el rol no tiene
@@ -1974,7 +2087,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(
+      ..showAppSnackBar(
         SnackBar(
           content: const Text('Cuenta por pagar creada y vinculada a la orden.'),
           duration: const Duration(seconds: 4),
@@ -1992,7 +2105,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showAppSnackBar(SnackBar(content: Text(message)));
   }
 }
 

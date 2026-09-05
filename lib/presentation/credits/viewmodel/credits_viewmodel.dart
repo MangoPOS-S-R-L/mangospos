@@ -6,6 +6,7 @@ import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/credits_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import '../state/credit_payment_receipt.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 final creditsRepositoryProvider = Provider<CreditsRepository>((ref) {
   return CreditsRepository(Supabase.instance.client);
@@ -45,7 +46,7 @@ class CreditsViewModel extends ChangeNotifier {
         await _fetchAll();
       }
     } catch (e) {
-      _error = e.toString();
+      _error = FriendlyError.from(e);
       debugPrint('Error loading credits: $e');
     } finally {
       _isLoading = false;
@@ -61,7 +62,7 @@ class CreditsViewModel extends ChangeNotifier {
       await _fetchAll();
       _error = null;
     } catch (e) {
-      _error = e.toString();
+      _error = FriendlyError.from(e);
     } finally {
       _isLoading = false;
       notifyListeners();

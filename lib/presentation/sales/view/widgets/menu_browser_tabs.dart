@@ -4,6 +4,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/presentation_tabs.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Shared tabbed browser used by table orders and manual sales.
 class MenuBrowserTabs extends ConsumerWidget {
@@ -425,7 +426,7 @@ class _ProductCard extends ConsumerWidget {
               );
           onAddProduct();
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            ScaffoldMessenger.of(context).showAppSnackBar(
               SnackBar(
                 content: Text('Agregado: ${item.name}'),
                 duration: const Duration(milliseconds: 1200),
@@ -436,7 +437,7 @@ class _ProductCard extends ConsumerWidget {
           if (context.mounted) {
             ScaffoldMessenger.of(
               context,
-            ).showSnackBar(SnackBar(content: Text('No se pudo agregar: $e')));
+            ).showAppSnackBar(SnackBar(content: Text('No se pudo agregar: $e')));
           }
         }
       },

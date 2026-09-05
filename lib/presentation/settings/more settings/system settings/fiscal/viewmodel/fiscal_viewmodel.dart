@@ -170,6 +170,7 @@ class FiscalViewModel extends Notifier<FiscalState> {
     required String serie,
     required int ultimoSeq,
     required int maximoSeq,
+    DateTime? expirationDate,
   }) async {
     try {
       final bizId = businessId == 'auto'
@@ -183,6 +184,7 @@ class FiscalViewModel extends Notifier<FiscalState> {
             serie: serie,
             ultimoSeq: ultimoSeq,
             maximoSeq: maximoSeq,
+            expirationDate: expirationDate,
           );
       await load(businessId); // Recargar
     } catch (e) {
@@ -196,10 +198,16 @@ class FiscalViewModel extends Notifier<FiscalState> {
       // Actualización rápida local
       final newSeqs = state.sequences.map((s) {
         if (s.id == id) {
+          final rawExp = data['expiration_date'];
           return s.copyWith(
             ultimoSeq: data['current_number'] ?? s.ultimoSeq,
             maximoSeq: data['range_end'] ?? s.maximoSeq,
             activo: data['is_active'] ?? s.activo,
+            expirationDate: rawExp == null
+                ? null
+                : DateTime.tryParse(rawExp.toString()),
+            clearExpirationDate:
+                data.containsKey('expiration_date') && rawExp == null,
           );
         }
         return s;

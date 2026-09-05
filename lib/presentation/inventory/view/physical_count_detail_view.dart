@@ -56,6 +56,7 @@ import '../services/inventory_scan.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import 'widgets/item_form_dialog.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PhysicalCountDetailView extends ConsumerStatefulWidget {
   final String sessionId;
@@ -150,7 +151,7 @@ class _PhysicalCountDetailViewState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la sesión: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la sesión: $e');
         _loading = false;
       });
     }

@@ -160,6 +160,18 @@ flutter:
     - assets/images/
     - assets/favicon/
     - assets/Login Images/
+    # Raices de confianza empacadas (bundle CA de Mozilla, via curl.se).
+    #
+    # No reemplazan al almacen del sistema: se SUMAN a el. Existen porque
+    # Windows no trae todas las raices preinstaladas — las baja de Windows
+    # Update bajo demanda, y ese mecanismo lo dispara CryptoAPI, no Dart. En
+    # esos equipos Edge abre el backend sin problema y la app Flutter falla
+    # con `unable to get local issuer certificate`.
+    #
+    # Conviene refrescarlo de vez en cuando:
+    #   curl -o assets/certs/roots.pem https://curl.se/ca/cacert.pem
+    # Quedarse atras no rompe nada (el almacen del sistema sigue activo).
+    - assets/certs/roots.pem
 
   # Tipografia del TICKET, no de la interfaz.
   #

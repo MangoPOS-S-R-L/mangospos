@@ -668,7 +668,10 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
         opts.addAll(const ['ml', 'cl', 'L', 'oz']);
         break;
       case UnitFamily.weight:
-        opts.addAll(const ['g', 'kg']);
+        // `oz` va acá aunque su familia por defecto sea volumen: contra un
+        // insumo de peso la conversión la resuelve como onza de peso. Es el
+        // caso de la pechuga — se compra por libra y la receta la pide en oz.
+        opts.addAll(const ['g', 'kg', 'lb', 'oz']);
         break;
       case UnitFamily.count:
       case UnitFamily.unknown:

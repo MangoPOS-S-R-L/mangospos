@@ -19,6 +19,7 @@ import '../providers/billing_providers.dart';
 import '../widgets/azul_payment_page_launcher.dart';
 import '../widgets/pay_now_button.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PaymentMethodView extends ConsumerWidget {
   const PaymentMethodView({super.key});
@@ -59,7 +60,7 @@ class PaymentMethodView extends ConsumerWidget {
         error: (e, _) => Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text('No pudimos cargar la tarjeta: $e'),
+            child: Text(FriendlyError.humanize('No pudimos cargar la tarjeta: $e')),
           ),
         ),
         data: (pm) => ListView(

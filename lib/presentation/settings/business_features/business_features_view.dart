@@ -26,6 +26,7 @@ import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class BusinessFeaturesView extends ConsumerStatefulWidget {
   const BusinessFeaturesView({super.key, this.businessId = 'auto'});
@@ -64,7 +65,7 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la configuración: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la configuración: $e');
         _loading = false;
       });
     }
@@ -180,7 +181,7 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
       setState(() {
         _features = previous;
         _saving = false;
-        _error = 'No se pudo guardar: $e';
+        _error = FriendlyError.humanize('No se pudo guardar: $e');
       });
     }
   }

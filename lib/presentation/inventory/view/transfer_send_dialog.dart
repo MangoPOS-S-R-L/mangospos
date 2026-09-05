@@ -10,6 +10,7 @@ import '../viewmodel/transfers_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../services/session/session_controller.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class TransferSendDialog extends ConsumerStatefulWidget {
   /// Bodega de ORIGEN sugerida. La manda el interior de una bodega: si ya
@@ -124,7 +125,7 @@ class _TransferSendDialogState extends ConsumerState<TransferSendDialog> {
       setState(() {
         _loadingTargetWarehouses = false;
         _targetWarehousesError =
-            'No se pudieron cargar las bodegas del negocio destino: $e';
+            FriendlyError.humanize('No se pudieron cargar las bodegas del negocio destino: $e');
       });
     }
   }

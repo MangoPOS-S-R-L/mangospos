@@ -23,6 +23,7 @@ import '../state/requisitions_state.dart';
 import 'requisition_dispatch_dialog.dart';
 import 'requisition_form_dialog.dart';
 import 'widgets/inventory_back_button.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class RequisitionsView extends ConsumerStatefulWidget {
   const RequisitionsView({super.key});
@@ -80,7 +81,7 @@ class _RequisitionsViewState extends ConsumerState<RequisitionsView>
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }
@@ -105,7 +106,7 @@ class _RequisitionsViewState extends ConsumerState<RequisitionsView>
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = FriendlyError.from(e);
       });
     }
   }

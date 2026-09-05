@@ -36,6 +36,7 @@ import 'mobile_shell.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 import '../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class MainShell extends ConsumerStatefulWidget {
   /// El shell de navegación con estado del `StatefulShellRoute.indexedStack`.
@@ -300,7 +301,7 @@ class _MainShellState extends ConsumerState<MainShell> {
     } else {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         backgroundColor: bg,
         behavior: SnackBarBehavior.floating,

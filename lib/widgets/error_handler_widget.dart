@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../core/network/database_operation_wrapper.dart';
 import '../core/network/supabase_config.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// 🎨 Widget para mostrar errores de base de datos de manera amigable
 class ErrorHandlerWidget extends StatelessWidget {
@@ -109,7 +110,7 @@ class ErrorSnackBar {
         ? (error).message
         : SupabaseConfig.getFriendlyErrorMessage(error);
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    ScaffoldMessenger.of(context).showAppSnackBar(
       SnackBar(
         content: Row(
           children: [

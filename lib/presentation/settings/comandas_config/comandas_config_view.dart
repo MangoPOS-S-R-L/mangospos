@@ -19,6 +19,7 @@ import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ComandasConfigView extends ConsumerStatefulWidget {
   const ComandasConfigView({super.key, this.businessId = 'auto'});
@@ -59,7 +60,7 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la configuración: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la configuración: $e');
         _loading = false;
       });
     }
@@ -89,7 +90,7 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
       setState(() {
         _features = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }
@@ -118,7 +119,7 @@ class _ComandasConfigViewState extends ConsumerState<ComandasConfigView> {
       setState(() {
         _completeOnPayment = previous;
         _saving = false;
-        _error = 'No se pudo guardar el cambio: $e';
+        _error = FriendlyError.humanize('No se pudo guardar el cambio: $e');
       });
     }
   }

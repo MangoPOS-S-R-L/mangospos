@@ -21,6 +21,7 @@ import '../../../app/theme/mango_colors.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../data/repositories/billing_repository.dart';
 import '../providers/billing_providers.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class AzulPaymentPageLauncher extends ConsumerStatefulWidget {
   final String businessId;
@@ -130,10 +131,10 @@ class _AzulPaymentPageLauncherState
       if (!mounted) return;
       setState(() => _isWaiting = true);
     } on BillingRepositoryException catch (e) {
-      if (mounted) setState(() => _lastError = e.message);
+      if (mounted) setState(() => _lastError = FriendlyError.from(e));
     } catch (e) {
       if (mounted) {
-        setState(() => _lastError = 'No se pudo iniciar el registro: $e');
+        setState(() => _lastError = FriendlyError.humanize('No se pudo iniciar el registro: $e'));
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);

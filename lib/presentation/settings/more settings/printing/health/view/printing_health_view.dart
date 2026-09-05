@@ -24,6 +24,7 @@ import 'package:mangopos/core/utils/app_toast.dart';
 import '../state/printing_health_state.dart';
 import '../viewmodel/printing_health_viewmodel.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class PrintingHealthView extends ConsumerStatefulWidget {
   const PrintingHealthView({super.key, this.businessId = 'auto'});
@@ -163,7 +164,7 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
         if (next.pendingTransitions.isEmpty) return;
         final messenger = ScaffoldMessenger.of(context);
         for (final t in next.pendingTransitions) {
-          messenger.showSnackBar(
+          messenger.showAppSnackBar(
             SnackBar(
               backgroundColor: t.current == PrinterHealthLevel.down
                   ? const Color(0xFFEF4444)

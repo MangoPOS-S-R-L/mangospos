@@ -25,6 +25,7 @@ import 'package:mangopos/presentation/reports/services/sales_by_waiter_export_se
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Resultado combinado del reporte: resumen por mesero + desglose de
 /// productos. El desglose viene de una RPC aparte (mig 20260728_0002);
@@ -158,7 +159,7 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
       final (rows, productRows) = await future;
       if (!mounted) return;
       if (rows.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(content: Text('No hay datos para exportar')),
         );
         return;
@@ -175,7 +176,7 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Error exportando PDF: $e')));
+        ).showAppSnackBar(SnackBar(content: Text('Error exportando PDF: $e')));
       }
     } finally {
       if (mounted) setState(() => _exporting = false);

@@ -16,6 +16,7 @@ import 'package:mangopos/presentation/inventory/view/production_order_detail_vie
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ProductionOrdersView extends ConsumerStatefulWidget {
   const ProductionOrdersView({super.key});
@@ -64,7 +65,7 @@ class _ProductionOrdersViewState extends ConsumerState<ProductionOrdersView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudieron cargar las órdenes: $e';
+        _error = FriendlyError.humanize('No se pudieron cargar las órdenes: $e');
         _loading = false;
       });
     }
@@ -478,7 +479,7 @@ class _CreateProductionOrderDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error cargando opciones: $e';
+        _error = FriendlyError.humanize('Error cargando opciones: $e');
         _loading = false;
       });
     }
@@ -517,7 +518,7 @@ class _CreateProductionOrderDialogState
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = 'No se pudo crear la orden: $e';
+        _error = FriendlyError.humanize('No se pudo crear la orden: $e');
       });
     }
   }

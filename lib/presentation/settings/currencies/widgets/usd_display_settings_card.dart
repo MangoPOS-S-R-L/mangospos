@@ -19,6 +19,7 @@ import 'package:intl/intl.dart';
 
 import '../../../../app/theme/mango_colors.dart';
 import '../../../../data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class UsdDisplaySettingsCard extends ConsumerStatefulWidget {
   const UsdDisplaySettingsCard({super.key, required this.businessId});
@@ -74,7 +75,7 @@ class _UsdDisplaySettingsCardState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error cargando configuración: $e';
+        _error = FriendlyError.humanize('Error cargando configuración: $e');
         _isLoading = false;
       });
     }
@@ -137,7 +138,7 @@ class _UsdDisplaySettingsCardState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error guardando: $e';
+        _error = FriendlyError.humanize('Error guardando: $e');
       });
     } finally {
       if (mounted) setState(() => _isSaving = false);

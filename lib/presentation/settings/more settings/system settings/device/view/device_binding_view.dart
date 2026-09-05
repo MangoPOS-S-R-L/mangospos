@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Pantalla "Vincular dispositivo" — Fase 2.5 del rollout offline.
 ///
@@ -81,7 +82,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _errorMessage = 'Error consultando estado: $e';
+        _errorMessage = FriendlyError.humanize('Error consultando estado: $e');
       });
     }
   }
@@ -135,7 +136,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = 'No se pudo vincular: $e');
+        setState(() => _errorMessage = FriendlyError.humanize('No se pudo vincular: $e'));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -159,7 +160,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = 'Error sincronizando: $e');
+        setState(() => _errorMessage = FriendlyError.humanize('Error sincronizando: $e'));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -205,7 +206,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = 'Error desvinculando: $e');
+        setState(() => _errorMessage = FriendlyError.humanize('Error desvinculando: $e'));
       }
     } finally {
       if (mounted) setState(() => _busy = false);

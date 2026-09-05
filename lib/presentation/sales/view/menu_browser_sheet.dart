@@ -5,6 +5,7 @@ import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dar
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/presentation_tabs.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class MenuBrowserSheet extends ConsumerStatefulWidget {
   const MenuBrowserSheet({super.key});
@@ -556,7 +557,7 @@ class _ProductCard extends ConsumerWidget {
 
         // Feedback visual sutil
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          ScaffoldMessenger.of(context).showAppSnackBar(
             SnackBar(
               content: Text('Agregado: ${item.name}'),
               duration: const Duration(milliseconds: 900),

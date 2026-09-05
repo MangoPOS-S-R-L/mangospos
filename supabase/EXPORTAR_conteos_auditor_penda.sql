@@ -2,7 +2,7 @@
 -- LA PENDA EXPRESS — un Excel por sesión de conteo, para el auditor
 -- business_id = 35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6
 --
--- CONTEXTO: las 4 sesiones (una por área) están contadas pero SIN CERRAR. El
+-- CONTEXTO: las CINCO sesiones (una por área) están contadas pero SIN CERRAR. El
 -- auditor quiere el detalle de cada una ANTES de combinarlas, que es lo
 -- correcto: una vez combinadas y cerradas, lo que contó cada área solo se
 -- puede reconstruir mirando las sesiones canceladas.
@@ -21,7 +21,7 @@
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- 1. PORTADA — el estado de las 4 sesiones. Va como primera hoja del informe.
+-- 1. PORTADA — el estado de las cinco sesiones. Primera hoja del informe.
 -- ---------------------------------------------------------------------------
 select
   s.code                                                   as sesion,
@@ -67,8 +67,13 @@ order by s.code;
 --    Los totales del área también viajan repetidos (`total_area_*`): dejan
 --    cuadrar el archivo contra la portada sin abrir otra consulta.
 --
---    Sale SOLO lo que esa área contó. Si el auditor quiere también los
---    renglones en blanco, comentar la línea marcada.
+--    SALE TODO: lo contado y lo que quedó en blanco. La columna `estado`
+--    los separa. Un renglón en blanco no es un error — nadie recorre las
+--    2,284 líneas del catálogo — pero el auditor necesita verlos para saber
+--    qué NO se verificó, sobre todo los que el sistema cree tener.
+--
+--    Los totales del pie sólo suman lo contado; los blancos no ensucian el
+--    número que se compara contra la portada.
 --
 --    `diferencia` se calcula contra el snapshot del congelado, que es la foto
 --    del sistema cuando arrancó el conteo. El ajuste REAL del cierre se
@@ -85,6 +90,11 @@ select
   coalesce(nullif(btrim(ii.sku), ''), '')        as sku,
   coalesce(nullif(btrim(ii.barcode), ''), '')    as codigo_barras,
   ii.unit                                        as unidad,
+  case
+    when l.counted_quantity is not null      then 'CONTADO'
+    when l.snapshot_quantity > 0             then 'SIN CONTAR · CON EXISTENCIA'
+    else 'SIN CONTAR · EN CERO'
+  end                                            as estado,
   round(l.snapshot_quantity, 3)                  as sistema_al_congelar,
   round(l.counted_quantity, 3)                   as contado,
   round(l.counted_quantity - l.snapshot_quantity, 3) as diferencia,
@@ -92,11 +102,17 @@ select
   round((l.counted_quantity - l.snapshot_quantity)
         * coalesce(ii.cost, 0), 2)               as valor_diferencia,
   round(l.counted_quantity * coalesce(ii.cost, 0), 2) as valor_contado,
+  -- Sólo para los que nadie contó: lo que sobrevive al cierre sin verificar.
+  case when l.counted_quantity is null and l.snapshot_quantity > 0
+       then round(l.snapshot_quantity * coalesce(ii.cost, 0), 2) end
+                                                 as valor_sin_verificar,
   case when coalesce(ii.cost, 0) = 0 then 'SIN COSTO' else '' end as alerta,
   coalesce(l.counter_notes, '')                  as notas,
   (l.updated_at at time zone 'America/Santo_Domingo') as ultima_edicion,
-  -- Totales del área, repetidos en cada fila para poder cuadrar el archivo.
-  count(*)          over ()                      as total_area_articulos,
+  -- Totales del área. Cuentan SÓLO lo contado, para poder cuadrar contra la
+  -- portada aunque el archivo traiga también los renglones en blanco.
+  count(*) filter (where l.counted_quantity is not null) over ()
+                                                 as total_area_articulos,
   round(sum(l.counted_quantity) over (), 3)      as total_area_unidades,
   round(sum(l.counted_quantity * coalesce(ii.cost, 0)) over (), 2)
                                                  as total_area_valor
@@ -109,8 +125,151 @@ left join public.employees e
       and e.business_id = s.business_id
 where s.business_id = '35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6'
   and s.code = 'PC-2026-000002'          -- ⬅ CAMBIAR por cada sesión
-  and l.counted_quantity is not null     -- ⬅ COMENTAR para incluir los blancos
-order by ii.name;
+order by
+  -- Primero lo contado, después lo que el sistema cree tener y nadie vio,
+  -- y al final el relleno en cero.
+  case
+    when l.counted_quantity is not null then 1
+    when l.snapshot_quantity > 0        then 2
+    else 3
+  end,
+  ii.name;
+
+
+-- ---------------------------------------------------------------------------
+-- 2b. TODAS LAS ÁREAS EN UN SOLO ARCHIVO — la forma corta.
+--
+--     Igual que la consulta 2 pero sin filtrar por sesión: baja las cinco de
+--     una vez. Cada fila lleva su sesión y su área, así que se puede filtrar
+--     en Excel con una tabla dinámica en vez de bajar cinco archivos y
+--     acordarse de cuál era cuál.
+--
+--     Sale ordenado por área y artículo, de modo que las cinco quedan
+--     apiladas y separadas visualmente.
+-- ---------------------------------------------------------------------------
+select
+  s.code                                         as sesion,
+  coalesce(s.notes, '(sin nombre de área)')      as area,
+  w.name                                         as bodega,
+  ii.name                                        as articulo,
+  coalesce(nullif(btrim(ii.sku), ''), '')        as codigo,
+  ii.unit                                        as unidad,
+  round(l.snapshot_quantity, 3)                  as sistema_al_congelar,
+  round(l.counted_quantity, 3)                   as contado,
+  round(l.counted_quantity - l.snapshot_quantity, 3) as diferencia,
+  round(coalesce(ii.cost, 0), 2)                 as costo_unitario,
+  round(l.counted_quantity * coalesce(ii.cost, 0), 2)  as valor_contado,
+  round((l.counted_quantity - l.snapshot_quantity)
+        * coalesce(ii.cost, 0), 2)               as valor_diferencia,
+  case when coalesce(ii.cost, 0) = 0 then 'SIN COSTO' else '' end as alerta,
+  coalesce(l.counter_notes, '')                  as notas
+from public.physical_count_lines l
+join public.physical_count_sessions s on s.id = l.session_id
+join public.warehouses w on w.id = s.warehouse_id
+join public.inventory_items ii on ii.id = l.item_id
+where s.business_id = '35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6'
+  and s.status = 'in_progress'
+  and l.counted_quantity is not null
+order by s.code, ii.name;
+
+
+-- ---------------------------------------------------------------------------
+-- 2c. LO QUE QUEDÓ SIN CONTAR — «los pocos productos» que faltan.
+--
+--     Un artículo sin contar en NINGUNA de las cinco áreas conserva su
+--     existencia vieja al cerrar. Con 2,284 líneas por sesión, lo normal es
+--     que la enorme mayoría esté en blanco: nadie recorre el catálogo entero.
+--     Lo que importa es lo que tiene EXISTENCIA en el sistema y nadie contó —
+--     eso es lo que va a quedar como fantasma.
+--
+--     Esta lista es la que hay que revisar antes de poner ceros: si algo
+--     tiene existencia y valor y ningún área lo vio, o se perdió, o está en
+--     un anaquel que nadie recorrió.
+-- ---------------------------------------------------------------------------
+select
+  ii.name                                   as articulo,
+  coalesce(nullif(btrim(ii.sku), ''), '')   as codigo,
+  ii.unit                                   as unidad,
+  max(l.snapshot_quantity)                  as existencia_en_sistema,
+  round(coalesce(ii.cost, 0), 2)            as costo_unitario,
+  round(max(l.snapshot_quantity) * coalesce(ii.cost, 0), 2) as valor_en_riesgo
+from public.physical_count_lines l
+join public.physical_count_sessions s on s.id = l.session_id
+join public.inventory_items ii on ii.id = l.item_id
+where s.business_id = '35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6'
+  and s.status = 'in_progress'
+group by ii.id, ii.name, ii.sku, ii.unit, ii.cost
+having count(*) filter (where l.counted_quantity is not null) = 0
+   and max(l.snapshot_quantity) > 0
+order by max(l.snapshot_quantity) * coalesce(ii.cost, 0) desc;
+
+-- ---------------------------------------------------------------------------
+-- 2d. EL CATÁLOGO COMPLETO — contados y sin contar, en un solo CSV.
+--
+--     Una fila por artículo, no por área: las cinco sesiones ya vienen
+--     sumadas. Es el archivo que muestra TODO el inventario de un vistazo,
+--     con la columna `estado` separando lo que se contó de lo que no.
+--
+--     Lo que hay que mirar en el CSV, en este orden:
+--
+--       SIN CONTAR · CON EXISTENCIA  → lo grave. El sistema cree tenerlo y
+--         nadie lo vio. Al cerrar conserva su existencia vieja y queda como
+--         fantasma. `valor_en_riesgo` dice cuánto pesa cada uno.
+--
+--       CONTADO                      → lo normal. `diferencia` y
+--         `valor_diferencia` dicen cuánto se movió cada renglón.
+--
+--       SIN CONTAR · EN CERO         → ruido. El sistema tampoco tenía nada,
+--         así que da igual. Son la enorme mayoría de las 2,284 líneas: nadie
+--         recorre el catálogo entero, y no hace falta.
+--
+--     Sale ordenado por estado y después por peso en pesos, así que lo
+--     primero de cada bloque es lo que más importa.
+-- ---------------------------------------------------------------------------
+select
+  case
+    when count(*) filter (where l.counted_quantity is not null) > 0
+      then 'CONTADO'
+    when max(l.snapshot_quantity) > 0
+      then 'SIN CONTAR · CON EXISTENCIA'
+    else 'SIN CONTAR · EN CERO'
+  end                                            as estado,
+  ii.name                                        as articulo,
+  coalesce(nullif(btrim(ii.sku), ''), '')        as codigo,
+  ii.unit                                        as unidad,
+  ii.item_classification                         as clasificacion,
+  round(max(l.snapshot_quantity), 3)             as sistema_al_congelar,
+  round(sum(l.counted_quantity), 3)              as contado,
+  round(sum(l.counted_quantity) - max(l.snapshot_quantity), 3) as diferencia,
+  round(coalesce(ii.cost, 0), 2)                 as costo_unitario,
+  round(sum(l.counted_quantity) * coalesce(ii.cost, 0), 2)     as valor_contado,
+  round((sum(l.counted_quantity) - max(l.snapshot_quantity))
+        * coalesce(ii.cost, 0), 2)               as valor_diferencia,
+  -- Sólo tiene sentido para los que nadie contó: es lo que va a sobrevivir
+  -- al cierre sin que nadie lo haya visto.
+  case when count(*) filter (where l.counted_quantity is not null) = 0
+       then round(max(l.snapshot_quantity) * coalesce(ii.cost, 0), 2) end
+                                                 as valor_en_riesgo,
+  count(*) filter (where l.counted_quantity is not null) as en_cuantas_areas,
+  string_agg(
+    coalesce(s.notes, s.code) || ' = ' || round(l.counted_quantity, 3)::text,
+    '  |  ' order by s.code
+  ) filter (where l.counted_quantity is not null)        as quien_lo_conto,
+  case when coalesce(ii.cost, 0) = 0 then 'SIN COSTO' else '' end as alerta
+from public.physical_count_lines l
+join public.physical_count_sessions s on s.id = l.session_id
+join public.inventory_items ii on ii.id = l.item_id
+where s.business_id = '35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6'
+  and s.status = 'in_progress'
+group by ii.id, ii.name, ii.sku, ii.unit, ii.cost, ii.item_classification
+order by
+  case
+    when count(*) filter (where l.counted_quantity is not null) > 0 then 2
+    when max(l.snapshot_quantity) > 0 then 1
+    else 3
+  end,
+  max(l.snapshot_quantity) * coalesce(ii.cost, 0) desc,
+  ii.name;
 
 
 -- ---------------------------------------------------------------------------

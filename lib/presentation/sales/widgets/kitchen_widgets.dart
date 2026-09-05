@@ -10,6 +10,7 @@ import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dar
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 // === SEND TO KITCHEN BUTTON WITH STATE MACHINE ===
 
@@ -73,7 +74,7 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
 
     // Validation
     if (items.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(
           content: Text('Agrega productos antes de enviar'),
           backgroundColor: Color(0xFFEF4444),
@@ -101,7 +102,7 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
       setState(() => _state = KitchenButtonState.success);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           const SnackBar(
             content: Text('✓ Orden enviada a cocina'),
             backgroundColor: Color(0xFF22C55E),
@@ -129,7 +130,7 @@ class _SendToKitchenButtonState extends ConsumerState<_SendToKitchenButton> {
       setState(() => _state = KitchenButtonState.error);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             content: Text('Error al enviar orden: ${e.toString()}'),
             backgroundColor: const Color(0xFFEF4444),

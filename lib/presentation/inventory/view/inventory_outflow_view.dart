@@ -9,6 +9,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import 'widgets/inventory_back_button.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
   const InventoryOutflowView({super.key});
@@ -609,7 +610,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     if (confirmed != true) return;
     await ref.read(inventoryViewModelProvider).deactivateItem(item.id);
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(content: Text('"${item.name}" eliminado')),
       );
     }

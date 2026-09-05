@@ -17,11 +17,14 @@ import 'package:intl/intl.dart';
 import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../purchases/state/goods_receipt.dart';
 import '../../purchases/state/purchases_state.dart';
+import '../../purchases/utils/goods_receipt_printing.dart';
 import '../../purchases/utils/purchase_status.dart';
 import '../../purchases/view/goods_receipt_dialog.dart';
 import '../../purchases/viewmodel/purchases_viewmodel.dart';
 import 'direct_receipt_dialog.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Abre el selector de origen. Devuelve `true` si entró mercancía (para que
 /// la pantalla que lo abrió recargue su listado).
@@ -36,11 +39,23 @@ Future<bool> showReceiveSourceDialog(BuildContext context, WidgetRef ref) async 
     case _ReceiveSource.purchaseOrder:
       return showPurchaseOrderPicker(context, ref);
     case _ReceiveSource.manual:
-      await showDialog<void>(
+      final receipt = await showDialog<GoodsReceipt>(
         context: context,
         barrierDismissible: false,
         builder: (_) => const DirectReceiptDialog(),
       );
+      if (receipt == null) return false;
+      if (!context.mounted) return true;
+      // Igual que al recibir contra una OC: el papel sale solo y después
+      // queda en pantalla, con PDF y reimpresión a mano.
+      await GoodsReceiptPrinting.printThermal(
+        context,
+        ref,
+        receipt: receipt,
+        fallbackOnScreen: false,
+      );
+      if (!context.mounted) return true;
+      await showGoodsReceiptDialog(context, ref, receipt: receipt);
       return true;
   }
 }
@@ -222,7 +237,7 @@ class _PurchaseOrderPickerDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudieron cargar las órdenes: $e';
+        _error = FriendlyError.humanize('No se pudieron cargar las órdenes: $e');
         _loading = false;
       });
     }

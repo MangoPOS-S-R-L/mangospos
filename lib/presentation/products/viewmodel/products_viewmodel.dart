@@ -12,6 +12,7 @@ import '../../../core/storage/image_upload_helper.dart';
 import '../../../core/utils/export/report_exporter.dart';
 import '../../../data/repositories/products_repository.dart';
 import '../../../data/repositories/printing_v2_repository.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 final productsRepositoryProvider = Provider<ProductsRepository>((ref) {
   return ProductsRepository(Supabase.instance.client);
@@ -195,7 +196,7 @@ class ProductsViewModel extends ChangeNotifier {
       _sanitizeFilters();
     } catch (e) {
       if (generation != _loadGeneration) return;
-      _error = 'Error cargando productos: $e';
+      _error = FriendlyError.humanize('Error cargando productos: $e');
       debugPrint('Error initializing ProductsViewModel: $e');
     } finally {
       if (generation == _loadGeneration) {
@@ -443,7 +444,7 @@ class ProductsViewModel extends ChangeNotifier {
           // tragaba silencioso y se reportaba "no puedo reasignar áreas".
           debugPrint('addProduct: fallo guardando N:M áreas: $e');
           _error =
-              'Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e';
+              FriendlyError.humanize('Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e');
         }
       }
 
@@ -546,7 +547,7 @@ class ProductsViewModel extends ChangeNotifier {
         } catch (e) {
           debugPrint('updateProduct: fallo guardando N:M áreas: $e');
           _error =
-              'Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e';
+              FriendlyError.humanize('Producto guardado, pero las áreas de impresión multi-print no se actualizaron: $e');
         }
       }
 
@@ -677,7 +678,7 @@ class ProductsViewModel extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Error downloading template: $e');
-      _error = 'Error descargando plantilla: $e';
+      _error = FriendlyError.humanize('Error descargando plantilla: $e');
       notifyListeners();
     }
   }
@@ -803,7 +804,7 @@ class ProductsViewModel extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       debugPrint('Error exporting products: $e');
-      _error = 'Error exportando productos: $e';
+      _error = FriendlyError.humanize('Error exportando productos: $e');
       notifyListeners();
     }
   }

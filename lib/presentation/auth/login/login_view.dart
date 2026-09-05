@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'login_state.dart';
 import 'login_viewmodel.dart';
@@ -37,22 +38,13 @@ class _LoginViewState extends ConsumerState<LoginView> {
       }
     });
 
+    // Un solo aviso a la vez: `AppToast` borra el anterior y se va solo, asi
+    // cinco intentos con la clave mala no encolan cinco avisos de 5 segundos.
     ref.listen(loginVmProvider, (prev, next) {
-      if (prev?.isLoading == true &&
-          next.isLoading == false &&
-          next.error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(next.error!),
-            backgroundColor: Colors.redAccent,
-            action: SnackBarAction(
-              label: 'OK',
-              textColor: Colors.white,
-              onPressed: () {},
-            ),
-          ),
-        );
-      }
+      final error = next.error;
+      if (error == null) return;
+      if (prev != null && prev.errorTick == next.errorTick) return;
+      AppToast.error(context, error);
     });
 
     final state = ref.watch(loginVmProvider);
@@ -177,15 +169,6 @@ class _LoginViewState extends ConsumerState<LoginView> {
                     textAlign: TextAlign.center,
                   ),
                 ),
-
-                if (state.error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    state.error!,
-                    style: const TextStyle(color: Colors.redAccent),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
 
                 const SizedBox(height: 8),
                 Text(

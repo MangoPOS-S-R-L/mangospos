@@ -1,8 +1,9 @@
-// Conduce de recepción en pantalla + las acciones que lo sacan en papel.
+// El papel de la compra en pantalla + las acciones que lo sacan impreso.
 //
-// Se abre en dos momentos: justo después de recibir (con el conduce recién
-// emitido) y al reimprimir uno viejo desde el detalle de la orden. La misma
-// pantalla para los dos casos, porque es el mismo documento.
+// Sirve a los dos documentos ([GoodsReceipt.kind]): la ORDEN DE COMPRA que se
+// emite al registrar la compra y el CONDUCE que emite la recepción. Se abre
+// después de registrar, después de recibir y al reimprimir desde el detalle
+// de la orden: la misma pantalla siempre, porque es el mismo papel.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,7 +43,8 @@ Future<bool> showPurchaseReceiveFlow(
   return true;
 }
 
-/// Muestra el conduce con las tres salidas: térmica, PDF e imprimir PDF.
+/// Muestra el documento de compra con las tres salidas: térmica, PDF e
+/// imprimir PDF. Vale igual para la orden de compra y para el conduce.
 Future<void> showGoodsReceiptDialog(
   BuildContext context,
   WidgetRef ref, {
@@ -72,7 +74,8 @@ class _GoodsReceiptDialog extends ConsumerWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Conduce ${receipt.number.isEmpty ? "s/n" : receipt.number}',
+              '${receipt.isOrder ? "Orden de compra" : "Conduce"} '
+              '${receipt.number.isEmpty ? "s/n" : receipt.number}',
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
           ),
@@ -144,6 +147,19 @@ class _GoodsReceiptDialog extends ConsumerWidget {
                   ),
                 ),
               const Divider(height: 20),
+              // El desglose solo lo trae la orden: es el dinero de la factura
+              // del suplidor. El conduce declara mercancía, no impuestos.
+              if (receipt.hasAmountBreakdown) ...[
+                _amountRow('Subtotal', money.formatAmount(receipt.subtotal ?? 0)),
+                if ((receipt.taxTotal ?? 0) != 0)
+                  _amountRow('ITBIS', money.formatAmount(receipt.taxTotal ?? 0)),
+                if ((receipt.discountTotal ?? 0) != 0)
+                  _amountRow(
+                    'Descuento',
+                    '-${money.formatAmount(receipt.discountTotal ?? 0)}',
+                  ),
+                const SizedBox(height: 6),
+              ],
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -156,7 +172,7 @@ class _GoodsReceiptDialog extends ConsumerWidget {
                     ),
                   ),
                   Text(
-                    money.formatAmount(receipt.total),
+                    money.formatAmount(receipt.grandTotal),
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
@@ -225,10 +241,12 @@ class _GoodsReceiptDialog extends ConsumerWidget {
   Widget _headerBlock() {
     final fields = <(String, String)>[
       ('Almacén', receipt.warehouseName),
-      if (receipt.orderNumber.isNotEmpty)
+      if (!receipt.isOrder && receipt.orderNumber.isNotEmpty)
         ('Orden de compra', receipt.orderNumber),
       if (receipt.invoiceNumber.isNotEmpty) ('Factura', receipt.invoiceNumber),
       if (receipt.ncf.isNotEmpty) ('NCF', receipt.ncf),
+      if (receipt.issuedByName.isNotEmpty)
+        ('Realizado por', receipt.issuedByName),
       if (receipt.receivedByName.isNotEmpty)
         ('Recibido por', receipt.receivedByName),
     ];
@@ -315,6 +333,21 @@ class _GoodsReceiptDialog extends ConsumerWidget {
       ),
     );
   }
+
+  /// Renglón del desglose de la orden (subtotal / ITBIS / descuento).
+  Widget _amountRow(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+            Text(value, style: const TextStyle(fontSize: 12.5)),
+          ],
+        ),
+      );
 
   static String _qty(double value) {
     if ((value - value.roundToDouble()).abs() < 0.001) {

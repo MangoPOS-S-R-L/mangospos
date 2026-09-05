@@ -10,6 +10,7 @@ import 'package:mangopos/presentation/sales/widgets/floor_map_geometry.dart';
 import 'package:mangopos/presentation/sales/widgets/floor_seats.dart';
 import '../viewmodel/zones_tables_viewmodel.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Editor visual del plano (floor map) de una zona. Vive en Ajustes →
 /// Zonas y mesas y permite arrastrar las mesas a su posición física y
@@ -86,7 +87,7 @@ class _ZoneFloorEditorViewState extends ConsumerState<ZoneFloorEditorView> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
       );
     }

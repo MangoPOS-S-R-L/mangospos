@@ -18,6 +18,7 @@ import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.da
 import 'package:mangopos/presentation/purchases/state/purchases_state.dart';
 import 'package:mangopos/presentation/purchases/viewmodel/purchases_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class InventoryReorderView extends ConsumerStatefulWidget {
   const InventoryReorderView({super.key});
@@ -84,7 +85,7 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudieron cargar las sugerencias: $e';
+        _error = FriendlyError.humanize('No se pudieron cargar las sugerencias: $e');
         _loading = false;
       });
     }

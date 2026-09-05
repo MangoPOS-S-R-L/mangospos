@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
+import 'package:mangopos/core/utils/logger.dart';
 
 /// Toast/notificación estándar de MangoPOS.
 ///
@@ -11,18 +13,39 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 /// AppToast.success(context, 'Promoción creada');
 /// AppToast.error(context, 'No se pudo guardar');
 /// ```
+///
+/// Dos garantías para el usuario:
+/// 1. **Nunca muestra texto técnico.** El mensaje pasa por [FriendlyError], así
+///    que `'No se pudo imprimir: $e'` sale como `'No se pudo imprimir. Sin
+///    conexión con el servidor…'`. El detalle crudo queda en el log.
+/// 2. **Nunca se acumula.** Cada toast borra el anterior y se va solo; no hay
+///    forma de encolar 5 avisos de 5 segundos.
 class AppToast {
   const AppToast._();
 
   static const _errorRed = Color(0xFFEF4444);
   static const _warningAmber = Color(0xFFF59E0B);
 
-  static void success(BuildContext context, String message) =>
-      _show(context, message, MangoColors.successGreen,
-          Icons.check_circle_rounded);
+  /// Tope de permanencia en pantalla. Un aviso más largo estorba y el usuario
+  /// ya vio el resultado en la propia pantalla.
+  static const Duration maxDuration = Duration(seconds: 5);
+  static const Duration _defaultDuration = Duration(seconds: 3);
+  static const Duration _errorDuration = Duration(seconds: 4);
 
-  static void error(BuildContext context, String message) =>
-      _show(context, message, _errorRed, Icons.error_rounded);
+  static void success(BuildContext context, String message) => _show(
+    context,
+    message,
+    MangoColors.successGreen,
+    Icons.check_circle_rounded,
+  );
+
+  static void error(BuildContext context, String message) => _show(
+    context,
+    message,
+    _errorRed,
+    Icons.error_rounded,
+    duration: _errorDuration,
+  );
 
   static void warning(BuildContext context, String message) =>
       _show(context, message, _warningAmber, Icons.warning_amber_rounded);
@@ -34,10 +57,17 @@ class AppToast {
     BuildContext context,
     String message,
     Color accent,
-    IconData icon,
-  ) {
+    IconData icon, {
+    Duration duration = _defaultDuration,
+  }) {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
+
+    // El detalle técnico se registra pero no se muestra.
+    final friendly = FriendlyError.humanize(message);
+    if (friendly != message) {
+      AppLogger.w('Toast con detalle técnico oculto al usuario: $message');
+    }
     messenger
       ..clearSnackBars()
       ..showSnackBar(
@@ -45,7 +75,7 @@ class AppToast {
           behavior: SnackBarBehavior.floating,
           backgroundColor: Colors.white,
           elevation: 10,
-          duration: const Duration(seconds: 3),
+          duration: duration > maxDuration ? maxDuration : duration,
           margin: const EdgeInsets.all(16),
           padding: EdgeInsets.zero,
           shape: RoundedRectangleBorder(
@@ -80,7 +110,7 @@ class AppToast {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   child: Text(
-                    message,
+                    friendly,
                     style: const TextStyle(
                       color: MangoColors.darkGray,
                       fontWeight: FontWeight.w600,

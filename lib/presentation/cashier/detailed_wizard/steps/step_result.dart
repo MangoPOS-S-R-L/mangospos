@@ -9,6 +9,7 @@ import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart
 import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 import 'package:mangopos/presentation/cashier/widgets/close_summary_table.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Paso de resultado post-firma. Aparece sólo después de que
 /// `onCloseConfirmed` retorna OK.
@@ -112,7 +113,7 @@ class _StepResultState extends State<StepResult> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _lastPrintError = e.toString();
+        _lastPrintError = FriendlyError.from(e);
       });
       if (!silent) {
         AppToast.error(context, 'No se pudo imprimir: $e');

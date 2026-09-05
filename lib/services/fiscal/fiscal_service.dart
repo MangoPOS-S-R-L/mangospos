@@ -61,6 +61,7 @@ class FiscalService {
     required String serie,
     required int ultimoSeq,
     required int maximoSeq,
+    DateTime? expirationDate,
   }) async {
     final bid = await BusinessResolver.ensure(businessId);
     final ncfType = '$serie$tipo';
@@ -73,6 +74,9 @@ class FiscalService {
       'range_end': maximoSeq,
       'current_number': ultimoSeq,
       'is_active': true,
+      // La DGII valida esta fecha contra la autorización del rango: sin ella
+      // rechaza todo e-CF que no sea E32 con el código 145.
+      'expiration_date': expirationDate?.toIso8601String().substring(0, 10),
     }, onConflict: 'business_id,ncf_type,serie');
   }
 

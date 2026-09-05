@@ -17,6 +17,7 @@ import '../../../data/models/billing_charge.dart';
 import '../../../services/session/session_controller.dart';
 import '../providers/billing_providers.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ChargeHistoryView extends ConsumerWidget {
   const ChargeHistoryView({super.key});
@@ -57,7 +58,7 @@ class ChargeHistoryView extends ConsumerWidget {
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => ListView(
             padding: const EdgeInsets.all(24),
-            children: [Center(child: Text('No pudimos cargar el historial: $e'))],
+            children: [Center(child: Text(FriendlyError.humanize('No pudimos cargar el historial: $e')))],
           ),
           data: (charges) {
             if (charges.isEmpty) {

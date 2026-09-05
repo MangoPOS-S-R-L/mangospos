@@ -10,6 +10,7 @@ import 'package:mangopos/core/services/mall_sales_export_service.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/mall_sales_export_repository.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Configuración del envío de ventas por hora al servidor SFTP de la plaza
 /// comercial (ej. Ágora Santiago Center). Accesible desde Configuración →
@@ -98,7 +99,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudo cargar la configuración: $e';
+        _error = FriendlyError.humanize('No se pudo cargar la configuración: $e');
         _loading = false;
       });
     }
@@ -142,7 +143,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
       if (!mounted) return false;
       setState(() {
         _saving = false;
-        _error = 'No se pudo guardar: $e';
+        _error = FriendlyError.humanize('No se pudo guardar: $e');
       });
       return false;
     }
@@ -211,7 +212,7 @@ class _MallSalesExportViewState extends ConsumerState<MallSalesExportView> {
       AppToast.success(context, 'Archivo $fileName subido correctamente.');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _lastError = e.toString());
+      setState(() => _lastError = FriendlyError.from(e));
       AppToast.error(context, 'No se pudo enviar: $e');
     } finally {
       if (mounted) setState(() => _sending = false);

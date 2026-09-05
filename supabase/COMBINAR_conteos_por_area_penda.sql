@@ -15,12 +15,30 @@
 -- las sentencias de abajo trabajan sobre todas las `in_progress`, así que no
 -- se les escapa ninguna, pero conviene saber qué se está sumando.
 --
--- ⚠️ LO MÁS IMPORTANTE: NO CERRAR LAS CUATRO SESIONES.
---    `fn_physical_count_complete` deja el stock IGUAL a lo contado, no le
---    suma. Si se cierran una tras otra, un artículo que está en dos áreas
---    termina valiendo solo lo del área que cerró de última — el resto se
---    pierde en silencio. La combinación tiene que ser ANTES del cierre, y
---    SUMANDO. Eso es lo que hace este archivo.
+-- ⚠️ LO MÁS IMPORTANTE: NO CERRAR MÁS DE UNA SESIÓN.
+--
+--    CORREGIDO 2026-09-03 — antes este archivo decía que el cierre deja el
+--    stock IGUAL a lo contado. NO ES ASÍ, y el error importa:
+--
+--      fn_physical_count_complete:  v_variance := contado - snapshot
+--                                   y registra un movimiento de ajuste
+--      fn_sync_inventory_stock_on_movement (trigger):
+--                                   quantity = quantity + excluded.quantity
+--
+--      → stock final = stock ACTUAL + (contado - snapshot)
+--
+--    Con las cinco sesiones sobre la MISMA bodega, cerrar dos aplica DOS
+--    ajustes, uno encima del otro. Un artículo con snapshot 100 contado 30 en
+--    dos áreas: la primera lo deja en 30, la segunda le vuelve a restar 70 y
+--    lo deja en -40. No es que se pierda un área — es que se resta dos veces.
+--
+--    Por eso la combinación va ANTES del cierre y solo se cierra UNA sesión.
+--    Eso es lo que hace este archivo.
+--
+--    (Lo bueno de esta semántica: la mercancía que entró DESPUÉS de congelar
+--    sobrevive al cierre, porque el ajuste es relativo al snapshot y no un
+--    reemplazo. Ej.: carne salada con snapshot 6.25, contado 0.625 y stock
+--    actual 48 termina en 42.375, no en 0.625.)
 --
 -- ⚠️ TAMPOCO tocar "Poner en cero lo no contado" en ninguna sesión: el botón
 --    trabaja por sesión y las cuatro tienen las 2,236 líneas completas, así

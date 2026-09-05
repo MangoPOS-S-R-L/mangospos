@@ -22,6 +22,7 @@ import '../../../services/session/session_controller.dart';
 import '../../printing/widgets/ticket_preview_dialog.dart';
 import '../../settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 import '../state/credit_payment_receipt.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 /// Encabezado del negocio para el recibo.
 class _CreditReceiptHeader {
@@ -146,7 +147,7 @@ class CreditPaymentPrinting {
       );
       return true;
     } catch (e) {
-      messenger?.showSnackBar(
+      messenger?.showAppSnackBar(
         SnackBar(content: Text('El recibo no se pudo imprimir: $e')),
       );
       return false;

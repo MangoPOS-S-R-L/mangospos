@@ -24,6 +24,7 @@ import 'package:mangopos/data/models/zone.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class TableSelectorModal extends ConsumerStatefulWidget {
   final String orderId;
@@ -113,7 +114,7 @@ class _TableSelectorModalState extends ConsumerState<TableSelectorModal>
     } catch (e) {
       if (!mounted) return;
       setState(() => _assigning = false);
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showAppSnackBar(
         SnackBar(
           content: Text('No se pudo asignar la mesa: $e'),
           backgroundColor: Colors.red,

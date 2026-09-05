@@ -13,6 +13,7 @@ import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
+import 'package:mangopos/presentation/cashier/widgets/annulment_process_dialog.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -21,6 +22,7 @@ import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart'
 import 'package:mangopos/presentation/cashier/utils/invoice_reprint.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 String _formatQty(double qty) {
   if ((qty - qty.roundToDouble()).abs() < 0.001) {
@@ -110,7 +112,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = FriendlyError.from(e);
           _loading = false;
         });
       }
@@ -767,7 +769,21 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
                     tooltip: 'Anular',
                     visualDensity: VisualDensity.compact,
                   ),
-                ] else
+                ] else ...[
+                  // Anulada: el botón deja de ser "anular" y pasa a ser la
+                  // nota de crédito — reimprimirla, o emitirla si quedó
+                  // pendiente. El RPC es idempotente, así que no hay forma de
+                  // sacar dos notas del mismo comprobante.
+                  IconButton(
+                    icon: const Icon(
+                      Icons.receipt_long_outlined,
+                      size: 20,
+                      color: Colors.deepPurple,
+                    ),
+                    onPressed: () => _creditNote(context, ref, payment),
+                    tooltip: 'Nota de crédito',
+                    visualDensity: VisualDensity.compact,
+                  ),
                   const Padding(
                     padding: EdgeInsets.only(right: 8.0),
                     child: Text(
@@ -779,6 +795,7 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
                       ),
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -792,6 +809,40 @@ mixin _PaymentActionsMixin {
   Map<String, dynamic> get payment;
   VoidCallback get onRefresh;
   NumberFormat get currency;
+
+  /// Nota de crédito de una venta ANULADA: la emite si quedó pendiente y la
+  /// imprime. Si ya existe, el RPC devuelve la misma y solo se reimprime —
+  /// nunca salen dos notas del mismo comprobante.
+  void _creditNote(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> payment,
+  ) async {
+    final fdId = payment['fiscal_document_id']?.toString() ?? '';
+    if (fdId.isEmpty) {
+      AppToast.info(context, 'Esta venta no tenía comprobante fiscal.');
+      return;
+    }
+
+    final reason =
+        payment['cancellation_reason']?.toString().trim().isNotEmpty == true
+        ? payment['cancellation_reason'].toString().trim()
+        : 'Anulación desde historial';
+
+    final outcome = await showCreditNoteRetryDialog(
+      context,
+      ref,
+      fiscalDocumentId: fdId,
+      reason: reason,
+    );
+    if (!context.mounted) return;
+
+    final pendiente = outcome.creditNotes.where((n) => n.needsAttention);
+    if (pendiente.isNotEmpty) {
+      AppToast.info(context, pendiente.first.message);
+    }
+    onRefresh();
+  }
 
   /// Delega en [reprintInvoiceFromPayment]. El cuerpo se movió a
   /// `utils/invoice_reprint.dart` porque Cuentas por Cobrar reimprime la
@@ -875,29 +926,30 @@ mixin _PaymentActionsMixin {
     }
 
     // 3. Ejecutar anulación
-    try {
-      if (!context.mounted) return;
-      AppToast.info(context, 'Anulando venta...');
+    //
+    // Va por el popup de proceso y no por una llamada suelta: con comprobante
+    // fiscal la anulación no termina cuando se anula la venta — todavía falta
+    // emitir la NOTA DE CRÉDITO que la reversa, mandarla a la DGII e
+    // imprimirla. El popup muestra esos pasos y, si alguno queda pendiente,
+    // lo dice ahí mismo en vez de dejarlo escondido.
+    if (!context.mounted) return;
+    final outcome = await showAnnulmentProcessDialog(
+      context,
+      ref,
+      paymentId: paymentId,
+      orderId: orderId,
+      checkId: checkId,
+      reason: reason.isEmpty ? 'Anulación desde historial' : reason,
+    );
 
-      final salesRepo = ref.read(salesRepositoryProvider);
-      await salesRepo.annulPayment(
-        paymentId: paymentId,
-        orderId: orderId,
-        checkId: checkId,
-        reason: reason.isEmpty ? 'Anulación desde historial' : reason,
-      );
+    if (!context.mounted) return;
 
-      if (!context.mounted) return;
-      AppToast.success(context, 'Venta anulada correctamente.');
-
-      onRefresh();
-    } catch (e) {
-      if (!context.mounted) return;
+    if (!outcome.annulled) {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Error al anular'),
-          content: Text(e.toString()),
+          content: Text(outcome.error ?? 'La venta no se pudo anular.'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -906,7 +958,18 @@ mixin _PaymentActionsMixin {
           ],
         ),
       );
+      return;
     }
+
+    // El detalle de la nota ya se vio en el popup; acá solo queda el remate.
+    final pendiente = outcome.creditNotes.where((n) => n.needsAttention);
+    if (pendiente.isNotEmpty) {
+      AppToast.info(context, pendiente.first.message);
+    } else {
+      AppToast.success(context, 'Venta anulada correctamente.');
+    }
+
+    onRefresh();
   }
 
   /// Corrige el tipo de pago de una venta ya cobrada (error del cajero) sin
@@ -2235,7 +2298,17 @@ class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
                         color: Colors.redAccent,
                         visualDensity: VisualDensity.compact,
                       ),
-                    ] else
+                    ] else ...[
+                      IconButton(
+                        icon: const Icon(
+                          Icons.receipt_long_outlined,
+                          size: 20,
+                        ),
+                        onPressed: () => _creditNote(context, ref, payment),
+                        color: Colors.deepPurple,
+                        tooltip: 'Nota de crédito',
+                        visualDensity: VisualDensity.compact,
+                      ),
                       const Padding(
                         padding: EdgeInsets.only(left: 8),
                         child: Text(
@@ -2247,6 +2320,7 @@ class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
                           ),
                         ),
                       ),
+                    ],
                   ],
                 ),
               ],

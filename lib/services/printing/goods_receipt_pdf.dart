@@ -1,9 +1,11 @@
-// Conduce de recepción de mercancía — versión documento (PDF carta).
+// El papel de la compra — versión documento (PDF carta).
 //
-// Es el papel que archiva contabilidad: una hoja por recepción, con el
-// encabezado del negocio, el suplidor, la tabla de lo recibido y las dos
-// firmas. Sale por cualquier impresora normal (Printing.layoutPdf abre el
-// diálogo nativo) o se comparte como archivo.
+// Es la hoja que archiva contabilidad, para los DOS documentos de una compra
+// (orden de compra y recepción de mercancía, según [GoodsReceipt.kind]): el
+// encabezado del negocio, el suplidor, la tabla de la mercancía y las dos
+// firmas —«Realizado por» y «Recibido por»—. Sale por cualquier impresora
+// normal (Printing.layoutPdf abre el diálogo nativo) o se comparte como
+// archivo.
 //
 // Lee el MISMO [GoodsReceipt] que el ticket térmico (goods_receipt_ticket.dart):
 // el papel del almacén y el del contable no pueden decir cosas distintas.
@@ -25,7 +27,8 @@ class GoodsReceiptPdf {
     final shortId =
         receipt.id.length > 8 ? receipt.id.substring(0, 8) : receipt.id;
     final number = receipt.number.isEmpty ? shortId : receipt.number;
-    return 'conduce_$number.pdf';
+    final prefix = receipt.isOrder ? 'orden_compra' : 'conduce';
+    return '${prefix}_$number.pdf';
   }
 
   static Future<Uint8List> build({
@@ -37,13 +40,18 @@ class GoodsReceiptPdf {
     String? businessRnc,
     BusinessCurrency? currency,
     bool isReprint = false,
+    /// Tamaño de la hoja. Carta por defecto —es el papel de oficina de RD—,
+    /// pero al imprimir manda el que elija el usuario en el diálogo del
+    /// sistema: A4, oficio o lo que tenga cargado la impresora. La tabla usa
+    /// anchos proporcionales, así que se acomoda sola al ancho de la hoja.
+    PdfPageFormat pageFormat = PdfPageFormat.letter,
   }) async {
     final money = currency ?? BusinessCurrency.fallbackDop;
     final doc = pw.Document();
 
     doc.addPage(
       pw.MultiPage(
-        pageFormat: PdfPageFormat.letter,
+        pageFormat: pageFormat,
         margin: const pw.EdgeInsets.fromLTRB(36, 36, 36, 28),
         build: (context) => [
           _header(
@@ -81,6 +89,10 @@ class GoodsReceiptPdf {
 
   /// Abre el diálogo de impresión nativo del sistema (cualquier impresora,
   /// no solo la térmica del POS). Es la ruta que usa el contable.
+  ///
+  /// El documento se arma con el tamaño de hoja que el usuario elige EN el
+  /// diálogo (A4, carta, oficio…), no con uno fijo: antes salía siempre en
+  /// carta y una impresora con A4 cargado terminaba escalando la hoja.
   static Future<void> printDocument({
     required GoodsReceipt receipt,
     required String businessName,
@@ -91,23 +103,27 @@ class GoodsReceiptPdf {
     BusinessCurrency? currency,
     bool isReprint = false,
   }) async {
-    final bytes = await build(
-      receipt: receipt,
-      businessName: businessName,
-      businessBranch: businessBranch,
-      businessAddress: businessAddress,
-      businessPhone: businessPhone,
-      businessRnc: businessRnc,
-      currency: currency,
-      isReprint: isReprint,
-    );
     await Printing.layoutPdf(
-      onLayout: (_) async => bytes,
+      onLayout: (format) => build(
+        receipt: receipt,
+        businessName: businessName,
+        businessBranch: businessBranch,
+        businessAddress: businessAddress,
+        businessPhone: businessPhone,
+        businessRnc: businessRnc,
+        currency: currency,
+        isReprint: isReprint,
+        pageFormat: format,
+      ),
       name: fileName(receipt),
     );
   }
 
   /// Comparte/guarda el PDF con el diálogo nativo del sistema.
+  ///
+  /// Acá no hay diálogo de impresión que consultar, así que el archivo se
+  /// genera en el tamaño por defecto del negocio (carta, salvo que el
+  /// llamador pida otro).
   static Future<void> shareDocument({
     required GoodsReceipt receipt,
     required String businessName,
@@ -117,6 +133,7 @@ class GoodsReceiptPdf {
     String? businessRnc,
     BusinessCurrency? currency,
     bool isReprint = false,
+    PdfPageFormat pageFormat = PdfPageFormat.letter,
   }) async {
     final bytes = await build(
       receipt: receipt,
@@ -127,6 +144,7 @@ class GoodsReceiptPdf {
       businessRnc: businessRnc,
       currency: currency,
       isReprint: isReprint,
+      pageFormat: pageFormat,
     );
     await Printing.sharePdf(bytes: bytes, filename: fileName(receipt));
   }
@@ -173,7 +191,10 @@ class GoodsReceiptPdf {
     final labels = <String, String>{
       'No.:': receipt.number.isEmpty ? 's/n' : receipt.number,
       'Fecha:': _date(receipt.date),
-      if (receipt.orderNumber.isNotEmpty) 'Orden:': receipt.orderNumber,
+      // En la orden el número del documento YA es el de la orden: repetirlo
+      // debajo no agrega nada.
+      if (!receipt.isOrder && receipt.orderNumber.isNotEmpty)
+        'Orden:': receipt.orderNumber,
       if (receipt.invoiceNumber.isNotEmpty) 'Factura:': receipt.invoiceNumber,
       if (receipt.ncf.isNotEmpty) 'NCF:': receipt.ncf,
     };
@@ -190,7 +211,9 @@ class GoodsReceiptPdf {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
-                    'RECEPCIÓN DE MERCANCÍA',
+                    receipt.isOrder
+                        ? 'ORDEN DE COMPRA'
+                        : 'RECEPCIÓN DE MERCANCÍA',
                     style: pw.TextStyle(
                       fontSize: 12,
                       fontWeight: pw.FontWeight.bold,
@@ -219,7 +242,10 @@ class GoodsReceiptPdf {
                   // Va visible, no en letra chica al pie.
                   if (receipt.isReconstructed)
                     pw.Text(
-                      'Sin recepción registrada — reconstruido de la orden',
+                      // Guion simple a propósito: la fuente base del PDF
+                      // (Helvetica) no puede dibujar la raya larga
+                      // (U+2014) y la deja en blanco.
+                      'Sin recepción registrada - reconstruido de la orden',
                       style: const pw.TextStyle(fontSize: 8.5),
                     ),
                 ],
@@ -374,17 +400,49 @@ class GoodsReceiptPdf {
   }
 
   static pw.Widget _totals(GoodsReceipt receipt, BusinessCurrency money) {
+    // El desglose solo lo trae la orden: es el dinero de la factura del
+    // suplidor. El conduce declara mercancía, no impuestos.
+    pw.Widget breakdownRow(String label, String value) => pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 1),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.end,
+            children: [
+              pw.Text(label, style: const pw.TextStyle(fontSize: 9)),
+              pw.SizedBox(
+                width: 90,
+                child: pw.Text(
+                  value,
+                  style: const pw.TextStyle(fontSize: 9),
+                  textAlign: pw.TextAlign.right,
+                ),
+              ),
+            ],
+          ),
+        );
+
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
         _rule(),
         pw.SizedBox(height: 3),
+        if (receipt.hasAmountBreakdown) ...[
+          breakdownRow('Subtotal', money.formatAmount(receipt.subtotal ?? 0)),
+          if ((receipt.taxTotal ?? 0) != 0)
+            breakdownRow('ITBIS', money.formatAmount(receipt.taxTotal ?? 0)),
+          if ((receipt.discountTotal ?? 0) != 0)
+            breakdownRow(
+              'Descuento',
+              '-${money.formatAmount(receipt.discountTotal ?? 0)}',
+            ),
+          pw.SizedBox(height: 2),
+        ],
         pw.Row(
           mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
           children: [
             pw.Text(
               '${receipt.lines.length} renglones · '
-              '${_qty(receipt.totalUnits)} unidades recibidas',
+              '${_qty(receipt.totalUnits)} unidades'
+              '${receipt.isOrder ? "" : " recibidas"}',
               style: const pw.TextStyle(fontSize: 9),
             ),
             pw.Row(
@@ -394,7 +452,7 @@ class GoodsReceiptPdf {
                   style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
                 ),
                 pw.Text(
-                  money.formatAmount(receipt.total),
+                  money.formatAmount(receipt.grandTotal),
                   style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
                 ),
               ],
@@ -427,10 +485,13 @@ class GoodsReceiptPdf {
           ),
         );
 
+    // Las MISMAS dos firmas en los dos documentos (pedido del dueño): quien
+    // hizo el papel y quien recibió la mercancía. El nombre impreso debajo de
+    // la raya no reemplaza la firma, la identifica.
     return pw.Row(
       mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
       children: [
-        slot('Entregado por', ''),
+        slot('Realizado por', receipt.issuedByName),
         slot('Recibido por', receipt.receivedByName),
       ],
     );

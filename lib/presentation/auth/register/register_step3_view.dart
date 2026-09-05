@@ -9,6 +9,7 @@ import 'package:mangopos/app/theme/mango_tokens.dart';
 import 'package:mangopos/presentation/auth/register/business_registration_catalog.dart';
 import 'package:mangopos/presentation/auth/register/register_step2_viewmodel.dart';
 import 'package:mangopos/presentation/auth/widgets/auth_shell.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class RegisterStep3View extends ConsumerStatefulWidget {
   const RegisterStep3View({super.key});
@@ -276,7 +277,7 @@ class _RegisterStep3ViewState extends ConsumerState<RegisterStep3View> {
       }
     } catch (error) {
       if (!mounted) return;
-      final errorMsg = error.toString().replaceFirst('Exception: ', '');
+      final errorMsg = FriendlyError.from(error);
       setState(() {
         _completed = false;
         _requiresEmailConfirmation = false;

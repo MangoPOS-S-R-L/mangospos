@@ -7,12 +7,14 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/presentation/purchases/state/goods_receipt.dart';
+import 'package:mangopos/presentation/purchases/state/purchases_state.dart';
 import 'package:mangopos/presentation/purchases/utils/goods_receipt_printing.dart';
 import 'package:mangopos/services/printing/goods_receipt_ticket.dart';
 
 GoodsReceipt _receipt({
   String status = 'complete',
   String number = 'RM-00007',
+  String issuedByName = '',
   List<GoodsReceiptLine>? lines,
 }) {
   return GoodsReceipt(
@@ -29,6 +31,7 @@ GoodsReceipt _receipt({
     supplierRnc: '130012345',
     warehouseName: 'Bodega Principal',
     receivedByName: 'Juan Perez',
+    issuedByName: issuedByName,
     notes: '',
     lines: lines ??
         const [
@@ -193,8 +196,20 @@ void main() {
       expect(text, contains('PO-00012'));
       expect(text, contains('B0100000284'));
       // Las dos firmas: sin ellas el papel no prueba la entrega.
-      expect(text, contains('Entregado por'));
+      expect(text, contains('Realizado por'));
       expect(text, contains('Recibido por'));
+    });
+
+    test('la firma «Realizado por» lleva a quien registró la compra', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: _receipt(issuedByName: 'Ana Compradora'),
+        businessName: 'Mi Negocio',
+      );
+      final text = ticket.rawText ?? '';
+      expect(text, contains('Realizado por'));
+      expect(text, contains('ANA COMPRADORA'));
+      // Y sigue diciendo quién recibió: son dos personas distintas.
+      expect(text, contains('JUAN PEREZ'));
     });
 
     test('una entrega parcial lo dice en la cara del documento', () {
@@ -297,4 +312,129 @@ void main() {
       expect(ticket.rawText, contains('s/n'));
     });
   });
+
+  // ── Orden de compra ─────────────────────────────────────────────────────
+  //
+  // El otro papel de la compra. Lo que se le reclamaría si faltara: que diga
+  // que es una ORDEN (y no un conduce), que declare el dinero de la factura
+  // del suplidor —incluido el descuento global, que no vive en las líneas— y
+  // que traiga las mismas dos firmas.
+  group('Orden de compra', () {
+    test('se arma desde la factura guardada, con su desglose', () {
+      final document = GoodsReceipt.fromOrderDetail(
+        _orderDetail(),
+        issuedByName: 'Ana Compradora',
+      );
+
+      expect(document.isOrder, isTrue);
+      expect(document.number, 'PO-00012');
+      expect(document.lines, hasLength(2));
+      // El total sale de la CABECERA (subtotal + ITBIS − descuento), no de la
+      // suma de las líneas: el descuento global no vive en ninguna línea.
+      expect(document.grandTotal, closeTo(50670 + 9120.6 - 670, 0.01));
+      // Un conduce parcial se marca; una orden recibida a medias, no: ahí
+      // 'partial' significa otra cosa.
+      expect(document.isPartial, isFalse);
+    });
+
+    test('el ticket dice ORDEN DE COMPRA, el desglose y las dos firmas', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: GoodsReceipt.fromOrderDetail(
+          _orderDetail(),
+          issuedByName: 'Ana Compradora',
+        ),
+        businessName: 'Mi Negocio',
+      );
+      final text = ticket.rawText ?? '';
+
+      expect(ticket.type, 'purchase_order');
+      expect(text, contains('ORDEN DE COMPRA'));
+      expect(text, isNot(contains('RECEPCION DE MERCANCIA')));
+      expect(text, contains('Subtotal:'));
+      expect(text, contains('ITBIS:'));
+      expect(text, contains('Descuento:'));
+      expect(text, contains('Realizado por'));
+      expect(text, contains('ANA COMPRADORA'));
+      expect(text, contains('Recibido por'));
+      // Quien recibe firma sobre la raya: al comprar todavía no recibió nadie.
+      expect(text, isNot(contains('JUAN PEREZ')));
+    });
+
+    test('sin desglose no inventa renglones en cero (conduce)', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: _receipt(),
+        businessName: 'Mi Negocio',
+      );
+      final text = ticket.rawText ?? '';
+      expect(text, isNot(contains('Subtotal:')));
+      expect(text, isNot(contains('ITBIS:')));
+    });
+
+    test('en 58mm el título de la orden tampoco se sale del papel', () {
+      final ticket = GoodsReceiptTicket.build(
+        receipt: GoodsReceipt.fromOrderDetail(_orderDetail()),
+        businessName: 'Mi Negocio',
+        paperWidth: 58,
+      );
+      for (final line in (ticket.rawText ?? '').split('\n')) {
+        expect(line.length, lessThanOrEqualTo(32), reason: 'linea: "$line"');
+      }
+    });
+  });
+}
+
+/// Factura de compra guardada, con descuento global: el caso que obliga a que
+/// el total salga de la cabecera y no de la suma de las líneas.
+PurchaseOrderDetail _orderDetail() {
+  return PurchaseOrderDetail(
+    order: PurchaseOrderSummary(
+      id: 'a1b2c3d4-0000-0000-0000-000000000000',
+      supplierId: 'sup-1',
+      supplierName: 'Ferreteria Bellon SRL',
+      warehouseId: 'wh-1',
+      warehouseName: 'Bodega Principal',
+      orderNumber: 'PO-00012',
+      invoiceNumber: 'F-9987',
+      ncf: 'B0100000284',
+      status: 'sent',
+      total: 59120.6,
+      notes: '',
+      expectedDate: DateTime(2026, 9, 5),
+      receivedDate: null,
+      createdAt: DateTime(2026, 9, 5, 10, 30),
+    ),
+    subtotal: 50670,
+    tax: 9120.6,
+    discount: 670,
+    lines: const [
+      PurchaseOrderLine(
+        id: 'l1',
+        inventoryItemId: 'i1',
+        description: 'BLK6',
+        itemName: 'Blocks de 6 pulgadas',
+        unit: 'unidad',
+        sku: '000004',
+        tracksLots: false,
+        quantityOrdered: 500,
+        quantityReceived: 0,
+        unitCost: 48.35,
+        taxRate: 18,
+        total: 24175,
+      ),
+      PurchaseOrderLine(
+        id: 'l2',
+        inventoryItemId: 'i2',
+        description: '',
+        itemName: 'Varilla construccion 3/8x20 pies',
+        unit: 'unidad',
+        sku: '000002',
+        tracksLots: false,
+        quantityOrdered: 100,
+        quantityReceived: 0,
+        unitCost: 264.95,
+        taxRate: 18,
+        total: 26495,
+      ),
+    ],
+  );
 }

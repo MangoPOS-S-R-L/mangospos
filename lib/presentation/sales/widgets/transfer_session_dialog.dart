@@ -18,6 +18,8 @@ import '../../../data/repositories/zones_repository.dart';
 import '../../../core/multimesero/operator_permissions.dart';
 import '../../../services/session/session_controller.dart';
 import 'pin_verification_modal.dart';
+import 'package:mangopos/core/utils/app_snackbar.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Punto de entrada. Devuelve `true` si la transferencia se completó.
 ///
@@ -132,7 +134,7 @@ class _TransferSessionDialogState
       if (mounted) {
         setState(() {
           _loadingTables = false;
-          _loadError = e.toString();
+          _loadError = FriendlyError.from(e);
         });
       }
     }
@@ -178,7 +180,7 @@ class _TransferSessionDialogState
       );
       if (!pinOk) {
         if (!mounted) return;
-        messenger.showSnackBar(
+        messenger.showAppSnackBar(
           const SnackBar(
             content: Text('Transferencia cancelada: PIN no autorizado.'),
             behavior: SnackBarBehavior.floating,
@@ -222,7 +224,7 @@ class _TransferSessionDialogState
       }
 
       Navigator.of(context).pop(true);
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         SnackBar(
           content: Text(msg),
           behavior: SnackBarBehavior.floating,
@@ -231,7 +233,7 @@ class _TransferSessionDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      messenger.showSnackBar(
+      messenger.showAppSnackBar(
         SnackBar(
           content: Text('No se pudo transferir: $e'),
           backgroundColor: Colors.red,

@@ -8,6 +8,7 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import '../widgets/business_currency_settings_card.dart';
 import '../widgets/usd_display_settings_card.dart';
 import '../../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class CurrenciesView extends ConsumerStatefulWidget {
   const CurrenciesView({super.key});
@@ -36,7 +37,7 @@ class _CurrenciesViewState extends ConsumerState<CurrenciesView> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'No se pudo resolver el negocio: $e');
+      setState(() => _error = FriendlyError.humanize('No se pudo resolver el negocio: $e'));
     }
   }
 

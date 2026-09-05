@@ -15,6 +15,7 @@ import 'package:mangopos/presentation/inventory/view/physical_count_detail_view.
 import 'package:mangopos/presentation/inventory/viewmodel/inventory_viewmodel.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PhysicalCountView extends ConsumerStatefulWidget {
   /// Bodega desde la que se llegó (Fase 2 Bodegas). Cuando viene, el conteo
@@ -71,7 +72,7 @@ class _PhysicalCountViewState extends ConsumerState<PhysicalCountView> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'No se pudieron cargar las sesiones: $e';
+        _error = FriendlyError.humanize('No se pudieron cargar las sesiones: $e');
         _loading = false;
       });
     }
@@ -477,7 +478,7 @@ class _CreatePhysicalCountDialogState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error cargando bodegas: $e';
+        _error = FriendlyError.humanize('Error cargando bodegas: $e');
         _loading = false;
       });
     }
@@ -507,7 +508,7 @@ class _CreatePhysicalCountDialogState
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        _error = 'No se pudo crear la sesión: $e';
+        _error = FriendlyError.humanize('No se pudo crear la sesión: $e');
       });
     }
   }

@@ -12,6 +12,7 @@ import '../../../../app/theme/mango_colors.dart';
 import '../../../../core/business/country_profile.dart';
 import '../../../../core/currency/business_currency_provider.dart';
 import '../../../../data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class BusinessCurrencySettingsCard extends ConsumerStatefulWidget {
   const BusinessCurrencySettingsCard({super.key, required this.businessId});
@@ -52,7 +53,7 @@ class _BusinessCurrencySettingsCardState
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = 'Error cargando el país: $e';
+        _error = FriendlyError.humanize('Error cargando el país: $e');
         _isLoading = false;
       });
     }
@@ -75,7 +76,7 @@ class _BusinessCurrencySettingsCardState
       AppToast.success(context, 'País y moneda actualizados.');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'Error guardando: $e');
+      setState(() => _error = FriendlyError.humanize('Error guardando: $e'));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }

@@ -20,6 +20,7 @@ import '../../../data/repositories/purchases_repository.dart';
 import '../state/goods_receipt.dart';
 import '../state/purchases_state.dart';
 import '../viewmodel/purchases_viewmodel.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Devuelve el [GoodsReceipt] emitido, o `null` si se canceló (o si el
 /// servidor no tiene la migración del conduce y se recibió por la ruta vieja).
@@ -78,7 +79,7 @@ class _PurchaseReceiveDialogState extends ConsumerState<PurchaseReceiveDialog> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _loadError = 'No se pudieron cargar las líneas: $e';
+        _loadError = FriendlyError.humanize('No se pudieron cargar las líneas: $e');
         _loading = false;
       });
     }
