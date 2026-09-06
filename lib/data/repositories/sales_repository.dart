@@ -1201,17 +1201,35 @@ class SalesRepository {
     return (value == null || value.trim().isEmpty) ? null : value.trim();
   }
 
+  /// Enciende/apaga un producto del menu (`menu_items.is_active`). Es el
+  /// "86" que dispara el boton Agotar de la POS.
+  ///
+  /// El `.select()` NO es decorativo: la policy `menu_items_write` solo deja
+  /// escribir `menu_items` a `user_businesses.role IN ('owner','admin')`. Un
+  /// UPDATE bloqueado por RLS no es un error — PostgREST responde 204 sin
+  /// tocar nada — asi que sin comprobar filas la POS mostraba "quedo marcado
+  /// como agotado" y el producto seguia a la venta. Si no volvio ninguna
+  /// fila, lanzamos para que la UI lo diga.
   Future<void> setMenuItemAvailability({
     required String menuItemId,
     required bool isActive,
   }) async {
+    final List<dynamic> updated;
     try {
-      await _client
+      updated = await _client
           .from('menu_items')
           .update({'is_active': isActive})
-          .eq('id', menuItemId);
+          .eq('id', menuItemId)
+          .select('id');
     } catch (e) {
       throw Exception('Error al actualizar disponibilidad del producto: $e');
+    }
+
+    if (updated.isEmpty) {
+      throw Exception(
+        'No se pudo cambiar la disponibilidad del producto: tu usuario no '
+        'tiene permiso para modificar el menu. Pideselo a un administrador.',
+      );
     }
   }
 

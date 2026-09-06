@@ -4,6 +4,7 @@ import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 class ProductDetailModal extends StatefulWidget {
   final OrderItem item;
@@ -458,6 +459,17 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       await widget.onMarkSoldOut!.call();
       if (!mounted) return;
       Navigator.of(context).pop();
+    } catch (e) {
+      // Sin este catch el fallo se perdia: la excepcion salia del handler y
+      // el modal quedaba abierto sin decir nada (caso tipico: sin red, o RLS
+      // rechazando el UPDATE por el rol del usuario logueado).
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        SnackBar(
+          content: Text(FriendlyError.humanize(e.toString())),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -1060,7 +1072,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                   isSaving: _isSaving,
                   onSave: _handleSave,
                   onCancel: () => Navigator.of(context).pop(),
-                  onMarkSoldOut: widget.item.productId == null
+                  onMarkSoldOut: widget.onMarkSoldOut == null
                       ? null
                       : _handleMarkSoldOut,
                   onReprint: widget.onReprint,
@@ -1083,19 +1095,22 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ),
                         const VerticalDivider(width: 1, color: kBorder),
-                        Expanded(
-                          child: _ModalButton(
-                            icon: Icons.warning_amber_rounded,
-                            label: 'Agotar producto',
-                            color: widget.item.productId == null
-                                ? kTextSecondary
-                                : kDangerRed,
-                            onTap: widget.item.productId == null
-                                ? null
-                                : _handleMarkSoldOut,
+                        // Sin callback no hay boton, igual que la reimpresion:
+                        // el caller lo anula cuando el producto no aplica o
+                        // cuando quien opera no tiene permiso para agotar. Antes
+                        // se dibujaba siempre y con callback nulo quedaba un
+                        // boton que se veia habilitado y no hacia nada.
+                        if (widget.onMarkSoldOut != null) ...[
+                          Expanded(
+                            child: _ModalButton(
+                              icon: Icons.warning_amber_rounded,
+                              label: 'Agotar producto',
+                              color: kDangerRed,
+                              onTap: _handleMarkSoldOut,
+                            ),
                           ),
-                        ),
-                        const VerticalDivider(width: 1, color: kBorder),
+                          const VerticalDivider(width: 1, color: kBorder),
+                        ],
                         if (widget.onReprint != null) ...[
                           Expanded(
                             child: _ModalButton(

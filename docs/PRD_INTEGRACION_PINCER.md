@@ -1,443 +1,474 @@
 # PRD — Integración Pincer → MangoPOS (canal de pedidos online)
 
-> **Estado:** Borrador para revisión
-> **Fecha:** 2026-09-04
+> **Estado:** Borrador R2 — con respuestas de Pincer del 2026-09-05
+> **Fecha:** 2026-09-04 · **R2:** 2026-09-05
 > **Dueño de producto:** Cristian Gómez
-> **Contraparte:** Tamayo (Pincer)
-> **Ámbito:** Que un pedido tomado en Pincer entre **solo** al POS como pedido de
+> **Contraparte:** Tamayo Belliard (Pincer) — tamayobelliardinvest@gmail.com · 829-548-1236
+> **Piloto:** Tropella Coffee & Tea
+> **Ámbito:** Que un pedido tomado en Pincer entre solo al POS como pedido de
 > delivery/pickup, imprima comanda, llegue al KDS y siga el flujo normal de caja,
-> cierre, NCF y reportes. Pincer llama a MangoPOS; MangoPOS no llama a Pincer.
-> **Relación con otros PRDs:** este es el mismo motor de
-> [PRD_UBER_EATS_INTEGRATION.md](PRD_UBER_EATS_INTEGRATION.md) (Fase 1), pero
-> **más simple**: no hay OAuth, ni certificación, ni partnership. Lo que se
-> construya aquí queda listo para Uber Eats / PedidosYa.
+> cierre, NCF y reportes.
+> **Relación con otros PRDs:** mismo motor de
+> [PRD_UBER_EATS_INTEGRATION.md](PRD_UBER_EATS_INTEGRATION.md) Fase 1, sin OAuth ni
+> certificación. Lo que se construya queda listo para Uber Eats y PedidosYa.
 
 ---
 
-## 0. Decisión de alcance (cerrada con el dueño de producto)
+## 0. Alcance (cerrado con ambas partes)
 
-El correo de Pincer pide seis cosas. **No son un producto, son tres.** El alcance
-que se aprueba es solo el primero:
-
-| # | Lo que pide Pincer | Decisión |
+| # | Tema | Decisión |
 |---|---|---|
-| A | Pedido online (delivery / para llevar) que entra solo, imprime comanda, ya viene pagado | ✅ **En alcance.** Es el canal tipo PedidosYa. Reusa `delivery_type`. |
-| B | Sumar líneas a una **cuenta de mesa ya abierta** (comensal sentado ordena por QR) | ⛔ **Fuera de F1.** Requiere resolver mesa↔sesión↔check, rondas de comanda, atribución de mesero y el candado de órdenes huérfanas. Es un producto aparte (self-service en mesa). |
-| C | **Pay-at-table**: leer la cuenta abierta y cobrarla desde el teléfono | ⛔ **Fuera de F1.** Toca NCF, propina, división de cuenta, cierre de caja y "quién es el cajero". El riesgo fiscal es real y no se justifica en la primera entrega. |
+| A | Pedido online (delivery / pickup) que entra solo, imprime comanda, ya viene pagado | ✅ **F1** |
+| B | Sumar líneas a una cuenta de mesa abierta | ⛔ **2ª etapa** — acordado con Pincer el 2026-09-05 |
+| C | Pay-at-table (leer y cobrar la cuenta desde el teléfono) | ⛔ **2ª etapa** |
+| D | Cancelación desde Pincer hacia el POS | ✅ **F1** — endpoint nuevo (§5.5) |
+| E | Cancelación desde el POS hacia Pincer (webhook saliente) | ✅ **F1** — **la integración deja de ser unidireccional** (§5.6) |
 
-**Regla de oro de F1:** una orden de Pincer nace y muere como **delivery/pickup**.
-Nunca toca una mesa del salón.
+**Regla de oro de F1:** una orden de Pincer nace y muere como delivery/pickup. Nunca
+toca una mesa del salón.
 
 ---
 
-## 1. Punto por punto del correo de Tamayo
+## 1. Estado del acuerdo, punto por punto
 
-| Pedido de Pincer | Respuesta | Trabajo |
+| Tema | Pincer (2026-09-05) | Estado de nuestro lado |
 |---|---|---|
-| 1. Autenticación por restaurante, revocable | Sí — API key por negocio en header `X-Api-Key`, hash en BD, revocable desde el panel | **Nuevo** (hoy solo existe API key de *lectura*) |
-| 2. Crear orden con líneas, modificadores, notas, tipo de servicio | Sí para delivery/pickup. **No** para "agregar a mesa abierta" (ver §0-B) | **Nuevo** (RPC de ingesta) |
-| 3. GET catálogo con id estable | Sí — `menu_items.id` es UUID y no cambia al editar nombre o precio | Casi listo (falta exponerlo) |
-| 4. Leer mesas y su cuenta abierta | **No en F1** (ver §0-B/C) | — |
-| 5. Registrar pago externo con referencia | Sí — `fn_process_payment_v3` ya acepta `p_reference` | Falta el método de pago "Pincer" y su tratamiento en cierre |
-| 6. Idempotencia por identificador de ellos | Sí — `UNIQUE(business_id, external_order_id)`, repetición devuelve la orden ya creada | **Nuevo**, patrón ya usado en compras |
-| Ambiente de pruebas | Sí — negocio de pruebas + `environment='sandbox'`; nunca imprime en Tropella | **Nuevo** (flag, no infra nueva) |
-| Límites y códigos de error | Sí — tabla de errores en §5.4 + rate limit por API key | **Nuevo** |
+| Propina | Viene separada como `tip_amount`, no paga ITBIS | ⚠️ **El POS no tiene dónde guardarla** — ver §7.1 |
+| Comisión | Cero. El cobro entra directo a la cuenta Azul del restaurante | ✅ Simplifica la conciliación (§7.2) |
+| UUID de producto | Lo mandan en cada línea | ✅ Falta exponer el catálogo y definir altas/bajas (§6) |
+| Autenticación | Proponen HMAC sobre el body en vez de allowlist por IP | ✅ Sí a HMAC — **pero no sustituye el allowlist** (§5.2) |
+| Volumen | 5 pedidos/min por restaurante en pico | ✅ Límite en 60 rpm por credencial, sobra |
+| RNC | Ya validan módulo 11 (9 díg.) y módulo 10 (cédula 11 díg.) | ✅ **El POS hoy no valida nada** — su validación es la única (§8) |
+| Cancelaciones | Void de Azul + llamada a nuestro endpoint; webhook nuestro si se cancela en el POS | ⚠️ Falta regla de ventana tras comanda impresa (§9.3) |
+| Piloto | Tropella Coffee & Tea | ⚠️ **Tropella tiene el e-CF sin activar** (§8, R8) |
+| Idempotencia | Su número es contador por restaurante; usar su ID interno | ✅ Ya diseñado como `UNIQUE(business_id, external_order_id)` |
 
 ---
 
-## 2. Estado actual
+## 2. Estado actual del código
 
-### Ya existe (base reutilizable — no se reinventa)
+### Ya existe (base reutilizable)
 
-- **Delivery como origen de orden.** `table_sessions.origin='delivery'` con
-  `delivery_type ∈ {'own','uber_eats','pedidos_ya'}` (constraint `chk_delivery_type`)
-  y el RPC `fn_open_delivery_order(p_user_id, p_delivery_type, p_people_count)`, que
-  crea zona "Delivery", mesa temporal `DEL-NNN`, sesión y orden
+- **Delivery como origen.** `table_sessions.origin='delivery'` con
+  `delivery_type ∈ {'own','uber_eats','pedidos_ya'}` y
+  `fn_open_delivery_order(p_user_id, p_delivery_type, p_people_count)`
   ([20260408_0002](../supabase/migrations/20260408_0002_delivery_system.sql)).
-  → **Falta agregar `'pincer'` al CHECK.** Una línea.
-- **Listado y pantalla de delivery.** `fn_list_delivery_orders(business_id)` y
-  [`delivery_express_view.dart`](../lib/presentation/sales/view/delivery_express_view.dart)
-  con canal Realtime `delivery_orders_{businessId}` en
-  [`delivery_viewmodel.dart`](../lib/presentation/sales/viewmodel/delivery_viewmodel.dart).
-- **Patrón maduro de integración externa:** inbox + procesador async de
-  [`alanube-webhook`](../supabase/functions/alanube-webhook/index.ts) (receiver
-  trivial que responde rápido y valida por header, trabajo pesado aparte).
-- **Alta de línea con impuestos correctos:** `fn_add_item_from_menu(p_order_id,
-  p_menu_item_id, p_qty, p_check_position, p_is_takeout, p_notes)` — resuelve precio,
-  `menu_item_taxes`, promos e inventario. **La ingesta debe llamar a este RPC, no
-  hacer INSERT crudo en `order_items`**, o la orden entra sin ITBIS.
-- **Pago con referencia externa:** `fn_process_payment_v3(..., p_reference,
-  p_customer_rnc, p_requested_ncf_type, p_cashier_session_id DEFAULT NULL, ...)`.
-- **Métodos de pago por negocio:** `payment_methods(business_id, name, code, position, icon)`.
-- **Idempotencia con clave del cliente:** patrón de
-  [`fn_receive_purchase_order_v2`](../supabase/migrations/20260812_0001_fn_receive_purchase_order_v2.sql)
-  (`idempotency_key` + advisory lock + devolver lo ya creado).
-- **KDS en tiempo real:** escucha `order_items` por Realtime. Una orden ingerida
-  con ítems en `pending` **aparece sola en el KDS**, sin código nuevo.
+  → Falta agregar `'pincer'` al CHECK. Una línea.
+- **Listado y pantalla:** `fn_list_delivery_orders`,
+  [`delivery_express_view.dart`](../lib/presentation/sales/view/delivery_express_view.dart),
+  canal Realtime `delivery_orders_{businessId}`.
+- **Patrón de webhook entrante:** [`alanube-webhook`](../supabase/functions/alanube-webhook/index.ts).
+- **Patrón de HTTP saliente desde la BD:** `pg_net` ya en uso en
+  [`azul_charge_subscription_cron`](../supabase/migrations/20260609_0001_azul_charge_subscription_cron.sql)
+  y [`mall_export_cron`](../supabase/migrations/20260816_0001_mall_export_cron.sql)
+  → **es el camino para el webhook de cancelación (§5.6)**.
+- **Alta de línea con impuestos correctos:** `fn_add_item_from_menu(...)`.
+  **La ingesta debe usar este RPC, no INSERT crudo**, o la orden entra sin ITBIS.
+- **Pago con referencia:** `fn_process_payment_v3(..., p_reference, p_customer_rnc,
+  p_requested_ncf_type, p_cashier_session_id DEFAULT NULL, ...)`.
+- **Anulación con nota de crédito:** `fn_issue_credit_note()` emite E34/B04 copiando
+  montos exactos del original
+  ([20260903_0001](../supabase/migrations/20260903_0001_credit_note_annulment.sql)).
+  Nunca tumba la anulación: si falta secuencia devuelve `no_sequence`.
+- **KDS Realtime:** la orden ingerida con ítems en `pending` aparece sola.
 - **Cola de impresión:** `print_jobs` + `fn_claim_print_job` + agente Node +
   [`CloudPrintQueueWorker`](../lib/core/printing/cloud_print_queue_worker.dart).
 
-### Falta (lo que construye este PRD)
+### Falta
 
-1. **Autenticación de escritura por negocio** (API key hasheada + revocación + rate limit).
-2. **Edge function `pincer-orders`** + inbox + **`fn_ingest_external_order`** idempotente.
-3. **`'pincer'` en `chk_delivery_type`** y método de pago `pincer`.
-4. **Impresión automática de la comanda** — ver §6, **es la pieza cara**.
-5. **Sección "Órdenes" en Ventas** — bandeja de pedidos entrantes (§9).
-6. **GET de catálogo** para que Pincer case sus platos.
-7. **Modo sandbox** por API key.
+1. API key por negocio + **secreto HMAC** + revocación + rate limit.
+2. Edge functions `pincer-catalog`, `pincer-orders`, `pincer-orders/{id}/cancel`.
+3. `fn_ingest_external_order` idempotente.
+4. **Campo de propina en el flujo de orden** (§7.1) — no existe hoy.
+5. **Impresión automática de la comanda** (§9.1) — la pieza cara.
+6. **Webhook saliente de cancelación** (§5.6).
+7. Sección "Órdenes" en Ventas (§10).
+8. Modo sandbox por credencial.
 
 ---
 
-## 3. Arquitectura (F1)
+## 3. Arquitectura
 
 ```
                        Pincer (sus servidores)
-                             │  POST /pincer-orders
-                             │  X-Api-Key: <clave del restaurante>
-                             │  X-Idempotency-Key: <su # de orden>
+        POST /pincer-orders            POST /pincer-orders/{id}/cancel
+        X-Api-Key + X-Pincer-Signature (HMAC-SHA256 con timestamp)
                              ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │ Edge Function: pincer-orders  (PÚBLICA, service_role interno) │
-  │  1. Resuelve API key → business_id + environment              │
-  │  2. Guarda el payload crudo en external_order_inbox           │
-  │  3. RPC fn_ingest_external_order(payload)  ← transaccional    │
-  │  4. Responde 201 con { order_id, order_number, status }       │
+  │ Edge Function: pincer-orders                                  │
+  │  1. API key → business_id + secreto + environment             │
+  │  2. Verifica HMAC del RAW body y la ventana de 5 min          │
+  │  3. Guarda en external_order_inbox (ANTES de ingerir)         │
+  │  4. RPC fn_ingest_external_order(payload)  ← una transacción  │
+  │  5. 201 con { order_id, order_number, status }                │
   │     o 200 con la MISMA orden si la clave se repite            │
   └──────────────────────────────────────────────────────────────┘
                              │
-                             ▼
   ┌──────────────────────────────────────────────────────────────┐
   │ DB: fn_ingest_external_order(jsonb)  SECURITY DEFINER         │
   │  - idempotente por (business_id, external_order_id)           │
-  │  - fn_open_delivery_order(...) con delivery_type='pincer'     │
-  │  - por cada línea: fn_add_item_from_menu + modificadores      │
-  │      · id resuelto  → precio/ITBIS/inventario correctos       │
-  │      · id no resuelto → línea ad-hoc marcada needs_review     │
-  │  - si viene pagada: fn_process_payment_v3 método 'pincer'     │
-  │    con p_reference = referencia de la transacción             │
-  │  - items en 'pending' + status_ext='sent_to_kitchen' → KDS    │
-  │  - guarda external_orders (vínculo + raw + total de ellos)    │
+  │  - fn_open_delivery_order con delivery_type='pincer'          │
+  │  - por línea: fn_add_item_from_menu + modificadores           │
+  │  - tip_amount → orders.tip (columna nueva, fuera del ITBIS)   │
+  │  - si viene pagada: fn_process_payment_v3, método 'pincer'    │
+  │  - ítems 'pending' + status_ext='sent_to_kitchen' → KDS       │
   └──────────────────────────────────────────────────────────────┘
                              │ Realtime
              ┌───────────────┴────────────────┐
              ▼                                ▼
-      KDS (ya funciona)          Sección "Órdenes" en Ventas (nueva)
-                                  + aviso sonoro
-                                  + IMPRESIÓN DE COMANDA (§6)
-```
+      KDS (ya funciona)          Sección "Órdenes" + comanda (§9.1)
 
-**Por qué el receiver ingiere en línea (a diferencia de Alanube):** Pincer necesita
-saber en la misma llamada si la orden entró, para decidir si cae al respaldo manual
-de su tablet. Un 202 "ya veremos" no le sirve. La ingesta es una sola transacción de
-BD, es rápida. El inbox se guarda igual, **antes** de ingerir, para que ningún pedido
-se pierda aunque la RPC falle.
+  ── vuelta ──  POS cancela → trigger + pg_net → POST al webhook de Pincer (§5.6)
+```
 
 ---
 
 ## 4. Modelo de datos
 
-Todo aditivo, `business_id`-scoped, RLS estilo Alanube. Migración propuesta
-`20260905_0001_external_orders_channel.sql` (+ `_ROLLBACK.sql`).
-**Nombres genéricos (`external_*`), no `pincer_*`:** el mismo motor sirve para
-Uber Eats y PedidosYa.
+Migración propuesta `20260906_0001_external_orders_channel.sql` (+ `_ROLLBACK.sql`).
+Nombres genéricos (`external_*`): el mismo motor sirve para Uber Eats y PedidosYa.
 
-### 4.1 `external_api_keys` — credencial por negocio
+### 4.1 `external_api_keys`
 ```
-id             uuid pk
-business_id    uuid fk businesses
-channel        text not null            -- 'pincer' | 'uber_eats' | ...
-key_prefix     text not null            -- 8 chars visibles, para identificarla en el panel
-key_hash       text not null            -- sha256 de la clave completa; la clave se muestra UNA vez
-environment    text check (sandbox|production) default 'sandbox'
-scopes         text[] default '{orders:write,catalog:read}'
-rate_limit_rpm int default 120
-is_active      boolean default true     -- revocación = false
-last_used_at   timestamptz
-created_at, revoked_at
-```
-RLS: sin policies para `authenticated` salvo lectura del prefijo por el dueño del
-negocio. Solo `service_role` valida el hash.
-
-### 4.2 `external_order_inbox` — nada se pierde
-```
-id, business_id, channel, external_order_id, payload jsonb, headers jsonb,
-http_status int, processed boolean, error text, received_at
+id, business_id, channel ('pincer'|…)
+key_prefix        text   -- 8 chars visibles en el panel
+key_hash          text   -- sha256; la clave se muestra UNA sola vez
+hmac_secret_enc   text   -- secreto de firma, cifrado; distinto de la API key
+environment       text   -- sandbox | production
+scopes            text[] default '{orders:write,orders:cancel,catalog:read}'
+rate_limit_rpm    int    default 60
+cancel_webhook_url text  -- a dónde avisamos si el POS cancela (§5.6)
+is_active         boolean, last_used_at, created_at, revoked_at
 ```
 
-### 4.3 `external_orders` — vínculo 1:1
+### 4.2 `external_order_inbox`
+`id, business_id, channel, external_order_id, payload, headers, signature_valid,
+http_status, processed, error, received_at`
+
+### 4.3 `external_orders`
 ```
-id                uuid pk
-business_id       uuid fk businesses
-channel           text
-external_order_id text not null            -- UNIQUE (business_id, external_order_id)
-external_number   text                     -- el # corto que ve el cliente (va IMPRESO en la comanda)
-order_id          uuid fk orders
-session_id        uuid fk table_sessions
-service_type      text                     -- 'delivery' | 'pickup'
-paid_externally   boolean
-external_total    numeric                  -- lo que ellos cobraron (fuente de verdad del cobro)
-payment_reference text
-customer_name, customer_phone, delivery_address text
-customer_rnc      text
-raw_order         jsonb
+id, business_id, channel
+external_order_id  text   -- SU ID INTERNO (único global). UNIQUE(business_id, external_order_id)
+external_number    text   -- su contador por restaurante; es el que se IMPRIME
+order_id, session_id
+service_type       text   -- delivery | pickup
+paid_externally    boolean
+external_total     numeric   -- lo que ellos cobraron, propina incluida
+tip_amount         numeric   -- desglosado (§7.1)
+payment_reference  text      -- referencia Azul
+customer_name, customer_phone, delivery_address, customer_rnc
+cancel_state       text   -- none | cancelled_by_pincer | cancelled_by_pos
+cancel_notified_at timestamptz  -- cuándo confirmamos el webhook saliente
+raw_order          jsonb
 created_at, updated_at
 ```
 
-### 4.4 `external_item_map` — solo por si acaso
-```
-business_id, channel, external_item_id, menu_item_id   -- UNIQUE(business_id, channel, external_item_id)
-```
-Pincer dijo que va a mandar **nuestro** `menu_items.id`. Si lo hace, esta tabla queda
-vacía y se ignora. Existe como red: si mandan un id suyo, se mapea aquí y no se pierde
-el pedido.
+### 4.4 `external_item_map`
+`business_id, channel, external_item_id, menu_item_id` — red por si algún día
+mandan un id suyo. Con Pincer queda vacía.
+
+### 4.5 `external_webhook_outbox` — la vuelta
+`id, business_id, channel, event ('order.cancelled'), external_order_id, payload,
+attempts, next_attempt_at, delivered_at, last_error`
 
 ---
 
 ## 5. Contrato de API
 
-Base: `https://supabase.mangopos.do/functions/v1/`
-Auth: header `X-Api-Key`. Todo JSON, UTF-8. Montos en **decimal con 2 posiciones**,
-no en centavos (el POS trabaja en `numeric`; convertir en el borde crea errores de
-redondeo en el ITBIS).
+Base: `https://supabase.mangopos.do/functions/v1/`. JSON UTF-8, montos decimales
+con 2 posiciones (el POS trabaja en `numeric`; centavos en el borde crean errores de
+redondeo en el ITBIS — ya nos pasó con Alanube: 800.01 vs 800.00).
 
-### 5.1 `GET /pincer-catalog`
+### 5.1 Autenticación
+```
+X-Api-Key: mgp_live_a1b2c3d4…
+X-Pincer-Signature: t=1757090531,v1=<hex hmac_sha256(secret, "t.rawbody")>
+```
+- Secreto **distinto** de la API key, entregado una sola vez, rotable sin cambiar la key.
+- Ventana de 5 minutos contra `t`; fuera de eso, `401`. Comparación en tiempo constante.
+- La firma se calcula sobre el **body crudo**, byte por byte, antes de parsear.
+
+### 5.2 Sobre el allowlist de IP (respuesta a su punto 4)
+
+Sí al HMAC. Pero **HMAC y allowlist resuelven problemas distintos y no se sustituyen**:
+la firma se evalúa dentro de nuestra edge function; el WAF filtra *antes*, a nivel de
+red. Si el WAF los bloquea, la petición nunca llega a donde se verifica la firma —
+exactamente lo que nos pasó con Azul e Incapsula. Necesitamos sus rangos de salida
+igual, aunque sea solo para no bloquearlos.
+
+### 5.3 `GET /pincer-catalog?updated_since=<iso8601>`
 ```json
 {
-  "business": { "id": "…", "name": "Tropella", "currency": "DOP" },
-  "categories": [{ "id": "…", "name": "Platos fuertes", "position": 1 }],
+  "business": { "id": "…", "name": "Tropella Coffee & Tea", "currency": "DOP" },
+  "catalog_version": "2026-09-05T14:03:11Z",
+  "categories": [{ "id": "…", "name": "Bebidas frías", "position": 1 }],
   "items": [
-    {
-      "id": "9f3c…",                    // ESTABLE. No cambia al editar nombre ni precio.
-      "name": "Pechuga a la plancha",
-      "category_id": "…",
-      "price": 450.00,                  // precio de menú (impuesto según config del negocio)
-      "is_active": true,
-      "image_url": "…",
+    { "id": "9f3c…", "name": "Latte frío", "category_id": "…", "price": 250.00,
+      "is_active": true, "updated_at": "2026-09-04T18:00:00Z", "image_url": "…",
       "modifier_groups": [
-        { "id": "…", "name": "Acompañante", "min_select": 1, "max_select": 1,
-          "modifiers": [{ "id": "…", "name": "Tostones", "price_delta": 0 }] }
-      ]
-    }
+        { "id": "…", "name": "Tamaño", "min_select": 1, "max_select": 1,
+          "modifiers": [{ "id": "…", "name": "Grande", "price_delta": 50.00 }] }
+      ] }
   ]
 }
 ```
+**Altas y bajas (§6):** un producto dado de baja sale con `is_active: false`, **nunca
+desaparece del listado ni cambia de id**. Con `updated_since` piden solo el delta.
 
-### 5.2 `POST /pincer-orders`
+### 5.4 `POST /pincer-orders`
 ```json
 {
-  "external_order_id": "PIN-2026-000123",   // idempotencia
-  "external_number": "A-142",               // se IMPRIME en la comanda
-  "service_type": "delivery",               // delivery | pickup
-  "placed_at": "2026-09-04T18:22:11Z",
+  "external_order_id": "pnc_01J9X4K2M8QY",   // su ID interno, único global → idempotencia
+  "external_number": "142",                   // su contador por restaurante → se IMPRIME
+  "service_type": "delivery",
+  "placed_at": "2026-09-05T18:22:11Z",
   "customer": { "name": "Juan Pérez", "phone": "809…", "rnc": null,
                 "address": "Calle 1 #4, Naco" },
-  "payment": { "status": "paid", "total": 1250.00, "method": "card",
-               "reference": "azul-8837261" },
+  "payment": { "status": "paid", "subtotal": 1150.00, "tip_amount": 100.00,
+               "total": 1250.00, "method": "card", "reference": "azul-8837261",
+               "authorization_code": "OK1234" },
   "lines": [
-    { "menu_item_id": "9f3c…", "quantity": 2, "notes": "sin cebolla",
+    { "menu_item_id": "9f3c…", "quantity": 2, "notes": "sin azúcar",
       "modifiers": [{ "modifier_id": "…", "quantity": 1 }] }
   ]
 }
 ```
+`total = subtotal + tip_amount`. El ITBIS sale de nuestro catálogo sobre `subtotal`;
+la propina queda fuera de la base imponible.
+
 Respuesta `201`:
 ```json
-{ "order_id": "…", "order_number": "DEL-018", "external_number": "A-142",
-  "status": "accepted", "printed": true, "kds": true, "pos_total": 1250.00 }
+{ "order_id": "…", "order_number": "DEL-018", "external_number": "142",
+  "status": "accepted", "queued_for_print": true, "kds": true,
+  "pos_subtotal": 1150.00, "pos_total": 1250.00, "tip_amount": 100.00 }
 ```
-Repetir la misma `external_order_id` devuelve `200` con **el mismo cuerpo**, sin crear
-ni imprimir nada de nuevo.
+Repetir la misma `external_order_id` devuelve `200` con el mismo cuerpo, sin crear ni
+imprimir nada nuevo.
 
-### 5.3 `GET /pincer-orders/{external_order_id}`
-Para que Pincer confirme el estado tras un timeout: `accepted | preparing | ready |
-delivered | cancelled`, con `pos_total`.
+### 5.5 `POST /pincer-orders/{external_order_id}/cancel`
+```json
+{ "reason": "cliente canceló", "cancelled_by": "supervisor@pincer", "void_reference": "azul-void-…" }
+```
+Respuestas:
+- `200 { "cancelled": true, "credit_note": "E34…" | null }` — anulada. Si ya había
+  comprobante emitido, se dispara `fn_issue_credit_note()`.
+- `409 { "code": "already_in_kitchen", "state": "preparing", "printed_at": "…" }` —
+  **la comanda ya salió** (§9.3). No se anula sin que el restaurante confirme.
+- `404 unknown_order`.
 
-### 5.4 Errores
+### 5.6 Webhook saliente: el POS canceló
+`POST` a `cancel_webhook_url` con la misma firma HMAC (invertida: firmamos nosotros).
+```json
+{ "event": "order.cancelled", "external_order_id": "pnc_01J9X4K2M8QY",
+  "cancelled_at": "…", "reason": "…", "cancelled_by": "pos", "credit_note": "E34…" }
+```
+Cola `external_webhook_outbox` + `pg_net`, reintentos con backoff (1m, 5m, 30m, 2h, 6h)
+hasta 24 h. Esperamos `2xx`. **Es el canal por el que un cliente no se queda cobrado.**
+
+> Detalle a tener presente: una anulación hecha con la tablet sin internet sale por
+> la cola offline y el webhook se dispara al reconectar, no en el momento.
+
+### 5.7 Errores
 
 | HTTP | code | Significado | ¿Reintentar? |
 |---|---|---|---|
-| 401 | `invalid_api_key` | Clave inválida o revocada | No |
-| 403 | `channel_disabled` | El restaurante apagó Pincer en su POS | No |
+| 401 | `invalid_api_key` / `invalid_signature` / `stale_timestamp` | Credencial o firma | No |
+| 403 | `channel_disabled` | El restaurante apagó Pincer | No |
 | 409 | `duplicate_order` | Ya existe (se devuelve la orden) | No |
-| 422 | `unknown_menu_item` | `menu_item_id` no existe en ese negocio | No — corregir el mapeo |
-| 422 | `invalid_payload` | Falta un campo o el formato es inválido | No |
-| 429 | `rate_limited` | Excedió `rate_limit_rpm` (header `Retry-After`) | Sí, con backoff |
-| 503 | `pos_unavailable` | BD caída / mantenimiento | Sí, con backoff |
+| 409 | `already_in_kitchen` | Cancelación tardía (§9.3) | No |
+| 422 | `unknown_menu_item` / `invalid_payload` / `tip_mismatch` | Datos | No |
+| 429 | `rate_limited` (`Retry-After`) | Excedió 60 rpm | Sí, backoff |
+| 503 | `pos_unavailable` | BD caída | Sí, backoff |
 | 500 | `internal_error` | Bug nuestro, ya quedó en el inbox | Sí, y avisar |
 
-**Regla para Pincer:** solo `429`, `503` y `500` se reintentan. Todo lo demás es
-definitivo y va al respaldo manual de su tablet.
+Solo `429`, `503` y `500` se reintentan.
 
 ---
 
-## 6. La comanda — la pieza que no es obvia
+## 6. Altas y bajas de catálogo (su punto 3)
 
-**Insertar la orden en la base de datos NO imprime nada.** Los bytes ESC/POS los
-arma la app Flutter (`lib/services/printing/`), no el servidor: `print_jobs.data_hex`
-ya viene renderizado desde el cliente. Un pedido que nace en el servidor **no tiene
-quién lo imprima**.
+Pregunta de Pincer: cómo se enteran cuando el restaurante crea o da de baja un ítem.
 
-El KDS sí lo ve solo (escucha `order_items` por Realtime). Pero el restaurante que
-imprime comanda en papel no vería nada.
+**Recomendado: que consulten `GET /pincer-catalog?updated_since=` cada 15 minutos.**
+Sin estado de nuestro lado, sin cola, sin reintentos, y si se cae un ciclo el siguiente
+se pone al día solo. Para un menú de restaurante, 15 minutos de latencia no le hace
+daño a nadie.
 
-**Solución F1 — receptor en la app (recomendada):** una tablet del local se designa
-**"estación de recepción"** (bandera por dispositivo, igual que `host_device_id` de
-impresoras). Esa app escucha el canal Realtime de delivery, y al ver una orden nueva
-de canal externo:
-1. suena el aviso,
-2. arma la comanda con el builder que ya existe (agregando `external_number`, que es
-   como el personal identifica el pedido para llevar),
-3. la manda por el dispatcher de cocina normal (con su fallback a `print_jobs`).
+Garantías que damos:
+- El `id` es un UUID que **no cambia nunca**, ni al editar nombre, precio o categoría.
+- Un producto eliminado **no se borra del feed**: sale `is_active: false` para siempre.
+  Si alguna vez desapareciera de golpe, Pincer se quedaría con líneas apuntando a un id
+  muerto y el pedido rebotaría con `422` en pleno pico.
+- Un `menu_item_id` inactivo en un pedido responde `422 unknown_menu_item`.
 
-Ventajas: reusa todo el camino probado de impresión, respeta áreas de impresión y
-el modo sin impresora. Riesgo: si esa tablet está apagada, no hay comanda — se mitiga
-con el aviso visible en la sección Órdenes y con un segundo dispositivo de respaldo
-(el claim atómico de `fn_claim_print_job` ya evita la doble impresión).
-
-**Alternativa descartada para F1:** renderizar ESC/POS en el servidor. Sería duplicar
-en TypeScript los cinco builders de ticket, la lógica de 58/80 mm y el modo raster de
-Star. Mucho trabajo y dos fuentes de verdad para el mismo papel.
-
-> **Advertencia para el contrato con Pincer:** por eso `"printed": true` en la
-> respuesta significa *"encolada para imprimir"*, no *"salió el papel"*. No prometer
-> lo segundo.
+Webhook de catálogo: se puede, reusando `external_webhook_outbox`, pero no lo pongo en
+F1. Notificar cada cambio de precio de un menú que se edita a mano genera mucho ruido
+para el problema que resuelve.
 
 ---
 
-## 7. Pago externo y cierre de caja
+## 7. Dinero
 
-El cobro ya ocurrió en Pincer. El POS **registra el ingreso, no lo cobra**.
+### 7.1 Propina — hay que construirla
 
-- Método de pago nuevo por negocio: `('Pincer', 'pincer')`, con
-  `p_reference = payment.reference`.
-- **No exige sesión de caja abierta** (`p_cashier_session_id` va NULL). Un pedido a
-  las 3 a.m. con la caja cerrada tiene que entrar igual. Esto es deliberado y sigue
-  el mismo criterio del abono a crédito.
-- **No entra al cuadre de efectivo.** En el cierre aparece como bloque aparte
-  ("Ingresos por canal externo"), sin afectar el conteo del cajón. Si se suma al
-  efectivo esperado, el cajero cuadra corto todos los días.
-- **Divergencia de totales:** si `payment.total` de Pincer ≠ total calculado por el
-  POS (promos, ITBIS, fee de delivery), se registra el pago por el total de Pincer y
-  la diferencia queda visible en `external_orders` para conciliación. **No** se deja
-  que el motor de impuestos reescriba lo que el cliente ya pagó.
+Pincer manda `tip_amount` separado. **El POS hoy no tiene dónde ponerlo:**
+`orders` no tiene columna `tip`, `payments` tampoco, y `sales_viewmodel` no la maneja
+en ningún punto del flujo de cobro. Lo único que existe es `fiscal_documents.tip`, y
+ahí se rellena como **diferencia implícita**
+(`tip = total − subtotal − itbis − service_fee`, ver
+[20260530_0012](../supabase/migrations/20260530_0012_fix_recompute_fd_keep_base_only.sql)).
+`business_settings.tip_enabled` existe en la BD pero **nadie lo lee**: es un flag muerto.
 
----
+Trabajo mínimo en F1:
+1. `orders.tip numeric(12,2) DEFAULT 0` — columna nueva, aditiva.
+2. La propina **no entra** en la base imponible ni en el cálculo de ITBIS ni de Ley 10%
+   (coincide con lo que Pincer describe).
+3. `orders.total` incluye la propina, para que cuadre con lo que ellos cobraron.
+4. Al emitir el comprobante, la propina viaja a `fiscal_documents.tip` **explícita**, no
+   por diferencia.
+5. En el cierre de caja aparece como línea propia, no revuelta con la venta.
 
-## 8. Fiscal (NCF / RNC)
+> **Pregunta abierta para Pincer (P1):** ¿esa propina es del restaurante o del
+> repartidor de Pincer? Si es del repartidor, el restaurante no debe registrarla como
+> ingreso propio y el tratamiento contable cambia. No lo aclararon.
 
-- Sin RNC: consumo normal, flujo fiscal del negocio sin cambios.
-- Con RNC: `fn_process_payment_v3` ya acepta `p_customer_rnc` y
-  `p_requested_ncf_type`; se pide crédito fiscal (B01/E31) por la vía normal.
-- **Riesgo a revisar con el contador:** el NCF se emite al registrar el pago, es decir
-  al momento de la ingesta, no cuando el cliente estaba en el checkout de Pincer.
-  Si Pincer quiere mostrarle el NCF al cliente en su app, hace falta que consulten
-  `GET /pincer-orders/{id}` después (el e-CF de Alanube es asíncrono).
-- Pincer debe validar el RNC en su checkout (longitud 9/11 y dígito verificador).
-  Un RNC malo hoy revienta la emisión del comprobante.
+### 7.2 Comisión cero — lo que simplifica
 
----
+Que el cobro entre directo al merchant de Azul del restaurante quita el problema más
+feo de los agregadores: aquí **el bruto es el neto**. El depósito de Azul ya incluye
+esas ventas, así que la conciliación es contra el estado de cuenta de Azul del propio
+restaurante, sin liquidación semanal de por medio.
 
-## 9. Sección "Órdenes" en Ventas (F2)
+Consecuencia práctica: el método de pago del POS debe leerse como **tarjeta cobrada por
+Pincer**, no como un canal de dinero ajeno. Sigue **fuera del cuadre de efectivo**, pero
+sí cuenta en el total de tarjeta del día.
 
-Lo que hoy es `/ventas?mode=delivery` se queda para el delivery propio digitado a
-mano. Se agrega una **sección "Órdenes"** en el shell de ventas: bandeja de todo lo
-que entra por canales externos.
+### 7.3 Registro del pago
 
-- **Lista por estado:** Nuevas (badge + sonido) → En preparación → Listas → Entregadas.
-- **Tarjeta:** número de Pincer bien grande (es como piden el pedido en el mostrador),
-  tipo de servicio, cliente, hora, total, marca "Pagado".
-- **Acciones:** ver detalle, **reimprimir comanda**, marcar lista, cancelar.
-- **Rojo visible** cuando una orden entró pero la comanda no se pudo imprimir.
-- **Reconciliación** de líneas `needs_review` (ítem que no resolvió) en un clic.
-- Permiso nuevo `ventas.ordenes.ver` — **hay que sembrarlo en el catálogo de
-  permisos de la BD o el RPC lo descarta en silencio.**
+- Método por negocio: `('Pincer', 'pincer')`, con `p_reference = payment.reference`.
+- **No exige sesión de caja abierta** (`p_cashier_session_id` NULL): un pedido a las
+  3 a.m. con la caja cerrada tiene que entrar igual.
+- **No entra al cuadre de efectivo.** Bloque aparte en el cierre. Sumarlo al efectivo
+  esperado haría que el cajero cuadre corto todos los días.
+- Si `payment.total` ≠ total calculado por el POS, manda el de Pincer (es lo que el
+  cliente pagó) y la diferencia queda visible en `external_orders` para conciliar.
 
 ---
 
-## 10. Fases
+## 8. Fiscal
 
-| Fase | Contenido | Depende de |
-|---|---|---|
-| **F0** | Migración: `'pincer'` en `chk_delivery_type`, método de pago, tablas §4, permiso | — |
-| **F1a** | Edge functions `pincer-catalog` + `pincer-orders` + `fn_ingest_external_order` | F0 |
-| **F1b** | Receptor de impresión en la app (§6) | F1a |
-| **F1c** | Sección "Órdenes" (§9) | F1a |
-| **F2** | Sandbox por API key + panel de credenciales (crear/revocar) | F1a |
-| **F3** | `GET /pincer-orders/{id}` + estados hacia Pincer | F1c |
-| **F4** *(futuro)* | Pedido a mesa abierta y pay-at-table (§0-B, §0-C) | decisión aparte |
-
-Lo que se entrega en F1 sirve **tal cual** para Uber Eats y PedidosYa: solo cambia el
-`channel` y quien traduce el payload.
+- **Validación de RNC:** Pincer ya valida módulo 11 (RNC de 9) y módulo 10 (cédula de
+  11). Conviene saber que **el POS no valida RNC en ninguna parte** — no hay
+  validación de dígito verificador en el código. Su validación es la única barrera, así
+  que se agradece que la hayan puesto.
+- Sin RNC: consumo normal. Con RNC: `fn_process_payment_v3` recibe `p_customer_rnc` y
+  `p_requested_ncf_type`; el crédito fiscal sale por la vía normal.
+- El NCF se emite al registrar el pago (en la ingesta), no en el checkout de Pincer. Si
+  quieren mostrárselo al cliente, tienen que consultarlo después: el e-CF de Alanube es
+  asíncrono.
+- **Bloqueador del piloto:** Tropella tiene el e-CF **sin activar** — el switch de la
+  POS no llegó a crear su fila en `business_alanube_settings` y quedó `pending` desde el
+  2026-08-29, a falta del ULID de la company en Alanube. Si el piloto va a emitir
+  comprobantes con RNC, esto se resuelve **antes** de la prueba.
 
 ---
 
-## 11. Riesgos
+## 9. Operación
+
+### 9.1 La comanda — la pieza que no es obvia
+
+**Insertar la orden en la base de datos no imprime nada.** Los bytes ESC/POS los arma
+Flutter (`lib/services/printing/`): `print_jobs.data_hex` llega ya renderizado desde el
+cliente. Un pedido que nace en el servidor no tiene quién lo imprima. El KDS sí lo ve
+solo (escucha `order_items` por Realtime); el papel, no.
+
+**Solución F1:** una tablet del local se designa **estación de recepción**. Escucha el
+canal Realtime, suena, arma la comanda con el builder existente (con `external_number`
+bien grande, que es como el personal identifica el pedido en el mostrador) y la manda
+por el dispatcher de cocina normal, con su fallback a `print_jobs`.
+
+Riesgo: tablet apagada, no hay comanda. Se mitiga con el aviso en la sección Órdenes y
+un segundo dispositivo de respaldo — el claim atómico de `fn_claim_print_job` ya evita
+la doble impresión.
+
+Descartado para F1: renderizar ESC/POS en el servidor. Serían cinco builders duplicados
+en TypeScript, con 58/80 mm y el modo raster de Star, y dos fuentes de verdad para el
+mismo papel.
+
+> Por eso la respuesta dice `"queued_for_print": true`, no `"printed"`. Ya está
+> acordado con Pincer que ese caso no se reintenta desde su lado.
+
+### 9.2 Estados que reportamos
+`accepted → preparing → ready → delivered`, más `cancelled`. Consultables por
+`GET /pincer-orders/{external_order_id}`.
+
+### 9.3 Ventana de cancelación — falta cerrarlo
+
+Pincer propone: supervisor cancela en su tablet → `ProcessVoid` en Azul → nos avisan.
+El hueco: **si la comanda ya salió y la comida está hecha, el void devuelve el dinero y
+el restaurante come la pérdida sin haber opinado.**
+
+Propuesta: la cancelación es automática solo mientras la orden esté en `accepted`.
+Desde `preparing` en adelante devolvemos `409 already_in_kitchen`, y ahí Pincer decide
+con el restaurante si igual hace el void. La comida ya cocinada es plata real de otro.
+
+---
+
+## 10. Sección "Órdenes" en Ventas (F1c)
+
+Bandeja de todo lo que entra por canales externos, aparte del delivery propio digitado
+a mano que hoy vive en `/ventas?mode=delivery`.
+
+- **Estados:** Nuevas (badge + sonido) → En preparación → Listas → Entregadas.
+- **Tarjeta:** número de Pincer bien grande, tipo de servicio, cliente, hora, total,
+  marca "Pagado", propina desglosada.
+- **Acciones:** detalle, **reimprimir comanda**, marcar lista, cancelar (dispara §5.6).
+- **Rojo visible** cuando la orden entró pero la comanda no se pudo imprimir.
+- Permiso `ventas.ordenes.ver` — **hay que sembrarlo en el catálogo de permisos de la
+  BD o el RPC lo descarta en silencio** (ya nos pasó con los 4 permisos de crédito).
+
+---
+
+## 11. Fases
+
+| Fase | Contenido |
+|---|---|
+| **F0** | Migración: `'pincer'` en `chk_delivery_type`, `orders.tip`, tablas §4, método de pago, permiso |
+| **F1a** | `pincer-catalog` + `pincer-orders` + `fn_ingest_external_order` + HMAC |
+| **F1b** | Receptor de impresión en la app (§9.1) |
+| **F1c** | Sección "Órdenes" (§10) |
+| **F1d** | Cancelación entrante (§5.5) + webhook saliente (§5.6) |
+| **F2** | Sandbox por credencial + panel de API keys (crear / revocar / rotar secreto) |
+| **F3** | Estados hacia Pincer (§9.2) |
+| **F4** *(2ª etapa)* | Mesa abierta y pay-at-table |
+
+---
+
+## 12. Riesgos
 
 | # | Riesgo | Mitigación |
 |---|---|---|
-| R1 | La tablet receptora apagada → sin comanda | Aviso en Órdenes + segundo dispositivo + `print_jobs` como cola |
-| R2 | `fn_confirm_order_to_kitchen` **no tiene guard** y puede resucitar órdenes pagadas (caso conocido: 6,009 órdenes atascadas) | La ingesta NO debe llamarlo sobre una orden ya pagada; marcar los ítems directamente |
-| R3 | Ítem sin ITBIS vinculado entra en 0 | El catálogo expone qué ítems no tienen impuesto; se corrige antes de salir a producción |
-| R4 | Total de Pincer ≠ total del POS | Se registra el de ellos + reporte de conciliación (§7) |
-| R5 | Pincer reintenta en pico y satura | Rate limit por API key + `Retry-After` |
-| R6 | Pedido de prueba imprime en Tropella | `environment='sandbox'` obligatorio hasta certificar; negocio de pruebas aparte |
-| R7 | La orden entra pero el KDS no la muestra | El KDS mira `order_items.status` y `kitchen_done_at`, no `status_ext`: la ingesta debe dejar los ítems en `pending` |
+| R1 | Tablet receptora apagada → sin comanda | Aviso en Órdenes + segundo dispositivo + `print_jobs` |
+| R2 | `fn_confirm_order_to_kitchen` **no tiene guard** y resucita órdenes pagadas (6,009 atascadas) | La ingesta no lo llama: marca los ítems directamente |
+| R3 | Ítem sin ITBIS vinculado entra en 0 | `menu_item_taxes` es la única fuente; auditar Tropella antes del piloto |
+| R4 | Propina revuelta con la venta o dentro de la base imponible | §7.1, columna explícita |
+| R5 | Pincer reintenta en pico | 60 rpm + `Retry-After` |
+| R6 | Pedido de prueba imprime en Tropella | `environment='sandbox'` obligatorio hasta certificar |
+| R7 | El KDS no muestra la orden | El KDS mira `order_items.status`, no `status_ext`: dejar ítems en `pending` |
+| R8 | **Tropella sin e-CF activo** y el piloto emite con RNC | Cerrar la activación en Alanube antes de la prueba (§8) |
+| R9 | Void tras comanda impresa | `409 already_in_kitchen` (§9.3) |
+| R10 | Cancelación en el POS estando offline | Sale por la cola offline; el webhook se dispara al reconectar |
+| R11 | El WAF bloquea a Pincer y la firma nunca se evalúa | Pedir rangos de salida igual (§5.2) |
 
 ---
 
-## 12. Preguntas abiertas
+## 13. Preguntas abiertas
 
-- **P1.** ¿Pincer cobra propina? Hoy no viene en su payload y el POS la maneja aparte.
-- **P2.** ¿Qué pasa si el restaurante cancela un pedido ya pagado en Pincer? ¿Quién
-  devuelve el dinero, y se emite nota de crédito?
-- **P3.** ¿Fee de la plataforma? Si Pincer retiene comisión, el ingreso bruto en el POS
-  no es lo que el restaurante recibe. Definir si se registra bruto (recomendado) o neto.
-- **P4.** ¿Sandbox contra qué? Opciones: negocio de pruebas en el mismo stack (rápido,
-  suficiente) o el clon del VPS (más limpio, más caro de mantener).
-- **P5.** Consulta al contador sobre el momento de emisión del NCF (§8).
-
----
-
-## Anexo — Borrador de respuesta a Tamayo
-
-> Tamayo, buenas.
->
-> Revisé lo que necesitan y te contesto punto por punto, con lo que sí podemos y
-> con lo que prefiero dejar para una segunda etapa.
->
-> **Lo que hacemos primero.** El pedido de Pincer entra a MangoPOS como un pedido de
-> delivery o para llevar, con sus líneas, modificadores, notas y su número de orden
-> impreso en la comanda; sale en cocina y en el KDS, y el pago que ustedes ya cobraron
-> queda registrado con su referencia para que el cierre cuadre. Ese es el corazón de
-> lo que pediste y es lo que vamos a entregar.
->
-> **Lo que sí les damos tal como lo pidieron:** credencial por restaurante que podemos
-> revocar, GET del catálogo con un id estable por producto (nuestro id es un UUID que
-> no cambia al editar nombre ni precio, así que casan contra eso), idempotencia por el
-> identificador de ustedes — si repiten por timeout les devolvemos la orden ya creada,
-> sin segunda comanda —, ambiente de pruebas separado para que nada imprima en
-> Tropella mientras desarrollan, y una tabla de códigos de error que distingue lo que
-> vale la pena reintentar de lo que no.
->
-> **Lo que prefiero dejar para después, y por qué.** Los puntos de sumar líneas a una
-> mesa abierta y de que el comensal vea y pague su cuenta desde el teléfono no son una
-> extensión del primero: son otro producto. Ahí entran la división de cuentas, la
-> propina, el NCF, la atribución del mesero y el cierre de caja del cajero que está en
-> turno. Se puede hacer y nos interesa, pero mal hecho rompe la caja del restaurante, y
-> prefiero que la primera integración salga sólida.
->
-> **Un detalle técnico que conviene que sepan.** Cuando les respondamos "aceptada", eso
-> significa que la orden entró y quedó encolada para imprimir. La impresora física
-> depende de la red del local; si una comanda no sale, queda marcada en rojo en el POS
-> para que el personal la reimprima. No es un caso de reintentar del lado de ustedes.
->
-> **Lo del respaldo, de acuerdo contigo:** reintentan ante 429, 503 y 500; si aun así
-> falla, el pedido sigue en su tablet para digitarlo a mano. Como respaldo, no como
-> norma.
->
-> Te paso la documentación de los endpoints con los ejemplos de JSON esta semana.
-> Dos preguntas para dimensionar: ¿manejan propina en el checkout, y retienen comisión
-> sobre el total? Eso cambia cómo registramos el ingreso.
->
-> Saludos,
-> Cristian
+- **P1.** ¿La propina es del restaurante o del repartidor de Pincer? Cambia el registro
+  contable (§7.1).
+- **P2.** Ventana de cancelación tras comanda impresa (§9.3).
+- **P3.** ¿Qué pasa si el restaurante rechaza el pedido al recibirlo (producto agotado)?
+  Es el mismo camino del webhook saliente, pero antes de cocinar.
+- **P4.** Sandbox: negocio de pruebas en el mismo stack (rápido, suficiente) vs. clon del
+  VPS. Recomiendo lo primero.
+- **P5.** ¿Pincer maneja pedidos programados para más tarde? Cambia cuándo se imprime.

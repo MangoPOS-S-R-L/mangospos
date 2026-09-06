@@ -3338,7 +3338,13 @@ class _CartView extends ConsumerWidget {
           ref,
           isDraft: item.status == 'draft',
         ),
-        onMarkSoldOut: item.productId == null
+        // Agotar (86) esconde el producto del menu de TODAS las tablets y
+        // solo se revierte desde Productos, asi que va detras de permiso.
+        // `operatorHasPermission` evalua al mesero del PIN cuando lo hay:
+        // en una tablet compartida no vale el permiso del usuario logueado.
+        onMarkSoldOut:
+            item.productId == null ||
+                !operatorHasPermission(ref, 'ventas.orden.agotar_producto')
             ? null
             : () async {
                 await ref

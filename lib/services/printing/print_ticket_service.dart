@@ -281,12 +281,21 @@ class PrintTicketService {
     gen.text('ORDEN: #${order.id.substring(0, 8).toUpperCase()}');
     gen.setBold(false);
 
-    if ((waiterName != null && waiterName.isNotEmpty) ||
+    // MESERO de la comanda = quien DIGITÓ estos platos (el PIN multimesero
+    // que estaba activo al agregarlos), NO quien abrió la mesa. Regla del
+    // dueño (2026-09-06): "para eso ponen el PIN". Precuenta y factura
+    // siguen imprimiendo al opener — son documentos de la CUENTA y su
+    // responsable no cambia; la comanda es del PEDIDO que acaba de entrar.
+    // [waiterName] (el opener, que resuelve el caller vía
+    // `fn_order_opener_name`) queda de respaldo para ítems sin atribución.
+    final headerWaiter = _resolveItemsAuthorName(items) ?? waiterName;
+
+    if ((headerWaiter != null && headerWaiter.isNotEmpty) ||
         order.createdAt.year > 1970) {
       gen.textRow('MESERO', 'HORA');
       gen.setBold(true);
       gen.textRow(
-        (waiterName?.isNotEmpty ?? false) ? waiterName! : '-',
+        (headerWaiter?.isNotEmpty ?? false) ? headerWaiter! : '-',
         _formatTime(order.createdAt),
       );
       gen.setBold(false);
@@ -397,6 +406,39 @@ class PrintTicketService {
       escPosCommands: gen.getCommands(),
       rawText: gen.getPlainText(),
     );
+  }
+
+  /// Nombre del mesero que DIGITÓ los ítems de una comanda.
+  ///
+  /// Sale de `order_items.created_by_employee_id` — poblado con el PIN
+  /// multimesero activo al agregar cada ítem (ver
+  /// `SalesViewModel._resolveItemEmployeeId`) — y llega ya resuelto a
+  /// nombre en `OrderItem.createdByEmployeeName` vía el embed a
+  /// `employees` del repository.
+  ///
+  /// Una ronda normal la digita una sola persona → ese nombre. Si la ronda
+  /// mezcla autores (dos meseras agregaron a la misma mesa antes de que
+  /// alguien pulsara Enviar) devolvemos el del ítem MÁS RECIENTE: es quien
+  /// tiene el device en la mano y manda el papel a cocina.
+  ///
+  /// `null` cuando ningún ítem trae atribución (órdenes legacy, envíos sin
+  /// PIN activo) — ahí el caller cae al opener de la mesa.
+  static String? _resolveItemsAuthorName(List<OrderItem> items) {
+    final distinct = <String>{};
+    String? latestName;
+    DateTime? latestAt;
+    for (final item in items) {
+      final name = item.createdByEmployeeName?.trim();
+      if (name == null || name.isEmpty) continue;
+      distinct.add(name);
+      if (latestAt == null || !item.createdAt.isBefore(latestAt)) {
+        latestAt = item.createdAt;
+        latestName = name;
+      }
+    }
+    if (distinct.isEmpty) return null;
+    if (distinct.length == 1) return distinct.first;
+    return latestName;
   }
 
   /// Separador entre items. Linea solida `-----` en lugar de dashed

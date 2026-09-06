@@ -127,6 +127,16 @@ const accessPermissions = <AccessPermission>[
     description: 'Permite quitar productos antes del cobro.',
   ),
   AccessPermission(
+    code: 'ventas.orden.agotar_producto',
+    label: 'Agotar producto (86) desde la orden',
+    categoryId: 'operations',
+    categoryLabel: 'Gestion Operativa',
+    description:
+        'Marca un producto como agotado desde la linea de la orden. Lo esconde '
+        'del menu en TODOS los dispositivos y solo se puede reactivar desde '
+        'Productos.',
+  ),
+  AccessPermission(
     code: 'ventas.orden.enviar_cocina',
     label: 'Enviar Pedido',
     categoryId: 'kds',
@@ -841,6 +851,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'ventas.orden.editar_item',
       'ventas.orden.eliminar_item',
       'ventas.orden.enviar_cocina',
+      'ventas.orden.agotar_producto',
       'ventas.orden.descuento_aplicar',
       'ventas.orden.anular',
       'ventas.orden.reabrir',
@@ -944,6 +955,9 @@ final rolePresets = <String, RolePresetDefinition>{
       'ventas.orden.agregar_item',
       'ventas.orden.editar_item',
       'ventas.orden.enviar_cocina',
+      // El cajero es quien suele enterarse de que algo se acabo, asi que
+      // conserva el 86. El mesero NO: su preset lo deja fuera a proposito.
+      'ventas.orden.agotar_producto',
       'ventas.orden.descuento_aplicar',
       'ventas.orden.anular',
       'ventas.orden.reabrir',
