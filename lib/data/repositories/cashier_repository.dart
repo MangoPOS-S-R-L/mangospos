@@ -379,12 +379,19 @@ class CashierRepository {
     return response;
   }
 
+  /// Registradoras activas del negocio, en orden estable de creacion.
+  ///
+  /// El `order` no es cosmetico: el viewmodel se engancha a `registers.first`
+  /// y sin ordenar Postgres puede devolver las filas en distinto orden por
+  /// equipo, de modo que dos cajas del mismo local acabarian operando contra
+  /// registradoras distintas segun el humor del planner.
   Future<List<Map<String, dynamic>>> getCashRegisters(String businessId) async {
     final response = await _client
         .from('cash_registers')
         .select()
         .eq('business_id', businessId)
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .order('created_at', ascending: true);
     return List<Map<String, dynamic>>.from(response);
   }
 
@@ -494,6 +501,61 @@ class CashierRepository {
 
     if (data == null) return null;
     return CashRegisterSession.fromMap(data);
+  }
+
+  /// Cajas abiertas de una registradora, en crudo.
+  ///
+  /// Devuelve mapas y no `CashRegisterSession` aposta: el modelo no
+  /// transporta `device_id`, y ese campo es justo el que permite reconocer
+  /// "la caja de ESTE equipo". Una sola consulta resuelve las dos preguntas
+  /// que necesita la pantalla de Caja: cual es MI caja y si hay alguna caja
+  /// abierta en el local.
+  Future<List<Map<String, dynamic>>> getOpenSessionsForRegister(
+    String cashRegisterId, {
+    int limit = 20,
+  }) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select()
+        .eq('cash_register_id', cashRegisterId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return List<Map<String, dynamic>>.from(data);
+  }
+
+  /// De las cajas abiertas de la registradora, la que le toca a este
+  /// usuario/equipo: la suya primero y, si no tiene, la abierta desde este
+  /// mismo dispositivo (turno heredado en la misma estacion).
+  ///
+  /// Devolver null significa "no tengo caja abierta", y es lo que habilita
+  /// el boton "Abrir caja" a una segunda cajera mientras la primera opera la
+  /// suya en otro equipo. Antes la pantalla usaba la caja abierta mas
+  /// reciente de la registradora fuera de quien fuera, asi que la segunda
+  /// veia "Caja abierta" y el boton de cerrar apuntaba a la ajena.
+  ///
+  /// Funcion pura para poder testear la precedencia sin red.
+  static Map<String, dynamic>? pickOwnOpenSession(
+    List<Map<String, dynamic>> openSessions, {
+    String? userId,
+    String? deviceId,
+  }) {
+    if (openSessions.isEmpty) return null;
+
+    if (userId != null && userId.isNotEmpty) {
+      for (final session in openSessions) {
+        if (session['user_id']?.toString() == userId) return session;
+      }
+    }
+
+    if (deviceId != null && deviceId.isNotEmpty) {
+      for (final session in openSessions) {
+        if (session['device_id']?.toString() == deviceId) return session;
+      }
+    }
+
+    return null;
   }
 
   Future<List<CashRegisterSession>> getSessionsByRegister(

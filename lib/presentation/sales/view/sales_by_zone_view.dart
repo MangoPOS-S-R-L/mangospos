@@ -194,8 +194,10 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
     final zones = ref.watch(byZoneVmProvider.select((s) => s.zones));
     final isZoneLoading = ref.watch(byZoneVmProvider.select((s) => s.loading));
     final zoneError = ref.watch(byZoneVmProvider.select((s) => s.error));
-    final isCashOpen = ref.watch(
-      cashierViewModelProvider.select((vm) => vm.isCashOpen),
+    // Gate de VENTA: cualquier caja abierta de la registradora habilita
+    // abrir mesas, no solo la mia (el mesero vende contra la del cajero).
+    final canSell = ref.watch(
+      cashierViewModelProvider.select((vm) => vm.canSellWithOpenCash),
     );
     final viewMode = ref.watch(salesViewModeProvider);
     final hasZones = zones.isNotEmpty;
@@ -253,9 +255,9 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
               (zone) => viewMode == SalesZoneViewMode.map
                   ? _ZoneFloorMapView(
                       zoneId: zone.id,
-                      canOpenTables: isCashOpen,
+                      canOpenTables: canSell,
                     )
-                  : _ZoneGrid(zoneId: zone.id, canOpenTables: isCashOpen),
+                  : _ZoneGrid(zoneId: zone.id, canOpenTables: canSell),
             )
             .toList(),
       );
@@ -409,7 +411,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isCashOpen) ...[
+          if (!canSell) ...[
             Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: 10,

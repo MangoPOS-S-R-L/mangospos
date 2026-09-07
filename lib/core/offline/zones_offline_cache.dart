@@ -27,6 +27,7 @@ class ZonesOfflineCache {
 
   String _zonesKey(String businessId) => 'offline_zones_snapshot_$businessId';
   String _statusKey(String zoneId) => 'offline_zone_status_snapshot_$zoneId';
+  String _tablesKey(String zoneId) => 'offline_zone_tables_snapshot_$zoneId';
 
   Future<void> saveZonesSnapshot({
     required String businessId,
@@ -98,6 +99,51 @@ class ZonesOfflineCache {
       return (rows: rows, savedAt: savedAt);
     } catch (e) {
       debugPrint('ZonesOfflineCache.loadZoneStatusSnapshot error: $e');
+      return null;
+    }
+  }
+
+  // ---- MESAS DE UNA ZONA (dining_tables) ----
+  //
+  // Distinto del snapshot de ESTADO de arriba: aquí va la mesa en sí (código,
+  // etiqueta, capacidad y geometría del plano), que cambia rara vez. El estado
+  // —ocupada/libre, sesión abierta— es el otro snapshot y cambia todo el rato.
+  // Sin este, el modal "asignar a mesa" y el floor map salían vacíos sin red
+  // aunque las zonas sí cargaran de cache.
+
+  Future<void> saveZoneTablesSnapshot({
+    required String zoneId,
+    required List<Map<String, dynamic>> rowsRaw,
+  }) async {
+    try {
+      final storage = await _storage;
+      final payload = jsonEncode({
+        'saved_at': DateTime.now().toIso8601String(),
+        'rows': rowsRaw,
+      });
+      await storage.write(_tablesKey(zoneId), payload);
+    } catch (e) {
+      debugPrint('ZonesOfflineCache.saveZoneTablesSnapshot error: $e');
+    }
+  }
+
+  Future<({List<Map<String, dynamic>> rows, DateTime savedAt})?>
+      loadZoneTablesSnapshot({required String zoneId}) async {
+    try {
+      final storage = await _storage;
+      final raw = await storage.read(_tablesKey(zoneId));
+      if (raw == null || raw.isEmpty) return null;
+      final payload = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      final rows = (payload['rows'] as List? ?? const [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+      final savedAt = DateTime.tryParse(
+            (payload['saved_at'] as String?) ?? '',
+          ) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return (rows: rows, savedAt: savedAt);
+    } catch (e) {
+      debugPrint('ZonesOfflineCache.loadZoneTablesSnapshot error: $e');
       return null;
     }
   }

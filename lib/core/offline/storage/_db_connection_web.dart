@@ -10,10 +10,12 @@
 
 import 'package:drift/drift.dart';
 
-LazyDatabase openConnection() {
+LazyDatabase openConnection({
+  String fileName = 'mangopos_offline_queue.db',
+}) {
   return LazyDatabase(() async {
     throw UnsupportedError(
-      'Drift no está habilitado en web para MangoPOS. '
+      'Drift no está habilitado en web para MangoPOS ($fileName). '
       'La cola offline usa SharedPreferences en esta plataforma. '
       'Si ves este error, falta un guard `kIsWeb` en el caller.',
     );

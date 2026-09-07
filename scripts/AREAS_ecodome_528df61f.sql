@@ -7,11 +7,19 @@
 --   area, "Enviar a cocina" se bloquea y NO sale ninguna comanda — falla
 --   callado hasta que alguien intenta imprimir.
 --
--- >> ANTES DE CORRER: pon abajo los CODES reales de las areas del negocio.
---    Miralos con scripts/AREAS_diagnostico_528df61f.sql, o con:
---      select code, name, is_active from public.print_areas
---       where business_id = '528df61f-7136-4591-9e87-ee19f5882037';
---    Si un code no existe, el script aborta y te dice cuales hay.
+-- CREA LAS DOS AREAS si no existen: `cocina` (Cocina) y `bar` (Barra),
+-- y despues les asigna los 42 productos. Si ya existen, las reusa tal cual.
+--
+-- CANDADO: solo crea si el negocio NO tiene ninguna area activa. Si ya
+--   tiene areas y no estan las dos mias, ABORTA y te las lista — incluso
+--   si calza una sola: crear la que falta al lado de un `barra` que ya
+--   hace ese papel deja 33 productos apuntando a un area nueva y vacia.
+--   El code lo genera la app desde el nombre: Cocina -> cocina, Bar -> bar,
+--   Barra -> barra, y `_2` si choca. Pon los reales en el bloque 1.
+--
+-- LO QUE NO HACE: pegarle una impresora a cada area. Un area sin impresora
+--   acepta el producto pero la comanda NO sale. Eso se configura en
+--   Ajustes -> Areas de impresion, o con el bloque comentado del final.
 --
 -- REPARTO: cocina 9 (todo lo de `Comida`) | barra 33 (todo lo demas).
 --   No hay combos de dos areas en este catalogo.
@@ -28,34 +36,75 @@
 begin;
 
 -- ---------------------------------------------------------------------------
--- >> 1) CODES DE LAS AREAS — AJUSTA ESTOS DOS VALORES
+-- 1) LAS DOS AREAS — se CREAN si no existen. Cambia `name`/`code` aqui
+--    si el negocio las llama de otra forma.
 -- ---------------------------------------------------------------------------
-create temp table _area_cfg (rol text primary key, code text) on commit drop;
-insert into _area_cfg (rol, code) values
-  ('K', 'cocina'),   -- area de COCINA
-  ('B', 'bar');      -- area de BARRA
+create temp table _area_cfg (rol text primary key, code text, name text) on commit drop;
+insert into _area_cfg (rol, code, name) values
+  ('K', 'cocina', 'Cocina'),   -- area de COCINA
+  ('B', 'bar',    'Barra');    -- area de BARRA
 
 do $$
 declare
-  v_business uuid := '528df61f-7136-4591-9e87-ee19f5882037';
-  v_missing  text;
-  v_have     text;
+  v_business  uuid := '528df61f-7136-4591-9e87-ee19f5882037';
+  v_activas   int;
+  v_nuestras  int;
+  v_otras     text;
+  v_faltan    text;
+  v_creadas   text;
 begin
-  select string_agg(cfg.code, ', ')
-    into v_missing
-  from _area_cfg cfg
-  where not exists (
-    select 1 from public.print_areas a
-    where a.business_id = v_business and a.code = cfg.code
-      and coalesce(a.is_active, true)
-  );
-  if v_missing is not null then
+  -- Reactiva primero: un area NUESTRA apagada cuenta como existente, si no
+  -- rutearia a un area desactivada y el control daria sin_area_nm > 0.
+  update public.print_areas a
+     set is_active = true
+    from _area_cfg cfg
+   where a.business_id = v_business and a.code = cfg.code
+     and not coalesce(a.is_active, true);
+
+  select count(*) into v_activas
+  from public.print_areas a
+  where a.business_id = v_business and coalesce(a.is_active, true);
+
+  select count(*) into v_nuestras
+  from public.print_areas a
+  join _area_cfg cfg on cfg.code = a.code
+  where a.business_id = v_business and coalesce(a.is_active, true);
+
+  -- CANDADO. Solo hay dos caminos limpios: el negocio no tiene NINGUNA
+  -- area activa (las creamos), o ya tiene LAS DOS nuestras (las reusamos).
+  -- Cualquier mezcla aborta: crear la que falta al lado de un area que ya
+  -- hace ese papel con otro nombre (Barra -> code `barra`) deja el ruteo
+  -- partido y 33 productos apuntando a un area nueva y vacia.
+  if v_activas > 0 and v_nuestras < (select count(*) from _area_cfg) then
     select string_agg(a.code || ' (' || a.name || ')', ', ' order by a.code)
-      into v_have
+      into v_otras
     from public.print_areas a
     where a.business_id = v_business and coalesce(a.is_active, true);
-    raise exception 'No existen estas areas: %. El negocio tiene: %', v_missing, coalesce(v_have, '(ninguna)');
+
+    select string_agg(cfg.code, ', ' order by cfg.code)
+      into v_faltan
+    from _area_cfg cfg
+    where not exists (
+      select 1 from public.print_areas a
+      where a.business_id = v_business and a.code = cfg.code
+        and coalesce(a.is_active, true)
+    );
+
+    raise exception 'El negocio ya tiene estas areas activas: %. De las mias faltan: %. Pon los codes REALES en el bloque 1 y vuelve a correr (el code lo genera la app desde el nombre: Cocina -> cocina, Barra -> barra).', v_otras, v_faltan;
   end if;
+
+  with ins as (
+    insert into public.print_areas (business_id, name, code, is_active)
+    select v_business, cfg.name, cfg.code, true
+    from _area_cfg cfg
+    where not exists (
+      select 1 from public.print_areas a
+      where a.business_id = v_business and a.code = cfg.code
+    )
+    returning code
+  )
+  select string_agg(code, ', ' order by code) into v_creadas from ins;
+  raise notice 'Areas creadas: %', coalesce(v_creadas, '(ninguna: ya existian, se reusan)');
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -183,4 +232,31 @@ join public.menu_items mi on mi.id = x.menu_item_id
 where mi.business_id = '528df61f-7136-4591-9e87-ee19f5882037'::uuid
 group by a.code order by a.code;
 
+-- Las areas que quedaron. impr_comandas = 0 -> el area acepta el producto
+-- pero la comanda NO sale: hay que pegarle una impresora.
+select a.code, a.name, a.is_active,
+       (select count(*) from public.print_area_printers pp
+         where pp.area_id = a.id) as impresoras,
+       (select count(*) from public.print_area_printers pp
+         where pp.area_id = a.id and pp.enabled and pp.prints_orders) as impr_comandas
+from public.print_areas a
+where a.business_id = '528df61f-7136-4591-9e87-ee19f5882037'::uuid
+order by a.code;
+
 commit;
+
+
+-- ---------------------------------------------------------------------------
+-- OPCIONAL — pegarle una impresora a un area, si no la configuras por la app.
+-- Descomenta y pon el nombre exacto de la impresora y el code del area.
+-- ---------------------------------------------------------------------------
+-- insert into public.print_area_printers
+--   (business_id, area_id, printer_id, priority, enabled, prints_orders, prints_prebills, prints_receipts)
+-- select p.business_id, a.id, p.id, 1, true, true, false, false
+-- from public.printers p
+-- join public.print_areas a
+--   on a.business_id = p.business_id and a.code = 'cocina'   -- << el area
+-- where p.business_id = '528df61f-7136-4591-9e87-ee19f5882037'::uuid
+--   and p.name = 'NOMBRE EXACTO DE LA IMPRESORA'             -- << la impresora
+--   and not exists (select 1 from public.print_area_printers pp
+--                    where pp.area_id = a.id and pp.printer_id = p.id);

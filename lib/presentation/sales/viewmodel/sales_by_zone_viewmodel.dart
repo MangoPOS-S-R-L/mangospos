@@ -532,9 +532,12 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     if (!force && state.layoutByZone.containsKey(zoneId)) return;
     try {
       final repo = ref.read(zonesRepoProvider);
-      final tables = await repo.fetchTablesByZone(zoneId);
+      // Con fallback a cache: sin red el floor map se quedaba sin geometría y
+      // caía a su representación por defecto aunque el layout ya se hubiera
+      // descargado antes.
+      final result = await repo.fetchTablesByZoneWithCache(zoneId);
       state = state.copyWith(
-        layoutByZone: {...state.layoutByZone, zoneId: tables},
+        layoutByZone: {...state.layoutByZone, zoneId: result.tables},
       );
     } catch (e) {
       developer.log(

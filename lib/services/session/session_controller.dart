@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart'
 import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/user_businesses_offline_cache.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/core/network/supabase_config.dart';
@@ -600,12 +602,155 @@ class SessionController extends Notifier<SessionState> {
           sessionStillPresent ||
           SupabaseConfig.isRecoverableError(error);
 
+      // Arranque en frío sin red: preservar el estado anterior aquí significa
+      // volver a `AuthStatus.loading` —el estado inicial del build— y quedarse
+      // ahí PARA SIEMPRE, porque nada reintenta salvo un nuevo auth-event. Es
+      // el candado que dejaba la app en la pantalla de carga con la sesión
+      // válida y todo el modo offline listo detrás. Antes de resignarnos,
+      // reconstruimos la sesión desde los caches locales.
+      if (!hadAuthenticatedState &&
+          await _hydrateSessionFromCaches(userId: user.id)) {
+        return true;
+      }
+
       if (shouldPreserveState) {
         _safeSet(previousState);
         return false;
       }
 
       setUnauthenticated();
+      return false;
+    }
+  }
+
+  /// Reconstruye la sesión sin red desde lo que ya está en disco, para que un
+  /// arranque offline llegue a `authenticated` en vez de colgarse en loading.
+  ///
+  /// Fuentes (ambas se llenan solas en cada arranque normal con internet):
+  ///   - [UserBusinessesOfflineCache] → a qué negocios entra el usuario, con
+  ///     el rol y el nombre de cada sucursal.
+  ///   - [OfflineAuthService.cachedRoster] → employeeId, nombre y el set de
+  ///     permisos EFECTIVOS del usuario en ese negocio.
+  ///
+  /// Sobre la caducidad del roster: `verifyPin` bloquea a las 24h sin sync
+  /// para que un empleado despedido no entre por PIN en un terminal olvidado.
+  /// Ese candado sigue intacto — aquí no se está autenticando a nadie: la
+  /// credencial es la sesión de Supabase que el usuario ya tenía, con su
+  /// propia expiración, y el roster solo aporta el rol y los permisos que no
+  /// podemos consultar sin red. Por eso no se aplica el TTL: hacerlo
+  /// devolvería la pantalla de carga infinita justo al local que lleva más de
+  /// un día sin internet, que es el que más necesita operar.
+  ///
+  /// Devuelve `true` solo si logró dejar la sesión autenticada.
+  Future<bool> _hydrateSessionFromCaches({required String userId}) async {
+    try {
+      final cachedRows = await UserBusinessesOfflineCache().load(userId);
+
+      String? businessId = state.activeBusinessId;
+      if (businessId == null || businessId.isEmpty) {
+        try {
+          final storage = await StorageService.getInstance();
+          businessId = await storage.read(StorageKeys.activeBusinessId);
+        } catch (_) {/* storage no crítico */}
+      }
+      if ((businessId == null || businessId.isEmpty) && cachedRows != null) {
+        businessId = cachedRows.first['business_id']?.toString();
+      }
+      if (businessId == null || businessId.isEmpty) return false;
+
+      // La fila del negocio elegido (si el cache la tiene) da rol y nombre.
+      Map<String, dynamic>? row;
+      if (cachedRows != null) {
+        for (final candidate in cachedRows) {
+          if (candidate['business_id']?.toString() == businessId) {
+            row = candidate;
+            break;
+          }
+        }
+      }
+
+      final business = row?['businesses'];
+      final businessMap = business is Map
+          ? Map<String, dynamic>.from(business)
+          : const <String, dynamic>{};
+      final branch = businessMap['branch_name']?.toString().trim();
+      final businessName = (branch != null && branch.isNotEmpty)
+          ? branch
+          : businessMap['business_name']?.toString().trim();
+
+      // El roster cubre a los empleados; un propietario puede no estar en él,
+      // así que el rol de `user_businesses` manda y el roster es el respaldo.
+      final roster = await OfflineAuthService().cachedRoster(businessId);
+      OfflineRosterUser? me;
+      for (final candidate in roster) {
+        if (candidate.userId == userId) {
+          me = candidate;
+          break;
+        }
+      }
+
+      final roleStr = row?['role']?.toString() ?? me?.role;
+      final posRole = _mapRole(roleStr);
+      if (posRole == null) {
+        debugPrint(
+          '[Session] Hidratación offline sin rol utilizable '
+          '(role=$roleStr, business=$businessId).',
+        );
+        return false;
+      }
+
+      // Un usuario desactivado en el último roster bajado no entra.
+      if (me != null && !me.isActive) {
+        debugPrint('[Session] Hidratación offline abortada: usuario inactivo.');
+        return false;
+      }
+
+      final permissions = (me != null && me.permissions.isNotEmpty)
+          ? me.permissions.toSet()
+          : _fallbackPermissions(roleStr, posRole);
+
+      final availableBusinesses = <SessionBusiness>[];
+      for (final candidate in cachedRows ?? const <Map<String, dynamic>>[]) {
+        final id = candidate['business_id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        final raw = candidate['businesses'];
+        final map =
+            raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+        final candidateBranch = map['branch_name']?.toString().trim();
+        availableBusinesses.add(
+          SessionBusiness(
+            id: id,
+            name: (candidateBranch != null && candidateBranch.isNotEmpty)
+                ? candidateBranch
+                : (map['business_name']?.toString().trim() ?? 'Negocio'),
+            companyName: map['business_name']?.toString(),
+            role: candidate['role']?.toString() ?? 'owner',
+            status: map['status']?.toString(),
+            domain: map['domain']?.toString(),
+          ),
+        );
+      }
+
+      debugPrint(
+        '[Session] Sin red; sesión reconstruida desde cache local '
+        '(business=$businessId, rol=$roleStr, '
+        'permisos=${permissions.length}).',
+      );
+
+      setAuthenticated(
+        userId,
+        employeeId: me?.employeeId,
+        businessId: businessId,
+        businessName: businessName,
+        userName: me?.name,
+        activeRole: posRole,
+        availableRoles: [posRole],
+        availableBusinesses: availableBusinesses,
+        permissions: permissions,
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[Session] Hidratación offline falló: $e');
       return false;
     }
   }

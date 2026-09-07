@@ -92,8 +92,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
     }
 
     final orderState = ref.watch(currentOrderProvider);
-    final isCashOpen = ref.watch(
-      cashierViewModelProvider.select((vm) => vm.isCashOpen),
+    // Gate de VENTA: sirve cualquier caja abierta de la registradora, no
+    // solo la mia. El mesero no abre caja propia y vende contra la del
+    // cajero, asi que aqui NO va `isCashOpen` (que es "mi caja").
+    final canSell = ref.watch(
+      cashierViewModelProvider.select((vm) => vm.canSellWithOpenCash),
     );
     final guardNavigation = _shouldGuardNavigation(route, orderState);
     final sessionCtrl = ref.read(sessionProvider.notifier);
@@ -129,7 +132,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
               child: Column(
                 children: [
                   const SizedBox(height: 24),
-                  if (!isCashOpen)
+                  if (!canSell)
                     _CashClosedBanner(compact: compact),
                   // 2026-05-13: removido el widget "Saldo en caja" de la
                   // app POS. El cajero no debe ver el monto esperado
@@ -176,7 +179,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                             // bloqueada hasta completar TableSelectorModal
                             // + flujo de asignación post-cobro. Reactivar
                             // removiendo el `|| true` cuando esté listo.
-                            disabled: !isCashOpen || true,
+                            disabled: !canSell || true,
                             onTap: () => _handleNavTap(
                               context,
                               ref,
@@ -199,7 +202,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                             locked: !sessionCtrl.hasPermission(
                               'ventas_rapida.acceso',
                             ),
-                            disabled: !isCashOpen,
+                            disabled: !canSell,
                             onTap: () => _handleNavTap(
                               context,
                               ref,
@@ -222,7 +225,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                             locked: !sessionCtrl.hasPermission(
                               'delivery.crear_orden',
                             ),
-                            disabled: !isCashOpen,
+                            disabled: !canSell,
                             onTap: () => _handleNavTap(
                               context,
                               ref,
@@ -270,7 +273,7 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
                 // Retail: el sidebar (que normalmente muestra el aviso de
                 // "caja cerrada" y permite abrirla) está oculto; surfaceamos
                 // ese aviso aquí para no perder el punto de apertura de caja.
-                if (businessModel.isRetail && !isCashOpen)
+                if (businessModel.isRetail && !canSell)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                     child: _CashClosedBanner(compact: false),

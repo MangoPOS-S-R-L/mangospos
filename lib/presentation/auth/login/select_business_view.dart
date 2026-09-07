@@ -11,6 +11,7 @@ import '../../../core/theme/app_breakpoints.dart';
 import '../../../core/utils/logger.dart';
 import '../../../core/business/business_resolver.dart';
 import '../../../core/network/supabase_config.dart';
+import '../../../core/offline/user_businesses_offline_cache.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../services/session/session_controller.dart';
 import '../../../core/theme/app_colors.dart';
@@ -116,59 +117,14 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         return;
       }
 
-      // Solo los OWNERS con múltiples negocios ven el selector. Para todos los
-      // demás casos auto-seleccionamos:
-      //   - 1 solo negocio (cualquier rol) → directo
-      //   - empleado (cashier/waiter/cook/etc.) con múltiples negocios →
-      //     directo al primero. Un empleado no debería tener que "elegir"
-      //     dónde entrar; va a su sucursal asignada.
-      //
-      // Si hay un negocio activo previo en storage, lo preferimos por sobre
-      // "el primero" para que el empleado caiga en la sucursal donde estaba
-      // operando la última vez.
-      final isOwnerOfAny = list.any((row) {
-        final role = (row as Map<String, dynamic>?)?['role']?.toString();
-        return role == 'owner';
-      });
+      final rows = list.cast<Map<String, dynamic>>();
 
-      if (list.length == 1 || !isOwnerOfAny) {
-        Map<String, dynamic>? target;
+      // Cachear ANTES de decidir a dónde vamos: si el próximo arranque es sin
+      // internet, esta es la única copia de "a qué negocios entra este
+      // usuario" que evita el callejón sin salida.
+      await UserBusinessesOfflineCache().save(userId: user.id, rows: rows);
 
-        // Preferir el negocio activo previo si sigue en la lista del usuario.
-        try {
-          final storage = await StorageService.getInstance();
-          final stored = await storage.read(StorageKeys.activeBusinessId);
-          if (stored != null && stored.isNotEmpty) {
-            for (final row in list) {
-              final map = row as Map<String, dynamic>;
-              if (map['business_id']?.toString() == stored) {
-                target = map;
-                break;
-              }
-            }
-          }
-        } catch (_) {/* storage no crítico */}
-
-        target ??= list.first as Map<String, dynamic>;
-        final businessId = target['business_id'] as String?;
-        if (businessId != null) {
-          AppLogger.i(
-            '[SelectBusiness] Auto-seleccionando $businessId '
-            '(isOwnerOfAny=$isOwnerOfAny, total=${list.length})',
-          );
-          await _handleSelect(target);
-          return;
-        }
-      }
-
-      // Owner con múltiples negocios → mostrar el selector
-      if (mounted) {
-        setState(() {
-          _businesses = list.cast<Map<String, dynamic>>();
-          _isLoading = false;
-          _error = null;
-        });
-      }
+      await _applyBusinessList(rows);
     } catch (e) {
       if (SupabaseConfig.isAuthRefreshSchemaMismatchError(e)) {
         AppLogger.w(
@@ -181,6 +137,23 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         return;
       }
 
+      // Sin red (o server caído): reusar los accesos cacheados en vez de
+      // dejar al usuario varado. Antes esta rama pintaba "No pudimos cargar
+      // tus accesos" y el botón Reintentar repetía la MISMA consulta a red,
+      // así que un cajero sin internet no tenía forma de entrar.
+      final userId = supabase.auth.currentUser?.id;
+      if (userId != null) {
+        final cached = await UserBusinessesOfflineCache().load(userId);
+        if (cached != null) {
+          AppLogger.i(
+            '[SelectBusiness] Sin red; entrando con ${cached.length} '
+            'acceso(s) cacheado(s).',
+          );
+          await _applyBusinessList(cached);
+          return;
+        }
+      }
+
       if (mounted) {
         setState(() {
           _error = SupabaseConfig.isTlsCertificateError(e)
@@ -190,6 +163,60 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
         });
       }
       AppLogger.w('Error cargando negocios: $e');
+    }
+  }
+
+  /// Decide qué hacer con la lista de accesos — venga de la red o del cache.
+  ///
+  /// Solo los OWNERS con múltiples negocios ven el selector. Para todos los
+  /// demás casos auto-seleccionamos:
+  ///   - 1 solo negocio (cualquier rol) → directo
+  ///   - empleado (cashier/waiter/cook/etc.) con múltiples negocios → directo
+  ///     al primero. Un empleado no debería tener que "elegir" dónde entrar;
+  ///     va a su sucursal asignada.
+  ///
+  /// Si hay un negocio activo previo en storage, lo preferimos por sobre "el
+  /// primero" para que el empleado caiga en la sucursal donde estaba operando
+  /// la última vez.
+  Future<void> _applyBusinessList(List<Map<String, dynamic>> list) async {
+    final isOwnerOfAny = list.any((row) => row['role']?.toString() == 'owner');
+
+    if (list.length == 1 || !isOwnerOfAny) {
+      Map<String, dynamic>? target;
+
+      // Preferir el negocio activo previo si sigue en la lista del usuario.
+      try {
+        final storage = await StorageService.getInstance();
+        final stored = await storage.read(StorageKeys.activeBusinessId);
+        if (stored != null && stored.isNotEmpty) {
+          for (final row in list) {
+            if (row['business_id']?.toString() == stored) {
+              target = row;
+              break;
+            }
+          }
+        }
+      } catch (_) {/* storage no crítico */}
+
+      target ??= list.first;
+      final businessId = target['business_id'] as String?;
+      if (businessId != null) {
+        AppLogger.i(
+          '[SelectBusiness] Auto-seleccionando $businessId '
+          '(isOwnerOfAny=$isOwnerOfAny, total=${list.length})',
+        );
+        await _handleSelect(target);
+        return;
+      }
+    }
+
+    // Owner con múltiples negocios → mostrar el selector
+    if (mounted) {
+      setState(() {
+        _businesses = list;
+        _isLoading = false;
+        _error = null;
+      });
     }
   }
 

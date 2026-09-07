@@ -66,13 +66,22 @@ class _TableSelectorModalState extends ConsumerState<TableSelectorModal>
       throw Exception('Sin negocio activo.');
     }
     final repo = ref.read(zonesRepoProvider);
-    return repo.fetchZones(businessId);
+    // Con fallback a cache: sin red este modal mostraba "Reintentar" y no
+    // había forma de asignar la venta a una mesa.
+    final result = await repo.fetchZonesWithCache(businessId);
+    return result.zones;
   }
 
   Future<List<DiningTable>> _tablesFor(String zoneId) {
     return _tablesByZone.putIfAbsent(
       zoneId,
-      () => ref.read(zonesRepoProvider).fetchTablesByZone(zoneId),
+      () async {
+        final result =
+            await ref.read(zonesRepoProvider).fetchTablesByZoneWithCache(
+                  zoneId,
+                );
+        return result.tables;
+      },
     );
   }
 

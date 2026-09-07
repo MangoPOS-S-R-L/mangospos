@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -50,9 +51,21 @@ List<Future<void> Function()> buildOfflineRefreshers({
   SupabaseClient resolveClient() => client ?? Supabase.instance.client;
   final catalog = refreshCatalog ??
       (String b) => CatalogRefreshService(resolveClient()).refresh(b);
+  // Zonas + las MESAS de cada zona. Bajar solo las zonas dejaba el floor map y
+  // el modal de asignar a mesa sin geometría en un arranque en frío: el cajero
+  // veía sus zonas pero ninguna mesa dentro. Son pocas zonas por local (una
+  // consulta por zona), y ambas lecturas cachean como efecto secundario.
   final zones = refreshZones ??
       (String b) async {
-        await ZonesRepository(resolveClient()).fetchZones(b);
+        final repo = ZonesRepository(resolveClient());
+        final list = await repo.fetchZones(b);
+        for (final zone in list) {
+          try {
+            await repo.fetchTablesByZone(zone.id);
+          } catch (e) {
+            debugPrint('[offline] mesas de la zona ${zone.id} no bajaron: $e');
+          }
+        }
       };
   final inventory = refreshInventory ??
       (String b) => _refreshInventoryMainWarehouse(resolveClient(), b);
@@ -125,8 +138,13 @@ Future<void> _refreshInventoryMainWarehouse(
 /// no-autoDispose: se crea una vez y se limpia al cerrar el container.
 final offlineSyncCoordinatorProvider =
     Provider<OfflineSyncCoordinator>((ref) {
+  final connectivity = ConnectivityService();
   final coordinator = OfflineSyncCoordinator(
-    connectionStream: ConnectivityService().connectionStream,
+    connectionStream: connectivity.connectionStream,
+    // Lectura en vivo: el stream solo emite en los CAMBIOS, así que un equipo
+    // que nace online y no pierde la red nunca recibía nada por él y no
+    // sembraba un solo cache. Ver la nota en OfflineSyncCoordinator.
+    isConnectedNow: () => connectivity.isConnected,
     refreshers: buildOfflineRefreshers(
       resolveBusinessId: () => ref.read(sessionProvider).activeBusinessId,
     ),

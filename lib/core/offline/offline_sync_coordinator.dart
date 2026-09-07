@@ -19,22 +19,54 @@ class OfflineSyncCoordinator {
     required Stream<bool> connectionStream,
     required List<Future<void> Function()> refreshers,
     Duration periodic = const Duration(minutes: 15),
+    bool Function()? isConnectedNow,
+    Duration startupDelay = const Duration(seconds: 5),
   })  : _connectionStream = connectionStream,
         _refreshers = refreshers,
-        _periodic = periodic;
+        _periodic = periodic,
+        _isConnectedNow = isConnectedNow,
+        _startupDelay = startupDelay;
 
   final Stream<bool> _connectionStream;
   final List<Future<void> Function()> _refreshers;
   final Duration _periodic;
 
+  /// Lectura EN VIVO de la conectividad. Sin esto el coordinador solo conoce
+  /// el estado que le haya llegado por [_connectionStream] — y ese stream es
+  /// un broadcast sin replay que únicamente emite en los CAMBIOS
+  /// (`ConnectivityService._updateAdapterStatus(..., emit: false)` al
+  /// inicializar). En el caso normal —el equipo nace con internet y se queda
+  /// con internet— el stream no emitía nunca, `_connected` se quedaba en
+  /// `false` y NI la siembra inicial NI el timer periódico llegaban a correr:
+  /// los caches de lectura nunca se sembraban y el device llegaba a su primera
+  /// caída de red en frío. Es opcional para no romper los tests que inyectan
+  /// solo el stream.
+  final bool Function()? _isConnectedNow;
+
+  /// Espera antes de la siembra inicial, para no competir con la carga de la
+  /// primera pantalla (el shell lee este provider mientras el salón arranca).
+  final Duration _startupDelay;
+
   StreamSubscription<bool>? _sub;
   Timer? _timer;
+  Timer? _startupTimer;
   bool _connected = false;
   bool _inFlight = false;
   bool _disposed = false;
 
+  /// Conectividad efectiva: la lectura en vivo si la hay, si no lo último que
+  /// llegó por el stream.
+  bool get _isOnline => _isConnectedNow?.call() ?? _connected;
+
   void start() {
     if (_disposed) return;
+    // Semilla: arrancar en `false` a ciegas es lo que rompía la siembra. Con
+    // la lectura en vivo el estado inicial es el real, y la detección de
+    // transición sigue siendo correcta: si el device está offline de verdad,
+    // el probe emitirá `false` y la reconexión posterior sí cuenta como
+    // offline→online.
+    _connected = _isConnectedNow?.call() ?? _connected;
+
     _sub = _connectionStream.listen((connected) {
       final wasConnected = _connected;
       _connected = connected;
@@ -44,7 +76,19 @@ class OfflineSyncCoordinator {
     // Red de seguridad: aunque no haya transición, refresca cada tanto si hay
     // conexión (cubre cambios del server mientras el device sigue online).
     _timer = Timer.periodic(_periodic, (_) {
-      if (_connected) unawaited(refreshAll());
+      if (_isOnline) unawaited(refreshAll());
+    });
+
+    // Siembra inicial: sin esto, un device que nunca pierde la red no cachea
+    // nada hasta el primer corte — justo cuando ya es tarde.
+    if (_isConnectedNow == null) return;
+    if (_startupDelay <= Duration.zero) {
+      if (_isOnline) unawaited(refreshAll());
+      return;
+    }
+    _startupTimer = Timer(_startupDelay, () {
+      if (_disposed || !_isOnline) return;
+      unawaited(refreshAll());
     });
   }
 
@@ -72,5 +116,7 @@ class OfflineSyncCoordinator {
     _sub = null;
     _timer?.cancel();
     _timer = null;
+    _startupTimer?.cancel();
+    _startupTimer = null;
   }
 }

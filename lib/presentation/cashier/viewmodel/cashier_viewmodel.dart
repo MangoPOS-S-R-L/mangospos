@@ -42,6 +42,12 @@ class CashierViewModel extends ChangeNotifier {
 
   bool _isLoading = false;
   Map<String, dynamic>? _lastSession;
+  // Hay alguna caja abierta en la registradora, sin importar de quien.
+  // Se mantiene aparte de `_lastSession` (que es MI caja) porque las dos
+  // preguntas tienen respuestas distintas desde que dos cajeras pueden
+  // operar a la vez: yo puedo no tener caja y el local si tenerla abierta,
+  // y el mesero debe poder seguir vendiendo en ese caso.
+  bool _registerCashOpen = false;
   int _pendingTables = 0;
   String? _currentRegisterId;
   String _currentRegisterName = '';
@@ -95,6 +101,7 @@ class CashierViewModel extends ChangeNotifier {
       _recentMovements.length,
       _activeSessions.length,
       _totalWeeklySales,
+      _registerCashOpen,
     ].join('|');
   }
 
@@ -199,6 +206,86 @@ class CashierViewModel extends ChangeNotifier {
     }
   }
 
+  // El flag "el local tiene caja abierta" se cachea aparte y NO por usuario:
+  // el mesero vende contra la caja del cajero, asi que offline necesita
+  // recordar que el local tenia caja abierta aunque el nunca abriera una.
+  // Sin esto, separar "mi caja" de "la del local" dejaba al mesero sin poder
+  // abrir mesas al quedarse sin red.
+  String? _cachedRegisterOpenKey() {
+    if (_businessId == null || _currentRegisterId == null) return null;
+    return 'cashier_register_open_${_businessId}_$_currentRegisterId';
+  }
+
+  Future<void> _persistRegisterCashOpen(bool value) async {
+    final key = _cachedRegisterOpenKey();
+    if (key == null) return;
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write(key, value ? '1' : '0');
+    } catch (e) {
+      debugPrint('cashier: error persistiendo caja del local: $e');
+    }
+  }
+
+  Future<bool> _readCachedRegisterCashOpen() async {
+    final key = _cachedRegisterOpenKey();
+    if (key == null) return false;
+    try {
+      final storage = await StorageService.getInstance();
+      return (await storage.read(key)) == '1';
+    } catch (e) {
+      debugPrint('cashier: error leyendo caja del local cacheada: $e');
+      return false;
+    }
+  }
+
+  void _setRegisterCashOpen(bool value) {
+    _registerCashOpen = value;
+    unawaited(_persistRegisterCashOpen(value));
+  }
+
+  /// Resuelve el estado de caja de [registerId] en UNA consulta y sincroniza
+  /// las dos vistas que la app necesita:
+  ///
+  ///  - `_lastSession`: MI caja (la mia, o la abierta desde este equipo). Es
+  ///    la que se abre, se cierra y se arquea. Si no tengo ninguna, cae al
+  ///    historico propio para que el panel siga mostrando mi ultimo cierre.
+  ///  - `_registerCashOpen`: hay alguna caja abierta en la registradora, de
+  ///    quien sea. Solo gatea la venta.
+  ///
+  /// Antes las dos salian de la misma consulta ("la caja abierta mas reciente
+  /// de la registradora"), y por eso una segunda cajera en otro equipo veia la
+  /// caja de su companera: sin boton "Abrir caja" y con el de cerrar apuntando
+  /// a la ajena.
+  Future<void> _refreshSessionState(String registerId) async {
+    String? deviceId;
+    try {
+      deviceId = await DeviceUtils.getDeviceId();
+    } catch (e) {
+      debugPrint('cashier: no se pudo resolver el device_id: $e');
+    }
+
+    final openSessions = await _repository.getOpenSessionsForRegister(
+      registerId,
+    );
+    _setRegisterCashOpen(openSessions.isNotEmpty);
+
+    final mine = CashierRepository.pickOwnOpenSession(
+      openSessions,
+      userId: Supabase.instance.client.auth.currentUser?.id,
+      deviceId: deviceId,
+    );
+
+    if (mine != null) {
+      _setLastSession(mine);
+      return;
+    }
+
+    // Sin caja propia: historico del usuario para el panel. La venta se
+    // sigue gateando con `_registerCashOpen`.
+    _setLastSession(await _repository.getLastSession(registerId));
+  }
+
   /// Setter helper que mantiene el cache local sincronizado con `_lastSession`.
   /// Reemplaza asignaciones directas para que toda actualización pase por aquí.
   void _setLastSession(Map<String, dynamic>? session) {
@@ -224,7 +311,19 @@ class CashierViewModel extends ChangeNotifier {
   String get bestDayName => _bestDayName;
   String? get currentRegisterId => _currentRegisterId;
   String get currentRegisterName => _currentRegisterName;
+  /// MI caja esta abierta (la mia, o la abierta desde este equipo).
+  /// Es lo que gobierna abrir / cerrar / arquear en la pantalla de Caja.
   bool get isCashOpen => _lastSession?['status'] == 'open';
+
+  /// Hay caja abierta con la que vender: la mia o la de cualquier companero
+  /// en esta registradora. Los meseros no abren caja propia y venden contra
+  /// la del cajero, asi que los gates de venta usan esto y NO [isCashOpen].
+  bool get canSellWithOpenCash => isCashOpen || _registerCashOpen;
+
+  /// Hay una caja abierta en el local que NO es la mia. Sirve para avisar en
+  /// la pantalla de Caja que abrir aqui crea una segunda caja en paralelo.
+  bool get hasOtherOpenCash => _registerCashOpen && !isCashOpen;
+
   String? get businessId => _businessId;
 
   Future<void> init() async {
@@ -285,22 +384,11 @@ class CashierViewModel extends ChangeNotifier {
           // Cachear el register resuelto para que un arranque frío sin
           // internet pueda reconstruir la clave del cache de sesión.
           unawaited(_persistRegister());
-          // Modelo: una caja por cash_register, visible para todos los empleados
-          // del local (mesero/cajero/admin pueden vender si hay caja abierta).
-          // El cierre sigue restringido al dueño (validado en cashier_view +
-          // RPC fn_close_cash_session).
-          final registerSession = await _repository.getActiveSessionForRegister(
-            _currentRegisterId!,
-          );
-          if (registerSession != null) {
-            _setLastSession(registerSession.toMap());
-          } else {
-            // Fallback: última sesión del usuario (cerrada o abierta) para
-            // mostrar histórico cuando no hay caja activa.
-            _setLastSession(
-              await _repository.getLastSession(_currentRegisterId!),
-            );
-          }
+          // Modelo: cada cajero abre SU caja (el server lo limita a una por
+          // usuario y una por dispositivo); el resto del local vende contra
+          // cualquier caja abierta de la registradora. `_refreshSessionState`
+          // mantiene las dos lecturas separadas.
+          await _refreshSessionState(_currentRegisterId!);
 
           _lastCashOpenValidationAt = AppTime.nowAst();
           _pendingTables = await _salesRepository.getOpenTablesCount(
@@ -333,6 +421,9 @@ class CashierViewModel extends ChangeNotifier {
           _lastCashOpenValidationAt = AppTime.nowAst();
           debugPrint('cashier: restaurada caja abierta desde cache offline');
         }
+      }
+      if (!_registerCashOpen) {
+        _registerCashOpen = await _readCachedRegisterCashOpen();
       }
     } finally {
       _isLoading = false;
@@ -1097,19 +1188,9 @@ class CashierViewModel extends ChangeNotifier {
       if (_currentRegisterId != null && _businessId != null) {
         final prevHash = _observableStateHash();
 
-        // Misma resolucion que init(): caja es per-register (cualquier user
-        // del local). Si no hay activa, fallback al historico del usuario
-        // para mostrar el ultimo cierre en el panel.
-        final registerSession = await _repository.getActiveSessionForRegister(
-          _currentRegisterId!,
-        );
-        if (registerSession != null) {
-          _setLastSession(registerSession.toMap());
-        } else {
-          _setLastSession(
-            await _repository.getLastSession(_currentRegisterId!),
-          );
-        }
+        // Misma resolucion que init(): mi caja para el panel, caja del local
+        // para el gate de venta.
+        await _refreshSessionState(_currentRegisterId!);
         _lastCashOpenValidationAt = AppTime.nowAst();
         _pendingTables = await _salesRepository.getOpenTablesCount(
           _businessId!,
@@ -1149,7 +1230,7 @@ class CashierViewModel extends ChangeNotifier {
         now.difference(_lastCashOpenValidationAt!) < ttl;
 
     if (!force && hasRecentValidation) {
-      return _lastSession?['status'] == 'open';
+      return canSellWithOpenCash;
     }
 
     // Offline declarado: no hay red que consultar. Resolver desde memoria o
@@ -1180,29 +1261,23 @@ class CashierViewModel extends ChangeNotifier {
           _lastSession = cached;
         }
       }
-      return _lastSession?['status'] == 'open';
+      // El mesero no tiene caja propia: sin este flag cacheado se quedaba
+      // sin poder abrir mesas offline aunque el local si tuviera caja.
+      if (!_registerCashOpen) {
+        _registerCashOpen = await _readCachedRegisterCashOpen();
+      }
+      return canSellWithOpenCash;
     }
 
     try {
       if (_currentRegisterId == null || _businessId == null) {
         await init();
-        return _lastSession?['status'] == 'open';
+        return canSellWithOpenCash;
       }
 
-      // Buscar caja activa por register (compartida entre empleados del local).
-      // Si no hay activa, caer a última sesión del usuario para mostrar histórico.
-      final registerSession = await _repository.getActiveSessionForRegister(
-        _currentRegisterId!,
-      );
-      if (registerSession != null) {
-        _setLastSession(registerSession.toMap());
-      } else {
-        _setLastSession(
-          await _repository.getLastSession(_currentRegisterId!),
-        );
-      }
+      await _refreshSessionState(_currentRegisterId!);
       _lastCashOpenValidationAt = now;
-      return _lastSession?['status'] == 'open';
+      return canSellWithOpenCash;
     } catch (e) {
       debugPrint('Error validating cash session quickly: $e');
       // Fase 1.4a — offline: si no hay sesión en memoria pero hay una
@@ -1216,7 +1291,10 @@ class CashierViewModel extends ChangeNotifier {
           _lastSession = cached;
         }
       }
-      return _lastSession?['status'] == 'open';
+      if (!_registerCashOpen) {
+        _registerCashOpen = await _readCachedRegisterCashOpen();
+      }
+      return canSellWithOpenCash;
     }
   }
 }

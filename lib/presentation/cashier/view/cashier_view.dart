@@ -125,6 +125,15 @@ class _CashierViewState extends ConsumerState<CashierView>
               if (!canViewSummary)
                 _BlindCloseInfoBanner(isOpen: isOpen),
 
+              // Hay caja abierta en el local pero no es la mia: abrir aqui
+              // crea una SEGUNDA caja en paralelo (el server lo permite:
+              // una por usuario y una por dispositivo). Se avisa para que
+              // sea una decision y no un accidente.
+              if (vm.hasOtherOpenCash) ...[
+                const _OtherCashOpenBanner(),
+                SizedBox(height: context.hp(1.5)),
+              ],
+
               // Action Cards
               _ActionCardsSection(
                 isOpen: isOpen,
@@ -710,6 +719,35 @@ class _CashierViewState extends ConsumerState<CashierView>
 }
 
 // ===== HEADER SECTION =====
+class _OtherCashOpenBanner extends StatelessWidget {
+  const _OtherCashOpenBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.info.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.info.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline, color: AppColors.info, size: 20),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Otro cajero tiene una caja abierta en este local. Si abres '
+              'caja aqui sera una caja aparte, con su propio arqueo y cierre.',
+              style: TextStyle(fontSize: 13, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HeaderSection extends StatelessWidget {
   final CashierViewModel viewModel;
   final bool isOpen;

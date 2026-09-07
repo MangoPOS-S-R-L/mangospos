@@ -251,9 +251,62 @@ class ZonesRepository {
 
     final rows = await query.order('code', ascending: true);
 
-    return (rows as List)
-        .map((e) => DiningTable.fromMap(e as Map<String, dynamic>))
+    final rowsList = (rows as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList(growable: false);
+
+    // Persistir el conjunto crudo para el fallback offline, igual que
+    // [fetchZones]. Solo cuando NO se filtró por activas, para no cachear una
+    // vista parcial que después se devuelva como si fuera el conjunto completo.
+    if (includeInactive) {
+      unawaited(ZonesOfflineCache().saveZoneTablesSnapshot(
+        zoneId: zoneId,
+        rowsRaw: rowsList,
+      ));
+    } else {
+      unawaited(ZonesOfflineCache().saveZoneTablesSnapshot(
+        zoneId: zoneId,
+        rowsRaw: rowsList
+            .where((m) => (m['is_active'] ?? true) == true)
+            .toList(growable: false),
+      ));
+    }
+
+    return rowsList.map(DiningTable.fromMap).toList();
+  }
+
+  /// Variante de [fetchTablesByZone] con fallback al cache offline. Sin esto,
+  /// el modal de asignar a mesa y el floor map quedaban vacíos sin red aunque
+  /// las zonas sí cargaran de cache — el cajero veía la zona pero ninguna mesa.
+  Future<({List<DiningTable> tables, bool fromCache, DateTime? cachedAt})>
+      fetchTablesByZoneWithCache(String zoneId) async {
+    try {
+      final tables = await fetchTablesByZone(zoneId);
+      return (tables: tables, fromCache: false, cachedAt: null);
+    } catch (_) {
+      final cached = await loadCachedTablesByZone(zoneId);
+      if (cached == null) rethrow;
+      return (
+        tables: cached.tables,
+        fromCache: true,
+        cachedAt: cached.savedAt,
+      );
+    }
+  }
+
+  /// Lee el snapshot local de las mesas de una zona SIN tocar la red.
+  /// Devuelve null si no hay snapshot.
+  Future<({List<DiningTable> tables, DateTime savedAt})?>
+      loadCachedTablesByZone(String zoneId) async {
+    final snap = await ZonesOfflineCache().loadZoneTablesSnapshot(
+      zoneId: zoneId,
+    );
+    if (snap == null) return null;
+    final tables = snap.rows
+        .where((m) => (m['is_active'] ?? true) == true)
+        .map(DiningTable.fromMap)
         .toList();
+    return (tables: tables, savedAt: snap.savedAt);
   }
 
   /// Floor map: persiste los campos de layout de UNA mesa (posición,
