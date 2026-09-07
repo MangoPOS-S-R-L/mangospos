@@ -185,6 +185,69 @@ class CashierViewModel extends ChangeNotifier {
     }
   }
 
+  /// Registradora que le toca a este equipo: la que eligio (si sigue activa)
+  /// y, si no, la primera del negocio.
+  ///
+  /// Funcion pura para testear la precedencia sin red ni SharedPreferences.
+  static Map<String, dynamic> pickRegisterForDevice(
+    List<Map<String, dynamic>> registers,
+    String? preferredId,
+  ) {
+    if (preferredId != null && preferredId.isNotEmpty) {
+      for (final register in registers) {
+        if (register['id']?.toString() == preferredId) return register;
+      }
+    }
+    return registers.first;
+  }
+
+  /// Id de la registradora que este equipo tiene elegida, si hay alguna.
+  /// Comparte llave con el cache offline del register (`_cachedRegisterKey`):
+  /// es el mismo dato — "con que registradora opera este equipo" — asi que
+  /// los equipos que ya venian operando conservan la suya sin re-elegir.
+  Future<String?> _readPreferredRegisterId() async {
+    final key = _cachedRegisterKey();
+    if (key == null) return null;
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(key);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final id = decoded['id']?.toString();
+        if (id != null && id.isNotEmpty) return id;
+      }
+    } catch (e) {
+      debugPrint('cashier: error leyendo registradora preferida: $e');
+    }
+    return null;
+  }
+
+  /// Ata ESTE equipo a una registradora. Es lo que permite dos cajas con
+  /// impresora propia: factura, cierre y movimientos resuelven la impresora
+  /// de `currentRegisterId`.
+  ///
+  /// Se bloquea con la caja abierta: la sesion queda colgada de la
+  /// registradora con la que se abrio, y moverla partiria el arqueo entre
+  /// dos registradoras.
+  Future<void> selectRegisterForDevice({
+    required String registerId,
+    required String registerName,
+  }) async {
+    if (isCashOpen) {
+      throw const CashRegisterException(
+        errorCode: 'CASH_OPEN',
+        message:
+            'Cierra la caja antes de cambiar la registradora de este equipo.',
+      );
+    }
+
+    _currentRegisterId = registerId;
+    _currentRegisterName = registerName;
+    await _persistRegister();
+    await init();
+  }
+
   Future<void> _restoreRegisterFromCache() async {
     final key = _cachedRegisterKey();
     if (key == null) return;
@@ -369,8 +432,17 @@ class CashierViewModel extends ChangeNotifier {
 
         final registers = await _repository.getCashRegisters(_businessId!);
         if (registers.isNotEmpty) {
-          _currentRegisterId = registers.first['id'] as String;
-          _currentRegisterName = registers.first['name']?.toString() ?? '';
+          // La registradora es del EQUIPO, no del negocio: dos estaciones
+          // con impresora propia necesitan resolver cada una la suya
+          // (`cash_registers.receipt_printer_id` gobierna factura, cierre y
+          // movimientos). Si este equipo no eligio ninguna todavia, o la
+          // elegida se desactivo, cae a la primera como siempre.
+          final chosen = pickRegisterForDevice(
+            registers,
+            await _readPreferredRegisterId(),
+          );
+          _currentRegisterId = chosen['id'] as String;
+          _currentRegisterName = chosen['name']?.toString() ?? '';
         } else {
           final created = await _repository.createCashRegister(
             businessId: _businessId!,

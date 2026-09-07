@@ -1007,6 +1007,30 @@ class CashierRepository {
         .eq('id', cashRegisterId);
   }
 
+  /// Admin — renombra una registradora.
+  Future<void> updateCashRegisterName({
+    required String cashRegisterId,
+    required String name,
+  }) async {
+    await _client
+        .from('cash_registers')
+        .update({'name': name})
+        .eq('id', cashRegisterId);
+  }
+
+  /// Admin — activa o desactiva una registradora (baja LOGICA via
+  /// `is_active`). Nunca se borra: las sesiones historicas, sus arqueos y
+  /// las ventas cuelgan de ella por `cash_register_id`.
+  Future<void> setCashRegisterActive({
+    required String cashRegisterId,
+    required bool isActive,
+  }) async {
+    await _client
+        .from('cash_registers')
+        .update({'is_active': isActive})
+        .eq('id', cashRegisterId);
+  }
+
   /// Get all cash registers for a business with their printer info.
   Future<List<Map<String, dynamic>>> getCashRegistersWithPrinter(String businessId) async {
     final data = await _client
