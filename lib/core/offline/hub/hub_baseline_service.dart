@@ -24,8 +24,8 @@ import 'hub_state_db.dart';
 /// usando el proyector ya probado, sin lógica de mezcla nueva.
 class HubBaselineService {
   HubBaselineService({HubStateDb? db, SupabaseClient? client})
-      : _injectedDb = db,
-        _injectedClient = client;
+    : _injectedDb = db,
+      _injectedClient = client;
 
   final HubStateDb? _injectedDb;
   final SupabaseClient? _injectedClient;
@@ -57,7 +57,9 @@ class HubBaselineService {
   Future<int?> capture(String businessId) async {
     try {
       final ops = await _buildOps(businessId);
-      await _db.into(_db.hubBaseline).insertOnConflictUpdate(
+      await _db
+          .into(_db.hubBaseline)
+          .insertOnConflictUpdate(
             HubBaselineCompanion.insert(
               businessId: businessId,
               capturedAt: DateTime.now().toUtc(),
@@ -65,8 +67,7 @@ class HubBaselineService {
               // `insert` exige los required; el resto queda por defecto.
             ),
           );
-      final orders =
-          ops.where((o) => o['type'] == 'open_table').length;
+      final orders = ops.where((o) => o['type'] == 'open_table').length;
       debugPrint(
         '[HubBaseline] foto de $businessId: $orders órdenes, '
         '${ops.length} ops sintéticas.',
@@ -82,10 +83,11 @@ class HubBaselineService {
   /// Lista vacía si nunca se capturó.
   Future<List<Map<String, dynamic>>> ops(String businessId) async {
     try {
-      final row = await (_db.select(_db.hubBaseline)
-            ..where((t) => t.businessId.equals(businessId))
-            ..limit(1))
-          .getSingleOrNull();
+      final row =
+          await (_db.select(_db.hubBaseline)
+                ..where((t) => t.businessId.equals(businessId))
+                ..limit(1))
+              .getSingleOrNull();
       if (row == null) return const [];
       final decoded = jsonDecode(row.opsJson);
       if (decoded is! List) return const [];
@@ -102,10 +104,11 @@ class HubBaselineService {
   /// Cuándo se tomó la foto. `null` si no hay foto.
   Future<DateTime?> capturedAt(String businessId) async {
     try {
-      final row = await (_db.select(_db.hubBaseline)
-            ..where((t) => t.businessId.equals(businessId))
-            ..limit(1))
-          .getSingleOrNull();
+      final row =
+          await (_db.select(_db.hubBaseline)
+                ..where((t) => t.businessId.equals(businessId))
+                ..limit(1))
+              .getSingleOrNull();
       return row?.capturedAt;
     } catch (_) {
       return null;
@@ -124,10 +127,11 @@ class HubBaselineService {
   /// `'0'` cuando no hay foto.
   Future<String> revision(String businessId) async {
     try {
-      final row = await (_db.select(_db.hubBaseline)
-            ..where((t) => t.businessId.equals(businessId))
-            ..limit(1))
-          .getSingleOrNull();
+      final row =
+          await (_db.select(_db.hubBaseline)
+                ..where((t) => t.businessId.equals(businessId))
+                ..limit(1))
+              .getSingleOrNull();
       if (row == null) return '0';
       return '${row.opsJson.length}.${row.opsJson.hashCode}';
     } catch (_) {
@@ -137,9 +141,9 @@ class HubBaselineService {
 
   /// Borra la foto de un negocio.
   Future<void> clear(String businessId) async {
-    await (_db.delete(_db.hubBaseline)
-          ..where((t) => t.businessId.equals(businessId)))
-        .go();
+    await (_db.delete(
+      _db.hubBaseline,
+    )..where((t) => t.businessId.equals(businessId))).go();
   }
 
   // ─────────────────────────────────────────────────────────────────────
@@ -170,7 +174,11 @@ class HubBaselineService {
           .from('orders')
           .select('id, session_id, status_ext')
           .inFilter('session_id', chunk)
-          .inFilter('status_ext', ['open', 'sent_to_kitchen', 'partially_paid']);
+          .inFilter('status_ext', [
+            'open',
+            'sent_to_kitchen',
+            'partially_paid',
+          ]);
       orderRows.addAll((rows as List).cast<Map<String, dynamic>>());
     }
     if (orderRows.isEmpty) return const [];
@@ -193,7 +201,8 @@ class HubBaselineService {
           .from('order_items')
           .select(
             'id, order_id, product_name, qty, quantity, unit_price, '
-            'check_id, is_takeout, notes, status',
+            'check_id, is_takeout, notes, status, created_at, '
+            'started_at, ready_at',
           )
           .inFilter('order_id', chunk)
           .inFilter('status', _liveItemStatuses);
@@ -210,12 +219,25 @@ class HubBaselineService {
         'baseline': true,
       });
     }
+    // `hub_received_at` lleva la fecha REAL de la BD, no la de la captura: los
+    // dos proyectores la usan como reloj (`_stamp`), y sin ella una comanda que
+    // lleva 20 minutos en cocina aparecería recién llegada.
+    final firstItemAt = <String, String>{};
     for (final item in itemRows) {
       final orderId = item['order_id']?.toString();
       final itemId = item['id']?.toString();
       if (orderId == null || itemId == null) continue;
       final tableId = tableByOrder[orderId];
       if (tableId == null) continue;
+
+      final createdAt = item['created_at']?.toString();
+      if (createdAt != null) {
+        final prev = firstItemAt[orderId];
+        if (prev == null || createdAt.compareTo(prev) < 0) {
+          firstItemAt[orderId] = createdAt;
+        }
+      }
+
       ops.add({
         'type': 'add_item',
         'order_id': orderId,
@@ -229,6 +251,47 @@ class HubBaselineService {
         'check_pos': item['check_id']?.toString(),
         'notes': item['notes']?.toString(),
         'is_takeout': item['is_takeout'] == true,
+        if (createdAt != null) 'hub_received_at': createdAt,
+        'baseline': true,
+      });
+    }
+
+    // El proyector de cocina SOLO muestra órdenes con `sent = true`
+    // (hub_kitchen_projector.dart:136). Sin este op, las comandas que ya
+    // estaban en la cocina antes del corte no aparecían en el KDS — el
+    // "LÍMITE (baseline)" documentado en ese archivo.
+    //
+    // Todo ítem de la foto ya pasó por cocina: los `draft` se filtraron en la
+    // consulta, y draft es justamente "tecleado pero no enviado".
+    for (final orderId in firstItemAt.keys) {
+      ops.add({
+        'type': 'send_to_kitchen',
+        'order_id': orderId,
+        'table_id': tableByOrder[orderId],
+        'hub_received_at': firstItemAt[orderId],
+        'baseline': true,
+      });
+    }
+
+    // Estado real de cada ítem en cocina. Sin esto todos nacerían `pending` y
+    // el KDS perdería en qué va cada uno. Los `served` se emiten a propósito:
+    // el proyector los usa para SACARLOS de la pantalla, que es lo correcto —
+    // en la cuenta siguen (por eso arriba sí van como `add_item`).
+    for (final item in itemRows) {
+      final status = item['status']?.toString();
+      if (status == null || status == 'pending') continue;
+      final orderId = item['order_id']?.toString();
+      final itemId = item['id']?.toString();
+      if (orderId == null || itemId == null) continue;
+      if (!tableByOrder.containsKey(orderId)) continue;
+      ops.add({
+        'type': 'kds_item_status',
+        'order_id': orderId,
+        'item_id': itemId,
+        'status': status,
+        'hub_received_at':
+            (status == 'ready' ? item['ready_at'] : item['started_at'])
+                ?.toString(),
         'baseline': true,
       });
     }
