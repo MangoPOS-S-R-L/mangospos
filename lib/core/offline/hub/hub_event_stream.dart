@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'hub_lan_token.dart';
+
 /// Cliente del feed en vivo del Hub (F3c-2). Se conecta a `ws://hub/hub/events`,
 /// se suscribe a su negocio y expone las ops como un Stream. Reconecta con
 /// backoff si la conexión se cae (Hub reiniciado, red intermitente).
@@ -28,17 +30,34 @@ class HubEventStream {
   Stream<Map<String, dynamic>> get ops => _controller.stream;
 
   /// Convierte la baseUrl HTTP del Hub en la URL WebSocket del feed.
-  static Uri wsUrlFor(String baseUrl) {
-    final trimmed =
-        baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+  ///
+  /// El [token] va por query y no por header a propósito: el handshake de
+  /// WebSocket no admite cabeceras en todas las plataformas (en web es
+  /// imposible), y el agente exige token en `/hub/*`. Es el mismo secreto que
+  /// mandan las llamadas HTTP; solo cambia por dónde entra.
+  static Uri wsUrlFor(String baseUrl, {String? token}) {
+    final trimmed = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
     final ws = trimmed.replaceFirst(RegExp(r'^http'), 'ws');
-    return Uri.parse('$ws/hub/events');
+    final uri = Uri.parse('$ws/hub/events');
+    if (token == null || token.isEmpty) return uri;
+    return uri.replace(
+      queryParameters: {...uri.queryParameters, 'token': token},
+    );
   }
 
   void connect() {
     if (_disposed) return;
+    unawaited(_connectWithToken());
+  }
+
+  Future<void> _connectWithToken() async {
+    if (_disposed) return;
+    final token = await HubLanTokenService.instance.tokenFor(businessId);
+    if (_disposed) return;
     try {
-      _channel = WebSocketChannel.connect(wsUrlFor(baseUrl));
+      _channel = WebSocketChannel.connect(wsUrlFor(baseUrl, token: token));
       // Mensaje de suscripción: el servidor lo usa para enrutar el feed del
       // negocio a este socket.
       _channel!.sink.add(jsonEncode({'subscribe': businessId}));

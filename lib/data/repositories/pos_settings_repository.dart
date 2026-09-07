@@ -605,6 +605,22 @@ class PosSettingsRepository {
   /// desglose de "Ventas por área de producción" para el periodo de la
   /// sesión. Default `false` (no cambia el ticket sin opt-in). Tolerante a
   /// que la columna aún no exista (cae a false).
+  /// Secreto compartido que autoriza las llamadas LAN al Hub de este negocio
+  /// (migración 20260907_0002). Cadena vacía si la columna no existe todavía o
+  /// no hay fila — el caller cae entonces a la constante legacy.
+  ///
+  /// Viaja en la fila completa de `business_settings`, así que el
+  /// [BusinessSettingsOfflineCache] lo deja disponible SIN red, que es
+  /// justamente cuando el Hub hace falta.
+  Future<String> getLanToken(String businessId) async {
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      return row?['lan_token']?.toString() ?? '';
+    } catch (_) {
+      return (await _cachedRow(businessId))?['lan_token']?.toString() ?? '';
+    }
+  }
+
   Future<bool> getCashClosePrintSalesByArea(String businessId) async {
     try {
       final row = await _fetchAndCacheRow(businessId);

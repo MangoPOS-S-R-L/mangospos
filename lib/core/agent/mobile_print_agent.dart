@@ -28,6 +28,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../printing/android_usb_raw_printer.dart';
 import '../printing/usb_printer_identity.dart';
 import '../offline/hub/hub_config.dart';
+import '../offline/hub/hub_lan_token.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
 import '../offline/hub/hub_projection_cache.dart';
@@ -91,10 +92,12 @@ class MobilePrintAgent {
     final handler = const shelf.Pipeline()
         .addMiddleware(_corsMiddleware())
         .addMiddleware(_authMiddleware())
-        .addMiddleware(shelf.logRequests(
-          logger: (msg, isError) =>
-              debugPrint('[MobileAgent] ${isError ? "ERR " : ""}$msg'),
-        ))
+        .addMiddleware(
+          shelf.logRequests(
+            logger: (msg, isError) =>
+                debugPrint('[MobileAgent] ${isError ? "ERR " : ""}$msg'),
+          ),
+        )
         .addHandler(router.call);
 
     try {
@@ -108,9 +111,7 @@ class MobilePrintAgent {
       // H4: registra el difusor del Hub para que las ops que el HOST agrega a
       // su op-log local (sus propias mesas) se difundan por WS a las cajas
       // cliente, igual que las que llegan por POST /hub/ops.
-      OfflinePosService().setHubBroadcaster(
-        (biz, op) => _broadcastOp(biz, op),
-      );
+      OfflinePosService().setHubBroadcaster((biz, op) => _broadcastOp(biz, op));
       return url;
     } catch (e) {
       debugPrint('[MobileAgent] Failed to start: $e');
@@ -207,7 +208,44 @@ class MobilePrintAgent {
         if (path == 'health' || path == 'status' || path == 'hub/health') {
           return innerHandler(request);
         }
+
         final authHeader = request.headers['authorization'] ?? '';
+
+        // Endpoints del Hub: token OBLIGATORIO.
+        //
+        // Antes bastaba con NO mandar `Authorization` — el check de abajo solo
+        // rechaza cuando el header viene y no coincide, así que una petición
+        // sin header pasaba derecho. Cualquiera en la WiFi del local podía leer
+        // el salón y las órdenes y, sobre todo, INYECTAR ops en el op-log con
+        // `POST /hub/ops`; el uplink las sube después a Supabase como ventas
+        // reales. Aquí se exige el token del negocio (o el legacy, mientras
+        // dure el rollout). Ver [HubLanTokenService].
+        if (path.startsWith('hub/')) {
+          // El WebSocket del feed (`hub/events`) no puede mandar headers en el
+          // handshake, así que para él el token viaja por query. Es el mismo
+          // secreto; solo cambia por dónde entra.
+          final presented = _bearerOf(authHeader).isNotEmpty
+              ? _bearerOf(authHeader)
+              : (request.url.queryParameters['token'] ?? '');
+
+          final businessId = await _resolveOwnBusinessId();
+          final ok = await HubLanTokenService.instance.isValid(
+            businessId,
+            presented,
+          );
+          if (!ok) {
+            return shelf.Response.forbidden(
+              jsonEncode({'error': 'Unauthorized'}),
+              headers: {'Content-Type': 'application/json'},
+            );
+          }
+          return innerHandler(request);
+        }
+
+        // Resto de endpoints (impresión, descubrimiento): comportamiento
+        // intacto. Endurecerlos toca el camino de impresión, que es sensible y
+        // hoy manda el JWT de Supabase en vez de esta constante — se trata
+        // aparte para no romper cajas en producción.
         if (authHeader.isNotEmpty && !authHeader.contains(_apiToken)) {
           return shelf.Response.forbidden(
             jsonEncode({'error': 'Unauthorized'}),
@@ -217,6 +255,32 @@ class MobilePrintAgent {
         return innerHandler(request);
       };
     };
+  }
+
+  /// Extrae el valor de un header `Bearer <token>` (tolera que venga pelado).
+  static String _bearerOf(String header) {
+    final value = header.trim();
+    if (value.isEmpty) return '';
+    if (value.toLowerCase().startsWith('bearer ')) {
+      return value.substring(7).trim();
+    }
+    return value;
+  }
+
+  /// Negocio de ESTE equipo, para validar el token del Hub. Se cachea: el
+  /// middleware corre en cada request.
+  String? _ownBusinessIdCache;
+  Future<String> _resolveOwnBusinessId() async {
+    final cached = _ownBusinessIdCache;
+    if (cached != null) return cached;
+    try {
+      final storage = await StorageService.getInstance();
+      final id = await storage.read(StorageKeys.activeBusinessId) ?? '';
+      _ownBusinessIdCache = id;
+      return id;
+    } catch (_) {
+      return '';
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -241,8 +305,7 @@ class MobilePrintAgent {
     var role = 'pos';
     try {
       final storage = await StorageService.getInstance();
-      final businessId =
-          await storage.read(StorageKeys.activeBusinessId) ?? '';
+      final businessId = await storage.read(StorageKeys.activeBusinessId) ?? '';
       if (businessId.isNotEmpty) {
         role = hubDeviceRoleToString(
           await HubConfigService().getDeviceRole(businessId),
@@ -251,12 +314,7 @@ class MobilePrintAgent {
     } catch (_) {
       // best-effort → 'pos'
     }
-    return _jsonOk({
-      'status': 'ok',
-      'role': role,
-      'hub_protocol': 1,
-      'seq': 0,
-    });
+    return _jsonOk({'status': 'ok', 'role': role, 'hub_protocol': 1, 'seq': 0});
   }
 
   /// F3b: recibe una operación de un terminal, la agrega al op-log (seq +
@@ -535,7 +593,8 @@ class MobilePrintAgent {
     // Bluetooth printers
     try {
       if (await FlutterBluePlus.isSupported) {
-        final isOn = await FlutterBluePlus.adapterState.first ==
+        final isOn =
+            await FlutterBluePlus.adapterState.first ==
             BluetoothAdapterState.on;
         if (isOn) {
           // lastScanResults no existe en el wrapper Windows. Recolectamos
@@ -575,7 +634,9 @@ class MobilePrintAgent {
       return _jsonError('Invalid JSON body', 400);
     }
 
-    final jobId = body['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+    final jobId =
+        body['id']?.toString() ??
+        DateTime.now().millisecondsSinceEpoch.toString();
     final printer = body['printer'] as Map<String, dynamic>? ?? {};
     final content = body['content'] as Map<String, dynamic>? ?? {};
     final printerType = printer['type']?.toString() ?? 'network';
@@ -584,9 +645,8 @@ class MobilePrintAgent {
     // IP+puerto correspondan a un printer registrado para algún business
     // al que el usuario tenga acceso (RLS hace el filtro automáticamente).
     if (printerType == 'network') {
-      final ip = printer['ip']?.toString() ??
-          printer['ip_address']?.toString() ??
-          '';
+      final ip =
+          printer['ip']?.toString() ?? printer['ip_address']?.toString() ?? '';
       final port = (printer['port'] as num?)?.toInt() ?? 9100;
       if (!await _isNetworkPrinterAuthorized(ip, port)) {
         _addJobHistory(
@@ -607,7 +667,8 @@ class MobilePrintAgent {
       final contentType = content['type']?.toString() ?? 'raw_base64';
 
       if (contentType == 'raw_base64') {
-        final dataBase64 = content['dataBase64']?.toString() ??
+        final dataBase64 =
+            content['dataBase64']?.toString() ??
             content['data_base64']?.toString() ??
             '';
         if (dataBase64.isEmpty) {
@@ -759,7 +820,8 @@ class MobilePrintAgent {
     // identidad en `devicePath`/`mac`. Sin leerlos, todo trabajo terminaba en
     // el fallback "primera USB conectada" — con dos impresoras, en la que no
     // era.
-    final identity = UsbPrinterIdentity.parse(printer['devicePath']?.toString()) ??
+    final identity =
+        UsbPrinterIdentity.parse(printer['devicePath']?.toString()) ??
         UsbPrinterIdentity.parse(printer['device_path']?.toString()) ??
         UsbPrinterIdentity.parse(printer['mac']?.toString()) ??
         UsbPrinterIdentity.fromDeviceMap(printer);
@@ -864,10 +926,11 @@ class MobilePrintAgent {
 
   /// Print to Bluetooth printer via GATT write.
   Future<void> _printBluetooth(
-      Map<String, dynamic> printer, Uint8List data) async {
-    final address = printer['address']?.toString() ??
-        printer['mac']?.toString() ??
-        '';
+    Map<String, dynamic> printer,
+    Uint8List data,
+  ) async {
+    final address =
+        printer['address']?.toString() ?? printer['mac']?.toString() ?? '';
     if (address.isEmpty) {
       throw Exception('Missing Bluetooth address/mac');
     }
@@ -875,11 +938,8 @@ class MobilePrintAgent {
     final device = BluetoothDevice.fromId(address);
     try {
       // flutter_blue_plus 1.x no acepta `license` (parametro 2.x-only).
-      await device.connect(
-        autoConnect: false,
-        timeout: _btWriteTimeout,
-      );
-      
+      await device.connect(autoConnect: false, timeout: _btWriteTimeout);
+
       // Try to request a larger MTU for faster printing on supported devices
       try {
         if (Platform.isAndroid) {
@@ -908,20 +968,22 @@ class MobilePrintAgent {
         throw Exception('No writable characteristic found on Bluetooth device');
       }
 
-      // Send data in chunks. 
-      // Default BLE MTU is 23 bytes (20 bytes for data). 
+      // Send data in chunks.
+      // Default BLE MTU is 23 bytes (20 bytes for data).
       // We use a safe chunk size of 20 to ensure compatibility with all printers.
       const int safeChunkSize = 20;
-      
+
       for (var i = 0; i < data.length; i += safeChunkSize) {
-        final end = (i + safeChunkSize > data.length) ? data.length : i + safeChunkSize;
+        final end = (i + safeChunkSize > data.length)
+            ? data.length
+            : i + safeChunkSize;
         final chunk = data.sublist(i, end);
-        
+
         await writableChar.write(
           chunk.toList(),
           withoutResponse: writableChar.properties.writeWithoutResponse,
         );
-        
+
         // Very small delay to allow the printer's buffer to catch up
         await Future.delayed(const Duration(milliseconds: 10));
       }
@@ -934,7 +996,9 @@ class MobilePrintAgent {
 
   /// Print to network printer via direct TCP socket.
   Future<void> _printNetwork(
-      Map<String, dynamic> printer, Uint8List data) async {
+    Map<String, dynamic> printer,
+    Uint8List data,
+  ) async {
     final ip = printer['ip']?.toString() ?? '';
     final port = (printer['port'] as num?)?.toInt() ?? 9100;
 
@@ -942,8 +1006,11 @@ class MobilePrintAgent {
       throw Exception('Missing network printer IP');
     }
 
-    final socket = await Socket.connect(ip, port,
-        timeout: const Duration(seconds: 5));
+    final socket = await Socket.connect(
+      ip,
+      port,
+      timeout: const Duration(seconds: 5),
+    );
     try {
       socket.add(data);
       await socket.flush();

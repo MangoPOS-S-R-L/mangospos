@@ -5,7 +5,9 @@ import 'package:http/http.dart' as http;
 
 import '../../printing/agent_discovery.dart';
 import '../ncf_offline_allocator.dart';
+import '../../storage/storage_service.dart';
 import 'hub_config.dart' show kHubPortPrimary, kHubPortAlt;
+import 'hub_lan_token.dart';
 
 /// Cliente del Hub Local (F3). En F3a solo hace el *handshake*: localizar un
 /// Hub alcanzable en la LAN y confirmar que responde `/hub/health`. Las
@@ -19,8 +21,8 @@ import 'hub_config.dart' show kHubPortPrimary, kHubPortAlt;
 /// Devuelve la `baseUrl` del primer Hub que responde, o null.
 class HubClient {
   HubClient({AgentDiscovery? discovery, http.Client? httpClient})
-      : _discovery = discovery ?? AgentDiscovery(),
-        _http = httpClient ?? http.Client();
+    : _discovery = discovery ?? AgentDiscovery(),
+      _http = httpClient ?? http.Client();
 
   final AgentDiscovery _discovery;
   final http.Client _http;
@@ -29,18 +31,33 @@ class HubClient {
   static const Duration _discoverTimeout = Duration(seconds: 3);
   static const Duration _opTimeout = Duration(seconds: 5);
 
-  /// Token compartido del agente. Es el mismo hardcoded que usa el agente
-  /// hoy; se reemplazará por un token por-negocio (del paquete de activación
-  /// de F0) cuando se endurezca la seguridad LAN.
-  static const String _apiToken = 'MANGOPOS_SECURE_TOKEN_123';
+  /// Cabeceras con el token LAN del negocio activo.
+  ///
+  /// Antes iba una constante compilada, la misma para todos los locales del
+  /// país: quien la sacara del binario podía hablarle al Hub de cualquier
+  /// negocio. Ahora sale de `business_settings.lan_token` (migración
+  /// 20260907_0002), con caída al legacy mientras dure el rollout. Ver
+  /// [HubLanTokenService].
+  Future<Map<String, String>> _headers() async => {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ${await _resolveToken()}',
+  };
 
-  Map<String, String> get _authHeaders => {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_apiToken',
-      };
+  /// Token del negocio activo de ESTE equipo. La caja siempre habla con el Hub
+  /// de su propio negocio, así que no hace falta pasarlo en cada llamada.
+  static Future<String> _resolveToken() async {
+    try {
+      final storage = await StorageService.getInstance();
+      final businessId = await storage.read(StorageKeys.activeBusinessId) ?? '';
+      return HubLanTokenService.instance.tokenFor(businessId);
+    } catch (_) {
+      return kLegacyHubLanToken;
+    }
+  }
 
-  String _normalize(String baseUrl) =>
-      baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+  String _normalize(String baseUrl) => baseUrl.endsWith('/')
+      ? baseUrl.substring(0, baseUrl.length - 1)
+      : baseUrl;
 
   /// Localiza un Hub alcanzable. [configuredUrl] (opcional) es la dirección
   /// del primario designado; [businessId] filtra el descubrimiento mDNS.
@@ -120,7 +137,7 @@ class HubClient {
       final resp = await _http
           .post(
             Uri.parse('${_normalize(baseUrl)}/hub/ops'),
-            headers: _authHeaders,
+            headers: await _headers(),
             body: jsonEncode(op),
           )
           .timeout(_opTimeout);
@@ -144,7 +161,9 @@ class HubClient {
       final uri = Uri.parse('${_normalize(baseUrl)}/hub/state').replace(
         queryParameters: {'business_id': businessId, 'since': '$since'},
       );
-      final resp = await _http.get(uri, headers: _authHeaders).timeout(_opTimeout);
+      final resp = await _http
+          .get(uri, headers: await _headers())
+          .timeout(_opTimeout);
       if (resp.statusCode != 200) return null;
       final body = jsonDecode(resp.body);
       if (body is! Map) return null;
@@ -167,11 +186,12 @@ class HubClient {
     required String businessId,
   }) async {
     try {
-      final uri = Uri.parse('${_normalize(baseUrl)}/hub/salon').replace(
-        queryParameters: {'business_id': businessId},
-      );
-      final resp =
-          await _http.get(uri, headers: _authHeaders).timeout(_opTimeout);
+      final uri = Uri.parse(
+        '${_normalize(baseUrl)}/hub/salon',
+      ).replace(queryParameters: {'business_id': businessId});
+      final resp = await _http
+          .get(uri, headers: await _headers())
+          .timeout(_opTimeout);
       if (resp.statusCode != 200) return null;
       final body = jsonDecode(resp.body);
       if (body is! Map) return null;
@@ -201,8 +221,9 @@ class HubClient {
           if (orderId != null && orderId.isNotEmpty) 'order_id': orderId,
         },
       );
-      final resp =
-          await _http.get(uri, headers: _authHeaders).timeout(_opTimeout);
+      final resp = await _http
+          .get(uri, headers: await _headers())
+          .timeout(_opTimeout);
       if (resp.statusCode != 200) return null;
       final body = jsonDecode(resp.body);
       if (body is! Map) return null;
@@ -228,7 +249,7 @@ class HubClient {
       final resp = await _http
           .post(
             Uri.parse('${_normalize(baseUrl)}/hub/proxy/open-table'),
-            headers: _authHeaders,
+            headers: await _headers(),
             body: jsonEncode({
               'table_id': tableId,
               if (userId != null) 'user_id': userId,
@@ -266,7 +287,7 @@ class HubClient {
       final resp = await _http
           .post(
             Uri.parse('${_normalize(baseUrl)}/hub/proxy/add-item'),
-            headers: _authHeaders,
+            headers: await _headers(),
             body: jsonEncode({
               'order_id': orderId,
               'menu_item_id': menuItemId,
@@ -303,7 +324,7 @@ class HubClient {
       final resp = await _http
           .post(
             Uri.parse('${_normalize(baseUrl)}/hub/ncf/next'),
-            headers: _authHeaders,
+            headers: await _headers(),
             body: jsonEncode({
               'business_id': businessId,
               'ncf_type': range.ncfType,
