@@ -242,11 +242,26 @@ class MobilePrintAgent {
           return innerHandler(request);
         }
 
-        // Resto de endpoints (impresión, descubrimiento): comportamiento
-        // intacto. Endurecerlos toca el camino de impresión, que es sensible y
-        // hoy manda el JWT de Supabase en vez de esta constante — se trata
-        // aparte para no romper cajas en producción.
-        if (authHeader.isNotEmpty && !authHeader.contains(_apiToken)) {
+        // Resto de endpoints (impresión, descubrimiento).
+        //
+        // BUG QUE ESTE CHECK CAUSABA: solo aceptaba la constante compilada, y
+        // `LocalPrintService._headers()` manda el **JWT de Supabase** siempre
+        // que hay sesión (`resolveAgentBearerToken` lo prefiere). Contra este
+        // agente eso era un header no-vacío que no contiene la constante →
+        // 403. O sea que toda impresión POR EL AGENTE fallaba en Android, iOS
+        // y macOS con el usuario logueado, que es siempre. Las impresoras de
+        // RED no lo sufrían porque van por socket TCP directo; las que
+        // dependen del agente son las USB y las BLE.
+        //
+        // Lo absurdo era la incoherencia: una petición SIN header pasaba, y
+        // una con credencial real se botaba. Como el agente no tiene el
+        // JWT_SECRET, no puede verificar la firma; aceptar un bearer con forma
+        // de JWT no afloja nada que no estuviera ya abierto, y devuelve la
+        // impresión. Cerrar de verdad este lado es harina de otro costal (hay
+        // que pasar todos los clientes al token del negocio primero).
+        if (authHeader.isNotEmpty &&
+            !authHeader.contains(_apiToken) &&
+            !_looksLikeJwt(_bearerOf(authHeader))) {
           return shelf.Response.forbidden(
             jsonEncode({'error': 'Unauthorized'}),
             headers: {'Content-Type': 'application/json'},
@@ -255,6 +270,18 @@ class MobilePrintAgent {
         return innerHandler(request);
       };
     };
+  }
+
+  /// ¿El bearer tiene forma de JWT? Tres segmentos separados por punto, el
+  /// primero empezando por `eyJ` (un `{"` en base64url) — suficiente para
+  /// distinguirlo de un token compartido. NO valida la firma: el agente no
+  /// tiene el `JWT_SECRET`, así que esto no es autenticación, solo evita botar
+  /// al cliente legítimo.
+  static bool _looksLikeJwt(String bearer) {
+    final parts = bearer.split('.');
+    return parts.length == 3 &&
+        parts.every((p) => p.isNotEmpty) &&
+        parts.first.startsWith('eyJ');
   }
 
   /// Extrae el valor de un header `Bearer <token>` (tolera que venga pelado).
