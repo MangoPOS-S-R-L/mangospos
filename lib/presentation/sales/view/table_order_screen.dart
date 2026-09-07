@@ -10602,7 +10602,12 @@ class _ModifiersSelectionDialogState
           .where((item) => item['is_active'] != false)
           .toList(growable: false);
       final defaults = modifiers
-          .where((item) => item['default_selected'] == true)
+          // Una opción agotada (auto-86) no entra preseleccionada aunque sea
+          // la de por defecto: no hay con qué prepararla.
+          .where(
+            (item) =>
+                item['default_selected'] == true && item['is_sold_out'] != true,
+          )
           .map((item) => item['id']?.toString() ?? '')
           .where((id) => id.isNotEmpty)
           .toSet();
@@ -10741,6 +10746,13 @@ class _ModifiersSelectionDialogState
                                       final isSelected = selected.contains(
                                         modifierId,
                                       );
+                                      // Auto-86: se acabó el insumo de esta
+                                      // opción. Se muestra bloqueada en vez de
+                                      // esconderla, para que el mesero sepa
+                                      // por qué no puede escogerla.
+                                      final isSoldOut =
+                                          modifier['is_sold_out'] == true &&
+                                          !isSelected;
                                       return FilterChip(
                                         selected: isSelected,
                                         showCheckmark: false,
@@ -10764,13 +10776,20 @@ class _ModifiersSelectionDialogState
                                           vertical: 10,
                                         ),
                                         labelStyle: TextStyle(
-                                          color: isSelected
+                                          color: isSoldOut
+                                              ? _salesTextHint
+                                              : isSelected
                                               ? const Color(0xFF9A3412)
                                               : _salesTextPrimary,
                                           fontWeight: FontWeight.w600,
+                                          decoration: isSoldOut
+                                              ? TextDecoration.lineThrough
+                                              : null,
                                         ),
                                         avatar: Icon(
-                                          isSelected
+                                          isSoldOut
+                                              ? Icons.block_rounded
+                                              : isSelected
                                               ? Icons.check_circle_rounded
                                               : Icons
                                                     .add_circle_outline_rounded,
@@ -10780,16 +10799,22 @@ class _ModifiersSelectionDialogState
                                               : _salesTextHint,
                                         ),
                                         label: Text(
-                                          price > 0
+                                          isSoldOut
+                                              ? '${modifier['name']} · Agotado'
+                                              : price > 0
                                               ? '${modifier['name']} (+${currency.format(price)})'
                                               : '${modifier['name']}',
                                         ),
-                                        onSelected: (_) => _toggleModifier(
-                                          groupId: groupId,
-                                          modifierId: modifierId,
-                                          displayType: displayType,
-                                          maxSelect: maxSelect,
-                                        ),
+                                        // `null` deja el chip inhabilitado:
+                                        // agotado no se puede escoger.
+                                        onSelected: isSoldOut
+                                            ? null
+                                            : (_) => _toggleModifier(
+                                                groupId: groupId,
+                                                modifierId: modifierId,
+                                                displayType: displayType,
+                                                maxSelect: maxSelect,
+                                              ),
                                       );
                                     })
                                     .toList(growable: false),

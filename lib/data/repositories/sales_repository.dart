@@ -1373,17 +1373,39 @@ class SalesRepository {
     try {
       // Orden personalizado por producto (menu_item_groups.position).
       // El cliente reordena los grupos desde el editor de producto.
-      final data = await _client
-          .from('menu_item_groups')
-          .select(
-            'group_id, position, modifier_groups!inner(id, name, min_select, max_select, is_active, display_type, selection_mode, is_required, free_qty, max_qty_per_option, sort_order, modifiers(id, group_id, name, price_delta, is_active, sort_order, default_selected))',
-          )
-          .eq('menu_item_id', menuItemId)
-          .eq('modifier_groups.is_active', true)
-          .order('position', ascending: true);
+      //
+      // `is_sold_out` (auto-86 del modificador, 20260907_0004) va en un select
+      // aparte: si la migración no está aplicada PostgREST responde 42703 y
+      // reintentamos sin ella. Sin este respaldo, una migración pendiente
+      // dejaría al POS sin poder abrir modificadores.
+      const modifierColumns =
+          'id, group_id, name, price_delta, is_active, sort_order, default_selected';
+      const groupColumns =
+          'id, name, min_select, max_select, is_active, display_type, '
+          'selection_mode, is_required, free_qty, max_qty_per_option, sort_order';
+
+      Future<List<dynamic>> fetch({required bool withSoldOut}) async {
+        return await _client
+            .from('menu_item_groups')
+            .select(
+              'group_id, position, modifier_groups!inner($groupColumns, '
+              'modifiers($modifierColumns${withSoldOut ? ', is_sold_out' : ''}))',
+            )
+            .eq('menu_item_id', menuItemId)
+            .eq('modifier_groups.is_active', true)
+            .order('position', ascending: true) as List<dynamic>;
+      }
+
+      List<dynamic> data;
+      try {
+        data = await fetch(withSoldOut: true);
+      } on PostgrestException catch (e) {
+        if (e.code != '42703' && e.code != 'PGRST204') rethrow;
+        data = await fetch(withSoldOut: false);
+      }
 
       final rows = List<Map<String, dynamic>>.from(
-        data as List,
+        data,
       ).map((row) => Map<String, dynamic>.from(row)).toList(growable: false);
 
       for (final row in rows) {

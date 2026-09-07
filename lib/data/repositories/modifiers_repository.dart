@@ -54,18 +54,33 @@ class ModifiersRepository {
   }
 
   Future<List<ModifierOption>> getModifiers(String businessId) async {
-    final response = await _client
-        .from('modifiers')
-        .select('id, group_id, name, price_delta, is_active, created_at')
-        .eq('business_id', businessId)
-        .order('sort_order', ascending: true)
-        .order('name', ascending: true);
+    // `is_sold_out` la agrega 20260907_0004 (auto-86 del modificador). Sin la
+    // migración, PostgREST responde 42703 y se reintenta sin ella: la pantalla
+    // funciona igual, solo sin el sello «Agotado».
+    Future<List<Map<String, dynamic>>> fetch({required bool withSoldOut}) async {
+      final response = await _client
+          .from('modifiers')
+          .select(
+            'id, group_id, name, price_delta, is_active, created_at'
+            '${withSoldOut ? ', is_sold_out' : ''}',
+          )
+          .eq('business_id', businessId)
+          .order('sort_order', ascending: true)
+          .order('name', ascending: true);
+      return List<Map<String, dynamic>>.from(response);
+    }
 
-    return List<Map<String, dynamic>>.from(
-      response,
-    ).map((row) => ModifierOption.fromMap(row, priceParser: _toDouble)).toList(
-      growable: false,
-    );
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await fetch(withSoldOut: true);
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && e.code != 'PGRST204') rethrow;
+      rows = await fetch(withSoldOut: false);
+    }
+
+    return rows
+        .map((row) => ModifierOption.fromMap(row, priceParser: _toDouble))
+        .toList(growable: false);
   }
 
   Future<Map<String, List<String>>> getAssignments(String businessId) async {
@@ -311,6 +326,20 @@ class ModifiersRepository {
     return (byModifier: byModifier, supported: true);
   }
 
+  /// Recalcula el «Agotado» de la opción sin esperar al próximo movimiento de
+  /// inventario. Si la migración del auto-86 (20260907_0004) no está aplicada,
+  /// el RPC no existe y se ignora: el guardado de los insumos no se pierde.
+  Future<void> _recomputeAvailability(String modifierId) async {
+    try {
+      await _client.rpc(
+        'fn_recompute_modifier_availability',
+        params: {'p_modifier_id': modifierId},
+      );
+    } catch (_) {
+      // best-effort
+    }
+  }
+
   /// Reemplaza las líneas de insumo de un modificador (borrar + insertar, el
   /// mismo criterio que `RecipesRepository.saveRecipe`).
   ///
@@ -326,13 +355,18 @@ class ModifiersRepository {
           .delete()
           .eq('modifier_id', modifierId);
 
-      if (ingredients.isEmpty) return true;
+      if (ingredients.isEmpty) {
+        // Sin líneas ya no hay nada que agotar: hay que soltar el sello.
+        await _recomputeAvailability(modifierId);
+        return true;
+      }
 
       await _client.from('modifier_ingredients').insert(
             ingredients
                 .map((ingredient) => ingredient.toMap(modifierId))
                 .toList(growable: false),
           );
+      await _recomputeAvailability(modifierId);
       return true;
     } on PostgrestException catch (e) {
       if (e.code == '42P01' || e.code == '42703' || e.code == 'PGRST205') {

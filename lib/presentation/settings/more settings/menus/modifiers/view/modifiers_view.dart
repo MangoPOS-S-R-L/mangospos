@@ -786,6 +786,15 @@ class _ModifiersPanel extends StatelessWidget {
                                       ? MangoTokens.success
                                       : MangoTokens.warning,
                                 ),
+                                // Auto-86: el insumo se acabó. No es lo mismo
+                                // que «Inactivo» (eso lo apaga el admin).
+                                if (modifier.isSoldOut) ...[
+                                  const SizedBox(width: 8),
+                                  const _StatusBadge(
+                                    label: 'Agotado',
+                                    color: Color(0xFFDC2626),
+                                  ),
+                                ],
                                 const SizedBox(width: 8),
                                 Text(
                                   currency.format(modifier.priceDelta),

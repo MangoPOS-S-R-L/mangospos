@@ -19,6 +19,28 @@ join public.inventory_items ii on ii.id = mi.inventory_item_id
 join public.businesses b       on b.id = m.business_id
 order by b.legal_name, mg.name, m.name, ii.name;
 
+-- (1b) Auto-86 del modificador: cuáles quedaron agotadas y por qué insumo.
+--      `alcanza_para` = cuántas unidades de esa opción se pueden preparar.
+select b.legal_name,
+       m.name  as modificador,
+       m.is_active,
+       m.is_sold_out,
+       ii.name as insumo,
+       mi.quantity as pide,
+       coalesce((select sum(ist.quantity) from public.inventory_stock ist
+                 where ist.item_id = mi.inventory_item_id), 0) as existencia,
+       floor(
+         coalesce((select sum(ist.quantity) from public.inventory_stock ist
+                   where ist.item_id = mi.inventory_item_id), 0)
+         / nullif(mi.quantity, 0)
+       ) as alcanza_para
+from public.modifiers m
+join public.modifier_ingredients mi on mi.modifier_id = m.id
+join public.inventory_items ii on ii.id = mi.inventory_item_id
+join public.businesses b on b.id = m.business_id
+where mi.quantity > 0
+order by m.is_sold_out desc, b.legal_name, m.name;
+
 -- (2) ¿Las ventas nuevas están guardando la identidad del modificador?
 --     Si `con_modifier_id` queda en 0 después de vender con modificadores, la
 --     app está corriendo un build viejo (o falló el insert y cayó al reintento

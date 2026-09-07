@@ -1762,6 +1762,12 @@ class _ItemModifiersEditorDialogState
                                         final isSelected = selected.contains(
                                           modifierId,
                                         );
+                                        // Auto-86: sin insumo no se puede
+                                        // escoger. Si ya venía escogida se
+                                        // deja tocar, para poder quitarla.
+                                        final isSoldOut =
+                                            modifier['is_sold_out'] == true &&
+                                            !isSelected;
                                         return FilterChip(
                                           selected: isSelected,
                                           showCheckmark: false,
@@ -1783,7 +1789,9 @@ class _ItemModifiersEditorDialogState
                                             ),
                                           ),
                                           avatar: Icon(
-                                            isSelected
+                                            isSoldOut
+                                                ? Icons.block_rounded
+                                                : isSelected
                                                 ? Icons.check_circle_rounded
                                                 : Icons
                                                       .add_circle_outline_rounded,
@@ -1793,17 +1801,26 @@ class _ItemModifiersEditorDialogState
                                                 : const Color(0xFF9CA3AF),
                                           ),
                                           labelStyle: TextStyle(
-                                            color: isSelected
+                                            color: isSoldOut
+                                                ? const Color(0xFF9CA3AF)
+                                                : isSelected
                                                 ? const Color(0xFF9A3412)
                                                 : const Color(0xFF111827),
                                             fontWeight: FontWeight.w600,
+                                            decoration: isSoldOut
+                                                ? TextDecoration.lineThrough
+                                                : null,
                                           ),
                                           label: Text(
-                                            price > 0
+                                            isSoldOut
+                                                ? '${modifier['name']} · Agotado'
+                                                : price > 0
                                                 ? '${modifier['name']} (+RD\$ ${price.toStringAsFixed(2)})'
                                                 : '${modifier['name']}',
                                           ),
-                                          onSelected: (_) {
+                                          onSelected: isSoldOut
+                                              ? null
+                                              : (_) {
                                             setState(() {
                                               final set = _selectedByGroup
                                                   .putIfAbsent(

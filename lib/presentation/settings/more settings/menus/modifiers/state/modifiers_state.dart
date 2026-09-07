@@ -62,6 +62,11 @@ class ModifierOption {
   final bool isActive;
   final DateTime createdAt;
 
+  /// Auto-86: el inventario no alcanza ni para una unidad de esta opción.
+  /// Es DERIVADA (la escribe el trigger de 20260907_0004), distinta de
+  /// [isActive], que es el switch manual del administrador.
+  final bool isSoldOut;
+
   const ModifierOption({
     required this.id,
     required this.groupId,
@@ -69,6 +74,7 @@ class ModifierOption {
     required this.priceDelta,
     required this.isActive,
     required this.createdAt,
+    this.isSoldOut = false,
   });
 
   factory ModifierOption.fromMap(
@@ -84,6 +90,7 @@ class ModifierOption {
       createdAt:
           DateTime.tryParse(map['created_at']?.toString() ?? '') ??
           DateTime.now(),
+      isSoldOut: map['is_sold_out'] == true,
     );
   }
 }
