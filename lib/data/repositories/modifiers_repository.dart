@@ -235,4 +235,110 @@ class ModifiersRepository {
           .eq('group_id', groupId);
     }
   }
+
+  // ── Insumos por modificador (20260907_0001) ────────────────────────────────
+  //
+  // Un modificador puede descontar insumos igual que la receta de un producto:
+  // «Queso extra» baja queso, «Pan integral» baja pan integral y sube el pan
+  // sobao que la receta base iba a descontar (cantidad negativa).
+
+  /// Catálogo de insumos activos del negocio para el selector del formulario.
+  Future<List<ModifierInventoryItem>> getInventoryItems(
+    String businessId,
+  ) async {
+    final response = await _client
+        .from('inventory_items')
+        .select('id, name, sku, unit, cost, purchase_unit, pack_size')
+        .eq('business_id', businessId)
+        .eq('is_active', true)
+        .order('name');
+
+    return List<Map<String, dynamic>>.from(
+      response,
+    ).map(ModifierInventoryItem.fromMap).toList(growable: false);
+  }
+
+  /// Líneas de insumo de TODOS los modificadores del negocio, indexadas por
+  /// `modifier_id`.
+  ///
+  /// `supported` viene en `false` cuando la base todavía no tiene la tabla
+  /// (migración sin aplicar): la pantalla esconde la sección de insumos y el
+  /// resto del módulo sigue funcionando.
+  Future<({Map<String, List<ModifierIngredientEntry>> byModifier, bool supported})>
+      getIngredients(String businessId) async {
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = List<Map<String, dynamic>>.from(
+        await _client
+            .from('modifier_ingredients')
+            .select(
+              'id, modifier_id, inventory_item_id, quantity, unit, '
+              'modifiers!inner(business_id), '
+              'inventory_items(name, sku, unit, cost)',
+            )
+            .eq('modifiers.business_id', businessId),
+      );
+    } on PostgrestException catch (e) {
+      if (e.code == '42P01' || e.code == '42703' || e.code == 'PGRST205') {
+        return (byModifier: <String, List<ModifierIngredientEntry>>{}, supported: false);
+      }
+      rethrow;
+    }
+
+    final byModifier = <String, List<ModifierIngredientEntry>>{};
+    for (final row in rows) {
+      final modifierId = row['modifier_id']?.toString() ?? '';
+      if (modifierId.isEmpty) continue;
+      final item = row['inventory_items'] as Map<String, dynamic>?;
+      byModifier.putIfAbsent(modifierId, () => <ModifierIngredientEntry>[]);
+      byModifier[modifierId]!.add(
+        ModifierIngredientEntry(
+          id: row['id']?.toString() ?? '',
+          modifierId: modifierId,
+          inventoryItemId: row['inventory_item_id']?.toString() ?? '',
+          inventoryItemName: item?['name']?.toString() ?? 'Insumo',
+          inventoryItemSku: item?['sku']?.toString() ?? '',
+          quantity: _toDouble(row['quantity']),
+          unit: row['unit']?.toString() ?? item?['unit']?.toString() ?? 'unidad',
+          unitCost: _toDouble(item?['cost']),
+        ),
+      );
+    }
+
+    for (final list in byModifier.values) {
+      list.sort((a, b) => a.inventoryItemName.compareTo(b.inventoryItemName));
+    }
+    return (byModifier: byModifier, supported: true);
+  }
+
+  /// Reemplaza las líneas de insumo de un modificador (borrar + insertar, el
+  /// mismo criterio que `RecipesRepository.saveRecipe`).
+  ///
+  /// Devuelve `false` si la base no tiene la tabla todavía y había líneas que
+  /// guardar — el modificador se guardó igual, solo sin sus insumos.
+  Future<bool> replaceIngredients({
+    required String modifierId,
+    required List<ModifierIngredientDraft> ingredients,
+  }) async {
+    try {
+      await _client
+          .from('modifier_ingredients')
+          .delete()
+          .eq('modifier_id', modifierId);
+
+      if (ingredients.isEmpty) return true;
+
+      await _client.from('modifier_ingredients').insert(
+            ingredients
+                .map((ingredient) => ingredient.toMap(modifierId))
+                .toList(growable: false),
+          );
+      return true;
+    } on PostgrestException catch (e) {
+      if (e.code == '42P01' || e.code == '42703' || e.code == 'PGRST205') {
+        return ingredients.isEmpty;
+      }
+      rethrow;
+    }
+  }
 }

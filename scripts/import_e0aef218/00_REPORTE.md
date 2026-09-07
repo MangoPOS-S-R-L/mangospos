@@ -1,7 +1,32 @@
-# Import de catálogo — BARRA PAYÁN
+# Carga de catálogo — BARRA PAYÁN BEIBOLISTA
 
-Negocio: **BARRA PAYAN BEIBOLISTA** · `e0aef218-ab95-4ba4-b8ef-036fab1c07c7`
+Negocio: `e0aef218-ab95-4ba4-b8ef-036fab1c07c7`
 Fuente: dos fotos del menú impreso (2026-09-07). No hay CSV ni export de POS.
+
+## Cómo se corre
+
+**Un solo archivo: [`IMPORT_COMPLETO.sql`](IMPORT_COMPLETO.sql).** Pégalo entero
+en el SQL Editor de Supabase y dale Run.
+
+Va en **una sola transacción con la verificación adentro**: si al terminar
+falta un producto, o alguno queda sin ITBIS, sin área, con el área legacy en
+desacuerdo con la N:M, en `exclusive`, o con nombre duplicado — lanza excepción
+y **revierte entero**. No puede dejar el catálogo a medias.
+
+Se puede re-correr: inserta con `NOT EXISTS` contra `lower(name)`, así que no
+duplica. Lo que **no** hace es actualizar precios ya cargados; para eso está
+`07_ajuste_precios.sql`.
+
+| Archivo | Para qué |
+|---|---|
+| **`IMPORT_COMPLETO.sql`** | **La carga. Es el único que necesitas.** |
+| `99_rollback.sql` | Deshace todo. Aborta solo si algún producto ya se vendió. |
+| `07_ajuste_precios.sql` | Corregir precios después de cargados |
+| `00_diagnostico.sql` | Ya corrido ✅ (resultado abajo) |
+| `por_pasos/` | Los mismos pasos separados, por si hace falta depurar uno |
+
+Se regenera con `python3 scripts/build_import_e0aef218.py` (edita el `.py`, no
+el `.sql`).
 
 ## Resumen
 
@@ -9,30 +34,13 @@ Fuente: dos fotos del menú impreso (2026-09-07). No hay CSV ni export de POS.
 |---|---|
 | **Productos** | **54** |
 | Categorías | 4 |
-| Sándwiches / Otros → SANDWICHERA | 14 |
-| Jugos / Bebidas → JUGUERA | 40 |
-| Modificadores (Adicionales) | 5, enganchados a los 10 sándwiches |
+| Sándwiches + Otros → SANDWICHERA | 14 |
+| Jugos + Bebidas → JUGUERA | 40 |
+| Modificadores | 5 "Adicionales", en los 10 sándwiches |
 | Impuesto | ITBIS 18% **incluido en el precio** (`tax_mode='inclusive'`) |
-| Inventario | ninguno — el menú no trae costos ni existencias |
+| Inventario | ninguno — el menú no trae costos (`inventory_mode='none'`) |
 
-## Orden de ejecución
-
-| # | Archivo | Qué hace |
-|---|---|---|
-| 0 | `00_diagnostico.sql` | ✅ **Corrido 2026-09-07, todo verde** (ver abajo) |
-| 1 | `01_staging.sql` | Tabla intermedia con los 54 productos |
-| 2 | `02_catalogo.sql` | Categorías + productos |
-| 3 | `03_impuestos.sql` | Vincula el ITBIS 18% |
-| 4 | `04_areas.sql` | JUGUERA / SANDWICHERA (N:M + legacy) |
-| 5 | `05_modificadores.sql` | Grupo "Adicionales" |
-| 6 | `06_verificacion.sql` | Chequeos + borrado del staging |
-| 7 | `07_ajuste_precios.sql` | Opcional: corregir precios ya cargados |
-
-`99_rollback.sql` deshace los pasos 2-5, y **aborta solo** si algún producto ya se vendió.
-
----
-
-## ✅ Diagnóstico previo — corrido el 2026-09-07
+## ✅ Diagnóstico previo — 2026-09-07
 
 | Chequeo | Resultado |
 |---|---|
@@ -40,68 +48,61 @@ Fuente: dos fotos del menú impreso (2026-09-07). No hay CSV ni export de POS.
 | ITBIS 18% | existe, activo, `is_service_fee = false` ✓ |
 | Canales del ITBIS | zona, manual, venta rápida, para llevar, delivery — los 5 |
 | Áreas | `juguera` y `sandwichera`, activas, **0 impresoras** ⚠ |
-| Catálogo previo | vacío (0 categorías, 0 productos, 0 grupos) — sin riesgo de duplicados |
+| Catálogo previo | vacío — sin riesgo de duplicados |
+| `service_fee_enabled` | `false` ✓ (no cobran Ley 10%) |
+| `currency_code` | DOP |
 
-Pendiente de revisar: `business_settings.service_fee_enabled` debe estar en `false`.
+## ⚠ Seis precios por confirmar
 
-## ⚠ Antes de correr nada: confírmame 6 precios
+La columna de precios de **OTRAS BEBIDAS** está tachada y desgastada en la
+foto. Estos seis los leí con poca certeza; dos me huelen raro:
 
-En la foto 2, la columna de precios de **OTRAS BEBIDAS** está tachada y
-desgastada. Estos 6 los leí con poca certeza — puse mi mejor lectura, pero
-dos me huelen raro y los quiero confirmar contigo:
-
-| Producto | Lo que puse | Duda |
+| Producto | Puse | Duda |
 |---|---|---|
-| Agua | **175** | ¿$175 el agua? Podría ser $75 |
-| Leche | **145** | Se lee entre $145 y $175 |
-| Chocolate | **175** | Borroso |
-| Café Dominicano | **225** | Raro que cueste más que el Café con Leche ($175). ¿Será $125? |
-| Cortadito | **225** | Borroso |
-| Expreso | **225** | Borroso |
+| Agua | 175 | ¿$175 el agua? Podría ser $75 |
+| Café Dominicano | 225 | Sale más caro que el Café con Leche ($175). ¿$125? |
+| Leche | 145 | se lee entre 145 y 175 |
+| Chocolate | 175 | borroso |
+| Cortadito | 225 | borroso |
+| Expreso | 225 | borroso |
 
-Los otros 48 productos se leen sin ambigüedad.
-
-Dos caminos: corrígemelos y regenero con `python3 scripts/build_import_e0aef218.py`
-**antes** de cargar, o carga ya y ajústalos después con `07_ajuste_precios.sql`
-(el paso 2 inserta con NOT EXISTS, así que re-correrlo NO pisa precios).
-
----
+Los otros 48 se leen sin ambigüedad. Dos caminos: corregirlos en el `.py` y
+regenerar **antes** de cargar, o cargar ya y ajustarlos después con
+`07_ajuste_precios.sql`.
 
 ## Decisiones tomadas
 
-**Precios con impuesto dentro.** Dijiste "impuestos incluidos", así que los 54
-entran con `tax_mode = 'inclusive'` y vinculados al ITBIS 18%. El Club Sándwich
-de $450 se cobra $450; el ITBIS se desglosa hacia adentro (base $381.36 +
-ITBIS $68.64). Si entraran como `exclusive`, el POS cobraría $531 y el menú
-sería mentira.
+**Precios con impuesto dentro.** "Impuestos incluidos" → los 54 con
+`tax_mode='inclusive'` y vinculados al ITBIS. El Club Sándwich de $450 se cobra
+$450; el ITBIS se desglosa hacia adentro (base $381.36 + ITBIS $68.64).
+Verificado contra `fn_compute_item_totals`:
+`subtotal = line_amount / (1 + rate/100)`. En `exclusive` el POS cobraría $531
+y el menú sería mentira.
 
-**El vínculo del impuesto es obligatorio, no cosmético.** `menu_item_taxes` es
-la ÚNICA fuente del impuesto por producto desde el PRD 2.5 — ya no hay fallback
-a `default_tax_rate`. Un producto sin fila ahí factura **ITBIS 0.00 ante la
-DGII** aunque el impuesto exista y esté activo. Por eso los pasos 2 y 3 van
-juntos: entre uno y otro el catálogo está fiscalmente roto.
+**El vínculo del impuesto no es cosmético.** `menu_item_taxes` es la ÚNICA
+fuente del impuesto por producto desde el PRD 2.5 — ya no hay fallback a
+`default_tax_rate` (aunque el negocio lo tenga en 18). Un producto sin fila ahí
+factura **ITBIS 0.00 ante la DGII**. Por eso la verificación interna aborta si
+queda uno solo sin vincular.
 
-**Ley 10%: no se cobra.** No se vincula ningún impuesto de servicio, y el
-paso 3 aborta si `is_service_fee` está encendido. El diagnóstico también revisa
-que `business_settings.service_fee_enabled` esté en `false`: encendido cobraría
-un 10% por orden que el menú de Barra Payán no anuncia.
+**Ley 10%: no se cobra.** No se vincula impuesto de servicio, y el script
+aborta si alguien encendió `is_service_fee` o `service_fee_enabled`.
 
 **Jugos: 2 productos por sabor.** NAT y CA son Natural (en agua) y Con Leche.
-No se pueden modelar como un producto + modificador porque la diferencia no es
-fija: es $25 en unos sabores y $50 en otros.
+No se pueden modelar como producto + modificador porque la diferencia no es
+fija: $25 en unos sabores, $50 en otros.
 
 **Adicionales: modificadores.** Así el extra viaja pegado al sándwich —sale
 debajo de su ítem en la comanda de la SANDWICHERA— en vez de ser una línea
 suelta que el cocinero no sabe a cuál de los tres sándwiches de la mesa
-pertenece.
+pertenece. `fn_compute_item_totals` suma `mods_total` **antes** de extraer el
+impuesto, así que los adicionales también quedan con el ITBIS dentro.
 
-**Áreas: se resuelven por nombre, no por código.** De tu foto solo se conocen
-los nombres (JUGUERA / SANDWICHERA); el `code` real se lee de la propia fila.
-Se escriben **los dos** mecanismos a propósito: la tabla N:M
-`menu_item_print_areas` (fuente de verdad) y el legacy `print_area_code`, que
-`fn_add_item_from_menu` copia al `order_item`. El lookup N:M tiene timeout
-online — sin el legacy correcto, un bache de red manda los sándwiches a la
-juguera.
+**Áreas: se resuelven por nombre.** Se escriben **los dos** mecanismos a
+propósito: la N:M `menu_item_print_areas` (fuente de verdad) y el legacy
+`print_area_code`, que `fn_add_item_from_menu` copia al `order_item`. El lookup
+N:M tiene timeout online — sin el legacy correcto, un bache de red manda los
+sándwiches a la juguera.
 
 ## Catálogo
 
@@ -120,18 +121,13 @@ juguera.
 | Sándwich de Salami y Queso | 250 |
 | Derretido de Queso | 250 |
 
-Las descripciones del menú entran en `description`. La del Sándwich de Jamón y
-Queso está parcialmente tapada en la foto ("Jamón de pierna c…"); puse
-"Jamón de pierna, queso danés o cheddar y salsas."
+Las descripciones del menú van en `description`. La del Sándwich de Jamón y
+Queso está tapada en la foto ("Jamón de pierna c…"); puse "Jamón de pierna,
+queso danés o cheddar y salsas."
 
 ### Otros → SANDWICHERA
 
-| Producto | Precio |
-|---|---|
-| Tostada Especial | 200 |
-| Tostada | 50 |
-| Tostada de Ajo | 60 |
-| Servicio de Papas | 120 |
+Tostada Especial 200 · Tostada 50 · Tostada de Ajo 60 · Servicio de Papas 120
 
 ### Jugos → JUGUERA (14 sabores × 2 = 28)
 
@@ -154,54 +150,36 @@ Queso está parcialmente tapada en la foto ("Jamón de pierna c…"); puse
 
 ### Bebidas → JUGUERA
 
-| Producto | Precio | |
-|---|---|---|
-| Agua | 175 | ⚠ confirmar |
-| Refresco | 175 | |
-| Leche | 145 | ⚠ confirmar |
-| Café con Leche | 175 | |
-| Capuccino Italiano | 175 | |
-| Capuccino Caramelo | 225 | |
-| Capuccino Suizo | 225 | |
-| Mocachino | 175 | |
-| Chocolate | 175 | ⚠ confirmar |
-| Café Dominicano | 225 | ⚠ confirmar |
-| Cortadito | 225 | ⚠ confirmar |
-| Expreso | 225 | ⚠ confirmar |
+Agua 175 ⚠ · Refresco 175 · Leche 145 ⚠ · Café con Leche 175 ·
+Capuccino Italiano 175 · Capuccino Caramelo 225 · Capuccino Suizo 225 ·
+Mocachino 175 · Chocolate 175 ⚠ · Café Dominicano 225 ⚠ · Cortadito 225 ⚠ ·
+Expreso 225 ⚠
 
 ### Adicionales (modificadores de los 10 sándwiches)
 
-| Opción | +Precio |
-|---|---|
-| Queso cheddar o danés | 95 |
-| Pollo o Pierna | 100 |
-| Jamón | 75 |
-| Salami | 55 |
-| Huevo | 30 |
+Queso cheddar o danés +95 · Pollo o Pierna +100 · Jamón +75 · Salami +55 ·
+Huevo +30
 
 `min_select 0 / max_select 5`: todos opcionales, se pueden elegir varios.
-`max_qty_per_option` queda en su default (1) — para "2 huevos" hay que añadir
-el modificador dos veces. Dime si lo quieres distinto.
+`max_qty_per_option` queda en 1 — para "2 huevos" hay que añadir el modificador
+dos veces.
 
-Las tostadas y las papas quedaron **fuera** del grupo. Si también les ponen
-adicionales, se agregan a la lista del paso 5.
+Las tostadas y las papas quedaron **fuera** del grupo. Si también llevan
+adicionales, se agregan a `SANDWICHES` en el `.py`.
 
----
+## Pendientes que este script NO resuelve
 
-## Pendientes que NO resuelve este import
-
-1. **Las dos áreas están "Sin impresora"** (se ve en tu foto). La comanda se
-   genera pero no sale por ningún lado. Hay que vincular la impresora de cada
-   área en Ajustes → Impresoras → Comandas por impresora.
-2. ~~El ITBIS 18% tiene que existir y estar activo~~ — confirmado en el
-   diagnóstico.
-3. **Sin inventario ni costos.** El menú no los trae. Si quieren descontar
-   existencias hay que armar recetas aparte.
-4. **Sin códigos de barra ni SKU.** No aplican a este negocio.
+1. **JUGUERA y SANDWICHERA no tienen impresora vinculada.** Y el negocio tiene
+   `auto_print_order = true`, así que el POS va a intentar imprimir la comanda
+   en cada orden y no va a salir por ningún lado. Se vincula en
+   Ajustes → Impresoras → Comandas por impresora.
+2. **Sin inventario ni costos.** El menú no los trae y `inventory_mode='none'`.
+   Si quieren descontar existencias hay que armar recetas aparte.
+3. **Sin SKU ni códigos de barra.** No aplican a este negocio.
 
 ## Nota técnica
 
 `menu_item_groups` puede tener una columna `position` en la BD viva que no está
-en las migraciones del repo (el código Dart la lee). El paso 5 no la
+en las migraciones del repo (el código Dart la lee). El script no la
 especifica, contando con que tenga default. Si el INSERT falla por eso, la
-transacción revierte sola y no queda nada a medias — avísame y la agrego.
+transacción revierte sola y no queda nada a medias.

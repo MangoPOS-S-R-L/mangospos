@@ -10895,11 +10895,17 @@ class _ModifiersSelectionDialogState
           .map((item) => Map<String, dynamic>.from(item as Map))
           .where((item) => selected.contains(item['id']?.toString() ?? ''));
       for (final modifier in modifiers) {
+        final modifierId = modifier['id']?.toString();
         result.add(
           SelectedModifierInput(
             name: modifier['name']?.toString() ?? 'Modificador',
             qty: 1,
             price: (modifier['price_delta'] as num?)?.toDouble() ?? 0.0,
+            // Identidad de la opción: es lo que deja al inventario descontar
+            // los insumos configurados en ella.
+            modifierId: (modifierId == null || modifierId.isEmpty)
+                ? null
+                : modifierId,
           ),
         );
       }

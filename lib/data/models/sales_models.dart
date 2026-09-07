@@ -433,6 +433,11 @@ class OrderItemModifier extends Equatable {
   /// de un grupo de combo. NULL para modifiers normales (extras).
   final String? menuItemId;
 
+  /// Modificador de catálogo (modifiers.id) que originó esta línea. Es lo que
+  /// le permite al inventario descontar los insumos configurados en esa
+  /// opción. NULL en ventas viejas y en los componentes de combo.
+  final String? modifierId;
+
   const OrderItemModifier({
     required this.id,
     required this.itemId,
@@ -440,6 +445,7 @@ class OrderItemModifier extends Equatable {
     required this.qty,
     required this.price,
     this.menuItemId,
+    this.modifierId,
   });
 
   factory OrderItemModifier.fromMap(Map<String, dynamic> map) {
@@ -450,11 +456,13 @@ class OrderItemModifier extends Equatable {
       qty: (map['qty'] ?? 1).toDouble(),
       price: (map['price'] ?? 0).toDouble(),
       menuItemId: map['menu_item_id'] as String?,
+      modifierId: map['modifier_id'] as String?,
     );
   }
 
   @override
-  List<Object?> get props => [id, itemId, name, qty, price, menuItemId];
+  List<Object?> get props =>
+      [id, itemId, name, qty, price, menuItemId, modifierId];
 }
 
 /// 📄 Check (subcuenta)

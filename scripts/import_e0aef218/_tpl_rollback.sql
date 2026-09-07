@@ -4,7 +4,7 @@
 -- Generado por scripts/build_import_e0aef218.py — NO EDITAR A MANO.
 -- ============================================================================
 --
--- Borra los 54 productos, sus 4 categorías y el grupo de
+-- Borra los {{N}} productos, sus {{N_CATS}} categorías y el grupo de
 -- modificadores. Lleva la lista de nombres embebida, así que no depende de
 -- ninguna tabla de staging.
 --
@@ -23,60 +23,7 @@ declare
 begin
   create temp table _payan_nombres(name text) on commit drop;
   insert into _payan_nombres values
-    ('Club Sándwich'),
-    ('Payán Especial'),
-    ('Sándwich Completo'),
-    ('Sándwich de Pierna'),
-    ('Sándwich de Pollo'),
-    ('Juancito Caminador'),
-    ('Sándwich de Jamón y Queso'),
-    ('Sándwich de Huevo y Queso'),
-    ('Sándwich de Salami y Queso'),
-    ('Derretido de Queso'),
-    ('Tostada Especial'),
-    ('Tostada'),
-    ('Tostada de Ajo'),
-    ('Servicio de Papas'),
-    ('Jugo de Limón (Natural)'),
-    ('Jugo de Limón (Con Leche)'),
-    ('Jugo de Chinola (Natural)'),
-    ('Jugo de Chinola (Con Leche)'),
-    ('Jugo de Tamarindo (Natural)'),
-    ('Jugo de Tamarindo (Con Leche)'),
-    ('Jugo de Cereza (Natural)'),
-    ('Jugo de Cereza (Con Leche)'),
-    ('Jugo de Piña (Natural)'),
-    ('Jugo de Piña (Con Leche)'),
-    ('Jugo de Melón (Natural)'),
-    ('Jugo de Melón (Con Leche)'),
-    ('Jugo de Guineo (Natural)'),
-    ('Jugo de Guineo (Con Leche)'),
-    ('Jugo de Fresa (Natural)'),
-    ('Jugo de Fresa (Con Leche)'),
-    ('Jugo de Granadillo (Natural)'),
-    ('Jugo de Granadillo (Con Leche)'),
-    ('Jugo de Lechoza (Natural)'),
-    ('Jugo de Lechoza (Con Leche)'),
-    ('Jugo de Zapote (Natural)'),
-    ('Jugo de Zapote (Con Leche)'),
-    ('Jugo de China (Natural)'),
-    ('Jugo de China (Con Leche)'),
-    ('Jugo de Mango (Natural)'),
-    ('Jugo de Mango (Con Leche)'),
-    ('Jugo de Pitahaya (Natural)'),
-    ('Jugo de Pitahaya (Con Leche)'),
-    ('Agua'),
-    ('Refresco'),
-    ('Leche'),
-    ('Café con Leche'),
-    ('Capuccino Italiano'),
-    ('Capuccino Caramelo'),
-    ('Capuccino Suizo'),
-    ('Mocachino'),
-    ('Chocolate'),
-    ('Café Dominicano'),
-    ('Cortadito'),
-    ('Expreso');
+    {{NOMBRES}};
 
   select count(distinct mi.id) into v_vendidos
   from public.menu_items mi
@@ -119,7 +66,7 @@ begin
   -- Categorías, solo si quedaron vacías.
   delete from public.categories c
   where c.business_id = v_business
-    and c.name in ('Sándwiches', 'Otros', 'Jugos', 'Bebidas')
+    and c.name in ({{CATS_NOMBRES}})
     and not exists (select 1 from public.menu_items m where m.category_id = c.id);
 end $$;
 

@@ -1874,6 +1874,7 @@ class _ItemModifiersEditorDialogState
                                   ),
                                 );
                         for (final modifier in modifiers) {
+                          final modifierId = modifier['id']?.toString();
                           result.add(
                             SelectedModifierInput(
                               name:
@@ -1883,6 +1884,12 @@ class _ItemModifiersEditorDialogState
                                   (modifier['price_delta'] as num?)
                                       ?.toDouble() ??
                                   0.0,
+                              // Identidad de la opción: es lo que deja al
+                              // inventario descontar sus insumos.
+                              modifierId:
+                                  (modifierId == null || modifierId.isEmpty)
+                                  ? null
+                                  : modifierId,
                             ),
                           );
                         }

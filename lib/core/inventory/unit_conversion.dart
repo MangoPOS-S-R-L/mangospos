@@ -145,3 +145,58 @@ const List<String> purchaseUnitOptions = <String>[
   'Saco',
   'Funda',
 ];
+
+/// Convierte `quantity` (escrita en `fromUnit`) a la UNIDAD BASE del insumo.
+///
+/// Es la regla que ya usaba el formulario de recetas, extraída acá para que el
+/// formulario de modificadores descuente con el mismo criterio:
+///   1. si la unidad escrita es la unidad de COMPRA del insumo → × `packSize`
+///      (1 botella = 700 ml);
+///   2. si es de la misma familia que la base → factor de conversión;
+///   3. si no se reconoce → se asume que ya venía en unidad base.
+///
+/// Preserva el SIGNO: los modificadores guardan cantidades negativas para
+/// anular lo que la receta base descuenta («sin queso»).
+double toBaseQuantity({
+  required double quantity,
+  required String fromUnit,
+  required String baseUnit,
+  String? purchaseUnit,
+  double packSize = 1,
+}) {
+  final from = fromUnit.trim();
+  if (from.isEmpty) return quantity;
+
+  final pu = purchaseUnit?.trim();
+  if (pu != null && pu.isNotEmpty && from.toLowerCase() == pu.toLowerCase()) {
+    return quantity * (packSize <= 0 ? 1 : packSize);
+  }
+
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
+  return convertUnit(quantity, from, base) ?? quantity;
+}
+
+/// Unidades que se le ofrecen al usuario para un insumo: su unidad base + las
+/// de su misma familia + la unidad de compra (ej. Botella).
+///
+/// `oz` aparece en peso además de en volumen: contra un insumo de peso la
+/// conversión la resuelve como onza de peso (la pechuga se compra por libra y
+/// la receta la pide en onzas).
+List<String> unitOptionsFor({required String baseUnit, String? purchaseUnit}) {
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
+  final opts = <String>{base};
+  switch (unitFamily(base)) {
+    case UnitFamily.volume:
+      opts.addAll(const ['ml', 'cl', 'L', 'oz']);
+      break;
+    case UnitFamily.weight:
+      opts.addAll(const ['g', 'kg', 'lb', 'oz']);
+      break;
+    case UnitFamily.count:
+    case UnitFamily.unknown:
+      break;
+  }
+  final pu = purchaseUnit?.trim();
+  if (pu != null && pu.isNotEmpty) opts.add(pu);
+  return opts.toList(growable: false);
+}

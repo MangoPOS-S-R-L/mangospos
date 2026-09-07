@@ -8,6 +8,7 @@ import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/core/offline/hub/hub_op_log.dart';
 import 'package:mangopos/core/offline/hub/hub_order_projector.dart';
+import 'package:mangopos/core/offline/hub/hub_projection_cache.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/security/secure_blob_cipher.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
@@ -279,10 +280,9 @@ class OfflinePosService {
   /// round-trip HTTP a sí mismo. Best-effort: lista vacía ante error.
   Future<List<Map<String, dynamic>>> localHubSalon(String businessId) async {
     try {
-      final ops = await _hubOpLog.since(businessId, seq: 0);
-      return HubOrderProjector.projectSalon(ops)
-          .map((t) => t.toJson())
-          .toList(growable: false);
+      // Memoizado por revisión del op-log (ver [HubProjectionCache]): el
+      // host re-proyectaba el log entero en cada refresco de su propio grid.
+      return await HubProjectionCache.instance.salon(businessId);
     } catch (_) {
       return const [];
     }
@@ -293,7 +293,7 @@ class OfflinePosService {
   /// mismo. Best-effort: lista vacía ante error.
   Future<List<Map<String, dynamic>>> getLocalHubOps(String businessId) async {
     try {
-      return await _hubOpLog.since(businessId, seq: 0);
+      return await HubProjectionCache.instance.ops(businessId);
     } catch (_) {
       return const [];
     }
@@ -308,7 +308,7 @@ class OfflinePosService {
     String? orderId,
   }) async {
     try {
-      final ops = await _hubOpLog.since(businessId, seq: 0);
+      final ops = await HubProjectionCache.instance.ops(businessId);
       final order = HubOrderProjector.projectOrder(
         ops,
         tableId: tableId,
@@ -1911,7 +1911,8 @@ class OfflinePosService {
 
         // Re-aplicar modifiers seleccionados al item recién creado en el
         // server. La acción los lleva como snapshot en `selected_modifiers`
-        // (List<{name, qty, price, menu_item_id?}>). Antes esto se perdía: la orden offline
+        // (List<{name, qty, price, menu_item_id?, modifier_id?}>). Antes esto se
+        // perdía: la orden offline
         // llegaba al server SIN modifiers, dejando totales inconsistentes.
         final rawModifiers = action['selected_modifiers'];
         if (rawModifiers is List && rawModifiers.isNotEmpty) {

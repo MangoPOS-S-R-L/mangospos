@@ -18,6 +18,12 @@ final modifiersViewModelProvider =
     });
 
 class ModifiersViewModel extends ChangeNotifier {
+  /// La base todavía no tiene `modifier_ingredients` (migración
+  /// 20260907_0001 sin aplicar): el modificador sí se guardó.
+  static const _ingredientsUnavailableMessage =
+      'El modificador se guardó, pero sus insumos no: falta aplicar la '
+      'migración de insumos por modificador en la base.';
+
   final ModifiersRepository _repository;
 
   ModifiersState _state = const ModifiersState();
@@ -163,11 +169,15 @@ class ModifiersViewModel extends ChangeNotifier {
     }
   }
 
+  /// Crea el modificador y, si trae líneas, sus insumos. Si la base todavía no
+  /// tiene `modifier_ingredients`, el modificador se guarda igual y avisamos —
+  /// no se pierde el trabajo de capturar nombre y precio.
   Future<void> createModifier({
     required String groupId,
     required String name,
     required double priceDelta,
     required bool isActive,
+    List<ModifierIngredientDraft> ingredients = const [],
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -178,16 +188,27 @@ class ModifiersViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final id = const Uuid().v4();
       await _repository.createModifier(
         businessId: businessId,
-        id: const Uuid().v4(),
+        id: id,
         groupId: groupId,
         name: name,
         priceDelta: priceDelta,
         isActive: isActive,
       );
+      final savedIngredients = await _repository.replaceIngredients(
+        modifierId: id,
+        ingredients: ingredients,
+      );
       _state = _state.copyWith(saving: false, selectedGroupId: groupId);
       await refresh();
+      // El aviso va DESPUÉS del refresh: `refresh()` limpia el error, así que
+      // ponerlo antes lo borraría sin que nadie lo vea.
+      if (!savedIngredients) {
+        _state = _state.copyWith(error: _ingredientsUnavailableMessage);
+        notifyListeners();
+      }
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
@@ -204,6 +225,7 @@ class ModifiersViewModel extends ChangeNotifier {
     required String name,
     required double priceDelta,
     required bool isActive,
+    List<ModifierIngredientDraft> ingredients = const [],
   }) async {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
@@ -216,8 +238,18 @@ class ModifiersViewModel extends ChangeNotifier {
         priceDelta: priceDelta,
         isActive: isActive,
       );
+      final savedIngredients = await _repository.replaceIngredients(
+        modifierId: id,
+        ingredients: ingredients,
+      );
       _state = _state.copyWith(saving: false, selectedGroupId: groupId);
       await refresh();
+      // El aviso va DESPUÉS del refresh: `refresh()` limpia el error, así que
+      // ponerlo antes lo borraría sin que nadie lo vea.
+      if (!savedIngredients) {
+        _state = _state.copyWith(error: _ingredientsUnavailableMessage);
+        notifyListeners();
+      }
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
@@ -381,6 +413,8 @@ class ModifiersViewModel extends ChangeNotifier {
     final products = await _repository.getProducts(businessId);
     final modifiers = await _repository.getModifiers(businessId);
     final assignments = await _repository.getAssignments(businessId);
+    final inventoryItems = await _repository.getInventoryItems(businessId);
+    final ingredients = await _repository.getIngredients(businessId);
 
     final selectedGroupId = _resolveSelectedGroupId(groups);
 
@@ -390,6 +424,9 @@ class ModifiersViewModel extends ChangeNotifier {
       groups: groups,
       modifiers: modifiers,
       assignedProductIdsByGroup: assignments,
+      inventoryItems: inventoryItems,
+      ingredientsByModifier: ingredients.byModifier,
+      ingredientsSupported: ingredients.supported,
       selectedGroupId: selectedGroupId,
       clearError: true,
     );

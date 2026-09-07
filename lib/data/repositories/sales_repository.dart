@@ -1416,41 +1416,59 @@ class SalesRepository {
     required List<Map<String, dynamic>> modifiers,
   }) async {
     if (modifiers.isEmpty) return;
-    // Incluye menu_item_id (identidad del componente de combo) para que el
-    // inventario pueda descontar cada componente. Si la columna aún no existe
-    // (migración 20260605_0002 sin aplicar), reintenta sin ella para no romper
-    // el guardado de modifiers — el combo se sigue vendiendo, solo sin descuento
-    // de inventario por componente hasta que se aplique la migración.
-    List<Map<String, dynamic>> rows({required bool withMenuItem}) => modifiers
-        .map(
-          (modifier) => {
-            'item_id': itemId,
-            'name': modifier['name'],
-            'qty': modifier['qty'] ?? 1,
-            'price': modifier['price'] ?? 0,
-            if (withMenuItem && modifier['menu_item_id'] != null)
-              'menu_item_id': modifier['menu_item_id'],
-          },
-        )
-        .toList(growable: false);
+    // Se guardan dos identidades además del nombre, y las dos son para que el
+    // inventario pueda descontar:
+    //   - menu_item_id  → componente elegido de un combo   (20260605_0002)
+    //   - modifier_id   → opción del catálogo de modifiers (20260907_0002),
+    //     la que lleva los insumos configurados («queso extra», «sin queso»).
+    // Si alguna columna todavía no existe en la base, se reintenta sin ella,
+    // de la más completa a la más vieja: la venta NUNCA se pierde por una
+    // migración pendiente, solo se queda sin ese descuento.
+    List<Map<String, dynamic>> rows({
+      required bool withMenuItem,
+      required bool withModifierId,
+    }) =>
+        modifiers
+            .map(
+              (modifier) => {
+                'item_id': itemId,
+                'name': modifier['name'],
+                'qty': modifier['qty'] ?? 1,
+                'price': modifier['price'] ?? 0,
+                if (withMenuItem && modifier['menu_item_id'] != null)
+                  'menu_item_id': modifier['menu_item_id'],
+                if (withModifierId && modifier['modifier_id'] != null)
+                  'modifier_id': modifier['modifier_id'],
+              },
+            )
+            .toList(growable: false);
 
     final hasComponentId = modifiers.any((m) => m['menu_item_id'] != null);
-    try {
-      await _client
-          .from('order_item_modifiers')
-          .insert(rows(withMenuItem: true));
-    } catch (e) {
-      if (!hasComponentId) {
-        throw Exception('Error al guardar modificadores del item: $e');
-      }
+    final hasModifierId = modifiers.any((m) => m['modifier_id'] != null);
+
+    // Intentos, del más completo al más pobre. Solo se agregan los que de
+    // verdad cambian algo para estos modifiers.
+    final attempts = <({bool menuItem, bool modifierId})>[
+      (menuItem: true, modifierId: true),
+      if (hasModifierId && hasComponentId) (menuItem: true, modifierId: false),
+      if (hasModifierId || hasComponentId) (menuItem: false, modifierId: false),
+    ];
+
+    Object? firstError;
+    for (final attempt in attempts) {
       try {
-        await _client
-            .from('order_item_modifiers')
-            .insert(rows(withMenuItem: false));
-      } catch (_) {
-        throw Exception('Error al guardar modificadores del item: $e');
+        await _client.from('order_item_modifiers').insert(
+              rows(
+                withMenuItem: attempt.menuItem,
+                withModifierId: attempt.modifierId,
+              ),
+            );
+        return;
+      } catch (e) {
+        firstError ??= e;
       }
     }
+    throw Exception('Error al guardar modificadores del item: $firstError');
   }
 
   Future<void> replaceOrderItemModifiers({

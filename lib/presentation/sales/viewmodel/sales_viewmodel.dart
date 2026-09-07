@@ -58,11 +58,19 @@ class SelectedModifierInput {
   /// Es la identidad que el inventario usa para descontar cada componente.
   final String? menuItemId;
 
+  /// Modificador de catálogo (modifiers.id) que originó esta línea. Es la
+  /// identidad que el inventario usa para descontar sus insumos
+  /// (modifier_ingredients): sin ella solo queda el nombre en texto, que no
+  /// sirve para descontar. NULL en los componentes de combo (esos van por
+  /// [menuItemId]) y en cualquier modifier armado a mano.
+  final String? modifierId;
+
   const SelectedModifierInput({
     required this.name,
     this.qty = 1,
     this.price = 0,
     this.menuItemId,
+    this.modifierId,
   });
 
   Map<String, dynamic> toMap() => {
@@ -70,6 +78,7 @@ class SelectedModifierInput {
         'qty': qty,
         'price': price,
         if (menuItemId != null) 'menu_item_id': menuItemId,
+        if (modifierId != null) 'modifier_id': modifierId,
       };
 }
 

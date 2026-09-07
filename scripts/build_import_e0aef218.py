@@ -22,7 +22,7 @@ DECISIONES tomadas con el dueño el 2026-09-07:
 
 Uso: python3 scripts/build_import_e0aef218.py
 """
-import os
+import io, os, re
 
 BID = "e0aef218-ab95-4ba4-b8ef-036fab1c07c7"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -118,89 +118,53 @@ def build_rows():
     return rows
 
 
+def render(tpl_name, out_name, subs):
+    tpl = io.open(os.path.join(OUT, tpl_name), encoding="utf-8").read()
+    for k, v in subs.items():
+        tpl = tpl.replace("{{%s}}" % k, str(v))
+    left = re.findall(r"\{\{[A-Z_]+\}\}", tpl)
+    if left:
+        raise SystemExit("marcador sin resolver en %s: %s" % (tpl_name, set(left)))
+    io.open(os.path.join(OUT, out_name), "w", encoding="utf-8").write(tpl)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     rows = build_rows()
     dudosos = [r for r in rows if r[6]]
 
-    vals = ",\n  ".join(
-        "(%s, %s, %s, %s, %s, %d, %s)" % (
-            q(cat), q(name), ("%.2f" % price), q(descr),
-            "true" if bev else "false", pos, q(AREA_DE[cat]))
-        for cat, name, price, descr, bev, pos, _ in rows
-    )
+    subs = {
+        "N": len(rows),
+        "N_CATS": len(CATEGORIAS),
+        "N_MODS": len(ADICIONALES),
+        "N_SAND": len(SANDWICHES),
+        "N_JUGUERA": sum(1 for r in rows if AREA_DE[r[0]] == "JUGUERA"),
+        "N_SANDWICHERA": sum(1 for r in rows if AREA_DE[r[0]] == "SANDWICHERA"),
+        "VALS": ",\n  ".join(
+            "(%s, %s, %s, %s, %s, %d, %s)" % (
+                q(cat), q(name), ("%.2f" % price), q(descr),
+                "true" if bev else "false", pos, q(AREA_DE[cat]))
+            for cat, name, price, descr, bev, pos, _ in rows),
+        "CATS": ",\n    ".join("(%s, %d)" % (q(n), p) for n, p in CATEGORIAS),
+        "CATS_NOMBRES": ", ".join(q(n) for n, _ in CATEGORIAS),
+        "NOMBRES": ",\n    ".join("(%s)" % q(r[1]) for r in rows),
+        "SANDWICHES": ",\n    ".join("(%s)" % q(n) for n, _, _ in SANDWICHES),
+        "MODS": ",\n    ".join(
+            "(%s, %6.2f, %d)" % (q(n), d, i)
+            for i, (n, d) in enumerate(ADICIONALES)),
+    }
 
-    nombres = ",\n    ".join("(%s)" % q(r[1]) for r in rows)
-    sandwiches = ",\n    ".join("(%s)" % q(n) for n, _, _ in SANDWICHES)
-    mods = ",\n    ".join(
-        "(%s, %6.2f, %d)" % (q(n), d, i) for i, (n, d) in enumerate(ADICIONALES))
-    cats = ",\n  ".join("(%s, %d)" % (q(n), p) for n, p in CATEGORIAS)
+    render("_tpl_import.sql", "IMPORT_COMPLETO.sql", subs)
+    render("_tpl_rollback.sql", "99_rollback.sql", subs)
 
-    ctx = {"bid": BID, "vals": vals, "n": len(rows), "nombres": nombres,
-           "sandwiches": sandwiches, "mods": mods, "cats": cats,
-           "n_sand": len(SANDWICHES), "n_mods": len(ADICIONALES),
-           "n_cats": len(CATEGORIAS),
-           "n_sandwichera": sum(1 for r in rows if r[6 - 6] and AREA_DE[r[0]] == "SANDWICHERA"),
-           "n_juguera": sum(1 for r in rows if AREA_DE[r[0]] == "JUGUERA")}
-    ctx["n_sandwichera"] = sum(1 for r in rows if AREA_DE[r[0]] == "SANDWICHERA")
-
-    with open(os.path.join(OUT, "IMPORT_COMPLETO.sql"), "w", encoding="utf-8") as f:
-        f.write(FULL_TPL % ctx)
-
-    with open(os.path.join(OUT, "99_rollback.sql"), "w", encoding="utf-8") as f:
-        f.write(ROLLBACK_TPL % ctx)
-
-    print("IMPORT_COMPLETO.sql: %d productos (%d dudosos)" % (len(rows), len(dudosos)))
-    for r in dudosos:
-        print("  ? %-22s %s" % (r[1], r[2]))
-    from collections import Counter
-    for cat, n in Counter(r[0] for r in rows).items():
-        print("  %-12s %3d  -> %s" % (cat, n, AREA_DE[cat]))
-
-
-STAGING_TPL = """-- ============================================================================
--- Import de catálogo — BARRA PAYÁN
--- Business %(bid)s
--- Fuente: fotos del menú impreso (2026-09-07). Generado por
---         scripts/build_import_e0aef218.py — no editar a mano.
--- ============================================================================
---
--- PASO 1 — Tabla de staging con los %(n)d productos.
---   No toca nada del catálogo real. Se borra en el paso 05.
--- ============================================================================
-
-begin;
-
-drop table if exists %(stg)s;
-
-create table %(stg)s (
-  categoria  text not null,
-  name       text not null,
-  price      numeric(12,2) not null,
-  descr      text,
-  is_bev     boolean not null,
-  posicion   int not null,
-  area       text not null
-);
-
-insert into %(stg)s (categoria, name, price, descr, is_bev, posicion, area) values
-  %(vals)s;
-
-commit;
-
--- ============================================================================
--- VERIFICACIÓN — esperado: %(n)d filas, 0 nombres repetidos.
--- ============================================================================
-
-select count(*) as filas from %(stg)s;
-
-select categoria, area, count(*) as productos
-from %(stg)s group by categoria, area order by min(posicion);
-
--- Debe dar 0 filas.
-select lower(name) as nombre, count(*)
-from %(stg)s group by lower(name) having count(*) > 1;
-"""
+    print("IMPORT_COMPLETO.sql — %d productos, %d categorías, %d modificadores"
+          % (subs["N"], subs["N_CATS"], subs["N_MODS"]))
+    print("  SANDWICHERA %d · JUGUERA %d"
+          % (subs["N_SANDWICHERA"], subs["N_JUGUERA"]))
+    if dudosos:
+        print("  precios por confirmar (leídos de una foto tachada):")
+        for r in dudosos:
+            print("    ? %-20s %s" % (r[1], r[2]))
 
 
 if __name__ == "__main__":

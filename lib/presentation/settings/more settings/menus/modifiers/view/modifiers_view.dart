@@ -5,6 +5,9 @@ import 'package:intl/intl.dart';
 
 import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_tokens.dart';
+import '../../../../../../../core/inventory/unit_conversion.dart';
+import '../../recipes/view/widgets/searchable_select_field.dart';
+import '../state/modifier_ingredient_drafts.dart';
 import '../state/modifiers_state.dart';
 import '../viewmodel/modifiers_viewmodel.dart';
 
@@ -124,6 +127,7 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                                 : () => _openCreateModifierDialog(selectedGroup),
                             onEdit: _openEditModifierDialog,
                             onDelete: _confirmDeleteModifier,
+                            ingredientsByModifier: state.ingredientsByModifier,
                             onReorder: selectedGroup == null
                                 ? null
                                 : (orderedIds) => ref
@@ -178,6 +182,7 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
                                 : () => _openCreateModifierDialog(selectedGroup),
                             onEdit: _openEditModifierDialog,
                             onDelete: _confirmDeleteModifier,
+                            ingredientsByModifier: state.ingredientsByModifier,
                             onReorder: selectedGroup == null
                                 ? null
                                 : (orderedIds) => ref
@@ -287,9 +292,14 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
   }
 
   Future<void> _openCreateModifierDialog(ModifierGroupSummary group) async {
+    final state = ref.read(modifiersViewModelProvider).state;
     final payload = await showDialog<_ModifierFormResult>(
       context: context,
-      builder: (_) => _ModifierFormDialog(group: group),
+      builder: (_) => _ModifierFormDialog(
+        group: group,
+        inventoryItems: state.inventoryItems,
+        ingredientsSupported: state.ingredientsSupported,
+      ),
     );
     if (payload == null) return;
     await ref.read(modifiersViewModelProvider).createModifier(
@@ -297,6 +307,7 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
       name: payload.name,
       priceDelta: payload.priceDelta,
       isActive: payload.isActive,
+      ingredients: payload.ingredients,
     );
   }
 
@@ -313,6 +324,9 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
       builder: (_) => _ModifierFormDialog(
         group: group,
         initialModifier: modifier,
+        inventoryItems: state.inventoryItems,
+        initialIngredients: state.ingredientsOf(modifier.id),
+        ingredientsSupported: state.ingredientsSupported,
       ),
     );
     if (payload == null) return;
@@ -323,6 +337,7 @@ class _ModifiersViewState extends ConsumerState<ModifiersView> {
       name: payload.name,
       priceDelta: payload.priceDelta,
       isActive: payload.isActive,
+      ingredients: payload.ingredients,
     );
   }
 
@@ -669,6 +684,10 @@ class _ModifiersPanel extends StatelessWidget {
   final ValueChanged<ModifierOption> onDelete;
   final ValueChanged<List<String>>? onReorder;
 
+  /// Líneas de insumo por modificador: solo para mostrar el sello «N insumos»
+  /// y que se vea de un vistazo cuál mueve inventario.
+  final Map<String, List<ModifierIngredientEntry>> ingredientsByModifier;
+
   const _ModifiersPanel({
     required this.selectedGroup,
     required this.modifiers,
@@ -677,6 +696,7 @@ class _ModifiersPanel extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.onReorder,
+    this.ingredientsByModifier = const {},
   });
 
   @override
@@ -774,6 +794,17 @@ class _ModifiersPanel extends StatelessWidget {
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
+                                if ((ingredientsByModifier[modifier.id] ??
+                                        const [])
+                                    .isNotEmpty) ...[
+                                  const SizedBox(width: 8),
+                                  _StatusBadge(
+                                    label:
+                                        '${ingredientsByModifier[modifier.id]!.length} insumo'
+                                        '${ingredientsByModifier[modifier.id]!.length == 1 ? '' : 's'}',
+                                    color: MangoTokens.primary,
+                                  ),
+                                ],
                               ],
                             ),
                           ],
@@ -1319,20 +1350,34 @@ class _ModifierFormResult {
   final double priceDelta;
   final bool isActive;
 
+  /// Insumos que el modificador descuenta, ya convertidos a la unidad base y
+  /// con el signo aplicado (negativo = anula lo de la receta base).
+  final List<ModifierIngredientDraft> ingredients;
+
   const _ModifierFormResult({
     required this.name,
     required this.priceDelta,
     required this.isActive,
+    this.ingredients = const [],
   });
 }
 
 class _ModifierFormDialog extends StatefulWidget {
   final ModifierGroupSummary group;
   final ModifierOption? initialModifier;
+  final List<ModifierInventoryItem> inventoryItems;
+  final List<ModifierIngredientEntry> initialIngredients;
+
+  /// `false` = la base no tiene `modifier_ingredients` todavía: se esconde la
+  /// sección de insumos en vez de ofrecer algo que no se puede guardar.
+  final bool ingredientsSupported;
 
   const _ModifierFormDialog({
     required this.group,
     this.initialModifier,
+    this.inventoryItems = const [],
+    this.initialIngredients = const [],
+    this.ingredientsSupported = true,
   });
 
   @override
@@ -1343,6 +1388,7 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _priceController;
   bool _isActive = true;
+  final List<_ModifierIngredientRow> _ingredientRows = <_ModifierIngredientRow>[];
 
   @override
   void initState() {
@@ -1353,14 +1399,71 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
       text: (initial?.priceDelta ?? 0).toStringAsFixed(2),
     );
     _isActive = initial?.isActive ?? true;
+
+    // Las líneas guardadas vienen con signo; en pantalla se muestran en
+    // positivo y el signo se maneja con el botón +/− de cada fila.
+    for (final ingredient in widget.initialIngredients) {
+      _ingredientRows.add(
+        _ModifierIngredientRow(
+          inventoryItemId: ingredient.inventoryItemId,
+          quantity: ingredient.quantity.abs().toString(),
+          unit: ingredient.unit,
+          deducts: ingredient.isDeduction,
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _priceController.dispose();
+    for (final row in _ingredientRows) {
+      row.dispose();
+    }
     super.dispose();
   }
+
+  ModifierInventoryItem? _itemById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final item in widget.inventoryItems) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  List<String> _unitOptions(String? itemId) {
+    final item = _itemById(itemId);
+    return unitOptionsFor(
+      baseUnit: item?.unit ?? 'unidad',
+      purchaseUnit: item?.purchaseUnit,
+    );
+  }
+
+  void _addIngredientRow() {
+    setState(() => _ingredientRows.add(_ModifierIngredientRow()));
+  }
+
+  void _removeIngredientRow(int index) {
+    setState(() => _ingredientRows.removeAt(index).dispose());
+  }
+
+  /// Convierte lo capturado a líneas listas para guardar. La lógica vive en
+  /// [buildModifierIngredientDrafts] (función pura, con tests).
+  List<ModifierIngredientDraft> _buildIngredientDrafts() =>
+      buildModifierIngredientDrafts(
+        rows: _ingredientRows
+            .map(
+              (row) => ModifierIngredientInput(
+                inventoryItemId: row.inventoryItemId,
+                quantityText: row.quantity.text,
+                unitText: row.unit.text,
+                deducts: row.deducts,
+              ),
+            )
+            .toList(growable: false),
+        inventoryItems: widget.inventoryItems,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -1379,8 +1482,9 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
         subtitle: 'Ajusta el nombre, el impacto en precio y su disponibilidad.',
       ),
       content: SizedBox(
-        width: 460,
-        child: Column(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
@@ -1423,6 +1527,10 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
                 prefixText: 'RD\$ ',
               ),
             ),
+            if (widget.ingredientsSupported) ...[
+              const SizedBox(height: 18),
+              _buildIngredientsSection(),
+            ],
             const SizedBox(height: 14),
             Container(
               decoration: BoxDecoration(
@@ -1444,6 +1552,7 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
               ),
             ),
           ],
+          ),
         ),
       ),
       actions: [
@@ -1460,6 +1569,153 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
     );
   }
 
+  Widget _buildIngredientsSection() {
+    final hasInventory = widget.inventoryItems.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: MangoTokens.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: MangoTokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.inventory_2_outlined, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Insumos que mueve',
+                  style: MangoTokens.body().copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: hasInventory ? _addIngredientRow : null,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Agregar insumo'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Al vender esta opción el inventario se mueve solo. Usa «Quita» '
+            'cuando el modificador anula algo de la receta base: «Sin queso» '
+            'quita el queso, y un cambio de pan se arma con dos líneas '
+            '(agrega el pan nuevo, quita el de la receta).',
+            style: MangoTokens.label(),
+          ),
+          const SizedBox(height: 12),
+          if (!hasInventory)
+            Text(
+              'No hay insumos activos en el inventario de este negocio.',
+              style: MangoTokens.label(),
+            )
+          else if (_ingredientRows.isEmpty)
+            Text(
+              'Sin insumos: esta opción no toca el inventario.',
+              style: MangoTokens.label(),
+            )
+          else
+            ...List<Widget>.generate(
+              _ingredientRows.length,
+              _buildIngredientRow,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIngredientRow(int index) {
+    final row = _ingredientRows[index];
+    final options = _unitOptions(row.inventoryItemId);
+    final current = row.unit.text.trim();
+    final unitValue = options.contains(current)
+        ? current
+        : (options.isNotEmpty ? options.first : null);
+
+    return Padding(
+      key: row.key,
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 5,
+            child: SearchableSelectField<ModifierInventoryItem>(
+              labelText: 'Insumo',
+              hintText: 'Busca por nombre o SKU...',
+              items: widget.inventoryItems,
+              selected: _itemById(row.inventoryItemId),
+              labelOf: (item) => item.name,
+              subtitleOf: (item) => item.sku.trim().isEmpty
+                  ? item.unit
+                  : '${item.sku} · ${item.unit}',
+              keywordsOf: (item) => [item.sku],
+              onSelected: (item) {
+                setState(() {
+                  row.inventoryItemId = item.id;
+                  // Al cambiar de insumo la unidad vuelve a su base: las
+                  // opciones del selector dependen del insumo.
+                  row.unit.text = item.unit;
+                });
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 92,
+            child: TextField(
+              controller: row.quantity,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Cantidad'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 108,
+            child: DropdownButtonFormField<String>(
+              // `FormField` NO reacciona a un `initialValue` nuevo (ver
+              // FormFieldState.didUpdateWidget): sin esta key, cambiar de
+              // insumo dejaría en pantalla la unidad del insumo anterior
+              // aunque por dentro ya sea la nueva. La key fuerza un campo
+              // nuevo cuando cambia el insumo o la unidad.
+              key: ValueKey('${row.key}|${row.inventoryItemId}|$unitValue'),
+              initialValue: unitValue,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Unidad'),
+              items: options
+                  .map((u) => DropdownMenuItem(value: u, child: Text(u)))
+                  .toList(growable: false),
+              onChanged: (u) {
+                if (u != null) setState(() => row.unit.text = u);
+              },
+            ),
+          ),
+          IconButton(
+            tooltip: row.deducts
+                ? 'Descuenta del inventario'
+                : 'Quita: anula lo que la receta base descuenta',
+            onPressed: () => setState(() => row.deducts = !row.deducts),
+            icon: Icon(
+              row.deducts
+                  ? Icons.remove_circle_outline
+                  : Icons.add_circle_outline,
+              color: row.deducts ? MangoTokens.primary : MangoTokens.warning,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Quitar línea',
+            onPressed: () => _removeIngredientRow(index),
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _submit() {
     final name = _nameController.text.trim();
     if (name.isEmpty) return;
@@ -1469,7 +1725,36 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
         name: name,
         priceDelta: priceDelta,
         isActive: _isActive,
+        ingredients: _buildIngredientDrafts(),
       ),
     );
+  }
+}
+
+/// Fila en edición de la sección «Insumos que mueve» del formulario de
+/// modificadores.
+///
+/// `deducts` es el signo con el que se guardará la cantidad: true descuenta
+/// (queso extra), false la resta de lo que la receta base descontaría
+/// (sin queso, cambio de pan). En pantalla la cantidad siempre se escribe en
+/// positivo.
+class _ModifierIngredientRow {
+  final Key key = UniqueKey();
+  String? inventoryItemId;
+  final TextEditingController quantity;
+  final TextEditingController unit;
+  bool deducts;
+
+  _ModifierIngredientRow({
+    this.inventoryItemId,
+    String quantity = '',
+    String unit = '',
+    this.deducts = true,
+  })  : quantity = TextEditingController(text: quantity),
+        unit = TextEditingController(text: unit);
+
+  void dispose() {
+    quantity.dispose();
+    unit.dispose();
   }
 }

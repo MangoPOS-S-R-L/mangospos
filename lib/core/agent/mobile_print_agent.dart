@@ -30,6 +30,7 @@ import '../printing/usb_printer_identity.dart';
 import '../offline/hub/hub_config.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
+import '../offline/hub/hub_projection_cache.dart';
 import '../offline/offline_pos_service.dart';
 import '../../data/repositories/sales_repository.dart';
 import '../offline/ncf_offline_allocator.dart';
@@ -338,10 +339,10 @@ class MobilePrintAgent {
   Future<shelf.Response> _handleHubSalon(shelf.Request request) async {
     final businessId = request.url.queryParameters['business_id'] ?? '';
     if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
-    final ops = await _hubOpLog.since(businessId, seq: 0);
-    final tables = HubOrderProjector.projectSalon(ops)
-        .map((t) => t.toJson())
-        .toList(growable: false);
+    // Memoizado por revisión del op-log: con N cajas conectadas, cada op
+    // difundida por WS hacía que las N pidieran esto a la vez y el Hub
+    // proyectara N veces el log completo. Ver [HubProjectionCache].
+    final tables = await HubProjectionCache.instance.salon(businessId);
     return _jsonOk({'tables': tables});
   }
 
@@ -358,7 +359,7 @@ class MobilePrintAgent {
         (orderId == null || orderId.isEmpty)) {
       return _jsonError('Missing table_id or order_id', 400);
     }
-    final ops = await _hubOpLog.since(businessId, seq: 0);
+    final ops = await HubProjectionCache.instance.ops(businessId);
     final order = HubOrderProjector.projectOrder(
       ops,
       tableId: (tableId != null && tableId.isNotEmpty) ? tableId : null,
