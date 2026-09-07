@@ -80,7 +80,40 @@ class HubMeta extends Table {
   Set<Column> get primaryKey => {businessId};
 }
 
-@DriftDatabase(tables: [HubOps, HubMeta])
+/// Foto de las órdenes que YA estaban abiertas antes de que se cayera internet.
+///
+/// El hueco que cierra: los proyectores solo reconstruyen órdenes CREADAS
+/// durante la ventana offline, porque son las únicas cuyas ops están en el
+/// op-log. Una mesa abierta por otra caja mientras había internet vive solo en
+/// Supabase, así que al caer la red el Hub no sabía qué tenía dentro y abrirla
+/// mostraba una orden vacía.
+///
+/// Es una FOTO, no un log: se reemplaza entera en cada captura. Por eso vive en
+/// su propia tabla y NO como ops dentro de `hub_ops` — meter filas
+/// reemplazables en un registro append-only es mezclar dos cosas distintas, y
+/// además el uplink las vería y las volvería a subir a Supabase, duplicando
+/// órdenes e inventario. Aquí el uplink ni las ve.
+///
+/// Se guarda como ops SINTÉTICAS (`open_table` + `add_item`) en vez de un
+/// modelo propio: así la proyección es `projectSalon([...baseline, ...log])` y
+/// lo que se hizo offline se apila encima de la foto usando el MISMO proyector
+/// ya probado, sin lógica de mezcla aparte.
+@DataClassName('HubBaselineRow')
+class HubBaseline extends Table {
+  TextColumn get businessId => text()();
+
+  /// Cuándo se tomó la foto. Es además la parte de la revisión que le dice al
+  /// cache de proyección que el baseline cambió.
+  DateTimeColumn get capturedAt => dateTime()();
+
+  /// Array JSON de ops sintéticas, en el orden en que deben plegarse.
+  TextColumn get opsJson => text()();
+
+  @override
+  Set<Column> get primaryKey => {businessId};
+}
+
+@DriftDatabase(tables: [HubOps, HubMeta, HubBaseline])
 class HubStateDb extends _$HubStateDb {
   HubStateDb() : super(openConnection(fileName: 'mangopos_hub_state.db'));
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'hub_baseline_service.dart';
 import 'hub_op_log.dart';
 import 'hub_order_projector.dart';
 
@@ -31,7 +32,9 @@ import 'hub_order_projector.dart';
 /// grande del costo (las N lecturas por op se vuelven una). Materializar de
 /// verdad queda como paso posterior, si el perfil en hardware lo pide.
 class HubProjectionCache {
-  HubProjectionCache({HubOpLog? log}) : _log = log ?? HubOpLog();
+  HubProjectionCache({HubOpLog? log, HubBaselineService? baseline})
+      : _log = log ?? HubOpLog(),
+        _baseline = baseline ?? HubBaselineService();
 
   /// Instancia compartida: si cada consumidor tuviera la suya, no se
   /// aprovecharían entre ellos y volveríamos a N cálculos por op.
@@ -39,11 +42,12 @@ class HubProjectionCache {
 
   /// Para tests.
   @visibleForTesting
-  static void resetInstance({HubOpLog? log}) {
-    instance = HubProjectionCache(log: log);
+  static void resetInstance({HubOpLog? log, HubBaselineService? baseline}) {
+    instance = HubProjectionCache(log: log, baseline: baseline);
   }
 
   final HubOpLog _log;
+  final HubBaselineService _baseline;
   final Map<String, _Entry> _entries = <String, _Entry>{};
   final Map<String, Future<_Entry>> _inFlight = <String, Future<_Entry>>{};
 
@@ -101,9 +105,16 @@ class HubProjectionCache {
     }
   }
 
+  /// La foto del baseline se pliega ANTES del op-log (sus `seq` son negativos),
+  /// para que las mesas que ya estaban abiertas cuando se cayó internet existan
+  /// y lo que se hizo offline se apile encima. Ver [HubBaselineService].
   Future<_Entry> _rebuild(String businessId, String revision) async {
-    final ops = await _log.since(businessId, seq: 0);
-    return _Entry(revision: revision, ops: ops);
+    final baseline = await _baseline.ops(businessId);
+    final logOps = await _log.since(businessId, seq: 0);
+    return _Entry(
+      revision: revision,
+      ops: baseline.isEmpty ? logOps : [...baseline, ...logOps],
+    );
   }
 
   /// Huella barata del estado del log: dos consultas indexadas, contra traer y
@@ -116,7 +127,12 @@ class HubProjectionCache {
   Future<String> _revisionOf(String businessId) async {
     final seq = await _log.currentSeq(businessId);
     final length = await _log.length(businessId);
-    return '$seq:$length';
+    // Una foto nueva del baseline también invalida: al reconectar se recaptura
+    // y el salón tiene que reflejar lo que el server ya sabe. Va por CONTENIDO
+    // y no por `capturedAt` — drift guarda las fechas con resolución de
+    // segundos, así que dos capturas del mismo segundo serían indistinguibles.
+    final baselineRev = await _baseline.revision(businessId);
+    return '$seq:$length:$baselineRev';
   }
 }
 

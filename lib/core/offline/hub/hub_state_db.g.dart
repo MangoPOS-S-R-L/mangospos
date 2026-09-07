@@ -649,16 +649,299 @@ class HubMetaCompanion extends UpdateCompanion<HubMetaRow> {
   }
 }
 
+class $HubBaselineTable extends HubBaseline
+    with TableInfo<$HubBaselineTable, HubBaselineRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $HubBaselineTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _businessIdMeta = const VerificationMeta(
+    'businessId',
+  );
+  @override
+  late final GeneratedColumn<String> businessId = GeneratedColumn<String>(
+    'business_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _capturedAtMeta = const VerificationMeta(
+    'capturedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> capturedAt = GeneratedColumn<DateTime>(
+    'captured_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _opsJsonMeta = const VerificationMeta(
+    'opsJson',
+  );
+  @override
+  late final GeneratedColumn<String> opsJson = GeneratedColumn<String>(
+    'ops_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [businessId, capturedAt, opsJson];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'hub_baseline';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<HubBaselineRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('business_id')) {
+      context.handle(
+        _businessIdMeta,
+        businessId.isAcceptableOrUnknown(data['business_id']!, _businessIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_businessIdMeta);
+    }
+    if (data.containsKey('captured_at')) {
+      context.handle(
+        _capturedAtMeta,
+        capturedAt.isAcceptableOrUnknown(data['captured_at']!, _capturedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_capturedAtMeta);
+    }
+    if (data.containsKey('ops_json')) {
+      context.handle(
+        _opsJsonMeta,
+        opsJson.isAcceptableOrUnknown(data['ops_json']!, _opsJsonMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_opsJsonMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {businessId};
+  @override
+  HubBaselineRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return HubBaselineRow(
+      businessId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}business_id'],
+      )!,
+      capturedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}captured_at'],
+      )!,
+      opsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}ops_json'],
+      )!,
+    );
+  }
+
+  @override
+  $HubBaselineTable createAlias(String alias) {
+    return $HubBaselineTable(attachedDatabase, alias);
+  }
+}
+
+class HubBaselineRow extends DataClass implements Insertable<HubBaselineRow> {
+  final String businessId;
+
+  /// Cuándo se tomó la foto. Es además la parte de la revisión que le dice al
+  /// cache de proyección que el baseline cambió.
+  final DateTime capturedAt;
+
+  /// Array JSON de ops sintéticas, en el orden en que deben plegarse.
+  final String opsJson;
+  const HubBaselineRow({
+    required this.businessId,
+    required this.capturedAt,
+    required this.opsJson,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['business_id'] = Variable<String>(businessId);
+    map['captured_at'] = Variable<DateTime>(capturedAt);
+    map['ops_json'] = Variable<String>(opsJson);
+    return map;
+  }
+
+  HubBaselineCompanion toCompanion(bool nullToAbsent) {
+    return HubBaselineCompanion(
+      businessId: Value(businessId),
+      capturedAt: Value(capturedAt),
+      opsJson: Value(opsJson),
+    );
+  }
+
+  factory HubBaselineRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return HubBaselineRow(
+      businessId: serializer.fromJson<String>(json['businessId']),
+      capturedAt: serializer.fromJson<DateTime>(json['capturedAt']),
+      opsJson: serializer.fromJson<String>(json['opsJson']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'businessId': serializer.toJson<String>(businessId),
+      'capturedAt': serializer.toJson<DateTime>(capturedAt),
+      'opsJson': serializer.toJson<String>(opsJson),
+    };
+  }
+
+  HubBaselineRow copyWith({
+    String? businessId,
+    DateTime? capturedAt,
+    String? opsJson,
+  }) => HubBaselineRow(
+    businessId: businessId ?? this.businessId,
+    capturedAt: capturedAt ?? this.capturedAt,
+    opsJson: opsJson ?? this.opsJson,
+  );
+  HubBaselineRow copyWithCompanion(HubBaselineCompanion data) {
+    return HubBaselineRow(
+      businessId: data.businessId.present
+          ? data.businessId.value
+          : this.businessId,
+      capturedAt: data.capturedAt.present
+          ? data.capturedAt.value
+          : this.capturedAt,
+      opsJson: data.opsJson.present ? data.opsJson.value : this.opsJson,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HubBaselineRow(')
+          ..write('businessId: $businessId, ')
+          ..write('capturedAt: $capturedAt, ')
+          ..write('opsJson: $opsJson')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(businessId, capturedAt, opsJson);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is HubBaselineRow &&
+          other.businessId == this.businessId &&
+          other.capturedAt == this.capturedAt &&
+          other.opsJson == this.opsJson);
+}
+
+class HubBaselineCompanion extends UpdateCompanion<HubBaselineRow> {
+  final Value<String> businessId;
+  final Value<DateTime> capturedAt;
+  final Value<String> opsJson;
+  final Value<int> rowid;
+  const HubBaselineCompanion({
+    this.businessId = const Value.absent(),
+    this.capturedAt = const Value.absent(),
+    this.opsJson = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  HubBaselineCompanion.insert({
+    required String businessId,
+    required DateTime capturedAt,
+    required String opsJson,
+    this.rowid = const Value.absent(),
+  }) : businessId = Value(businessId),
+       capturedAt = Value(capturedAt),
+       opsJson = Value(opsJson);
+  static Insertable<HubBaselineRow> custom({
+    Expression<String>? businessId,
+    Expression<DateTime>? capturedAt,
+    Expression<String>? opsJson,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (businessId != null) 'business_id': businessId,
+      if (capturedAt != null) 'captured_at': capturedAt,
+      if (opsJson != null) 'ops_json': opsJson,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  HubBaselineCompanion copyWith({
+    Value<String>? businessId,
+    Value<DateTime>? capturedAt,
+    Value<String>? opsJson,
+    Value<int>? rowid,
+  }) {
+    return HubBaselineCompanion(
+      businessId: businessId ?? this.businessId,
+      capturedAt: capturedAt ?? this.capturedAt,
+      opsJson: opsJson ?? this.opsJson,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (businessId.present) {
+      map['business_id'] = Variable<String>(businessId.value);
+    }
+    if (capturedAt.present) {
+      map['captured_at'] = Variable<DateTime>(capturedAt.value);
+    }
+    if (opsJson.present) {
+      map['ops_json'] = Variable<String>(opsJson.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('HubBaselineCompanion(')
+          ..write('businessId: $businessId, ')
+          ..write('capturedAt: $capturedAt, ')
+          ..write('opsJson: $opsJson, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$HubStateDb extends GeneratedDatabase {
   _$HubStateDb(QueryExecutor e) : super(e);
   $HubStateDbManager get managers => $HubStateDbManager(this);
   late final $HubOpsTable hubOps = $HubOpsTable(this);
   late final $HubMetaTable hubMeta = $HubMetaTable(this);
+  late final $HubBaselineTable hubBaseline = $HubBaselineTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [hubOps, hubMeta];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+    hubOps,
+    hubMeta,
+    hubBaseline,
+  ];
 }
 
 typedef $$HubOpsTableCreateCompanionBuilder =
@@ -1018,6 +1301,172 @@ typedef $$HubMetaTableProcessedTableManager =
       HubMetaRow,
       PrefetchHooks Function()
     >;
+typedef $$HubBaselineTableCreateCompanionBuilder =
+    HubBaselineCompanion Function({
+      required String businessId,
+      required DateTime capturedAt,
+      required String opsJson,
+      Value<int> rowid,
+    });
+typedef $$HubBaselineTableUpdateCompanionBuilder =
+    HubBaselineCompanion Function({
+      Value<String> businessId,
+      Value<DateTime> capturedAt,
+      Value<String> opsJson,
+      Value<int> rowid,
+    });
+
+class $$HubBaselineTableFilterComposer
+    extends Composer<_$HubStateDb, $HubBaselineTable> {
+  $$HubBaselineTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get businessId => $composableBuilder(
+    column: $table.businessId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get capturedAt => $composableBuilder(
+    column: $table.capturedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get opsJson => $composableBuilder(
+    column: $table.opsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$HubBaselineTableOrderingComposer
+    extends Composer<_$HubStateDb, $HubBaselineTable> {
+  $$HubBaselineTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get businessId => $composableBuilder(
+    column: $table.businessId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get capturedAt => $composableBuilder(
+    column: $table.capturedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get opsJson => $composableBuilder(
+    column: $table.opsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$HubBaselineTableAnnotationComposer
+    extends Composer<_$HubStateDb, $HubBaselineTable> {
+  $$HubBaselineTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get businessId => $composableBuilder(
+    column: $table.businessId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get capturedAt => $composableBuilder(
+    column: $table.capturedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get opsJson =>
+      $composableBuilder(column: $table.opsJson, builder: (column) => column);
+}
+
+class $$HubBaselineTableTableManager
+    extends
+        RootTableManager<
+          _$HubStateDb,
+          $HubBaselineTable,
+          HubBaselineRow,
+          $$HubBaselineTableFilterComposer,
+          $$HubBaselineTableOrderingComposer,
+          $$HubBaselineTableAnnotationComposer,
+          $$HubBaselineTableCreateCompanionBuilder,
+          $$HubBaselineTableUpdateCompanionBuilder,
+          (
+            HubBaselineRow,
+            BaseReferences<_$HubStateDb, $HubBaselineTable, HubBaselineRow>,
+          ),
+          HubBaselineRow,
+          PrefetchHooks Function()
+        > {
+  $$HubBaselineTableTableManager(_$HubStateDb db, $HubBaselineTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$HubBaselineTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$HubBaselineTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$HubBaselineTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> businessId = const Value.absent(),
+                Value<DateTime> capturedAt = const Value.absent(),
+                Value<String> opsJson = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => HubBaselineCompanion(
+                businessId: businessId,
+                capturedAt: capturedAt,
+                opsJson: opsJson,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String businessId,
+                required DateTime capturedAt,
+                required String opsJson,
+                Value<int> rowid = const Value.absent(),
+              }) => HubBaselineCompanion.insert(
+                businessId: businessId,
+                capturedAt: capturedAt,
+                opsJson: opsJson,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$HubBaselineTableProcessedTableManager =
+    ProcessedTableManager<
+      _$HubStateDb,
+      $HubBaselineTable,
+      HubBaselineRow,
+      $$HubBaselineTableFilterComposer,
+      $$HubBaselineTableOrderingComposer,
+      $$HubBaselineTableAnnotationComposer,
+      $$HubBaselineTableCreateCompanionBuilder,
+      $$HubBaselineTableUpdateCompanionBuilder,
+      (
+        HubBaselineRow,
+        BaseReferences<_$HubStateDb, $HubBaselineTable, HubBaselineRow>,
+      ),
+      HubBaselineRow,
+      PrefetchHooks Function()
+    >;
 
 class $HubStateDbManager {
   final _$HubStateDb _db;
@@ -1026,4 +1475,6 @@ class $HubStateDbManager {
       $$HubOpsTableTableManager(_db, _db.hubOps);
   $$HubMetaTableTableManager get hubMeta =>
       $$HubMetaTableTableManager(_db, _db.hubMeta);
+  $$HubBaselineTableTableManager get hubBaseline =>
+      $$HubBaselineTableTableManager(_db, _db.hubBaseline);
 }

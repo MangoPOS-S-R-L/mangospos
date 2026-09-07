@@ -7,6 +7,7 @@ import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../services/session/session_controller.dart';
 import '../../network/connectivity_service.dart';
 import '../offline_pos_service.dart';
+import 'hub_baseline_service.dart';
 import 'hub_client.dart';
 import 'hub_config.dart';
 import 'hub_mode.dart';
@@ -41,6 +42,16 @@ class HubModeController extends StateNotifier<TerminalMode> {
 
   NetworkPolicy _policy = NetworkPolicy.cloud;
   HubDeviceRole _role = HubDeviceRole.pos;
+
+  final HubBaselineService _baseline = HubBaselineService();
+
+  /// Última captura del baseline, para no rehacerla en cada tick de 20s.
+  DateTime? _lastBaselineAt;
+
+  /// Cada cuánto se refresca la foto de las órdenes ya abiertas. Corto porque
+  /// su valor entero depende de qué tan fresca esté cuando se caiga la red, y
+  /// son 3 consultas acotadas SOLO en el equipo Hub.
+  static const Duration _baselineInterval = Duration(minutes: 2);
 
   /// URL del Hub alcanzable cuando este equipo es un cliente en modo hub; null
   /// en otro caso. Lo usan las rutas de lectura (grid del salón) en H4c.
@@ -127,6 +138,31 @@ class HubModeController extends StateNotifier<TerminalMode> {
 
     _wireUploader(pos, mode, businessId);
     if (mode != state) state = mode;
+
+    unawaited(_captureBaselineIfDue(mode, connected, businessId));
+  }
+
+  /// Refresca la foto de las órdenes YA abiertas mientras este equipo es el Hub
+  /// y TIENE internet.
+  ///
+  /// El momento importa: cuando la red se cae ya no se puede consultar nada, así
+  /// que la foto tiene que existir de antes. Es la misma idea de la bajada
+  /// proactiva de F6 — sin esto, una mesa abierta por otra caja antes del corte
+  /// se veía ocupada en el grid pero salía VACÍA al abrirla.
+  ///
+  /// Best-effort y fuera del camino crítico: `refresh()` no espera por esto.
+  Future<void> _captureBaselineIfDue(
+    TerminalMode mode,
+    bool connected,
+    String businessId,
+  ) async {
+    if (mode != TerminalMode.hubHost || !connected) return;
+    final last = _lastBaselineAt;
+    if (last != null && DateTime.now().difference(last) < _baselineInterval) {
+      return;
+    }
+    _lastBaselineAt = DateTime.now();
+    await _baseline.capture(businessId);
   }
 
   void _wireUploader(
