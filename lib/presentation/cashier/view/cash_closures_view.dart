@@ -10,6 +10,7 @@ import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/presentation/cashier/services/print_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 
@@ -23,6 +24,9 @@ class CashClosuresView extends ConsumerStatefulWidget {
 class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   late Future<List<CashRegisterSession>> _future;
   Map<String, String> _cashierNames = const {};
+
+  /// Nombre de cada registradora, para etiquetar de qué caja es cada sesión.
+  Map<String, String> _registerNames = const {};
   // Diferencia NETA (reportado − esperado total) por sesión, precargada vía el
   // RPC de resumen. La lista sola no tiene el esperado total (solo la de
   // efectivo en session.difference), así que la traemos aparte.
@@ -63,18 +67,28 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   }
 
   Future<List<CashRegisterSession>> _load() async {
-    final vm = ref.read(cashierViewModelProvider);
-    final registerId = vm.currentRegisterId;
-    if (registerId == null || registerId.isEmpty) {
+    // Sesiones de TODAS las cajas del negocio, no solo la de este equipo.
+    // Antes se filtraba por `vm.currentRegisterId`, así que en un local con dos
+    // registradoras el administrador veía solo la mitad y la segunda caja
+    // abierta no aparecía. De paso, ahora la pantalla también sirve en un
+    // equipo que todavía no tiene registradora propia.
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
       if (mounted) {
-        setState(() => _cashierNames = const {});
+        setState(() {
+          _cashierNames = const {};
+          _registerNames = const {};
+        });
       }
       return [];
     }
 
-    final sessions = await ref
-        .read(cashierRepositoryProvider)
-        .getSessionsByRegister(registerId);
+    final repo = ref.read(cashierRepositoryProvider);
+    final sessions = await repo.getSessionsByBusiness(businessId);
+    final registers = await repo.getRegisterNames(businessId);
+    if (mounted) {
+      setState(() => _registerNames = registers);
+    }
     final names = await _loadCashierNames(sessions);
     if (mounted) {
       setState(() => _cashierNames = names);
@@ -152,6 +166,14 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     } catch (_) {
       return const {};
     }
+  }
+
+  /// Nombre de la registradora de la sesión. `null` si el negocio tiene una
+  /// sola caja o no se pudo resolver — ahí la etiqueta sobra y solo hace ruido.
+  String? _registerNameOf(CashRegisterSession session) {
+    if (_registerNames.length < 2) return null;
+    final name = _registerNames[session.cashRegisterId]?.trim();
+    return (name == null || name.isEmpty) ? null : name;
   }
 
   String _resolveCashierName(CashRegisterSession session) {
@@ -578,6 +600,10 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                         ),
                         Text('Cierre: $closedAt'),
                         Text('Cajero: $cashierName'),
+                        // La lista mezcla las sesiones de TODAS las cajas del
+                        // negocio, así que hay que decir de cuál es cada una.
+                        if (_registerNameOf(session) != null)
+                          Text('Caja: ${_registerNameOf(session)}'),
                         Text(
                           'Inicio: RD\$ ${session.startAmount.toStringAsFixed(2)} · Final: RD\$ ${reportedTotal.toStringAsFixed(2)}',
                         ),

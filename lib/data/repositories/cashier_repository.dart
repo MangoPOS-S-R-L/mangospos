@@ -572,6 +572,53 @@ class CashierRepository {
     return data.map((json) => CashRegisterSession.fromMap(json)).toList();
   }
 
+  /// Sesiones de TODAS las registradoras del negocio, no solo la de este
+  /// equipo.
+  ///
+  /// Gestión de Cierres usaba [getSessionsByRegister] con la registradora de
+  /// ESTE dispositivo, así que en un local con dos cajas el administrador veía
+  /// solo la mitad: la segunda caja abierta no aparecía por ninguna parte. El
+  /// join con `cash_registers` es el mismo patrón de
+  /// [getActiveSessionForBusiness].
+  ///
+  /// Devuelve también el nombre de la registradora en `cash_registers` para que
+  /// la pantalla pueda decir de cuál es cada sesión — mezclar cajas sin
+  /// etiquetarlas sería peor que no mostrarlas.
+  Future<List<CashRegisterSession>> getSessionsByBusiness(
+    String businessId, {
+    int limit = 50,
+  }) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select('*, cash_registers!inner(business_id, name)')
+        .eq('cash_registers.business_id', businessId)
+        .order('opened_at', ascending: false)
+        .limit(limit);
+
+    return (data as List)
+        .cast<Map<String, dynamic>>()
+        .map(CashRegisterSession.fromMap)
+        .toList();
+  }
+
+  /// Nombre de cada registradora del negocio, por id. Para etiquetar las
+  /// sesiones cuando se listan varias cajas juntas.
+  Future<Map<String, String>> getRegisterNames(String businessId) async {
+    try {
+      final rows = await _client
+          .from('cash_registers')
+          .select('id, name')
+          .eq('business_id', businessId);
+      return {
+        for (final row in (rows as List).cast<Map<String, dynamic>>())
+          if ((row['id']?.toString() ?? '').isNotEmpty)
+            row['id'].toString(): row['name']?.toString() ?? '',
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
   Future<List<CashTransaction>> getSessionTransactions(String sessionId) async {
     final data = await _client
         .from('cash_transactions')
