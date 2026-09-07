@@ -2637,6 +2637,11 @@ class PrintTicketService {
     /// Ancho del papel de la impresora destino (58 u 80). Viene de
     /// `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
+
+    /// Reimpresión desde el historial de movimientos. Estampa la marca
+    /// bajo el título para que no se confunda con el volante original
+    /// (el papel es idéntico y los dos se firman).
+    bool isReprint = false,
   }) {
     _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: paperWidth);
@@ -2666,6 +2671,11 @@ class PrintTicketService {
     gen.textCentered(title);
     gen.setBold(false);
     gen.setTextSize();
+    if (isReprint) {
+      gen.setBold(true);
+      gen.textCentered('** REIMPRESIÓN **');
+      gen.setBold(false);
+    }
     gen.separator();
 
     final now = when ?? DateTime.now();
@@ -2712,11 +2722,16 @@ class PrintTicketService {
     gen.setBold(false);
     gen.lineFeed();
 
+    // Espacio real para firmar. Antes la raya salía pegada al monto y no
+    // quedaba papel donde apoyar la mano: el volante se firmaba encima del
+    // texto. Estos renglones en blanco son el "aire" del volante.
+    gen.lineFeed(4);
+
     // Raya de firma al ancho del papel (30 chars en 80mm; en 58mm se
     // recorta a las 32 columnas disponibles).
     gen.text('_' * (narrow ? gen.maxChars : 30));
     gen.textCentered('Firma');
-    gen.lineFeed();
+    gen.lineFeed(2);
 
     gen.textCentered(_formatDateTime(now));
     gen.lineFeed();

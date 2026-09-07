@@ -4,19 +4,16 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
-import 'package:mangopos/core/currency/business_currency_provider.dart';
-import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
-import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/data/models/payment_models.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
+import 'package:mangopos/presentation/cashier/utils/cash_movement_printing.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
-import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
-import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/theme/app_colors.dart';
 
 class IncomeExpenseView extends ConsumerStatefulWidget {
@@ -210,13 +207,8 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
             orElse: () => <String, dynamic>{'label': reasonCode},
           )['label']
           ?.toString();
-      _printMovementReceipt(
-        movementType: _selectedType,
-        amount: amount,
-        reasonLabel: reasonLabel ?? reasonCode,
-        description: description.isEmpty ? null : description,
-        sessionId: data.session.id,
-      );
+      final movementType = _selectedType;
+      final approvedByName = await _resolveApprovedByName(approvedBy);
 
       _amountController.clear();
       _descriptionController.clear();
@@ -227,14 +219,30 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       if (appliedOnline) {
         AppToast.success(
           context,
-          '${_labelForType(_selectedType)} registrado correctamente',
+          '${_labelForType(movementType)} registrado correctamente',
         );
       } else {
         AppToast.warning(
           context,
-          '${_labelForType(_selectedType)} guardado sin conexión. Se sincronizará al reconectar.',
+          '${_labelForType(movementType)} guardado sin conexión. Se sincronizará al reconectar.',
         );
       }
+
+      // El volante va DESPUÉS del aviso de registrado y con `await`: antes
+      // se disparaba fire-and-forget y cualquier fallo (impresora no
+      // resuelta, red caída) moría en un debugPrint. El cajero veía
+      // "registrado" y no salía papel, sin explicación.
+      if (!mounted) return;
+      await CashMovementPrinting.printThermal(
+        context,
+        ref,
+        movementType: movementType,
+        amount: amount,
+        reasonLabel: reasonLabel ?? reasonCode,
+        description: description.isEmpty ? null : description,
+        sessionId: data.session.id,
+        approvedByName: approvedByName,
+      );
     } catch (e) {
       if (!mounted) return;
       AppToast.error(context, 'No se pudo registrar el movimiento: $e');
@@ -262,6 +270,27 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
           description: description.isEmpty ? null : description,
           approvedBy: approvedBy,
         );
+  }
+
+  /// Nombre para el renglón "Autorizado por" del volante. `approved_by`
+  /// guarda el user_id del supervisor que puso el PIN, pero el papel que
+  /// se firma necesita el nombre. Best-effort: si el lookup falla, el
+  /// volante sale sin ese renglón en vez de no salir.
+  Future<String?> _resolveApprovedByName(String? approvedBy) async {
+    if (approvedBy == null || approvedBy.isEmpty) return null;
+    final session = ref.read(sessionProvider);
+    if (approvedBy == session.userId) return session.userName;
+    try {
+      final row = await Supabase.instance.client
+          .from('profiles')
+          .select('full_name')
+          .eq('id', approvedBy)
+          .maybeSingle();
+      final name = row?['full_name']?.toString().trim();
+      return (name == null || name.isEmpty) ? null : name;
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Resuelve quién autoriza un movimiento que exige PIN de supervisor.
@@ -423,97 +452,6 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         ),
       ),
     );
-  }
-
-  /// Sprint Caja Pro — Imprime el recibo del movimiento que acabamos
-  /// de registrar. Resuelve la impresora vinculada a la caja registradora
-  /// (`cash_registers.receipt_printer_id`) y, si no existe, busca una
-  /// del área `cashier`/`fiscal` como fallback. Fire-and-forget: si la
-  /// impresión falla no bloqueamos al cajero, el movimiento ya quedó
-  /// guardado.
-  Future<void> _printMovementReceipt({
-    required String movementType,
-    required double amount,
-    required String reasonLabel,
-    String? description,
-    required String sessionId,
-  }) async {
-    try {
-      final cashierVm = ref.read(cashierViewModelProvider);
-      final registerId = cashierVm.currentRegisterId;
-      final repo = ref.read(printingPrintersRepositoryProvider);
-
-      // Modo sin impresora: el recibo se muestra en pantalla (con
-      // compartir PDF) en vez de salir por papel.
-      final printerless = await PrinterlessMode.isEnabled(
-        ref.read(sessionProvider).activeBusinessId,
-      );
-
-      // 1. Impresora asignada al cash_register.
-      var printer = printerless || registerId == null
-          ? null
-          : await ref.read(cashierRepositoryProvider).getRegisterPrinterId(registerId)
-              .then((pid) async => pid == null
-                  ? null
-                  : await repo.getPrinter(pid));
-
-      // 2. Fallback: impresora de área cashier/fiscal.
-      if (printer == null && !printerless) {
-        final session = ref.read(sessionProvider);
-        final businessId = session.activeBusinessId;
-        if (businessId == null || businessId.isEmpty) return;
-        printer = await repo.getAssignedPrinterForType(
-          businessId: businessId,
-          preferredAreaCodes: const ['cashier', 'fiscal'],
-          printsPrebills: false,
-          printsReceipts: true,
-        );
-      }
-      if (printer == null && !printerless) return;
-
-      // 3. Generar y mandar.
-      final session = ref.read(sessionProvider);
-      final businessName = (session.activeBusinessName ?? 'MangoPOS').trim();
-      final cashierName = session.userName ?? '';
-
-      final ticket = PrintTicketService.generateCashMovementReceipt(
-        businessName: businessName.isEmpty ? 'MangoPOS' : businessName,
-        movementType: movementType,
-        amount: amount,
-        reasonLabel: reasonLabel,
-        description: description,
-        cashierName: cashierName,
-        sessionId: sessionId,
-        when: DateTime.now(),
-        currency: currentBusinessCurrencyOrFallback(ref),
-        // Layout segun el papel de la impresora destino (58 u 80mm). En modo
-        // sin impresora se arma a 80mm para pantalla/PDF.
-        paperWidth: printer?.paperWidth ?? 80,
-      );
-
-      if (printerless) {
-        if (mounted) {
-          await showPrintTicketOnScreen(
-            context,
-            ticket: ticket,
-            title: 'Recibo de caja',
-            fileNamePrefix: 'movimiento_caja',
-          );
-        }
-        return;
-      }
-
-      await repo.printEscPos(
-        printer: printer!,
-        data: ticket.escPosCommands,
-        kind: 'cash_movement',
-        areaCode: 'cashier',
-        idempotencyKey: 'cashmov-$sessionId-${DateTime.now().millisecondsSinceEpoch}',
-      );
-    } catch (e) {
-      // Fire-and-forget: solo logueamos.
-      debugPrint('[CashMovement] recibo no impreso: $e');
-    }
   }
 
   /// Sprint Caja Pro — Razón obligatoria. La validación final está en
@@ -811,11 +749,30 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
             )
           else
             ...data.transactions.map(
-              (tx) => _ManualMovementTile(transaction: tx),
+              (tx) => _ManualMovementTile(
+                transaction: tx,
+                // La fila guarda el `reason_code`; el volante imprime la
+                // etiqueta del catálogo, igual que cuando se registró.
+                reasonLabel: _reasonLabelFor(data, tx.reasonCode),
+                sessionId: data.session.id,
+              ),
             ),
         ],
       ),
     );
+  }
+
+  /// Etiqueta legible de la razón. Si el movimiento es legacy (sin
+  /// `reason_code`) o la razón se borró del catálogo, cae al código y, si
+  /// tampoco hay, a un guion — el volante nunca se queda sin el renglón.
+  String _reasonLabelFor(_ManualCashData data, String? reasonCode) {
+    if (reasonCode == null || reasonCode.isEmpty) return '—';
+    final row = data.reasons.firstWhere(
+      (r) => r['code'] == reasonCode,
+      orElse: () => <String, dynamic>{},
+    );
+    final label = row['label']?.toString().trim();
+    return (label == null || label.isEmpty) ? reasonCode : label;
   }
 
   Color _colorForType(String type) {
@@ -963,13 +920,52 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
-class _ManualMovementTile extends StatelessWidget {
+class _ManualMovementTile extends ConsumerStatefulWidget {
   final CashTransaction transaction;
+  final String reasonLabel;
+  final String sessionId;
 
-  const _ManualMovementTile({required this.transaction});
+  const _ManualMovementTile({
+    required this.transaction,
+    required this.reasonLabel,
+    required this.sessionId,
+  });
+
+  @override
+  ConsumerState<_ManualMovementTile> createState() =>
+      _ManualMovementTileState();
+}
+
+class _ManualMovementTileState extends ConsumerState<_ManualMovementTile> {
+  bool _isReprinting = false;
+
+  /// Reimprime el volante de un movimiento ya registrado. Sale con la
+  /// marca "REIMPRESIÓN" y con la fecha ORIGINAL del movimiento, no la de
+  /// hoy: el papel tiene que cuadrar con el asiento de caja aunque se
+  /// reimprima días después.
+  Future<void> _reprint() async {
+    if (_isReprinting) return;
+    setState(() => _isReprinting = true);
+    try {
+      await CashMovementPrinting.printThermal(
+        context,
+        ref,
+        movementType: widget.transaction.type,
+        amount: widget.transaction.amount,
+        reasonLabel: widget.reasonLabel,
+        description: widget.transaction.description,
+        sessionId: widget.sessionId,
+        when: widget.transaction.createdAt,
+        isReprint: true,
+      );
+    } finally {
+      if (mounted) setState(() => _isReprinting = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final transaction = widget.transaction;
     final isDeposit = transaction.type == 'deposit';
     final color = switch (transaction.type) {
       'deposit' => Colors.blue,
@@ -1030,13 +1026,43 @@ class _ManualMovementTile extends StatelessWidget {
             color: MangoColors.muted,
           ),
         ),
-        trailing: Text(
-          '${isDeposit ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(isMobile ? 0 : 2)}',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            fontSize: isMobile ? 13 : 16,
-            color: color,
-          ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${isDeposit ? '+' : '-'}RD\$ ${transaction.amount.toStringAsFixed(isMobile ? 0 : 2)}',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: isMobile ? 13 : 16,
+                color: color,
+              ),
+            ),
+            SizedBox(width: isMobile ? 2 : 6),
+            // Reimpresión del volante: el papel se moja, se traba la
+            // impresora o el que firma se lo lleva sin firmar. Sin esto
+            // había que volver a teclear el movimiento para tener papel.
+            IconButton(
+              onPressed: _isReprinting ? null : _reprint,
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints.tightFor(
+                width: isMobile ? 32 : 40,
+                height: isMobile ? 32 : 40,
+              ),
+              tooltip: 'Reimprimir volante',
+              icon: _isReprinting
+                  ? SizedBox(
+                      width: isMobile ? 14 : 16,
+                      height: isMobile ? 14 : 16,
+                      child: const CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      Icons.print_outlined,
+                      size: isMobile ? 16 : 18,
+                      color: MangoColors.muted,
+                    ),
+            ),
+          ],
         ),
       ),
     );
