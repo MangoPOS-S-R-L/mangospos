@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,6 +13,7 @@ import 'package:mangopos/services/fiscal/fiscal_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
 import 'catalog_refresh_service.dart';
+import 'offline_cache_pruner.dart';
 import 'ncf_offline_allocator.dart' show kOfflineNcfEnabled;
 import 'ncf_range_service.dart';
 import 'offline_sync_coordinator.dart';
@@ -49,13 +52,15 @@ List<Future<void> Function()> buildOfflineRefreshers({
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
   // un refresher por defecto (en test se inyectan todos y no se toca).
   SupabaseClient resolveClient() => client ?? Supabase.instance.client;
-  final catalog = refreshCatalog ??
+  final catalog =
+      refreshCatalog ??
       (String b) => CatalogRefreshService(resolveClient()).refresh(b);
   // Zonas + las MESAS de cada zona. Bajar solo las zonas dejaba el floor map y
   // el modal de asignar a mesa sin geometría en un arranque en frío: el cajero
   // veía sus zonas pero ninguna mesa dentro. Son pocas zonas por local (una
   // consulta por zona), y ambas lecturas cachean como efecto secundario.
-  final zones = refreshZones ??
+  final zones =
+      refreshZones ??
       (String b) async {
         final repo = ZonesRepository(resolveClient());
         final list = await repo.fetchZones(b);
@@ -67,24 +72,28 @@ List<Future<void> Function()> buildOfflineRefreshers({
           }
         }
       };
-  final inventory = refreshInventory ??
+  final inventory =
+      refreshInventory ??
       (String b) => _refreshInventoryMainWarehouse(resolveClient(), b);
-  final config = refreshConfig ??
+  final config =
+      refreshConfig ??
       (String b) =>
           PosSettingsRepository(resolveClient()).refreshBusinessSettings(b);
   // Impresoras por área: sin este prewarm periódico, un área configurada
   // DESPUÉS del login (típico: asignar la USB y probar) no tenía cache y
   // "Enviar a cocina" offline fallaba con "No hay impresora asignada".
-  final printers = refreshPrinters ??
+  final printers =
+      refreshPrinters ??
       (String b) async {
-        await PrintingService(resolveClient()).prewarmPrinterCache(
-          businessId: b,
-        );
+        await PrintingService(
+          resolveClient(),
+        ).prewarmPrinterCache(businessId: b);
       };
   // Secuencias NCF: getSequences cachea en disco como efecto secundario;
   // sin esto el modal de cobro offline decía "no hay secuencias fiscales
   // activas" si nunca se había abierto una orden online en este device.
-  final fiscalSequences = refreshFiscalSequences ??
+  final fiscalSequences =
+      refreshFiscalSequences ??
       (String b) async {
         await FiscalService().getSequences(b);
       };
@@ -110,7 +119,8 @@ List<Future<void> Function()> buildOfflineRefreshers({
   // current_number al caer la red. Solo se agrega con F4 encendido (o si el
   // test lo inyecta), así no añade tráfico cuando la emisión offline está off.
   if (kOfflineNcfEnabled || refreshNcfSeed != null) {
-    final ncfSeed = refreshNcfSeed ??
+    final ncfSeed =
+        refreshNcfSeed ??
         (String b) => NcfRangeService(resolveClient()).refreshAllSeries(b);
     refreshers.add(guard(ncfSeed));
   }
@@ -136,8 +146,18 @@ Future<void> _refreshInventoryMainWarehouse(
 /// de lectura al reconectar (offline→online) y periódicamente. Se mantiene vivo
 /// leyéndolo desde el shell (igual que `hubModeProvider`). Provider
 /// no-autoDispose: se crea una vez y se limpia al cerrar el container.
-final offlineSyncCoordinatorProvider =
-    Provider<OfflineSyncCoordinator>((ref) {
+final offlineSyncCoordinatorProvider = Provider<OfflineSyncCoordinator>((ref) {
+  // Poda de arranque: borra los caches de LECTURA de negocios que este equipo
+  // ya no usa. Medido en campo, eran el 86% de un plist de 34 MB que
+  // SharedPreferences carga entero en memoria en cada arranque. Una sola vez,
+  // best-effort y fuera del camino crítico; nunca toca borradores, cola,
+  // mapas, op-log ni roster. Ver [OfflineCachePruner].
+  Future.delayed(const Duration(seconds: 12), () {
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    unawaited(OfflineCachePruner().pruneOtherBusinesses(businessId));
+  });
+
   final connectivity = ConnectivityService();
   final coordinator = OfflineSyncCoordinator(
     connectionStream: connectivity.connectionStream,

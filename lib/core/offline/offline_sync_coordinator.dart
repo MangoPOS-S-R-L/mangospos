@@ -71,42 +71,65 @@ class OfflineSyncCoordinator {
       final wasConnected = _connected;
       _connected = connected;
       // Solo al pasar offline→online refrescamos (no en cada tick del probe).
-      if (connected && !wasConnected) unawaited(refreshAll());
+      if (connected && !wasConnected) {
+        unawaited(refreshAll(motivo: 'reconexión'));
+      }
     });
     // Red de seguridad: aunque no haya transición, refresca cada tanto si hay
     // conexión (cubre cambios del server mientras el device sigue online).
     _timer = Timer.periodic(_periodic, (_) {
-      if (_isOnline) unawaited(refreshAll());
+      if (_isOnline) unawaited(refreshAll(motivo: 'periódico'));
     });
 
     // Siembra inicial: sin esto, un device que nunca pierde la red no cachea
     // nada hasta el primer corte — justo cuando ya es tarde.
     if (_isConnectedNow == null) return;
     if (_startupDelay <= Duration.zero) {
-      if (_isOnline) unawaited(refreshAll());
+      if (_isOnline) unawaited(refreshAll(motivo: 'arranque'));
       return;
     }
     _startupTimer = Timer(_startupDelay, () {
-      if (_disposed || !_isOnline) return;
-      unawaited(refreshAll());
+      if (_disposed) return;
+      if (!_isOnline) {
+        debugPrint(
+          '[OfflineSyncCoordinator] arranque sin conexión: no se siembra '
+          'ahora; se hará al reconectar.',
+        );
+        return;
+      }
+      unawaited(refreshAll(motivo: 'arranque'));
     });
   }
 
   /// Corre todos los refreshers en orden, best-effort. Guard de solapamiento:
   /// si ya hay un refresh en vuelo, no arranca otro.
-  Future<void> refreshAll() async {
+  Future<void> refreshAll({String motivo = 'manual'}) async {
     if (_inFlight || _disposed) return;
     _inFlight = true;
+    // Sin esta traza no había forma de saber DESDE LA APP si la bajada
+    // proactiva corrió: los refreshers solo escribían al log cuando fallaban,
+    // así que "no pasó nada" y "funcionó" se veían igual. Y el bug que esto
+    // arregla era justamente que NUNCA corrían.
+    final t0 = DateTime.now();
+    var ok = 0;
+    var fallaron = 0;
     try {
       for (final refresh in _refreshers) {
         try {
           await refresh();
+          ok++;
         } catch (e) {
+          fallaron++;
           debugPrint('[OfflineSyncCoordinator] refresher falló: $e');
         }
       }
     } finally {
       _inFlight = false;
+      final ms = DateTime.now().difference(t0).inMilliseconds;
+      debugPrint(
+        '[OfflineSyncCoordinator] bajada ($motivo): $ok ok, $fallaron con '
+        'error, ${ms}ms. Los caches quedaron tibios para la próxima caída.',
+      );
     }
   }
 
