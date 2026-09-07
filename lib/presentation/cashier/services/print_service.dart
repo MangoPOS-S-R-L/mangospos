@@ -350,31 +350,17 @@ class CashClosePrintService {
           .getCashClosePrintSalesByArea(businessId);
       if (!enabled) return const [];
 
-      final session = await _client
-          .from('cash_register_sessions')
-          .select('opened_at, closed_at')
-          .eq('id', sessionId)
-          .maybeSingle();
-      final openedAt = session?['opened_at']?.toString();
-      if (openedAt == null || openedAt.isEmpty) return const [];
-      final closedAt = (session?['closed_at']?.toString().isNotEmpty == true)
-          ? session!['closed_at'].toString()
-          : DateTime.now().toUtc().toIso8601String();
-
-      // Llamamos la RPC directo con los timestamps UTC de la sesión (no via
-      // ReportsRepository, que asume DateTimes en hora local AST).
-      final resp = await _client.rpc('get_sales_summary_v2', params: {
-        '_business_id': businessId,
-        '_from': openedAt,
-        '_to': closedAt,
-      });
-      if (resp is! Map) return const [];
-      final rows = resp['sales_by_production_area'];
-      if (rows is! List) return const [];
-      return rows
-          .whereType<Object?>()
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(growable: false);
+      // Acotado a la SESIÓN. Antes se pedía por ventana de tiempo
+      // (`get_sales_summary_v2` con opened_at/closed_at), y en un local con dos
+      // registradoras eso barría también las ventas de la OTRA caja: el ticket
+      // cuadraba arriba y abajo imprimía de más. Ver migración 20260907_0001.
+      final rows = await _rpcAreaForSession(
+        rpc: 'get_sales_by_production_area_for_session',
+        sessionId: sessionId,
+        businessId: businessId,
+        legacyKey: 'sales_by_production_area',
+      );
+      return rows;
     } catch (e) {
       debugPrint('[CashClosePrint] desglose por área falló: $e');
       return const [];
@@ -395,6 +381,58 @@ class CashClosePrintService {
           .getCashClosePrintProductsByArea(businessId);
       if (!enabled) return const [];
 
+      // Acotado a la SESIÓN, igual que el desglose de ventas de arriba.
+      return await _rpcAreaForSession(
+        rpc: 'get_products_by_production_area_for_session',
+        sessionId: sessionId,
+        businessId: businessId,
+        legacyRpc: 'get_products_by_production_area',
+      );
+    } catch (e) {
+      debugPrint('[CashClosePrint] desglose productos por área falló: $e');
+      return const [];
+    }
+  }
+
+  /// Llama la RPC acotada por SESIÓN y, si no existe todavía, cae a la vieja
+  /// por ventana de tiempo.
+  ///
+  /// El fallback existe para que un build nuevo contra una BD sin la migración
+  /// 20260907_0001 siga imprimiendo el cierre como hasta ahora, en vez de
+  /// perder la sección. OJO: ese camino viejo **solo es correcto en locales de
+  /// UNA registradora** — con dos, mezcla las ventas de la otra caja, que es
+  /// justo el bug que la migración arregla. Por eso se avisa fuerte en el log.
+  ///
+  /// [legacyKey] es para las RPC que devuelven un objeto y no una lista (el
+  /// resumen de ventas trae el desglose bajo esa llave).
+  Future<List<Map<String, dynamic>>> _rpcAreaForSession({
+    required String rpc,
+    required String sessionId,
+    required String businessId,
+    String? legacyRpc,
+    String? legacyKey,
+  }) async {
+    List<Map<String, dynamic>> parse(dynamic value) {
+      final rows = value is Map && legacyKey != null ? value[legacyKey] : value;
+      if (rows is! List) return const [];
+      return rows
+          .whereType<Object?>()
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+    }
+
+    try {
+      return parse(await _client.rpc(rpc, params: {'_session_id': sessionId}));
+    } catch (e) {
+      debugPrint(
+        '[CashClosePrint] $rpc no disponible ($e). Cayendo al desglose por '
+        'VENTANA DE TIEMPO: si el local tiene más de una caja, estas cifras '
+        'incluirán ventas de las otras. Aplicar la migración 20260907_0001.',
+      );
+    }
+
+    // Fallback: el camino de antes, por ventana de tiempo de la sesión.
+    try {
       final session = await _client
           .from('cash_register_sessions')
           .select('opened_at, closed_at')
@@ -406,18 +444,18 @@ class CashClosePrintService {
           ? session!['closed_at'].toString()
           : DateTime.now().toUtc().toIso8601String();
 
-      final resp = await _client.rpc('get_products_by_production_area', params: {
-        '_business_id': businessId,
-        '_from': openedAt,
-        '_to': closedAt,
-      });
-      if (resp is! List) return const [];
-      return resp
-          .whereType<Object?>()
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(growable: false);
+      // Los timestamps van en UTC directo (no via ReportsRepository, que asume
+      // DateTimes en hora local AST).
+      return parse(await _client.rpc(
+        legacyRpc ?? 'get_sales_summary_v2',
+        params: {
+          '_business_id': businessId,
+          '_from': openedAt,
+          '_to': closedAt,
+        },
+      ));
     } catch (e) {
-      debugPrint('[CashClosePrint] desglose productos por área falló: $e');
+      debugPrint('[CashClosePrint] fallback por ventana también falló: $e');
       return const [];
     }
   }
