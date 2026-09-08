@@ -51,13 +51,15 @@ void main() {
   });
 
   group('idempotencia', () {
-    test('reenviar la misma op_id devuelve el seq previo y no duplica',
-        () async {
-      final first = await dao.append(biz, {'op_id': 'a', 'type': 'add_item'});
-      final again = await dao.append(biz, {'op_id': 'a', 'type': 'add_item'});
-      expect(again, first);
-      expect(await dao.length(biz), 1);
-    });
+    test(
+      'reenviar la misma op_id devuelve el seq previo y no duplica',
+      () async {
+        final first = await dao.append(biz, {'op_id': 'a', 'type': 'add_item'});
+        final again = await dao.append(biz, {'op_id': 'a', 'type': 'add_item'});
+        expect(again, first);
+        expect(await dao.length(biz), 1);
+      },
+    );
 
     test('acepta `id` como alias de `op_id`', () async {
       final first = await dao.append(biz, {'id': 'x', 'type': 'add_item'});
@@ -66,12 +68,14 @@ void main() {
       expect(await dao.length(biz), 1);
     });
 
-    test('ops SIN op_id no se deduplican (mismo comportamiento que antes)',
-        () async {
-      await dao.append(biz, {'type': 'add_item'});
-      await dao.append(biz, {'type': 'add_item'});
-      expect(await dao.length(biz), 2);
-    });
+    test(
+      'ops SIN op_id no se deduplican (mismo comportamiento que antes)',
+      () async {
+        await dao.append(biz, {'type': 'add_item'});
+        await dao.append(biz, {'type': 'add_item'});
+        expect(await dao.length(biz), 2);
+      },
+    );
 
     test('la misma op_id en dos negocios distintos no colisiona', () async {
       expect(await dao.append('biz-a', {'op_id': 'igual'}), 1);
@@ -148,20 +152,20 @@ void main() {
 
       final quedan = await dao.retainOrders(biz, {'viva'});
       expect(quedan, 2);
-      expect(
-        (await dao.since(biz)).map((e) => e['op_id']),
-        ['a', 'c'],
-      );
+      expect((await dao.since(biz)).map((e) => e['op_id']), ['a', 'c']);
     });
 
-    test('retainOrders borra las ops SIN order_id (caja, inventario)', () async {
-      await dao.append(biz, {'op_id': 'a', 'order_id': 'viva'});
-      await dao.append(biz, {'op_id': 'b', 'type': 'cash_transaction'});
+    test(
+      'retainOrders borra las ops SIN order_id (caja, inventario)',
+      () async {
+        await dao.append(biz, {'op_id': 'a', 'order_id': 'viva'});
+        await dao.append(biz, {'op_id': 'b', 'type': 'cash_transaction'});
 
-      final quedan = await dao.retainOrders(biz, {'viva'});
-      expect(quedan, 1);
-      expect((await dao.since(biz)).single['op_id'], 'a');
-    });
+        final quedan = await dao.retainOrders(biz, {'viva'});
+        expect(quedan, 1);
+        expect((await dao.since(biz)).single['op_id'], 'a');
+      },
+    );
 
     test('retainOrders con conjunto vacío deja el log limpio', () async {
       await dao.append(biz, {'op_id': 'a', 'order_id': 'x'});
@@ -217,26 +221,105 @@ void main() {
     });
   });
 
-  group('migración desde SharedPreferences', () {
-    test('importa el op-log legacy la primera vez y borra la llave vieja',
-        () async {
-      final storage = await StorageService.getInstance();
-      await storage.writeList(debugHubOpLogKey(biz), [
-        {'op_id': 'vieja-1', 'seq': 1, 'order_id': 'ord-1'},
-        {'op_id': 'vieja-2', 'seq': 2, 'order_id': 'ord-1'},
-      ]);
-
-      expect(await dao.length(biz), 2, reason: 'debe haber importado');
-      expect(
-        (await dao.since(biz)).map((e) => e['op_id']),
-        ['vieja-1', 'vieja-2'],
-      );
-      expect(
-        await storage.readList(debugHubOpLogKey(biz)),
-        anyOf(isNull, isEmpty),
-        reason: 'la llave legacy debe quedar borrada',
-      );
+  // ── Replicación al respaldo (paso 11) ──────────────────────────────────
+  //
+  // Cuando el Hub acepta una op, el terminal se desentiende y NO la encola
+  // local. Esa venta queda en UN SOLO disco: si ese equipo se rompe antes de
+  // subir, se pierde y de todas las cajas. Replicar es la única salida segura,
+  // porque la idempotencia de este sistema es POR DISPOSITIVO y la BD no tiene
+  // llave de idempotencia — dos equipos subiendo la misma op harían venta
+  // doble.
+  group('replicación al respaldo', () {
+    test('conserva el seq del primario en vez de renumerar', () async {
+      await dao.appendReplica(biz, {
+        'op_id': 'a',
+        'seq': 7,
+        'type': 'add_item',
+      });
+      final op = (await dao.since(biz)).single;
+      expect(op['seq'], 7);
+      expect(op['op_id'], 'a');
     });
+
+    // Si el respaldo renumerara desde 1, al promoverlo repartiría `seq` que el
+    // primario ya había entregado y los clientes se perderían ops.
+    test('la marca de agua sube con lo replicado', () async {
+      await dao.appendReplica(biz, {'op_id': 'a', 'seq': 7});
+      expect(await dao.currentSeq(biz), 7);
+      expect(await dao.append(biz, {'op_id': 'propia'}), 8);
+    });
+
+    test('replicar dos veces no duplica', () async {
+      expect(await dao.appendReplica(biz, {'op_id': 'a', 'seq': 3}), isTrue);
+      expect(await dao.appendReplica(biz, {'op_id': 'a', 'seq': 3}), isFalse);
+      expect(await dao.length(biz), 1);
+    });
+
+    test('una réplica sin seq se ignora, no truena', () async {
+      expect(await dao.appendReplica(biz, {'op_id': 'a'}), isFalse);
+      expect(await dao.length(biz), 0);
+    });
+
+    test('replicar fuera de orden deja el log ordenado por seq', () async {
+      await dao.appendReplica(biz, {'op_id': 'c', 'seq': 3});
+      await dao.appendReplica(biz, {'op_id': 'a', 'seq': 1});
+      await dao.appendReplica(biz, {'op_id': 'b', 'seq': 2});
+      expect((await dao.since(biz)).map((e) => e['op_id']), ['a', 'b', 'c']);
+    });
+
+    test('conserva el order_id para que la poda funcione igual', () async {
+      await dao.appendReplica(biz, {
+        'op_id': 'a',
+        'seq': 1,
+        'order_id': 'viva',
+      });
+      await dao.appendReplica(biz, {
+        'op_id': 'b',
+        'seq': 2,
+        'order_id': 'cerrada',
+      });
+      expect(await dao.retainOrders(biz, {'viva'}), 1);
+    });
+
+    test(
+      'el respaldo puede proyectar lo replicado (es un log válido)',
+      () async {
+        await dao.appendReplica(biz, {
+          'op_id': 'a',
+          'seq': 1,
+          'type': 'open_table',
+          'order_id': 'o1',
+          'table_id': 't1',
+        });
+        final ops = await dao.since(biz);
+        expect(ops.single['type'], 'open_table');
+        expect(ops.single['table_id'], 't1');
+      },
+    );
+  });
+
+  group('migración desde SharedPreferences', () {
+    test(
+      'importa el op-log legacy la primera vez y borra la llave vieja',
+      () async {
+        final storage = await StorageService.getInstance();
+        await storage.writeList(debugHubOpLogKey(biz), [
+          {'op_id': 'vieja-1', 'seq': 1, 'order_id': 'ord-1'},
+          {'op_id': 'vieja-2', 'seq': 2, 'order_id': 'ord-1'},
+        ]);
+
+        expect(await dao.length(biz), 2, reason: 'debe haber importado');
+        expect((await dao.since(biz)).map((e) => e['op_id']), [
+          'vieja-1',
+          'vieja-2',
+        ]);
+        expect(
+          await storage.readList(debugHubOpLogKey(biz)),
+          anyOf(isNull, isEmpty),
+          reason: 'la llave legacy debe quedar borrada',
+        );
+      },
+    );
 
     test('la numeración continúa después de lo importado', () async {
       final storage = await StorageService.getInstance();
@@ -248,16 +331,18 @@ void main() {
       expect(await dao.append(biz, {'op_id': 'nueva'}), 3);
     });
 
-    test('una op_id que ya estaba en el legacy sigue siendo idempotente',
-        () async {
-      final storage = await StorageService.getInstance();
-      await storage.writeList(debugHubOpLogKey(biz), [
-        {'op_id': 'vieja-1', 'seq': 1},
-      ]);
+    test(
+      'una op_id que ya estaba en el legacy sigue siendo idempotente',
+      () async {
+        final storage = await StorageService.getInstance();
+        await storage.writeList(debugHubOpLogKey(biz), [
+          {'op_id': 'vieja-1', 'seq': 1},
+        ]);
 
-      expect(await dao.append(biz, {'op_id': 'vieja-1'}), 1);
-      expect(await dao.length(biz), 1);
-    });
+        expect(await dao.append(biz, {'op_id': 'vieja-1'}), 1);
+        expect(await dao.length(biz), 1);
+      },
+    );
 
     test('sin llave legacy no pasa nada', () async {
       expect(await dao.length(biz), 0);

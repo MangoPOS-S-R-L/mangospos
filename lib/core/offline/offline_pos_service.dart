@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,8 @@ import 'package:uuid/uuid.dart';
 
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
+import 'package:mangopos/core/offline/hub/hub_client.dart';
+import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_op_log.dart';
 import 'package:mangopos/core/offline/hub/hub_order_projector.dart';
 import 'package:mangopos/core/offline/hub/hub_projection_cache.dart';
@@ -241,6 +244,11 @@ class OfflinePosService {
   ) async {
     try {
       final seq = await _hubOpLog.append(businessId, op);
+      // H7: espejar al respaldo. La op ya quedó guardada aquí, así que esto es
+      // pura red de seguridad — si el respaldo no está o no responde, el Hub
+      // sigue igual. Fire-and-forget para no meter latencia de red en el
+      // camino del cajero.
+      unawaited(_replicateToBackup(businessId, {...op, 'seq': seq}));
       try {
         _hubBroadcaster?.call(businessId, {...op, 'seq': seq});
       } catch (_) {
@@ -249,6 +257,33 @@ class OfflinePosService {
       return seq;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Manda una op ya aplicada al Hub de respaldo configurado, si lo hay.
+  ///
+  /// Es lo que evita que una venta viva en un solo disco: cuando el Hub acepta
+  /// una op, el terminal NO la encola local (ver [enqueueAction]). Si ese
+  /// equipo se rompe antes de subir a Supabase, se pierde y de todas las cajas.
+  ///
+  /// El respaldo GUARDA pero no sube nada mientras esté pasivo, así que el
+  /// uplink sigue teniendo un solo dueño. Eso es lo que hace segura la
+  /// replicación: la idempotencia de este sistema es por dispositivo y la BD no
+  /// tiene llave de idempotencia, así que dos equipos subiendo la misma op
+  /// harían venta doble e inventario doble.
+  Future<void> _replicateToBackup(
+    String businessId,
+    Map<String, dynamic> op,
+  ) async {
+    try {
+      final backupUrl = await HubConfigService().getBackupUrl(businessId);
+      if (backupUrl == null || backupUrl.isEmpty) return;
+      await HubClient().replicateOp(backupUrl, {
+        ...op,
+        'business_id': businessId,
+      });
+    } catch (_) {
+      // Best-effort: el espejo nunca puede afectar la operación del local.
     }
   }
 

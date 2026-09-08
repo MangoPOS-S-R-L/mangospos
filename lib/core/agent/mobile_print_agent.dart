@@ -143,6 +143,10 @@ class MobilePrintAgent {
     // Hub Local (F3b): recibir una operación (POST) y servir el delta del
     // op-log (GET). Con auth (igual que el resto de endpoints).
     router.post('/hub/ops', _handleHubOps);
+    // Réplica desde el Hub primario (H7). Conserva el `seq` que trae la op en
+    // vez de asignar uno nuevo: los dos logs tienen que ser comparables para
+    // que una promoción no le cambie el rango a los clientes.
+    router.post('/hub/replica', _handleHubReplica);
     router.get('/hub/state', _handleHubState);
 
     // H3: estado del salón + detalle de orden reconstruidos del op-log.
@@ -408,6 +412,23 @@ class MobilePrintAgent {
 
   /// F3b: sirve el delta del op-log desde `since` (query param) para que un
   /// terminal/KDS se ponga al día. Devuelve `{seq, ops}`.
+  /// H7: recibe una op replicada del Hub primario.
+  ///
+  /// El respaldo la GUARDA pero no la sube nunca mientras esté pasivo — el
+  /// uplink sigue teniendo un solo dueño. Eso es lo que hace segura la
+  /// replicación: la idempotencia de este sistema es por dispositivo y la BD no
+  /// tiene llave de idempotencia, así que dos equipos subiendo la misma op
+  /// harían venta doble e inventario doble.
+  Future<shelf.Response> _handleHubReplica(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final businessId = body['business_id']?.toString() ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+
+    final guardada = await _hubOpLog.appendReplica(businessId, body);
+    return _jsonOk({'stored': guardada, 'seq': body['seq']});
+  }
+
   Future<shelf.Response> _handleHubState(shelf.Request request) async {
     final q = request.url.queryParameters;
     final businessId = q['business_id'] ?? '';

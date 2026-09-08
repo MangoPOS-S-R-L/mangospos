@@ -150,6 +150,32 @@ class HubClient {
     }
   }
 
+  /// H7: manda una op YA APLICADA al Hub de respaldo, conservando su `seq`.
+  ///
+  /// Sin esto, una op que el Hub acepta vive en UN SOLO disco: el terminal se
+  /// desentiende (`enqueueAction` retorna en cuanto el Hub responde) y si ese
+  /// equipo se rompe antes de subir, la venta se pierde — y de todas las cajas
+  /// del local.
+  ///
+  /// Best-effort a propósito: el respaldo es una red de seguridad, no una
+  /// dependencia. Si no responde, el primario sigue operando normal; lo que se
+  /// pierde es la protección, no la venta.
+  Future<bool> replicateOp(String baseUrl, Map<String, dynamic> op) async {
+    try {
+      final resp = await _http
+          .post(
+            Uri.parse('${_normalize(baseUrl)}/hub/replica'),
+            headers: await _headers(),
+            body: jsonEncode(op),
+          )
+          .timeout(_opTimeout);
+      return resp.statusCode == 200;
+    } catch (e) {
+      debugPrint('[HubClient] réplica al respaldo falló (no crítico): $e');
+      return false;
+    }
+  }
+
   /// Lee el delta del op-log del Hub desde [since] (`GET /hub/state`).
   /// Devuelve `(seq, ops)` o null si falló.
   Future<({int seq, List<Map<String, dynamic>> ops})?> getStateSince(

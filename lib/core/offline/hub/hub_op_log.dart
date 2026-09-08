@@ -89,6 +89,13 @@ class HubOpLog {
     return nextSeq;
   }
 
+  /// Guarda una op REPLICADA del Hub primario conservando su `seq`.
+  /// Solo disponible con el backend SQLite; en web es no-op.
+  Future<bool> appendReplica(String businessId, Map<String, dynamic> op) async {
+    if (!_useSqlite) return false;
+    return _dao.appendReplica(businessId, op);
+  }
+
   /// Devuelve las ops con `seq` > [seq], en orden ascendente. Con `seq = 0`
   /// (default) devuelve el log completo.
   Future<List<Map<String, dynamic>>> since(

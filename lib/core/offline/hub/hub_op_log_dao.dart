@@ -45,11 +45,12 @@ class HubOpLogDao {
       final raw = await storage.readList(_legacyKey(businessId));
       if (raw == null || raw.isEmpty) return;
 
-      final legacy = raw
-          .whereType<Object?>()
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList(growable: false)
-        ..sort((a, b) => _seqOf(a).compareTo(_seqOf(b)));
+      final legacy =
+          raw
+              .whereType<Object?>()
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(growable: false)
+            ..sort((a, b) => _seqOf(a).compareTo(_seqOf(b)));
 
       // Solo importamos si el negocio aún no tiene nada en SQLite. Si ya tiene,
       // la migración corrió antes y esta llave es un residuo.
@@ -121,11 +122,12 @@ class HubOpLogDao {
 
     return _db.transaction(() async {
       if (opId != null) {
-        final existing = await (_db.select(_db.hubOps)
-              ..where((t) => t.businessId.equals(businessId))
-              ..where((t) => t.opId.equals(opId))
-              ..limit(1))
-            .getSingleOrNull();
+        final existing =
+            await (_db.select(_db.hubOps)
+                  ..where((t) => t.businessId.equals(businessId))
+                  ..where((t) => t.opId.equals(opId))
+                  ..limit(1))
+                .getSingleOrNull();
         if (existing != null) return existing.seq;
       }
 
@@ -139,7 +141,9 @@ class HubOpLogDao {
       final receivedAt = DateTime.now().toUtc();
       entry['hub_received_at'] ??= receivedAt.toIso8601String();
 
-      await _db.into(_db.hubOps).insert(
+      await _db
+          .into(_db.hubOps)
+          .insert(
             HubOpsCompanion.insert(
               businessId: businessId,
               seq: nextSeq,
@@ -153,24 +157,93 @@ class HubOpLogDao {
     });
   }
 
+  /// Guarda una op que viene REPLICADA del Hub primario, conservando su `seq`
+  /// original en vez de asignar uno nuevo.
+  ///
+  /// Por qué hace falta: cuando el Hub acepta una op, el terminal se
+  /// desentiende y NO la encola local (`enqueueAction`: "si el Hub la acepta
+  /// terminamos"). Esa venta queda en UN SOLO disco. Si ese equipo se rompe o
+  /// se lo roban antes de subir, se pierde — y de todas las cajas del local.
+  ///
+  /// La salida fácil —que el terminal se quede una copia y la suba después— NO
+  /// sirve: la idempotencia de este sistema es del lado del cliente y POR
+  /// DISPOSITIVO (`_readCompletedOps` lee del disco local) y la BD no tiene
+  /// llave de idempotencia, así que dos equipos subiendo la misma op crean
+  /// venta doble e inventario doble. Replicar sí es seguro: el respaldo guarda
+  /// la copia pero NUNCA sube nada mientras esté pasivo, así que el uplink
+  /// sigue teniendo un solo dueño.
+  ///
+  /// Conservar el `seq` del primario es lo que hace que los dos logs sean
+  /// comparables: si el respaldo renumerara, al promoverlo los clientes que
+  /// venían pidiendo `since(N)` leerían un rango que no corresponde.
+  ///
+  /// Idempotente: replicar dos veces la misma op no duplica ni truena.
+  /// Devuelve `true` si la guardó, `false` si ya estaba o venía sin `seq`.
+  Future<bool> appendReplica(String businessId, Map<String, dynamic> op) async {
+    final seq = _seqOf(op);
+    if (seq <= 0) {
+      debugPrint('[HubOpLogDao] réplica sin seq, se ignora: ${_opIdOf(op)}');
+      return false;
+    }
+    await _migrateLegacyIfNeeded(businessId);
+
+    return _db.transaction(() async {
+      final existing =
+          await (_db.select(_db.hubOps)
+                ..where((t) => t.businessId.equals(businessId))
+                ..where((t) => t.seq.equals(seq))
+                ..limit(1))
+              .getSingleOrNull();
+      if (existing != null) return false;
+
+      await _db
+          .into(_db.hubOps)
+          .insert(
+            HubOpsCompanion.insert(
+              businessId: businessId,
+              seq: seq,
+              opId: Value(_opIdOf(op)),
+              orderId: Value(_orderIdOf(op)),
+              payloadJson: jsonEncode(op),
+              receivedAt: _receivedAtOf(op),
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+
+      // La marca de agua tiene que subir con lo replicado: si al promover el
+      // respaldo siguiera numerando desde 1, repartiría `seq` ya entregados.
+      final marca = await _watermark(businessId);
+      if (seq > marca) {
+        await _db
+            .into(_db.hubMeta)
+            .insertOnConflictUpdate(
+              HubMetaRow(businessId: businessId, lastSeq: seq),
+            );
+      }
+      return true;
+    });
+  }
+
   /// `seq` más alto de las filas VIVAS. Solo sirve para la migración legacy y
   /// como piso de la marca de agua; NO para numerar (ver [_nextSeq]).
   Future<int> _maxLiveSeq(String businessId) async {
     final max = _db.hubOps.seq.max();
-    final row = await (_db.selectOnly(_db.hubOps)
-          ..addColumns([max])
-          ..where(_db.hubOps.businessId.equals(businessId)))
-        .getSingle();
+    final row =
+        await (_db.selectOnly(_db.hubOps)
+              ..addColumns([max])
+              ..where(_db.hubOps.businessId.equals(businessId)))
+            .getSingle();
     return row.read(max) ?? 0;
   }
 
   /// Marca de agua persistida: el último `seq` ENTREGADO, aunque su fila ya se
   /// haya podado.
   Future<int> _watermark(String businessId) async {
-    final row = await (_db.select(_db.hubMeta)
-          ..where((t) => t.businessId.equals(businessId))
-          ..limit(1))
-        .getSingleOrNull();
+    final row =
+        await (_db.select(_db.hubMeta)
+              ..where((t) => t.businessId.equals(businessId))
+              ..limit(1))
+            .getSingleOrNull();
     return row?.lastSeq ?? 0;
   }
 
@@ -184,7 +257,9 @@ class HubOpLogDao {
     final floor = await _watermark(businessId);
     final live = await _maxLiveSeq(businessId);
     final next = (floor > live ? floor : live) + 1;
-    await _db.into(_db.hubMeta).insertOnConflictUpdate(
+    await _db
+        .into(_db.hubMeta)
+        .insertOnConflictUpdate(
           HubMetaRow(businessId: businessId, lastSeq: next),
         );
     return next;
@@ -197,11 +272,12 @@ class HubOpLogDao {
     int seq = 0,
   }) async {
     await _migrateLegacyIfNeeded(businessId);
-    final rows = await (_db.select(_db.hubOps)
-          ..where((t) => t.businessId.equals(businessId))
-          ..where((t) => t.seq.isBiggerThanValue(seq))
-          ..orderBy([(t) => OrderingTerm.asc(t.seq)]))
-        .get();
+    final rows =
+        await (_db.select(_db.hubOps)
+              ..where((t) => t.businessId.equals(businessId))
+              ..where((t) => t.seq.isBiggerThanValue(seq))
+              ..orderBy([(t) => OrderingTerm.asc(t.seq)]))
+            .get();
     return rows.map(_decode).whereType<Map<String, dynamic>>().toList();
   }
 
@@ -232,33 +308,33 @@ class HubOpLogDao {
   Future<int> length(String businessId) async {
     await _migrateLegacyIfNeeded(businessId);
     final count = _db.hubOps.seq.count();
-    final row = await (_db.selectOnly(_db.hubOps)
-          ..addColumns([count])
-          ..where(_db.hubOps.businessId.equals(businessId)))
-        .getSingle();
+    final row =
+        await (_db.selectOnly(_db.hubOps)
+              ..addColumns([count])
+              ..where(_db.hubOps.businessId.equals(businessId)))
+            .getSingle();
     return row.read(count) ?? 0;
   }
 
   /// Vacía el op-log de un negocio. Se llama tras un uplink exitoso.
   Future<void> clear(String businessId) async {
     _migrated.add(businessId); // ya no hay nada legacy que valga la pena traer
-    await (_db.delete(_db.hubOps)
-          ..where((t) => t.businessId.equals(businessId)))
-        .go();
+    await (_db.delete(
+      _db.hubOps,
+    )..where((t) => t.businessId.equals(businessId))).go();
     try {
       final storage = await StorageService.getInstance();
       await storage.delete(_legacyKey(businessId));
-    } catch (_) {/* residuo legacy, no crítico */}
+    } catch (_) {
+      /* residuo legacy, no crítico */
+    }
   }
 
   /// Poda tras un uplink exitoso: conserva SOLO las ops cuyo `order_id` está en
   /// [keepOrderIds] (las mesas AÚN ABIERTAS que las cajas siguen proyectando por
   /// `/hub/salon`). Borra el resto — órdenes ya cerradas o anuladas, y ops sin
   /// `order_id` (caja, inventario) que ya subieron. Devuelve cuántas quedaron.
-  Future<int> retainOrders(
-    String businessId,
-    Set<String> keepOrderIds,
-  ) async {
+  Future<int> retainOrders(String businessId, Set<String> keepOrderIds) async {
     await _migrateLegacyIfNeeded(businessId);
 
     if (keepOrderIds.isEmpty) {
