@@ -148,6 +148,7 @@ declare
   v_needs_review boolean := false;
   v_pay_state    text := 'none';
   v_pay_error    text;
+  v_cash_session uuid;
   v_ext_row_id   uuid;
 begin
   -- ── Validacion del payload ────────────────────────────────────────────
@@ -335,26 +336,37 @@ begin
 
   -- ── Pago ──────────────────────────────────────────────────────────────
   if v_paid then
-    begin
-      perform public.fn_process_payment_v3(
-        p_order_id           => v_order_id,
-        p_check_id           => null,
-        p_payment_method_id  => p_channel,
-        p_amount             => coalesce(v_total, 0),
-        p_reference          => nullif(btrim(v_payment->>'reference'), ''),
-        p_customer_id        => null,
-        p_customer_rnc       => v_rnc,
-        p_cashier_session_id => null,     -- a proposito: entra con la caja cerrada
-        p_change_amount      => 0,
-        p_requested_ncf_type => case when v_rnc is not null then 'B01' else null end,
-        p_close_order        => true
-      );
-      v_pay_state := 'recorded';
-    exception when others then
-      -- El pedido NO se cae por esto: la comida ya se pago afuera.
+    -- `fn_process_payment_v3` exige sesion de caja SIEMPRE, aun para metodos que
+    -- no tocan el cajon (corta antes de mirar el metodo). Ver 20260907_0007.
+    v_cash_session := public.fn_external_open_cash_session(p_business_id);
+
+    if v_cash_session is null then
       v_pay_state := 'failed';
-      v_pay_error := left(sqlerrm, 500);
-    end;
+      v_pay_error := 'SIN_CAJA_ABIERTA: el pedido entro y la comanda salio, pero '
+                     || 'el cobro no se pudo registrar porque no hay una caja '
+                     || 'abierta. Registralo al abrir la proxima caja.';
+    else
+      begin
+        perform public.fn_process_payment_v3(
+          p_order_id           => v_order_id,
+          p_check_id           => null,
+          p_payment_method_id  => p_channel,
+          p_amount             => coalesce(v_total, 0),
+          p_reference          => nullif(btrim(v_payment->>'reference'), ''),
+          p_customer_id        => null,
+          p_customer_rnc       => v_rnc,
+          p_cashier_session_id => v_cash_session,
+          p_change_amount      => 0,
+          p_requested_ncf_type => case when v_rnc is not null then 'B01' else null end,
+          p_close_order        => true
+        );
+        v_pay_state := 'recorded';
+      exception when others then
+        -- El pedido NO se cae por esto: la comida ya se pago afuera.
+        v_pay_state := 'failed';
+        v_pay_error := left(sqlerrm, 500);
+      end;
+    end if;
   else
     v_pay_state := 'pending';   -- efectivo contra entrega: cobra el POS
   end if;
