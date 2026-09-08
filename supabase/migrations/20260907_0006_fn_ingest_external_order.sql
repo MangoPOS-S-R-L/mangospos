@@ -149,6 +149,7 @@ declare
   v_pay_state    text := 'none';
   v_pay_error    text;
   v_cash_session uuid;
+  v_pos_total    numeric;
   v_ext_row_id   uuid;
 begin
   -- ── Validacion del payload ────────────────────────────────────────────
@@ -335,6 +336,11 @@ begin
    where id = v_order_id;
 
   -- ── Pago ──────────────────────────────────────────────────────────────
+  -- El total se lee ANTES de cobrar: al cerrar la orden, `orders.total` queda
+  -- en 0 (el recalculo solo cuenta items no pagados). Si lo leyeramos despues
+  -- le reportariamos `pos_total: 0` al canal y les romperiamos la conciliacion.
+  select o.total into v_pos_total from public.orders o where o.id = v_order_id;
+
   if v_paid then
     -- `fn_process_payment_v3` exige sesion de caja SIEMPRE, aun para metodos que
     -- no tocan el cajon (corta antes de mirar el metodo). Ver 20260907_0007.
@@ -408,7 +414,7 @@ begin
     'payment_error',    v_pay_error,
     'environment',      case when p_environment = 'sandbox' then 'sandbox' else 'production' end,
     'needs_review',     v_needs_review,
-    'pos_total',        (select total from public.orders where id = v_order_id),
+    'pos_total',        v_pos_total,
     'tip_amount',       v_tip
   );
 end;

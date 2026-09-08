@@ -353,7 +353,7 @@ class CashClosePrintService {
       // Acotado a la SESIÓN. Antes se pedía por ventana de tiempo
       // (`get_sales_summary_v2` con opened_at/closed_at), y en un local con dos
       // registradoras eso barría también las ventas de la OTRA caja: el ticket
-      // cuadraba arriba y abajo imprimía de más. Ver migración 20260907_0007.
+      // cuadraba arriba y abajo imprimía de más. Ver migración 20260907_0009.
       final rows = await _rpcAreaForSession(
         rpc: 'get_sales_by_production_area_for_session',
         sessionId: sessionId,
@@ -398,7 +398,7 @@ class CashClosePrintService {
   /// por ventana de tiempo.
   ///
   /// El fallback existe para que un build nuevo contra una BD sin la migración
-  /// 20260907_0007 siga imprimiendo el cierre como hasta ahora, en vez de
+  /// 20260907_0009 siga imprimiendo el cierre como hasta ahora, en vez de
   /// perder la sección. OJO: ese camino viejo **solo es correcto en locales de
   /// UNA registradora** — con dos, mezcla las ventas de la otra caja, que es
   /// justo el bug que la migración arregla. Por eso se avisa fuerte en el log.
@@ -427,7 +427,7 @@ class CashClosePrintService {
       debugPrint(
         '[CashClosePrint] $rpc no disponible ($e). Cayendo al desglose por '
         'VENTANA DE TIEMPO: si el local tiene más de una caja, estas cifras '
-        'incluirán ventas de las otras. Aplicar la migración 20260907_0007.',
+        'incluirán ventas de las otras. Aplicar la migración 20260907_0009.',
       );
     }
 

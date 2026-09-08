@@ -12,7 +12,7 @@ import '../../../data/repositories/pos_settings_repository.dart';
 const String kLegacyHubLanToken = 'MANGOPOS_SECURE_TOKEN_123';
 
 /// Resuelve el token LAN del negocio: el secreto por-negocio de
-/// `business_settings.lan_token` (migración 20260907_0008), con caída a
+/// `business_settings.lan_token` (migración 20260907_0010), con caída a
 /// [kLegacyHubLanToken].
 ///
 /// Por qué existe: el agente y el cliente del Hub compartían una constante
@@ -69,7 +69,7 @@ class HubLanTokenService {
         return token;
       }
       debugPrint(
-        '[HubLanToken] $businessId sin lan_token (¿migración 20260907_0008 '
+        '[HubLanToken] $businessId sin lan_token (¿migración 20260907_0010 '
         'sin aplicar?). Usando el token legacy compartido.',
       );
     } catch (e) {

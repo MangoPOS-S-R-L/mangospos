@@ -606,7 +606,7 @@ class PosSettingsRepository {
   /// sesión. Default `false` (no cambia el ticket sin opt-in). Tolerante a
   /// que la columna aún no exista (cae a false).
   /// Secreto compartido que autoriza las llamadas LAN al Hub de este negocio
-  /// (migración 20260907_0008). Cadena vacía si la columna no existe todavía o
+  /// (migración 20260907_0010). Cadena vacía si la columna no existe todavía o
   /// no hay fila — el caller cae entonces a la constante legacy.
   ///
   /// Viaja en la fila completa de `business_settings`, así que el
