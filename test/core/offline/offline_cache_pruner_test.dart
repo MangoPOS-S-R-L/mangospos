@@ -139,6 +139,40 @@ void main() {
     });
   });
 
+  // La mina que apareció al medir en un equipo real: la poda decide con
+  // `key.contains(activeBusinessId)`. Estas dos familias llevan el id de la
+  // ZONA, no el del negocio, así que ese contains no matchearía nunca y se
+  // borrarían TODAS — incluidas las del negocio activo, dejando al cajero sin
+  // el estado de sus mesas justo en la próxima caída.
+  test('las familias con clave por ZONA NO están en la lista podable', () {
+    for (final porZona in [
+      'offline_zone_status_snapshot_',
+      'offline_zone_tables_snapshot_',
+    ]) {
+      expect(
+        OfflineCachePruner.readCachePrefixes,
+        isNot(contains(porZona)),
+        reason:
+            '"$porZona" lleva id de zona: podarla borraría también las del '
+            'negocio activo',
+      );
+    }
+  });
+
+  test('el snapshot de mesas del negocio activo sobrevive a la poda', () async {
+    await storage.write('offline_zone_tables_snapshot_zona-1', '{"rows":[]}');
+    await storage.write('offline_zone_status_snapshot_zona-1', '{"rows":[]}');
+    await pruner.pruneOtherBusinesses(activo);
+    expect(
+      await storage.read('offline_zone_tables_snapshot_zona-1'),
+      isNotNull,
+    );
+    expect(
+      await storage.read('offline_zone_status_snapshot_zona-1'),
+      isNotNull,
+    );
+  });
+
   // Guardarraíl de diseño: si alguien agrega una familia al podador que
   // también está protegida, este test lo caza antes que el campo.
   test('ninguna familia podable colisiona con una protegida', () {

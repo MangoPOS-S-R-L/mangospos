@@ -36,9 +36,21 @@ class OfflineCachePruner {
       _injected ?? await StorageService.getInstance();
 
   /// Familias de cache de LECTURA, todas con forma `<prefijo><businessId>`.
+  ///
   /// Reconstruibles desde el servidor: perderlas cuesta una consulta, no un
   /// dato. Es la misma familia que ya borra el botón "Limpiar caché del
   /// sistema", pero acotada por negocio y automática.
+  ///
+  /// ⚠️ **TODA familia de esta lista TIENE que terminar en el businessId.** La
+  /// poda decide con `key.contains(activeBusinessId)`, así que si se agrega una
+  /// familia cuya clave lleva OTRO id, ese `contains` no matchea NUNCA y se
+  /// borran TODAS sus entradas — incluidas las del negocio activo.
+  ///
+  /// Ya hay dos candidatas que parecen encajar y NO van:
+  /// `offline_zone_status_snapshot_` y `offline_zone_tables_snapshot_` llevan
+  /// el id de la ZONA, no el del negocio. Meterlas aquí dejaría al cajero sin
+  /// el estado de sus mesas en la próxima caída de red — justo lo contrario de
+  /// lo que este archivo existe para lograr.
   @visibleForTesting
   static const readCachePrefixes = <String>[
     'offline_catalog_',
