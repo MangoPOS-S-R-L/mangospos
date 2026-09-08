@@ -151,10 +151,17 @@ void main() {
         );
 
         final text = _ticketText(ticket.escPosCommands);
-        expect(text, contains('RD\$ 500.00'));
-        expect(text, contains('RD\$ 390.63'));
-        expect(text, contains('RD\$ 70.31'));
-        expect(text, isNot(contains('RD\$ 999.99')));
+        // Se afirma sobre el VALOR y su etiqueta, no sobre el espaciado: la
+        // fila de totales imprime 'RD$70.31' pegado y la línea del ítem
+        // 'RD$ 390.63' con espacio. Fijar el espacio exacto dejaba el test en
+        // rojo por un cambio de formato, tapando lo único que importa aquí,
+        // que es la aritmética fiscal.
+        expect(text, contains('500.00'));
+        expect(text, contains('390.63'));
+        expect(text, contains('ITBIS (18%)'));
+        expect(text, contains('70.31'));
+        // El valor "drifted" del backend NO puede aparecer en ningún lado.
+        expect(text, isNot(contains('999.99')));
       },
     );
 
@@ -185,8 +192,10 @@ void main() {
         );
 
         final text = _ticketText(ticket.escPosCommands);
-        expect(text, contains('RD\$ 495.00'));
-        expect(text, isNot(contains('RD\$ 500.00')));
+        expect(text, contains('495.00'));
+        // El precio de lista NO puede salir: la reimpresión tiene que mostrar
+        // lo que se cobró en su momento, no lo que vale el producto hoy.
+        expect(text, isNot(contains('500.00')));
       },
     );
 

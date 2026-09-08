@@ -7,6 +7,7 @@ import '../../data/models/order_item_tax_line.dart';
 import '../../data/models/sales_models.dart';
 import '../../data/models/payment_models.dart';
 import '../../core/utils/app_time.dart';
+import '../../core/utils/order_number_utils.dart';
 import '../../core/currency/business_currency.dart';
 import '../../core/currency/usd_conversion.dart';
 import '../../core/currency/usd_display_settings.dart';
@@ -278,7 +279,7 @@ class PrintTicketService {
     // como "Mesa: NU01" en la misma linea, para que cocina identifique
     // comensal + mesa de un solo vistazo. Aqui queda solo la ORDEN.
     gen.setBold(true);
-    gen.text('ORDEN: #${order.id.substring(0, 8).toUpperCase()}');
+    gen.text('ORDEN: #${shortOrderNumber(order.id)}');
     gen.setBold(false);
 
     // MESERO de la comanda = quien DIGITÓ estos platos (el PIN multimesero
@@ -767,7 +768,7 @@ class PrintTicketService {
       // INFORMACIÓN DE LA ORDEN
       // ════════════════════════════════════════════
       gen.setBold(true);
-      gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
+      gen.textRow('ORDEN:', shortOrderNumber(order.id));
       gen.setBold(false);
 
       if (tableName.isNotEmpty) {
@@ -1493,7 +1494,7 @@ class PrintTicketService {
 
       // Order Info
       gen.setBold(true);
-      gen.textRow('ORDEN:', order.id.substring(0, 8).toUpperCase());
+      gen.textRow('ORDEN:', shortOrderNumber(order.id));
       gen.setBold(false);
 
       // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
@@ -2138,7 +2139,7 @@ class PrintTicketService {
     }
 
     ModernInvoiceLayout.metaLine(gen, [
-      'Orden ${order.id.substring(0, 8).toUpperCase()}',
+      'Orden ${shortOrderNumber(order.id)}',
       if (tableName.isNotEmpty) 'Mesa $tableName',
       if (waiterName != null && waiterName.trim().isNotEmpty) waiterName.trim(),
     ]);
@@ -2380,7 +2381,7 @@ class PrintTicketService {
     );
 
     gen.orderInfo(
-      orderNumber: order.id.substring(0, 8).toUpperCase(),
+      orderNumber: shortOrderNumber(order.id),
       tableName: tableName ?? 'N/A',
       dateTime: fiscalDoc.issuedAt,
       waiterName: waiterName,

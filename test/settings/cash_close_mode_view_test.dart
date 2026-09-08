@@ -26,6 +26,20 @@ class _FakePosSettingsRepository extends PosSettingsRepository {
     return initial;
   }
 
+  // La vista carga CUATRO ajustes en `_load()`, no solo el modo. Sin estos tres
+  // stubs los otros se iban al repositorio real, la carga nunca resolvía y la
+  // pantalla se quedaba en el spinner: `pumpAndSettle` agotaba el tiempo. El
+  // test se rompió cuando la vista creció con los toggles de recuento y de
+  // desglose por área, no por un cambio en el modo de cierre.
+  @override
+  Future<bool> getAllowRecount(String businessId) async => false;
+
+  @override
+  Future<bool> getCashClosePrintSalesByArea(String businessId) async => false;
+
+  @override
+  Future<bool> getCashClosePrintProductsByArea(String businessId) async => false;
+
   @override
   Future<void> setCashCloseMode({
     required String businessId,

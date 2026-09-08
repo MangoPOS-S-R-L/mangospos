@@ -27,8 +27,14 @@ void main() {
         denominations: const [
           DenominationCount(value: 1000, label: 'RD\$ 1000', count: 30),
         ],
-        cardInput: '12,500',
-        transferInput: '4,200',
+        // Sin separador de miles A PROPÓSITO: ninguna de las dos UIs puede
+        // producirlo. El teclado del cierre a ciegas solo agrega dígitos, '.',
+        // '00' y borrado (blind_cash_close_viewmodel.appendNumpad), y el wizard
+        // detallado convierte la coma en punto y exige `^\d*\.?\d{0,2}$`
+        // (_DecimalMoneyInputFormatter). Este test pasaba '12,500' y esperaba
+        // 12500; llevaba tres semanas en rojo por eso.
+        cardInput: '12500',
+        transferInput: '4200',
         input: input,
       );
 
@@ -38,6 +44,23 @@ void main() {
       expect(result.totalReported, 46700);
       expect(result.expectedTotal, 45200);
       expect(result.difference, 1500);
+    });
+
+    // Guardarraíl: que nadie "arregle" parseAmount para aceptar separador de
+    // miles. En República Dominicana la coma es separador DECIMAL, así que
+    // leer '12,5' como 125 (o '12,500' como doce mil quinientos) descuadraría
+    // el cierre por miles de pesos en el sentido equivocado. Si algún día hay
+    // que aceptar comas, se decide en el FORMATTER —que ya las normaliza a
+    // punto— y no aquí a la adivina.
+    test('una cadena ambigua con coma NO se interpreta como miles', () {
+      expect(CashCloseCalculator.parseAmount('12,500'), 0);
+      expect(CashCloseCalculator.parseAmount('12,5'), 0);
+    });
+
+    test('acepta lo que las UIs sí producen', () {
+      expect(CashCloseCalculator.parseAmount('12500'), 12500);
+      expect(CashCloseCalculator.parseAmount('12500.50'), 12500.50);
+      expect(CashCloseCalculator.parseAmount('0.'), 0);
     });
 
     test('parsea vacio como 0', () {

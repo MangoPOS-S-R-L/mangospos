@@ -22,12 +22,19 @@ import 'package:mangopos/core/printing/star/printer_emulation.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/services/printing/esc_pos_generator.dart';
 
+/// Bitmap con tinta en la primera y la ÚLTIMA columna de cada fila.
+///
+/// Las dos importan. La primera evita que la fila se recorte por blanca. La
+/// última evita que se recorte a lo ANCHO: el encoder no transmite el margen
+/// derecho sin tinta (ahorra bytes en un enlace lento), así que un bitmap con
+/// un solo punto en x=0 emite 1 byte por fila y no `width/8`. Los tests de
+/// geometría de banda necesitan el ancho completo ocupado.
 MonoBitmap _bitmap({required int width, required int height}) {
   final bmp = MonoBitmap(width);
   bmp.ensureHeight(height);
-  // Un punto por fila para que no se recorte como fila en blanco.
   for (var y = 0; y < height; y++) {
     bmp.setPixel(0, y);
+    bmp.setPixel(width - 1, y);
   }
   return bmp;
 }
@@ -76,6 +83,47 @@ void main() {
       expect(header[5], 0, reason: 'xH');
       expect(header[6], 40, reason: 'yL: filas de la banda');
       expect(header[7], 0, reason: 'yH');
+    });
+
+    // El encoder NO transmite el margen derecho sin tinta: ahorra bytes en un
+    // enlace lento, que en una impresora térmica se nota. Estos dos tests fijan
+    // el contrato de ese recorte, porque es sutil y romperlo sale caro.
+    test('recorta el margen derecho sin tinta', () {
+      final bmp = MonoBitmap(576);
+      bmp.ensureHeight(4);
+      for (var y = 0; y < 4; y++) {
+        bmp.setPixel(0, y); // solo la primera columna
+      }
+      final bytes = EscPosRasterEncoder.encode(bmp, cut: false);
+      final band = _findAll(bytes, [0x1D, 0x76, 0x30, 0x00]).first;
+      expect(
+        bytes[band + 4],
+        1,
+        reason: 'con tinta solo en x=0 basta 1 byte por fila, no 72',
+      );
+    });
+
+    // LO QUE NO SE PUEDE ROMPER: el recorte es solo por la DERECHA. Si alguien
+    // "optimizara" quitando también los bytes vacíos de la izquierda, todo el
+    // contenido se correría al margen y la factura saldría desalineada — un
+    // total que debía ir a la derecha aparecería pegado al borde izquierdo.
+    test('el recorte NO mueve el contenido a la izquierda', () {
+      final bmp = MonoBitmap(576);
+      bmp.ensureHeight(4);
+      for (var y = 0; y < 4; y++) {
+        bmp.setPixel(300, y);
+      }
+      final bytes = EscPosRasterEncoder.encode(bmp, cut: false);
+      final band = _findAll(bytes, [0x1D, 0x76, 0x30, 0x00]).first;
+      final bytesPorFila = bytes[band + 4] + bytes[band + 5] * 256;
+      expect(bytesPorFila, 38, reason: 'x=300 cae en el byte 37, así que 38');
+
+      final fila = bytes.sublist(band + 8, band + 8 + bytesPorFila);
+      expect(
+        fila.indexWhere((b) => b != 0),
+        37,
+        reason: 'la tinta debe seguir en su byte: 300 ~/ 8 = 37',
+      );
     });
 
     test('parte en bandas los tickets largos', () {
