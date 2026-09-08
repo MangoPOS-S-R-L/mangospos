@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/offline/hub/hub_client.dart';
 import '../../../core/offline/hub/hub_config.dart';
+import 'hub_single_point_of_failure_banner.dart';
 import '../../../core/offline/hub/hub_lan_scan.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/offline/offline_pos_service.dart';
@@ -33,6 +34,7 @@ class _HubNetworkSettingsViewState
     extends ConsumerState<HubNetworkSettingsView> {
   final HubConfigService _hubConfig = HubConfigService();
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _backupController = TextEditingController();
 
   bool _loading = true;
   bool _saving = false;
@@ -43,6 +45,7 @@ class _HubNetworkSettingsViewState
   bool _discovering = false; // buscando equipos en la red (mDNS)
   int _pendingCount = 0; // operaciones sin subir al servidor (cola + dead)
   int _hubOpLogCount = 0; // ops en el op-log del Hub (solo si este equipo es Hub)
+  String? _backupUrl; // respaldo configurado; null = el Hub es punto único de falla
 
   @override
   void initState() {
@@ -53,6 +56,7 @@ class _HubNetworkSettingsViewState
   @override
   void dispose() {
     _urlController.dispose();
+    _backupController.dispose();
     super.dispose();
   }
 
@@ -68,8 +72,11 @@ class _HubNetworkSettingsViewState
       final modeStr = await repo.getNetworkMode(bizId);
       final role = await _hubConfig.getDeviceRole(bizId);
       final url = await _hubConfig.getHubUrl(bizId);
+      final backup = await _hubConfig.getBackupUrl(bizId);
       if (!mounted) return;
+      _backupController.text = backup ?? '';
       setState(() {
+        _backupUrl = backup;
         _businessId = bizId;
         _policy = networkPolicyFromString(modeStr);
         _role = role;
@@ -213,8 +220,14 @@ class _HubNetworkSettingsViewState
                     _policySelector(isOwner),
                     if (_policy == NetworkPolicy.hub) ...[
                       const SizedBox(height: 16),
+                      _singlePointOfFailureWarning(),
                       _sectionTitle('Rol de este dispositivo'),
                       _roleSelector(),
+                      if (_role == HubDeviceRole.hub) ...[
+                        const SizedBox(height: 16),
+                        _sectionTitle('Equipo de respaldo'),
+                        _backupField(),
+                      ],
                       if (_role != HubDeviceRole.hub) ...[
                         const SizedBox(height: 16),
                         _sectionTitle('Dirección del Hub'),
@@ -318,6 +331,47 @@ class _HubNetworkSettingsViewState
         ),
       ),
     );
+  }
+
+  Widget _singlePointOfFailureWarning() =>
+      HubSinglePointOfFailureBanner(backupUrl: _backupUrl);
+
+  /// Dirección del equipo que guarda la copia del op-log.
+  Widget _backupField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _backupController,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'IP del equipo de respaldo',
+            hintText: '192.168.1.51',
+            helperText:
+                'Otra caja del local, con su rol puesto en "Respaldo". Recibe '
+                'una copia de cada operación pero no sube nada al servidor: el '
+                'Hub sigue siendo el único que sincroniza.',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 10),
+        FilledButton.icon(
+          onPressed: _saveBackupUrl,
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: const Text('Guardar respaldo'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _saveBackupUrl() async {
+    final bizId = _businessId;
+    if (bizId == null || bizId.isEmpty) return;
+    final raw = _backupController.text.trim();
+    await _hubConfig.setBackupUrl(bizId, raw.isEmpty ? null : raw);
+    if (!mounted) return;
+    setState(() => _backupUrl = raw.isEmpty ? null : raw);
+    _toast(raw.isEmpty ? 'Respaldo quitado' : 'Respaldo guardado');
   }
 
   Widget _sectionTitle(String t) => Padding(
