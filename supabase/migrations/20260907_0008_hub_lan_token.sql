@@ -1,5 +1,5 @@
 -- =============================================================================
--- 20260907_0002 — Token LAN por negocio para el Hub Local (paso 8 offline)
+-- 20260907_0008 — Token LAN por negocio para el Hub Local (paso 8 offline)
 -- =============================================================================
 --
 -- Hoy el agente LAN y el cliente del Hub comparten UNA constante compilada

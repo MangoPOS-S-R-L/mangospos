@@ -56,7 +56,7 @@ void main() {
       expect(await s.tokenFor('biz-1'), 'tok-1');
     });
 
-    // Migración 20260907_0002 sin aplicar: el getter devuelve vacío. No se
+    // Migración 20260907_0008 sin aplicar: el getter devuelve vacío. No se
     // puede dejar al local incomunicado por eso.
     test('sin lan_token cae al legacy', () async {
       final s = HubLanTokenService(readToken: _FakeSettings(const {}).read);

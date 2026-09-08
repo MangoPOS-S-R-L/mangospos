@@ -1,5 +1,5 @@
 -- =============================================================================
--- 20260907_0001 — Desglose por área del CIERRE acotado a la SESIÓN de caja
+-- 20260907_0007 — Desglose por área del CIERRE acotado a la SESIÓN de caja
 -- =============================================================================
 --
 -- BUG DE CAMPO (07/09/2026, Barra Payán). En un local con DOS registradoras, el

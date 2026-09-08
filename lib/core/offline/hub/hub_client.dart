@@ -36,7 +36,7 @@ class HubClient {
   /// Antes iba una constante compilada, la misma para todos los locales del
   /// país: quien la sacara del binario podía hablarle al Hub de cualquier
   /// negocio. Ahora sale de `business_settings.lan_token` (migración
-  /// 20260907_0002), con caída al legacy mientras dure el rollout. Ver
+  /// 20260907_0008), con caída al legacy mientras dure el rollout. Ver
   /// [HubLanTokenService].
   Future<Map<String, String>> _headers() async => {
     'Content-Type': 'application/json',

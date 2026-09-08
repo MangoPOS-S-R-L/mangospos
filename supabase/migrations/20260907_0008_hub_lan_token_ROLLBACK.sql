@@ -1,4 +1,4 @@
--- Rollback de 20260907_0002. La app cae sola a la constante legacy cuando la
+-- Rollback de 20260907_0008. La app cae sola a la constante legacy cuando la
 -- columna no existe (el getter degrada a default), así que soltar la columna no
 -- rompe el Hub: vuelve al esquema de token compartido de antes.
 
