@@ -21,19 +21,36 @@ class TransfersViewModel extends ChangeNotifier {
 
   TransfersState get state => _state;
 
+  /// Negocio activo, resuelto BAJO DEMANDA y cacheado en el estado.
+  ///
+  /// [init] solo corre cuando se entra a la pantalla de Transferencias, pero
+  /// el diálogo de envío también se abre desde Bodegas y desde el interior de
+  /// una bodega. Por ese camino nadie inicializaba el viewmodel y la
+  /// transferencia moría con "No hay negocio seleccionado" aunque el negocio
+  /// estuviera perfectamente activo. Resolverlo aquí deja al viewmodel
+  /// autosuficiente sin importar por qué puerta se entre.
+  Future<String?> _ensureBusinessId() async {
+    final cached = _state.businessId;
+    if (cached != null && cached.isNotEmpty) return cached;
+    final resolved = await resolveBusinessIdOrNull(
+      Supabase.instance.client,
+      'auto',
+    );
+    if (resolved != null && resolved.isNotEmpty) {
+      _state = _state.copyWith(businessId: resolved);
+    }
+    return resolved;
+  }
+
   Future<void> init({bool force = false}) async {
     if (_state.loading && !force) return;
     _state = _state.copyWith(loading: true, clearError: true);
     notifyListeners();
     try {
-      final businessId = await resolveBusinessIdOrNull(
-        Supabase.instance.client,
-        'auto',
-      );
+      final businessId = await _ensureBusinessId();
       if (businessId == null) {
         throw Exception('No se pudo resolver el negocio actual');
       }
-      _state = _state.copyWith(businessId: businessId);
       await _reload();
     } catch (e) {
       _state = _state.copyWith(
@@ -127,7 +144,7 @@ class TransfersViewModel extends ChangeNotifier {
     String? notes,
     String? targetBusinessId,
   }) async {
-    final businessId = _state.businessId;
+    final businessId = await _ensureBusinessId();
     if (businessId == null) {
       throw Exception('No hay negocio seleccionado');
     }

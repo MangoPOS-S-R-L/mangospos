@@ -241,6 +241,19 @@ class BusinessFeatures {
   final double deliveryFeeMin;
   final List<double> deliveryFeePresets;
 
+  /// Nota de venta: documento de venta NO fiscal, numerado por negocio
+  /// (NV-000123). Cuando está prendido, el cobro deja elegir "Nota de venta"
+  /// además de los NCF disponibles; la venta es real (inventario y caja) pero
+  /// no consume NCF ni se declara. Default false = como siempre.
+  final bool salesNoteEnabled;
+
+  /// Prefijo del correlativo de notas de venta. Solo cosmético.
+  final String salesNotePrefix;
+
+  /// Si true, el cobro arranca preseleccionado en Nota de venta. El cajero
+  /// puede cambiarlo antes de confirmar.
+  final bool salesNoteDefault;
+
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
     this.salesModeManualEnabled = true,
@@ -263,6 +276,9 @@ class BusinessFeatures {
     this.deliveryFeeRequired = true,
     this.deliveryFeeMin = 0,
     this.deliveryFeePresets = const [],
+    this.salesNoteEnabled = false,
+    this.salesNotePrefix = 'NV-',
+    this.salesNoteDefault = false,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -300,7 +316,19 @@ class BusinessFeatures {
       deliveryFeeRequired: map['delivery_fee_required'] != false,
       deliveryFeeMin: _toDoubleOrZero(map['delivery_fee_min']),
       deliveryFeePresets: _parseFeePresets(map['delivery_fee_presets']),
+      // Columnas de 20260910_0001. En un servidor sin la migración no vienen
+      // en el SELECT y la feature queda apagada, que es el estado legacy.
+      salesNoteEnabled: map['sales_note_enabled'] == true,
+      salesNotePrefix: _salesNotePrefixOrDefault(map['sales_note_prefix']),
+      salesNoteDefault: map['sales_note_default'] == true,
     );
+  }
+
+  /// El prefijo nunca puede quedar vacío: sin él la nota se imprimiría como
+  /// "000123" pelado y dejaría de distinguirse de un número de orden.
+  static String _salesNotePrefixOrDefault(dynamic raw) {
+    final clean = raw?.toString().trim() ?? '';
+    return clean.isEmpty ? 'NV-' : clean;
   }
 
   /// numeric de Postgres puede llegar como num o String (según el driver).
@@ -344,6 +372,9 @@ class BusinessFeatures {
     bool? deliveryFeeRequired,
     double? deliveryFeeMin,
     List<double>? deliveryFeePresets,
+    bool? salesNoteEnabled,
+    String? salesNotePrefix,
+    bool? salesNoteDefault,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -376,6 +407,9 @@ class BusinessFeatures {
       deliveryFeeRequired: deliveryFeeRequired ?? this.deliveryFeeRequired,
       deliveryFeeMin: deliveryFeeMin ?? this.deliveryFeeMin,
       deliveryFeePresets: deliveryFeePresets ?? this.deliveryFeePresets,
+      salesNoteEnabled: salesNoteEnabled ?? this.salesNoteEnabled,
+      salesNotePrefix: salesNotePrefix ?? this.salesNotePrefix,
+      salesNoteDefault: salesNoteDefault ?? this.salesNoteDefault,
     );
   }
 
@@ -1212,6 +1246,9 @@ class PosSettingsRepository {
       'require_goods_receipt': features.requireGoodsReceipt,
       'inventory_costing_method': features.inventoryCostingMethod.wireValue,
       'warehouse_sections_enabled': features.warehouseSectionsEnabled,
+      'sales_note_enabled': features.salesNoteEnabled,
+      'sales_note_prefix': features.salesNotePrefix,
+      'sales_note_default': features.salesNoteDefault,
     };
 
     try {
@@ -1299,6 +1336,7 @@ class PosSettingsRepository {
     }
     return null;
   }
+
 }
 
 class _CachedReceiptMode {

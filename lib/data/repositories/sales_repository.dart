@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/utils/app_time.dart';
@@ -8,6 +8,7 @@ import '../datasources/queries/sales_queries.dart';
 import '../models/credit_note_result.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
+import '../models/sales_note.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
 import '../../core/offline/hub/hub_client.dart';
@@ -2898,6 +2899,69 @@ class SalesRepository {
     }
   }
 
+  // ── Notas de venta (documento NO fiscal) ──────────────────────────────────
+
+  /// Marca el contenedor que se va a cobrar para que, al cerrarse, emita una
+  /// NOTA DE VENTA en vez de un comprobante con NCF.
+  ///
+  /// Tiene que correr ANTES del cobro: el documento lo emite el trigger de
+  /// cierre dentro del mismo RPC de pago, así que una marca puesta después
+  /// llega tarde y la venta ya quemó un NCF.
+  ///
+  /// [checkId] no nulo marca solo esa sub-cuenta (split bill); nulo marca la
+  /// orden completa.
+  Future<void> markAsSalesNote({
+    required String orderId,
+    String? checkId,
+    bool value = true,
+  }) async {
+    if (checkId != null && checkId.isNotEmpty) {
+      await _client
+          .from('order_checks')
+          .update({'is_sales_note': value})
+          .eq('id', checkId);
+      return;
+    }
+    await _client
+        .from('orders')
+        .update({'is_sales_note': value})
+        .eq('id', orderId);
+  }
+
+  /// Nota de venta emitida para un contenedor cobrado. `checkId` nulo busca la
+  /// de la orden completa.
+  ///
+  /// Devuelve null si el servidor todavía no tiene la migración de notas de
+  /// venta: el cobro ya está grabado y el ticket sale igual, solo que sin
+  /// número de nota. Preferimos eso a tumbar el flujo de cobro.
+  Future<SalesNote?> getSalesNote({
+    required String orderId,
+    String? checkId,
+  }) async {
+    try {
+      var query = _client
+          .from('sales_notes')
+          .select()
+          .eq('order_id', orderId)
+          .eq('status', 'active');
+
+      query = (checkId != null && checkId.isNotEmpty)
+          ? query.eq('check_id', checkId)
+          : query.isFilter('check_id', null);
+
+      final data = await query
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (data == null) return null;
+      return SalesNote.fromMap(data);
+    } catch (e) {
+      debugPrint('No se pudo leer la nota de venta: $e');
+      return null;
+    }
+  }
+
   /// Obtener documento fiscal por ID
   Future<FiscalDocument?> getFiscalDocumentById(String documentId) async {
     try {
@@ -2968,6 +3032,26 @@ class SalesRepository {
           .update(_cancelledFiscalDocumentPatch(reason))
           .eq('order_id', orderId)
           .select('id');
+
+      // 5b. Anular la NOTA DE VENTA si la venta se documentó con una. No es un
+      // comprobante fiscal: no necesita nota de crédito, solo dejar de estar
+      // activa para que el historial la muestre anulada y el índice de "una
+      // nota activa por contenedor" quede libre. Best-effort: un servidor sin
+      // la migración de notas no puede tumbar una anulación.
+      try {
+        await _client
+            .from('sales_notes')
+            .update({
+              'status': 'cancelled',
+              'cancelled_at': DateTime.now().toUtc().toIso8601String(),
+              if (reason != null && reason.trim().isNotEmpty)
+                'cancellation_reason': reason.trim(),
+            })
+            .eq('order_id', orderId)
+            .eq('status', 'active');
+      } catch (e) {
+        debugPrint('No se pudo anular la nota de venta de $orderId: $e');
+      }
 
       // 6. Cancelar CxC abiertas de la orden (venta a crédito anulada).
       await _cancelOpenCreditsForOrder(orderId);

@@ -1325,6 +1325,12 @@ class PrintTicketService {
     /// Ancho del papel de la impresora que va a recibir la factura (58 u 80).
     /// Viene de `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
+
+    /// Número de la NOTA DE VENTA (`NV-000123`) cuando el cobro se hizo con
+    /// documento NO fiscal. Reemplaza el bloque NCF por "NOTA No." y agrega la
+    /// leyenda de que el papel no tiene valor fiscal. Excluyente con
+    /// [fiscalNcf]: una venta emite nota o comprobante, nunca los dos.
+    String? salesNoteNumber,
   }) {
     // ── CANDADO: los ítems TIENEN que ser de esta orden ──────────────────
     // Una factura es un documento fiscal: el encabezado (nº de orden, NCF,
@@ -1450,6 +1456,7 @@ class PrintTicketService {
         gen,
         order: order,
         displayTitle: displayTitle,
+        salesNoteNumber: salesNoteNumber,
         fiscalNcf: fiscalNcf,
         fiscalType: fiscalType,
         isElectronicCf: isElectronicCf,
@@ -1497,8 +1504,14 @@ class PrintTicketService {
       gen.textRow('ORDEN:', shortOrderNumber(order.id));
       gen.setBold(false);
 
-      // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
-      if (!isElectronicCf) {
+      // NOTA DE VENTA: ocupa el lugar del bloque fiscal. No lleva TIPO (no hay
+      // tipo DGII que nombrar) ni NCF — precisamente porque no consumió uno.
+      if (salesNoteNumber != null && salesNoteNumber.isNotEmpty) {
+        gen.setBold(true);
+        gen.textRow('NOTA No.:', salesNoteNumber);
+        gen.setBold(false);
+      } else if (!isElectronicCf) {
+        // Para NCF fisico, TIPO/NCF van DESPUES de ORDEN (orden tradicional).
         if (fiscalNcf != null && fiscalNcf.isNotEmpty) {
           if (fiscalType != null) {
             gen.textRow('TIPO:', _getNcfTypeName(fiscalType));
@@ -2022,6 +2035,20 @@ class PrintTicketService {
       gen.setAlignment(Alignment.left);
     }
 
+    // NOTA DE VENTA: la leyenda va ANTES del pie comercial y centrada. Es lo
+    // que separa este papel de una factura a los ojos de un cliente o de una
+    // inspección: sin ella, un ticket con el mismo layout que la factura pasa
+    // por comprobante fiscal.
+    if (salesNoteNumber != null && salesNoteNumber.isNotEmpty) {
+      if (!modern) gen.lineFeed();
+      gen.setAlignment(Alignment.center);
+      gen.setBold(true);
+      gen.text('DOCUMENTO SIN VALOR FISCAL');
+      gen.setBold(false);
+      gen.text('No válido para crédito fiscal');
+      gen.setAlignment(Alignment.left);
+    }
+
     // Footer: bloques en orden segun footerBlocks (o defaults canonicos
     // si null). El renderer skipea bloques sin contenido.
     if (!modern) gen.lineFeed(compact ? 1 : 2);
@@ -2108,6 +2135,7 @@ class PrintTicketService {
     required String? waiterName,
     required String dateStr,
     required String timeStr,
+    String? salesNoteNumber,
   }) {
     // Sin renglones sueltos alrededor de la regla: el interlineado ya la
     // separa de sus dos vecinos exactamente lo mismo que separa dos líneas de
@@ -2115,6 +2143,31 @@ class PrintTicketService {
     ModernInvoiceLayout.rule(gen);
 
     final hasNcf = fiscalNcf != null && fiscalNcf.isNotEmpty;
+    final isSalesNote = salesNoteNumber != null && salesNoteNumber.isNotEmpty;
+
+    // NOTA DE VENTA: el documento se nombra a sí mismo y lleva su número. No
+    // hay tipo DGII ni NCF que imprimir.
+    if (isSalesNote) {
+      ModernInvoiceLayout.emphasisCentered(
+        gen,
+        displayTitle.isEmpty ? 'Nota de venta' : displayTitle,
+      );
+      ModernInvoiceLayout.centered(gen, 'No. $salesNoteNumber');
+      ModernInvoiceLayout.metaLine(gen, [
+        'Orden ${shortOrderNumber(order.id)}',
+        if (tableName.isNotEmpty) 'Mesa $tableName',
+        if (waiterName != null && waiterName.trim().isNotEmpty)
+          waiterName.trim(),
+      ]);
+      ModernInvoiceLayout.metaLine(gen, ['$dateStr $timeStr']);
+      if (customerName != null && customerName != 'Cliente') {
+        ModernInvoiceLayout.field(gen, 'Cliente', customerName);
+      }
+      if (deliveryAddress != null && deliveryAddress.trim().isNotEmpty) {
+        ModernInvoiceLayout.field(gen, 'Dirección', deliveryAddress.trim());
+      }
+      return;
+    }
 
     // El nombre del comprobante ES el título del documento fiscal (DGII
     // Norma General 01-2020). Solo cuando no hay comprobante cae al título

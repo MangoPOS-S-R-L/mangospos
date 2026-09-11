@@ -317,6 +317,28 @@ class SalesRepositoryImproved {
   /// Procesar pago con manejo especial de errores
   ///
   /// `splitSequence` distingue múltiples pagos del mismo método sobre la
+  /// Marca el contenedor para que, al cerrarse, emita NOTA DE VENTA en vez de
+  /// comprobante fiscal. Tiene que correr ANTES del cobro: el documento lo
+  /// emite el trigger de cierre dentro del RPC de pago. Ver doc en
+  /// `SalesRepository.markAsSalesNote`.
+  Future<void> markAsSalesNote({
+    required String orderId,
+    String? checkId,
+    bool value = true,
+  }) async {
+    if (checkId != null && checkId.isNotEmpty) {
+      await _client
+          .from('order_checks')
+          .update({'is_sales_note': value})
+          .eq('id', checkId);
+      return;
+    }
+    await _client
+        .from('orders')
+        .update({'is_sales_note': value})
+        .eq('id', orderId);
+  }
+
   /// misma orden/check. Ver doc en `SalesRepository.processPayment`.
   Future<Payment> processPayment({
     required String orderId,

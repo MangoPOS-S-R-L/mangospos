@@ -1428,6 +1428,23 @@ mixin _PaymentActionsMixin {
               )
               .map((f) => f['check_id'].toString())
               .toSet();
+          // Una sub-cuenta cobrada con NOTA DE VENTA no deja
+          // fiscal_document: sin esto sus ítems aparecerían dentro del
+          // detalle del documento full-order. Best-effort — en un servidor
+          // sin la migración de notas no hay nada que sumar.
+          try {
+            final notesRaw = await Supabase.instance.client
+                .from('sales_notes')
+                .select('check_id, status')
+                .eq('order_id', orderId);
+            otherFdCheckIds.addAll(
+              List<Map<String, dynamic>>.from(notesRaw)
+                  .where(
+                    (n) => n['check_id'] != null && n['status'] == 'active',
+                  )
+                  .map((n) => n['check_id'].toString()),
+            );
+          } catch (_) {}
           // Filtro por scope del fd:
           //   - fd.check_id != NULL → solo items del check.
           //   - fd.check_id == NULL (full-order o remainder): items con

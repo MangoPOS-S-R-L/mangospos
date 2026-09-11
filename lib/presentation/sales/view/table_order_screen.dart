@@ -21,6 +21,7 @@ import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/models/sales_note.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/models/bank_account.dart';
 import 'package:mangopos/data/models/business_profile.dart';
@@ -366,6 +367,23 @@ Future<FiscalDocument?> _loadFiscalDocument(
     return await ref
         .read(salesRepositoryProvider)
         .getOrderFiscalDocument(orderId);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Nota de venta del contenedor cobrado, si el cobro se hizo con documento NO
+/// fiscal. Fail-soft: sin ella el ticket sale igual (solo que sin el número de
+/// nota), y en un servidor sin la migración siempre devuelve null.
+Future<SalesNote?> _loadSalesNote(
+  WidgetRef ref,
+  String orderId, {
+  String? checkId,
+}) async {
+  try {
+    return await ref
+        .read(salesRepositoryProvider)
+        .getSalesNote(orderId: orderId, checkId: checkId);
   } catch (_) {
     return null;
   }
@@ -2777,8 +2795,17 @@ class _CartView extends ConsumerWidget {
             fiscalDocumentId: fdIdFromPayment,
           );
           final waiterNameFuture = _loadWaiterName(ref, order.id);
+          // Nota de venta del mismo scope que se acaba de cobrar. Arranca en
+          // paralelo con el resto; si el cobro fue fiscal devuelve null y
+          // nada cambia.
+          final salesNoteFuture = _loadSalesNote(
+            ref,
+            order.id,
+            checkId: checkId,
+          );
           final businessProfile = await businessProfileFuture;
           final fiscalDoc = await fiscalDocFuture;
+          final salesNote = await salesNoteFuture;
           final waiterName =
               await waiterNameFuture ?? ref.read(sessionProvider).userName;
           final issuedAt =
@@ -2801,15 +2828,24 @@ class _CartView extends ConsumerWidget {
             orderId: printOrder.id,
             checkId: checkId,
           );
+          // Nota de venta: el papel se llama distinto y NO lleva datos
+          // fiscales. Dejar el NCF aquí imprimiría un comprobante que esta
+          // venta nunca emitió.
+          final isSalesNoteInvoice = salesNote != null;
           final invoiceData = {
-            'title': '*** FACTURA ***',
+            'title': isSalesNoteInvoice
+                ? '*** NOTA DE VENTA ***'
+                : '*** FACTURA ***',
             'restaurantName': businessProfile.name,
             'legalName': businessProfile.legalName,
             'rnc': businessProfile.rnc,
             'phone': businessProfile.phone,
             'address': businessProfile.address,
-            'ncf': ncfFromPayment ?? fiscalDoc?.ncfNumber,
-            'fiscalType': printedFiscalType,
+            'salesNote': salesNote?.noteNumber,
+            'ncf': isSalesNoteInvoice
+                ? null
+                : (ncfFromPayment ?? fiscalDoc?.ncfNumber),
+            'fiscalType': isSalesNoteInvoice ? null : printedFiscalType,
             'customerName': finalCustomerName,
             'customerLegalName': finalCustomerLegalName,
             'customerTaxId': finalCustomerTaxId,
@@ -2972,7 +3008,9 @@ class _CartView extends ConsumerWidget {
                   // distinga del original y no se confunda con una
                   // segunda venta.
                   final copyData = Map<String, dynamic>.from(invoiceData);
-                  copyData['title'] = '*** COPIA - FACTURA ***';
+                  copyData['title'] = isSalesNoteInvoice
+                      ? '*** COPIA - NOTA DE VENTA ***'
+                      : '*** COPIA - FACTURA ***';
                   await _handlePrintFlow(
                     context,
                     ref,
@@ -3030,10 +3068,11 @@ class _CartView extends ConsumerWidget {
           creditOnly: true,
           initialCustomerId: finalCustomerId,
           initialCustomerName: finalCustomerName,
-          onComprobante: (payment, fiscalDoc, modalCustomerName) async {
-            await handleConfirmed([payment]);
-            onFinish();
-          },
+          onComprobante:
+              (payment, fiscalDoc, modalCustomerName, salesNote) async {
+                await handleConfirmed([payment]);
+                onFinish();
+              },
           onPaymentSuccess: () {},
         ),
       );
@@ -5910,6 +5949,7 @@ class _CartView extends ConsumerWidget {
                 businessRnc: data['rnc'] as String?,
                 fiscalNcf: data['ncf'] as String?,
                 fiscalType: data['fiscalType'] as String?,
+                salesNoteNumber: data['salesNote'] as String?,
                 customerName: data['customerName'] as String?,
                 customerLegalName: data['customerLegalName'] as String?,
                 customerTaxId: data['customerTaxId'] as String?,

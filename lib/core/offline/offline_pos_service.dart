@@ -2306,6 +2306,16 @@ class OfflinePosService {
         // fiscal_document se registre con ESE número sin regenerarlo, junto
         // con su tipo (para que fd.ncf_type coincida con el NCF impreso).
         final offlineNcf = action['offline_ncf']?.toString();
+        // NOTA DE VENTA: el cobro se hizo pidiendo documento no fiscal. La
+        // marca va ANTES del RPC porque el trigger de cierre — que corre
+        // dentro de ese RPC — es quien decide si emite nota o NCF.
+        if (action.containsKey('is_sales_note')) {
+          await salesRepository.markAsSalesNote(
+            orderId: resolvedOrderId,
+            checkId: action['check_id']?.toString(),
+            value: action['is_sales_note'] == true,
+          );
+        }
         await salesRepository.processPayment(
           orderId: resolvedOrderId,
           checkId: action['check_id']?.toString(),

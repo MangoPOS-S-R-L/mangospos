@@ -13,6 +13,7 @@ import '../../../core/offline/offline_pos_service.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/sales_models.dart';
 
+import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
@@ -117,6 +118,18 @@ class PaymentSplitState {
   /// precuenta. Null = sin NCF offline (provisional / online).
   final String? offlineNcf;
 
+  // ── Nota de venta (documento NO fiscal) ──
+  /// El negocio tiene prendida la nota de venta, así que el cobro ofrece
+  /// elegirla en vez del comprobante fiscal.
+  final bool salesNoteAvailable;
+
+  /// El cajero eligió cobrar con nota de venta: esta venta no consume NCF.
+  final bool salesNoteSelected;
+
+  /// Número de la nota emitida al cerrar el cobro (`NV-000123`), para
+  /// mostrarlo en el estado final igual que se muestra el NCF.
+  final String? emittedSalesNote;
+
   const PaymentSplitState({
     this.totalAmount = 0,
     this.transactions = const [],
@@ -134,6 +147,9 @@ class PaymentSplitState {
     this.selectedBankAccount,
     this.offlineQueued = false,
     this.offlineNcf,
+    this.salesNoteAvailable = false,
+    this.salesNoteSelected = false,
+    this.emittedSalesNote,
   });
 
   PaymentSplitState copyWith({
@@ -153,6 +169,9 @@ class PaymentSplitState {
     Object? selectedBankAccount = _bankSentinel,
     bool? offlineQueued,
     String? offlineNcf,
+    bool? salesNoteAvailable,
+    bool? salesNoteSelected,
+    String? emittedSalesNote,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -177,6 +196,9 @@ class PaymentSplitState {
           : selectedBankAccount as BankAccount?,
       offlineQueued: offlineQueued ?? this.offlineQueued,
       offlineNcf: offlineNcf ?? this.offlineNcf,
+      salesNoteAvailable: salesNoteAvailable ?? this.salesNoteAvailable,
+      salesNoteSelected: salesNoteSelected ?? this.salesNoteSelected,
+      emittedSalesNote: emittedSalesNote ?? this.emittedSalesNote,
     );
   }
 
@@ -324,6 +346,29 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     } catch (e) {
       debugPrint('Error loading order details: $e');
     }
+
+    // Nota de venta: documento NO fiscal. El flag sale de las features del
+    // negocio (con caché local, así que también resuelve offline). Fail-soft:
+    // si no se puede leer, la opción no aparece y el cobro es el de siempre.
+    try {
+      final businessId = _ref.read(sessionProvider).activeBusinessId;
+      if (businessId != null && businessId.isNotEmpty) {
+        final features = await _ref
+            .read(posSettingsRepositoryProvider)
+            .getBusinessFeatures(businessId);
+        state = state.copyWith(
+          salesNoteAvailable: features.salesNoteEnabled,
+          salesNoteSelected:
+              features.salesNoteEnabled && features.salesNoteDefault,
+        );
+      }
+    } catch (_) {}
+  }
+
+  /// Alterna entre comprobante fiscal y NOTA DE VENTA para este cobro.
+  void setSalesNote(bool value) {
+    if (state.salesNoteSelected == value) return;
+    state = state.copyWith(salesNoteSelected: value);
   }
 
   /// True cuando la serie del comprobante es electronica (Exx / e-CF).
@@ -565,12 +610,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // adjuntamos a la PRIMERA transacción. El trigger emite el fiscal_document
       // con ese número; las demás transacciones se enlazan por idempotencia.
       // Si no hay NCF (no papel / sin Hub / agotado) → recibo provisional.
-      final offlineNcf = await allocateOfflineNcfPaper(
-        client: Supabase.instance.client,
-        businessId: businessId,
-        ncfType: ncfType,
-        isConnected: () => ConnectivityService().isConnected,
-      );
+      // Con NOTA DE VENTA no se pide número al Hub: quemaría un NCF del rango
+      // autorizado para una venta que nunca va a declararse.
+      final offlineNcf = state.salesNoteSelected
+          ? null
+          : await allocateOfflineNcfPaper(
+              client: Supabase.instance.client,
+              businessId: businessId,
+              ncfType: ncfType,
+              isConnected: () => ConnectivityService().isConnected,
+            );
 
       final localPayments = <Payment>[];
       for (int i = 0; i < state.transactions.length; i++) {
@@ -616,6 +665,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             // (un comprobante por cobro). El server lo usa al sincronizar.
             if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
             if (i == 0 && offlineNcf != null) 'requested_ncf_type': ncfType,
+            // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
+            // el replay la ponga antes de reproducir el cobro. Si llega
+            // después, el cierre ya emitió NCF. Viaja el valor elegido
+            // (incluido `false`) para que el replay no herede una marca vieja.
+            if (i == 0 && state.salesNoteAvailable)
+              'is_sales_note': state.salesNoteSelected,
             // Bank account se asocia post-RPC en el flujo online vía un
             // UPDATE puntual. Offline guardamos solo el id; el replay
             // queda pendiente de hacer ese UPDATE — para esta primera
@@ -702,6 +757,40 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         return null;
       }
 
+      // NOTA DE VENTA: la marca va ANTES del primer cobro. El documento lo
+      // emite el trigger de cierre dentro del RPC de pago, así que ponerla
+      // después llega tarde y la venta ya habría quemado un NCF. Si falla, se
+      // aborta: consumir un comprobante fiscal no se deshace.
+      //
+      // Se escribe el valor ELEGIDO, no solo el `true`: un cobro anterior
+      // marcado como nota y cancelado deja la marca puesta en la orden, y sin
+      // este `false` explícito el siguiente cobro saldría como nota aunque el
+      // cajero haya elegido factura. Solo corre en negocios con la feature
+      // prendida.
+      if (state.salesNoteAvailable) {
+        try {
+          await _salesRepo.markAsSalesNote(
+            orderId: _orderId,
+            checkId: _checkId,
+            value: state.salesNoteSelected,
+          );
+        } catch (e) {
+          if (!OfflinePosService.isTransportError(e)) {
+            _localProcessing = false;
+            state = state.copyWith(
+              isProcessing: false,
+              stage: PaymentStage.idle,
+              error:
+                  'No se pudo preparar la nota de venta: '
+                  '${_friendlyPaymentError(e)} El cobro no se procesó.',
+            );
+            return null;
+          }
+          // Error de transporte: sigue al camino offline, donde la marca
+          // viaja en el payload de la cola.
+        }
+      }
+
       // NO consolidamos transactions: si el cajero agrega cash 1000 tres
       // veces (caso: tres clientes pagando 1000 cada uno), cada entrada se
       // persiste como un row independiente. El `split_sequence` distingue
@@ -780,7 +869,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             // RNC resuelto por sub-cuenta (o de la orden) desde el call site.
             // Solo aplica en la última transacción (la que emite el NCF).
             customerRnc: isLast ? _customerRnc : null,
-            fiscalType: _fiscalType,
+            // Con nota de venta no hay tipo de comprobante que pedir: dejarlo
+            // guardaría en el pago un NCF que nunca se emitió.
+            fiscalType: state.salesNoteSelected ? null : _fiscalType,
             cashierSessionId: cashierSessionId,
             reference: null,
             splitSequence: i,
@@ -859,14 +950,46 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // Mismo comportamiento que payment_viewmodel.dart::_emitDocumentSync,
       // pero inline aqui porque este viewmodel tiene su propio flujo de
       // confirmPayment para cobros con split de pagos.
+      // NOTA DE VENTA: no hay fiscal_document ni DGII a la que esperar. Se lee
+      // la nota que emitió el trigger para mostrar su número en el estado
+      // final, igual que se muestra el NCF.
+      if (state.salesNoteSelected) {
+        try {
+          var noteQuery = Supabase.instance.client
+              .from('sales_notes')
+              .select('note_number')
+              .eq('order_id', _orderId)
+              .eq('status', 'active');
+          noteQuery = (_checkId != null && _checkId.isNotEmpty)
+              ? noteQuery.eq('check_id', _checkId)
+              : noteQuery.isFilter('check_id', null);
+          final noteRow = await noteQuery
+              .order('created_at', ascending: false)
+              .limit(1)
+              .maybeSingle();
+          final number = noteRow?['note_number'] as String?;
+          if (number != null && number.trim().isNotEmpty) {
+            state = state.copyWith(emittedSalesNote: number.trim());
+          }
+        } catch (e) {
+          // Fail-soft: el cobro ya cerró y el ticket se imprime con el número
+          // que lee el caller; esto solo alimenta el estado final del modal.
+          debugPrint('No se pudo leer la nota de venta emitida: $e');
+        }
+      }
+
       try {
-        final fiscalDocRow = await Supabase.instance.client
-            .from('fiscal_documents')
-            .select('id, is_electronic, ncf_number')
-            .eq('order_id', _orderId)
-            .order('created_at', ascending: false)
-            .limit(1)
-            .maybeSingle();
+        // Con nota de venta no se consulta el comprobante: no existe. El
+        // resto del bloque ya trata `null` como "no hay doc que emitir".
+        final fiscalDocRow = state.salesNoteSelected
+            ? null
+            : await Supabase.instance.client
+                  .from('fiscal_documents')
+                  .select('id, is_electronic, ncf_number')
+                  .eq('order_id', _orderId)
+                  .order('created_at', ascending: false)
+                  .limit(1)
+                  .maybeSingle();
 
         final ncf = fiscalDocRow?['ncf_number'] as String?;
         if (ncf != null && ncf.trim().isNotEmpty) {

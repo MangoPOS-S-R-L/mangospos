@@ -38,6 +38,11 @@ const Map<String, String> _ncfTypeNames = {
   // Exportaciones (B16 / E46)
   'B16': 'Exportaciones',
   'E46': 'Exportaciones',
+  // 'NV' NO es un código DGII: es la marca interna de la NOTA DE VENTA, el
+  // documento de venta no fiscal del POS. Vive aquí porque este catálogo es el
+  // único traductor código→nombre de la app, y tenerlo fuera devolvería "NV"
+  // pelado en cualquier pantalla que muestre el tipo de documento.
+  'NV': 'Nota de Venta',
 };
 
 /// Nombre legible del tipo de NCF dado el código DGII.

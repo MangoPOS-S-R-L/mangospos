@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../../../services/fiscal/fiscal_service.dart';
 import '../../../../../../data/models/fiscal_models.dart';
+import '../../../../../../data/repositories/pos_settings_repository.dart';
 import '../../../../../../services/session/session_controller.dart';
 
 final fiscalVmProvider = NotifierProvider<FiscalViewModel, FiscalState>(
@@ -19,6 +20,12 @@ class FiscalState {
   /// default_ncf_type). El cajero siempre puede cambiarlo por venta.
   final String defaultNcfType;
 
+  /// Banderas del negocio. Aquí se usan las de NOTA DE VENTA, que viven en
+  /// `business_settings` y no en `fiscal_settings`: la nota no es un
+  /// comprobante fiscal, pero se configura junto a los que sí lo son porque
+  /// es el otro documento con el que se puede cerrar una venta.
+  final BusinessFeatures features;
+
   FiscalState({
     this.sequences = const [],
     this.isLoading = false,
@@ -27,6 +34,7 @@ class FiscalState {
     this.fiscalRnc = '',
     this.fiscalName = '',
     this.defaultNcfType = 'B02',
+    this.features = BusinessFeatures.defaults,
   });
 
   FiscalState copyWith({
@@ -37,6 +45,7 @@ class FiscalState {
     String? fiscalRnc,
     String? fiscalName,
     String? defaultNcfType,
+    BusinessFeatures? features,
   }) {
     return FiscalState(
       sequences: sequences ?? this.sequences,
@@ -47,6 +56,7 @@ class FiscalState {
       fiscalRnc: fiscalRnc ?? this.fiscalRnc,
       fiscalName: fiscalName ?? this.fiscalName,
       defaultNcfType: defaultNcfType ?? this.defaultNcfType,
+      features: features ?? this.features,
     );
   }
 }
@@ -74,6 +84,14 @@ class FiscalViewModel extends Notifier<FiscalState> {
       final settings = await ref
           .read(fiscalServiceProvider)
           .getBusinessFiscalSettings(bizId);
+      // Fail-soft: si las banderas no cargan, la sección de nota de venta
+      // queda apagada y el resto de la pantalla fiscal funciona igual.
+      var features = BusinessFeatures.defaults;
+      try {
+        features = await ref
+            .read(posSettingsRepositoryProvider)
+            .getBusinessFeatures(bizId);
+      } catch (_) {}
 
       state = state.copyWith(
         sequences: seqs,
@@ -82,6 +100,7 @@ class FiscalViewModel extends Notifier<FiscalState> {
         fiscalRnc: settings['rnc'] ?? '',
         fiscalName: settings['business_legal_name'] ?? '',
         defaultNcfType: (settings['default_ncf_type'] ?? 'B02').toString(),
+        features: features,
       );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
@@ -215,6 +234,39 @@ class FiscalViewModel extends Notifier<FiscalState> {
       state = state.copyWith(sequences: newSeqs);
     } catch (e) {
       state = state.copyWith(error: 'Error al actualizar secuencia: $e');
+    }
+  }
+
+  /// Ajustes de la NOTA DE VENTA (documento NO fiscal). Se pasan solo los
+  /// campos que cambian; el resto de las banderas del negocio viajan tal como
+  /// se cargaron, porque `setBusinessFeatures` reescribe la fila completa.
+  Future<void> updateSalesNoteSettings(
+    String businessId, {
+    bool? enabled,
+    bool? asDefault,
+    String? prefix,
+  }) async {
+    final previous = state.features;
+    final next = previous.copyWith(
+      salesNoteEnabled: enabled,
+      salesNoteDefault: asDefault,
+      salesNotePrefix: prefix,
+    );
+    // Optimista: el switch responde al toque y se revierte si el guardado
+    // falla, igual que hace la pantalla de funciones del negocio.
+    state = state.copyWith(features: next);
+    try {
+      final bizId = businessId == 'auto'
+          ? ref.read(sessionProvider).activeBusinessId ?? ''
+          : businessId;
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setBusinessFeatures(businessId: bizId, features: next);
+    } catch (e) {
+      state = state.copyWith(
+        features: previous,
+        error: 'Error al guardar la nota de venta: $e',
+      );
     }
   }
 }

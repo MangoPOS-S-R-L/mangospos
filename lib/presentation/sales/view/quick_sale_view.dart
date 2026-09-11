@@ -119,22 +119,28 @@ class QuickSaleView extends ConsumerWidget {
                               // RPC no recibe el nombre y la sesión virtual no
                               // tiene customer_name.
                               onComprobante:
-                                  (payment, fiscalDoc, modalCustomerName) =>
-                                      _printQuickSaleComprobante(
-                                        ref,
-                                        viewContext: viewContext,
-                                        order: paidOrder,
-                                        items: printItems,
-                                        payment: payment,
-                                        fiscalNcf: fiscalDoc?.ncfNumber,
-                                        fiscalType: fiscalDoc?.ncfType,
-                                        customerName:
-                                            (modalCustomerName?.trim().isNotEmpty ??
-                                                    false)
-                                                ? modalCustomerName!.trim()
-                                                : fiscalDoc?.customerName,
-                                        customerTaxId: fiscalDoc?.customerRnc,
-                                      ),
+                                  (
+                                    payment,
+                                    fiscalDoc,
+                                    modalCustomerName,
+                                    salesNote,
+                                  ) => _printQuickSaleComprobante(
+                                    ref,
+                                    viewContext: viewContext,
+                                    order: paidOrder,
+                                    items: printItems,
+                                    payment: payment,
+                                    fiscalNcf: fiscalDoc?.ncfNumber,
+                                    fiscalType: fiscalDoc?.ncfType,
+                                    salesNoteNumber: salesNote?.noteNumber,
+                                    customerName:
+                                        (modalCustomerName?.trim().isNotEmpty ??
+                                            false)
+                                        ? modalCustomerName!.trim()
+                                        : (salesNote?.customerName ??
+                                              fiscalDoc?.customerName),
+                                    customerTaxId: fiscalDoc?.customerRnc,
+                                  ),
                               onPaymentSuccess: () {
                                 ref
                                     .read(currentOrderProvider.notifier)
@@ -192,6 +198,10 @@ Future<void> _printQuickSaleComprobante(
   String? fiscalType,
   String? customerName,
   String? customerTaxId,
+
+  /// Número de la nota de venta cuando el cobro se hizo con documento NO
+  /// fiscal. Excluyente con [fiscalNcf].
+  String? salesNoteNumber,
 }) async {
   final session = ref.read(sessionProvider);
   final businessId = session.activeBusinessId;
@@ -269,9 +279,12 @@ Future<void> _printQuickSaleComprobante(
       businessRnc: rnc,
       fiscalNcf: fiscalNcf,
       fiscalType: fiscalType,
+      salesNoteNumber: salesNoteNumber,
       customerName: customerName,
       customerTaxId: customerTaxId,
-      title: '*** FACTURA ***',
+      title: (salesNoteNumber != null && salesNoteNumber.isNotEmpty)
+          ? '*** NOTA DE VENTA ***'
+          : '*** FACTURA ***',
       receiptItemDisplayMode: itemMode,
       template: invoiceTpl,
       currency: currentBusinessCurrencyOrFallback(ref),

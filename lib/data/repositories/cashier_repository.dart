@@ -1120,57 +1120,90 @@ class CashierRepository {
     final fromIndex = (page - 1) * pageSize;
     final toIndex = fromIndex + pageSize - 1;
 
-    var query = _client
-        .from('fiscal_documents')
-        .select(
-          'id, business_id, order_id, payment_id, check_id, ncf_number, '
-          'ncf_type, customer_name, customer_rnc, '
-          'subtotal, taxable_amount, itbis_amount, service_fee, total, '
-          'status, ecf_status, is_electronic, created_at',
-        )
-        .eq('business_id', businessId);
+    // Fuente: la vista `sales_documents` (comprobantes fiscales + notas de
+    // venta). Un servidor sin la migración 20260910_0001 no la tiene, así que
+    // se cae a `fiscal_documents` — mismo comportamiento que antes, sin notas.
+    Future<({List<Map<String, dynamic>> rows, int totalCount})> fetchDocs(
+      String source,
+    ) async {
+      final withDocKind = source == 'sales_documents';
+      var query = _client
+          .from(source)
+          .select(
+            'id, business_id, order_id, payment_id, check_id, ncf_number, '
+            'ncf_type, customer_name, customer_rnc, '
+            'subtotal, taxable_amount, itbis_amount, service_fee, total, '
+            'status, ecf_status, is_electronic, created_at'
+            '${withDocKind ? ', doc_kind' : ''}',
+          )
+          .eq('business_id', businessId);
 
-    if (from != null) {
-      query = query.gte('created_at', from.toIso8601String());
-    }
-    if (to != null) {
-      query = query.lt('created_at', to.toIso8601String());
-    }
-
-    if (searchTerm != null && searchTerm.isNotEmpty) {
-      final term = searchTerm.replaceAll(',', '\\,');
-      // Pre-fetch fd_ids por reference de payments (campos opcionales como
-      // número de autorización de tarjeta). Después se agregan a la cláusula OR.
-      final fdIdsByRefRaw = await _client
-          .from('payments')
-          .select('fiscal_document_id')
-          .eq('business_id', businessId)
-          .not('fiscal_document_id', 'is', null)
-          .ilike('reference', '%$searchTerm%');
-      final fdIdsByRef = List<Map<String, dynamic>>.from(fdIdsByRefRaw)
-          .map((row) => row['fiscal_document_id']?.toString())
-          .whereType<String>()
-          .toSet()
-          .toList(growable: false);
-
-      final clauses = <String>[
-        'ncf_number.ilike.%$term%',
-        'customer_name.ilike.%$term%',
-        'customer_rnc.ilike.%$term%',
-      ];
-      if (fdIdsByRef.isNotEmpty) {
-        clauses.add('id.in.(${fdIdsByRef.join(',')})');
+      if (from != null) {
+        query = query.gte('created_at', from.toIso8601String());
       }
-      query = query.or(clauses.join(','));
+      if (to != null) {
+        query = query.lt('created_at', to.toIso8601String());
+      }
+
+      if (searchTerm != null && searchTerm.isNotEmpty) {
+        final term = searchTerm.replaceAll(',', '\\,');
+        // Pre-fetch de ids por reference de payments (campos opcionales como
+        // número de autorización de tarjeta). Se agregan a la cláusula OR. En
+        // la vista el `id` de la fila es el del fd O el de la nota, así que se
+        // recogen las dos columnas de enlace.
+        final idsByRefRaw = await _client
+            .from('payments')
+            .select(
+              withDocKind
+                  ? 'fiscal_document_id, sales_note_id'
+                  : 'fiscal_document_id',
+            )
+            .eq('business_id', businessId)
+            .ilike('reference', '%$searchTerm%');
+        final idsByRef = List<Map<String, dynamic>>.from(idsByRefRaw)
+            .expand(
+              (row) => [
+                row['fiscal_document_id']?.toString(),
+                if (withDocKind) row['sales_note_id']?.toString(),
+              ],
+            )
+            .whereType<String>()
+            .toSet()
+            .toList(growable: false);
+
+        final clauses = <String>[
+          'ncf_number.ilike.%$term%',
+          'customer_name.ilike.%$term%',
+          'customer_rnc.ilike.%$term%',
+        ];
+        if (idsByRef.isNotEmpty) {
+          clauses.add('id.in.(${idsByRef.join(',')})');
+        }
+        query = query.or(clauses.join(','));
+      }
+
+      final response = await query
+          .order('created_at', ascending: false)
+          .range(fromIndex, toIndex)
+          .count(CountOption.exact);
+
+      return (
+        rows: List<Map<String, dynamic>>.from(response.data),
+        totalCount: response.count,
+      );
     }
 
-    final response = await query
-        .order('created_at', ascending: false)
-        .range(fromIndex, toIndex)
-        .count(CountOption.exact);
+    ({List<Map<String, dynamic>> rows, int totalCount}) result;
+    try {
+      result = await fetchDocs('sales_documents');
+    } on PostgrestException catch (_) {
+      // Vista ausente (o columna `sales_note_id` sin migrar): el historial
+      // fiscal sigue funcionando exactamente igual que antes.
+      result = await fetchDocs('fiscal_documents');
+    }
 
-    final fdRows = List<Map<String, dynamic>>.from(response.data);
-    final totalCount = response.count;
+    final fdRows = result.rows;
+    final totalCount = result.totalCount;
 
     if (fdRows.isEmpty) {
       return (
@@ -1218,26 +1251,63 @@ class CashierRepository {
             .inFilter('id', tableIds);
     final tablesById = {for (final t in tablesRaw) t['id'].toString(): t};
 
-    // Payments por fd: necesarios para preservar check_id (split bill) y
-    // mostrar agregado de métodos en split payment.
-    final fdIds = fdRows.map((fd) => fd['id'].toString()).toList(growable: false);
-    final paymentsForFdsRaw = fdIds.isEmpty
-        ? []
-        : await _client
-            .from('payments')
-            .select(
-              'id, fiscal_document_id, check_id, payment_method_id, '
-              'amount, change_amount, status, '
-              'payment_methods(code, name)',
-            )
-            .inFilter('fiscal_document_id', fdIds);
+    // Payments por documento: necesarios para preservar check_id (split bill) y
+    // mostrar agregado de métodos en split payment. Los pagos de una nota de
+    // venta cuelgan de `sales_note_id`, no de `fiscal_document_id`.
+    final fdIds = fdRows
+        .where((fd) => fd['doc_kind'] != 'sales_note')
+        .map((fd) => fd['id'].toString())
+        .toList(growable: false);
+    final noteIds = fdRows
+        .where((fd) => fd['doc_kind'] == 'sales_note')
+        .map((fd) => fd['id'].toString())
+        .toList(growable: false);
+    const paymentColumns =
+        'id, fiscal_document_id, sales_note_id, check_id, payment_method_id, '
+        'amount, change_amount, status, payment_methods(code, name)';
+    const legacyPaymentColumns =
+        'id, fiscal_document_id, check_id, payment_method_id, '
+        'amount, change_amount, status, payment_methods(code, name)';
+
     final paymentsByFd = <String, List<Map<String, dynamic>>>{};
-    for (final row in paymentsForFdsRaw) {
-      final fdId = row['fiscal_document_id']?.toString();
-      if (fdId == null) continue;
-      paymentsByFd.putIfAbsent(fdId, () => []).add(
-        Map<String, dynamic>.from(row),
-      );
+
+    if (fdIds.isNotEmpty) {
+      // `sales_note_id` no existe en servidores sin la migración: se pide solo
+      // cuando la vista respondió, y si aun así falla se cae a las columnas de
+      // siempre para no tumbar el historial.
+      List<dynamic> raw;
+      try {
+        raw = await _client
+            .from('payments')
+            .select(noteIds.isEmpty ? legacyPaymentColumns : paymentColumns)
+            .inFilter('fiscal_document_id', fdIds);
+      } on PostgrestException catch (_) {
+        raw = await _client
+            .from('payments')
+            .select(legacyPaymentColumns)
+            .inFilter('fiscal_document_id', fdIds);
+      }
+      for (final row in raw) {
+        final fdId = row['fiscal_document_id']?.toString();
+        if (fdId == null) continue;
+        paymentsByFd.putIfAbsent(fdId, () => []).add(
+          Map<String, dynamic>.from(row),
+        );
+      }
+    }
+
+    if (noteIds.isNotEmpty) {
+      final raw = await _client
+          .from('payments')
+          .select(paymentColumns)
+          .inFilter('sales_note_id', noteIds);
+      for (final row in raw) {
+        final noteId = row['sales_note_id']?.toString();
+        if (noteId == null) continue;
+        paymentsByFd.putIfAbsent(noteId, () => []).add(
+          Map<String, dynamic>.from(row),
+        );
+      }
     }
 
     final enriched = fdRows.map((fd) {
@@ -1322,7 +1392,12 @@ class CashierRepository {
         'customer_rnc': fd['customer_rnc'],
         'ncf_number': fd['ncf_number'],
         'ncf_type': fd['ncf_type'],
-        'ncf_type_name': fd['ncf_type'],
+        'ncf_type_name': fd['doc_kind'] == 'sales_note'
+            ? 'NOTA VENTA'
+            : fd['ncf_type'],
+        // 'fiscal' | 'sales_note'. Ausente en servidores sin la vista, donde
+        // todo lo que hay es fiscal.
+        'doc_kind': fd['doc_kind'] ?? 'fiscal',
         'ecf_status': fd['ecf_status'],
         'is_electronic': fd['is_electronic'],
         'table_code': tableCode,

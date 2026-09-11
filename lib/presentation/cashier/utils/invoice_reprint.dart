@@ -65,6 +65,18 @@ Future<void> reprintInvoiceFromPayment(
   final fdCheckId = payment['check_id']?.toString();
   final fdId = payment['fiscal_document_id']?.toString();
 
+  // NOTA DE VENTA: la fila del historial viene de la vista `sales_documents`,
+  // donde `ncf_number` es el número de la nota. Reimprimirla como NCF sería
+  // imprimir un comprobante fiscal que esta venta nunca emitió. `doc_kind`
+  // falta en servidores sin la vista; ahí nunca hay notas, así que el fallback
+  // por tipo solo sirve de cinturón.
+  final isSalesNote =
+      payment['doc_kind']?.toString() == 'sales_note' ||
+      payment['ncf_type']?.toString() == 'NV';
+  final salesNoteNumber = isSalesNote
+      ? payment['ncf_number']?.toString()
+      : null;
+
   // Pre-declarada para que el catch pueda mencionar la impresora
   // específica en el mensaje de error humano (humanizePrintError).
   PrinterConfig? assignedPrinter;
@@ -142,6 +154,21 @@ Future<void> reprintInvoiceFromPayment(
           .where((f) => f['check_id'] != null && f['status'] == 'active')
           .map((f) => f['check_id'].toString())
           .toSet();
+      // Una sub-cuenta cobrada con NOTA DE VENTA no deja fiscal_document, así
+      // que sin esto sus ítems se colarían en la reimpresión del documento
+      // full-order — mezclar dos documentos en un papel. Best-effort: un
+      // servidor sin la migración de notas simplemente no aporta nada.
+      try {
+        final notesRaw = await Supabase.instance.client
+            .from('sales_notes')
+            .select('check_id, status')
+            .eq('order_id', orderId);
+        otherCheckFdIds.addAll(
+          List<Map<String, dynamic>>.from(notesRaw)
+              .where((n) => n['check_id'] != null && n['status'] == 'active')
+              .map((n) => n['check_id'].toString()),
+        );
+      } catch (_) {}
 
       printItems = allItems.where((item) {
         if (item.status == 'void') return false;
@@ -310,6 +337,10 @@ Future<void> reprintInvoiceFromPayment(
     String? ecfSecurityCode;
     DateTime? ecfSignedAt;
     try {
+      // Una nota de venta no tiene fd: saltamos todo el bloque e-CF. Sin esto
+      // el id de la nota se consultaría contra fiscal_documents y, además de
+      // ser un viaje inútil, un id repetido sería un match falso.
+      if (isSalesNote) throw const _SkipFiscalLookup();
       // Cargar el fd EXACTO del payment, no "el último de la orden".
       // En split bill una orden tiene N fds; getOrderFiscalDocument
       // devolvería cualquiera. Usar el id del fd (el `payment['id']`
@@ -386,10 +417,13 @@ Future<void> reprintInvoiceFromPayment(
       businessAddress: profileRaw?['address'],
       businessPhone: profileRaw?['phone'],
       businessRnc: profileRaw?['rnc'],
-      fiscalNcf: payment['ncf_number']?.toString(),
-      fiscalType: payment['ncf_type_name']?.toString(),
+      fiscalNcf: isSalesNote ? null : payment['ncf_number']?.toString(),
+      fiscalType: isSalesNote ? null : payment['ncf_type_name']?.toString(),
+      salesNoteNumber: salesNoteNumber,
       customerName: payment['customer_name']?.toString(),
-      customerTaxId: payment['customer_tax_id']?.toString(),
+      customerTaxId: isSalesNote
+          ? null
+          : payment['customer_tax_id']?.toString(),
       title: '*** REIMPRESION ***',
       currency: currentBusinessCurrencyOrFallback(ref),
       receiptItemDisplayMode: receiptItemDisplayMode,
@@ -495,4 +529,11 @@ Future<void> reprintInvoiceFromPayment(
       );
     }
   }
+}
+
+/// Marca interna para saltar la búsqueda del comprobante fiscal en la
+/// reimpresión de una nota de venta. Se lanza y se atrapa en el mismo bloque
+/// try/catch fail-soft que ya envolvía esa consulta.
+class _SkipFiscalLookup implements Exception {
+  const _SkipFiscalLookup();
 }

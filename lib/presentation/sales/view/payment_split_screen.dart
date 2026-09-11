@@ -1149,6 +1149,14 @@ class _RightPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _TotalsCard(state: state),
+          if (state.salesNoteAvailable) ...[
+            const SizedBox(height: 12),
+            _DocumentTypeToggle(
+              salesNoteSelected: state.salesNoteSelected,
+              enabled: !isBusy,
+              onChanged: vm.setSalesNote,
+            ),
+          ],
           const SizedBox(height: 16),
           Expanded(
             child: _PaymentList(
@@ -1162,7 +1170,9 @@ class _RightPanel extends StatelessWidget {
           // es lo que suele estar mirando cuando el cliente le pregunta.
           PaymentStepsPanel(
             stage: state.stage,
-            isElectronic: vm.isElectronicFiscal,
+            // Una nota de venta no viaja a la DGII: anunciar esa etapa sería
+            // mentirle al cajero sobre qué está esperando.
+            isElectronic: !state.salesNoteSelected && vm.isElectronicFiscal,
             dgiiContingency: state.dgiiContingency,
             accent: _kPrimary,
             positive: _kPositive,
@@ -1170,9 +1180,12 @@ class _RightPanel extends StatelessWidget {
           const SizedBox(height: 16),
           ConfirmPaymentProgressButton(
             stage: state.stage,
-            isElectronic: vm.isElectronicFiscal,
+            isElectronic: !state.salesNoteSelected && vm.isElectronicFiscal,
             dgiiContingency: state.dgiiContingency,
-            ncf: state.emittedNcf,
+            // El número del documento emitido, sea NCF o nota de venta.
+            ncf: state.salesNoteSelected
+                ? state.emittedSalesNote
+                : state.emittedNcf,
             // null mientras corre: es lo que impide el doble-tap que
             // duplicaria la venta.
             onPressed: canConfirm
@@ -2155,6 +2168,114 @@ class _ErrorBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Elección del documento con el que se cobra: comprobante fiscal (el de
+/// siempre) o NOTA DE VENTA — papel numerado propio del negocio, sin valor
+/// fiscal y sin consumir NCF.
+///
+/// Solo se monta cuando el negocio tiene la nota de venta prendida.
+class _DocumentTypeToggle extends StatelessWidget {
+  final bool salesNoteSelected;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  const _DocumentTypeToggle({
+    required this.salesNoteSelected,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'DOCUMENTO',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+            color: Color(0xFF6B7280),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: _DocumentTypeChip(
+                label: 'Factura',
+                isSelected: !salesNoteSelected,
+                enabled: enabled,
+                onTap: () => onChanged(false),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _DocumentTypeChip(
+                label: 'Nota de venta',
+                isSelected: salesNoteSelected,
+                enabled: enabled,
+                onTap: () => onChanged(true),
+              ),
+            ),
+          ],
+        ),
+        if (salesNoteSelected) ...[
+          const SizedBox(height: 6),
+          const Text(
+            'Sin valor fiscal: no consume NCF ni se declara.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _DocumentTypeChip extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _DocumentTypeChip({
+    required this.label,
+    required this.isSelected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFFFF7ED) : Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? _kPrimary : const Color(0xFFE5E7EB),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: isSelected ? _kPrimary : const Color(0xFF374151),
+          ),
+        ),
       ),
     );
   }

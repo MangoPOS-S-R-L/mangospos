@@ -3,6 +3,7 @@ import '../../../core/fiscal/payment_stage.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
+import '../../../data/models/sales_note.dart';
 
 // `PaymentStage` se mudó a core/fiscal cuando el cobro por split (mesas)
 // también empezó a necesitarla. Se reexporta para que los imports que ya
@@ -54,6 +55,20 @@ class PaymentState extends Equatable {
   // True si el business tiene e-CF habilitado (al menos una sequence Exx activa).
   final bool ecfEnabled;
 
+  // ── Nota de venta (documento NO fiscal) ──
+  /// El negocio tiene la nota de venta habilitada, así que el cobro ofrece
+  /// "Nota de venta" como documento además de los NCF disponibles.
+  final bool salesNoteAvailable;
+
+  /// El cajero eligió cobrar con nota de venta. Excluyente con
+  /// [selectedNcfType]: cuando esto es true, la venta no consume NCF y
+  /// `selectedNcfType` queda en null.
+  final bool salesNoteSelected;
+
+  /// La nota emitida al cerrar el cobro. Es lo que se imprime en el ticket en
+  /// lugar del NCF. Null hasta que el cobro cierra.
+  final SalesNote? salesNote;
+
   // Estado del proceso
   final bool processingPayment; // true while payment RPC is in flight
   /// Qué se está esperando ahora mismo. `processingPayment` sigue siendo el
@@ -91,6 +106,9 @@ class PaymentState extends Equatable {
     this.availableNcfTypes = const [],
     this.selectedNcfType,
     this.ecfEnabled = false,
+    this.salesNoteAvailable = false,
+    this.salesNoteSelected = false,
+    this.salesNote,
     this.processingPayment = false,
     this.stage = PaymentStage.idle,
     this.dgiiContingency = false,
@@ -118,7 +136,14 @@ class PaymentState extends Equatable {
     String? customerName,
     List<String>? availableNcfTypes,
     String? selectedNcfType,
+    /// Elegir nota de venta apaga el NCF, y `selectedNcfType ?? this` no
+    /// puede expresar "ponlo en null". Misma convención que
+    /// `OrderCheck.copyWith(clearNcfType:)`.
+    bool clearNcfType = false,
     bool? ecfEnabled,
+    bool? salesNoteAvailable,
+    bool? salesNoteSelected,
+    SalesNote? salesNote,
     bool? processingPayment,
     PaymentStage? stage,
     bool? dgiiContingency,
@@ -148,8 +173,13 @@ class PaymentState extends Equatable {
       customerRnc: customerRnc ?? this.customerRnc,
       customerName: customerName ?? this.customerName,
       availableNcfTypes: availableNcfTypes ?? this.availableNcfTypes,
-      selectedNcfType: selectedNcfType ?? this.selectedNcfType,
+      selectedNcfType: clearNcfType
+          ? null
+          : (selectedNcfType ?? this.selectedNcfType),
       ecfEnabled: ecfEnabled ?? this.ecfEnabled,
+      salesNoteAvailable: salesNoteAvailable ?? this.salesNoteAvailable,
+      salesNoteSelected: salesNoteSelected ?? this.salesNoteSelected,
+      salesNote: salesNote ?? this.salesNote,
       processingPayment: processingPayment ?? this.processingPayment,
       stage: stage ?? this.stage,
       dgiiContingency: dgiiContingency ?? this.dgiiContingency,
@@ -163,6 +193,8 @@ class PaymentState extends Equatable {
   /// True si el tipo seleccionado requiere RNC del comprador.
   /// E31 (Crédito Fiscal) y E33/E34 contra créditos requieren RNC.
   bool get requiresCustomerRnc {
+    // La nota de venta no ampara crédito fiscal: nunca exige RNC.
+    if (salesNoteSelected) return false;
     final t = selectedNcfType;
     if (t == null) return false;
     return t == 'E31' || t == 'E33' || t == 'E34' || t == 'B01';
@@ -255,6 +287,9 @@ class PaymentState extends Equatable {
     availableNcfTypes,
     selectedNcfType,
     ecfEnabled,
+    salesNoteAvailable,
+    salesNoteSelected,
+    salesNote,
     processingPayment,
     stage,
     dgiiContingency,

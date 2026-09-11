@@ -15,6 +15,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
+import '../../../data/models/sales_note.dart';
 import '../../../data/repositories/credits_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
@@ -48,10 +49,14 @@ class PaymentModal extends ConsumerStatefulWidget {
   /// p_customer_name: el fiscal_document cae a "Consumidor Final" y el
   /// nombre tecleado solo existe en el estado del modal. Si es null, no se
   /// imprime. Usado por venta rápida.
+  /// [salesNote] viene poblada cuando el cobro se hizo con NOTA DE VENTA: en
+  /// ese caso NO hay `fiscalDoc` (la venta no emitió NCF) y el comprobante se
+  /// imprime con el número de la nota.
   final Future<void> Function(
     Payment payment,
     FiscalDocument? fiscalDoc,
     String? customerName,
+    SalesNote? salesNote,
   )? onComprobante;
 
   /// Código de método de pago a preseleccionar al abrir (ej. 'credit' para
@@ -190,6 +195,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
             state.processedPayment!,
             state.fiscalDocument,
             state.customerName,
+            state.salesNote,
           ));
         }
         // Si el pago se encoló offline, disparamos el hook ANTES del pop
@@ -208,14 +214,28 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
           unawaited(cashierVM.refreshSilently());
         } catch (_) {}
         widget.onPaymentSuccess();
+        // Se pidió nota de venta y el servidor no la emitió: la venta salió
+        // documentada de otra forma (típicamente con NCF, porque el desvío no
+        // corrió). Hay que decirlo en el acto — si no, el único síntoma es la
+        // secuencia fiscal bajando sin que nadie lo note.
+        final salesNoteFailed =
+            state.salesNoteSelected &&
+            state.salesNote == null &&
+            !state.offlineQueued;
         ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             content: Text(
               state.offlineQueued
                   ? 'Pago guardado offline. Queda pendiente de sincronizar.'
-                  : 'Pago procesado exitosamente${state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : ""}',
+                  : salesNoteFailed
+                  ? 'Pago procesado, pero la NOTA DE VENTA no se emitió. '
+                        'Revisa Ajustes > Configuración Fiscal: es probable '
+                        'que esta venta haya consumido un comprobante.'
+                  : 'Pago procesado exitosamente${state.salesNote != null ? " - Nota ${state.salesNote!.noteNumber}" : (state.fiscalDocument != null ? " - NCF: ${state.fiscalDocument!.ncfNumber}" : "")}',
             ),
-            backgroundColor: AppColors.success,
+            backgroundColor: salesNoteFailed
+                ? AppColors.warning
+                : AppColors.success,
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -352,9 +372,9 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              if (state.availableNcfTypes.length > 1)
+                              if (_showFiscalSelector(state))
                                 _buildFiscalSelector(state, viewModel),
-                              if (state.availableNcfTypes.length > 1)
+                              if (_showFiscalSelector(state))
                                 const SizedBox(height: AppSpacing.xl),
                               if (!widget.creditOnly)
                                 _buildPaymentMethods(state, viewModel),
@@ -572,9 +592,15 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
     );
   }
 
-  /// Selector de tipo de comprobante fiscal (B02 / E32 / E31 / etc.).
-  /// Solo se renderiza cuando el business tiene >1 tipo disponible (si solo
-  /// tiene B02 no tiene sentido mostrar la sección).
+  /// Hay algo que elegir cuando el negocio tiene más de un tipo de NCF, o
+  /// cuando la nota de venta está prendida (aunque haya un solo NCF: elegir
+  /// entre factura y nota de venta ya es una decisión).
+  bool _showFiscalSelector(PaymentState state) =>
+      state.availableNcfTypes.length > 1 || state.salesNoteAvailable;
+
+  /// Selector de tipo de documento: comprobantes fiscales (B02 / E32 / E31 /
+  /// etc.) y, si el negocio la tiene prendida, la NOTA DE VENTA — documento
+  /// numerado propio, sin valor fiscal, que no consume NCF.
   ///
   /// Si el tipo seleccionado requiere RNC del comprador (E31/E33/E34/B01),
   /// muestra inline los campos de RNC y Razón Social con validación.
@@ -583,7 +609,11 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'TIPO DE COMPROBANTE',
+          // Con la nota de venta en juego el rótulo no puede decir
+          // "comprobante": una nota de venta no lo es.
+          state.salesNoteAvailable
+              ? 'TIPO DE DOCUMENTO'
+              : 'TIPO DE COMPROBANTE',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.bold,
@@ -595,16 +625,50 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
         Wrap(
           spacing: AppSpacing.md,
           runSpacing: AppSpacing.md,
-          children: state.availableNcfTypes.map((type) {
-            final isSelected = state.selectedNcfType == type;
-            return _NcfTypeButton(
-              code: type,
-              label: _ncfTypeLabel(type),
-              isSelected: isSelected,
-              onTap: () => viewModel.selectNcfType(type),
-            );
-          }).toList(),
+          children: [
+            ...state.availableNcfTypes.map((type) {
+              final isSelected =
+                  state.selectedNcfType == type && !state.salesNoteSelected;
+              return _NcfTypeButton(
+                code: type,
+                label: _ncfTypeLabel(type),
+                isSelected: isSelected,
+                onTap: () => viewModel.selectNcfType(type),
+              );
+            }),
+            if (state.salesNoteAvailable)
+              _NcfTypeButton(
+                code: 'NOTA',
+                label: 'Nota de venta',
+                isSelected: state.salesNoteSelected,
+                isSalesNote: true,
+                onTap: viewModel.selectSalesNote,
+              ),
+          ],
         ),
+        if (state.salesNoteSelected) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 14,
+                color: AppColors.mutedForeground,
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  'Documento sin valor fiscal: no consume NCF y no se '
+                  'declara. La venta sí entra a caja e inventario.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedForeground,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
         if (state.requiresCustomerRnc) ...[
           const SizedBox(height: AppSpacing.md),
           _buildCustomerFields(state, viewModel),
@@ -1129,6 +1193,10 @@ class _NcfTypeButton extends StatelessWidget {
   final String code;
   final String label;
   final bool isSelected;
+
+  /// Documento NO fiscal (nota de venta). Cambia el badge a "NO FISCAL" para
+  /// que el cajero no confunda la opción con un comprobante de la DGII.
+  final bool isSalesNote;
   final VoidCallback onTap;
 
   const _NcfTypeButton({
@@ -1136,9 +1204,11 @@ class _NcfTypeButton extends StatelessWidget {
     required this.label,
     required this.isSelected,
     required this.onTap,
+    this.isSalesNote = false,
   });
 
-  bool get _isElectronic => code.isNotEmpty && code[0] == 'E';
+  bool get _isElectronic =>
+      !isSalesNote && code.isNotEmpty && code[0] == 'E';
 
   @override
   Widget build(BuildContext context) {
@@ -1179,7 +1249,9 @@ class _NcfTypeButton extends StatelessWidget {
                     borderRadius: BorderRadius.circular(3),
                   ),
                   child: Text(
-                    _isElectronic ? 'e-CF' : 'FÍSICO',
+                    isSalesNote
+                        ? 'NO FISCAL'
+                        : (_isElectronic ? 'e-CF' : 'FÍSICO'),
                     style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.bold,

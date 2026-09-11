@@ -4,6 +4,7 @@ import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import '../viewmodel/fiscal_viewmodel.dart';
+import 'sales_note_settings_section.dart';
 import '../../../../../../data/models/fiscal_models.dart';
 import '../../../../../../core/theme/app_colors.dart';
 
@@ -18,6 +19,7 @@ class FiscalReceiptsView extends ConsumerStatefulWidget {
 class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
   final _rncController = TextEditingController();
   final _nameController = TextEditingController();
+  final _salesNotePrefixController = TextEditingController();
 
   @override
   void initState() {
@@ -27,7 +29,43 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
       final state = ref.read(fiscalVmProvider);
       _rncController.text = state.fiscalRnc;
       _nameController.text = state.fiscalName;
+      _salesNotePrefixController.text = state.features.salesNotePrefix;
     });
+  }
+
+  @override
+  void dispose() {
+    _rncController.dispose();
+    _nameController.dispose();
+    _salesNotePrefixController.dispose();
+    super.dispose();
+  }
+
+  /// Guarda el prefijo tal como quedó en el campo. Se normaliza a mayúsculas
+  /// y, si quedó vacío, vuelve al 'NV-' de fábrica: un correlativo sin
+  /// prefijo se imprimiría como un número pelado, indistinguible del número
+  /// de orden.
+  Future<void> _saveSalesNotePrefix() async {
+    final clean = _salesNotePrefixController.text.trim().toUpperCase();
+    final value = clean.isEmpty ? 'NV-' : clean;
+
+    // Salida temprana obligatoria: `onTapOutside` se dispara con CUALQUIER
+    // toque de la pantalla, no solo al salir del campo. Sin esto, cada tap
+    // escribiría en la BD y sacaría un toast de "guardado" sin que el dueño
+    // haya cambiado nada.
+    if (value == ref.read(fiscalVmProvider).features.salesNotePrefix) {
+      // Normaliza lo tecleado (minúsculas, espacios) aunque no se guarde.
+      if (_salesNotePrefixController.text != value) {
+        _salesNotePrefixController.text = value;
+      }
+      return;
+    }
+
+    _salesNotePrefixController.text = value;
+    await ref
+        .read(fiscalVmProvider.notifier)
+        .updateSalesNoteSettings(widget.businessId, prefix: value);
+    if (mounted) AppToast.success(context, 'Prefijo guardado');
   }
 
   @override
@@ -257,8 +295,32 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
               _defaultNcfDropdown(vm),
             ],
           ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Divider(height: 1),
+          ),
+          _buildSalesNoteSection(vm),
         ],
       ),
+    );
+  }
+
+  /// NOTA DE VENTA: el otro documento con el que se puede cerrar una venta.
+  /// No es un comprobante fiscal — no consume NCF ni se declara — pero se
+  /// configura aquí porque es aquí donde el dueño decide con qué papel sale
+  /// su venta. El dibujo vive en [SalesNoteSettingsSection] para poder
+  /// montarlo en un test de layout.
+  Widget _buildSalesNoteSection(FiscalState vm) {
+    return SalesNoteSettingsSection(
+      features: vm.features,
+      prefixController: _salesNotePrefixController,
+      onEnabledChanged: (v) => ref
+          .read(fiscalVmProvider.notifier)
+          .updateSalesNoteSettings(widget.businessId, enabled: v),
+      onDefaultChanged: (v) => ref
+          .read(fiscalVmProvider.notifier)
+          .updateSalesNoteSettings(widget.businessId, asDefault: v),
+      onPrefixSubmitted: _saveSalesNotePrefix,
     );
   }
 
