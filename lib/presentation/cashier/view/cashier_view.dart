@@ -173,8 +173,14 @@ class _CashierViewState extends ConsumerState<CashierView>
     // La sesión puede pertenecer a otro usuario (la abrió otro cajero, o se
     // transfirió). Antes esto bloqueaba en seco y dejaba la caja imposible de
     // cerrar en un cambio de turno. Ahora: el dueño del negocio cierra directo;
-    // cualquier otro necesita PIN de Supervisor/Admin. El server no valida
-    // usuario (fn_close_cash_session), así que este es el único gate real.
+    // cualquier otro necesita PIN de Supervisor/Admin.
+    //
+    // OJO: este gate NO es el único. `fn_close_cash_session` también valida
+    // server-side (CLOSE_DENIED) y el PIN de supervisor no cambia el
+    // `auth.uid()` con el que corre el RPC: el server autoriza por la CUENTA
+    // logueada (dueño de la sesión u owner/admin/manager del negocio), no por
+    // el PIN. Si la cuenta del equipo es de un cajero raso, el cierre ajeno
+    // seguirá rechazándose aunque el supervisor ponga su PIN aquí.
     final currentUserId = Supabase.instance.client.auth.currentUser?.id;
     final isOwnSession = currentUserId != null &&
         session['user_id']?.toString() == currentUserId;

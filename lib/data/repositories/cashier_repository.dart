@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
@@ -237,6 +238,33 @@ class CashierRepository {
           message: 'Esta sesión de caja ya fue cerrada.',
         );
       }
+      // Cierre de turno ajeno: el guard de `fn_close_cash_session` solo deja
+      // pasar al dueño de la sesión (su chequeo de admin/owner lee
+      // `memberships`, la tabla de SUSCRIPCIÓN, cuyo `role` es 'staff' por
+      // default → nunca autoriza a nadie más). Revienta DESPUÉS de que el
+      // cajero firmó el conteo a ciegas, así que no podemos dejarlo ahí.
+      // Reintentamos por `fn_force_close_cash_session`, que autoriza con la
+      // tabla de roles buena (user_businesses + businesses.owner_id) y sigue
+      // siendo fail-closed: solo owner/admin/manager pasan. La migración
+      // 20260911_0001 arregla el guard de raíz; este fallback mantiene vivo
+      // el cierre en las BD que aún no la tienen aplicada.
+      if (isCloseDeniedError(e.message)) {
+        final forced = await _forceCloseAfterDenied(
+          sessionId: sessionId,
+          endAmount: endAmount,
+          notes: notes,
+        );
+        if (forced != null) return forced;
+        throw const CashRegisterException(
+          errorCode: 'CLOSE_DENIED',
+          message:
+              'Esta caja la abrió otro usuario y tu cuenta no tiene rol de '
+              'Administrador, Dueño o Gerente en el negocio, así que el '
+              'servidor no permite cerrarla. Cierra sesión e inicia con la '
+              'cuenta que abrió la caja, o pide a un administrador que la '
+              'cierre.',
+        );
+      }
       throw CashRegisterException(
         errorCode: e.code ?? 'DATABASE_ERROR',
         message: 'Error de base de datos: ${e.message}',
@@ -247,6 +275,58 @@ class CashierRepository {
         errorCode: 'UNKNOWN_ERROR',
         message: 'Ocurrió un error inesperado al cerrar la caja: $e',
       );
+    }
+  }
+
+  /// `true` si el error del server es el candado de "esta sesión no es tuya".
+  /// El texto exacto cambió entre migraciones (admin/owner vs
+  /// admin/owner/manager), por eso matcheamos solo el código.
+  static bool isCloseDeniedError(String message) =>
+      message.contains('CLOSE_DENIED');
+
+  /// Reintento del cierre por la vía de force-close cuando el guard de
+  /// `fn_close_cash_session` negó por pertenencia. Devuelve `null` si el
+  /// force-close tampoco procede (rol insuficiente, RPC inexistente en esa
+  /// BD, red) para que el caller reporte el CLOSE_DENIED original.
+  ///
+  /// Devuelve un mapa con la misma forma que el RPC de cierre normal: el
+  /// caller solo lee `success`/sentinels, pero mantenemos `difference` y
+  /// `expected` para no romper a quien imprima desde el response.
+  Future<Map<String, dynamic>?> _forceCloseAfterDenied({
+    required String sessionId,
+    required double endAmount,
+    String? notes,
+  }) async {
+    try {
+      final row = await forceCloseSession(
+        sessionId: sessionId,
+        endAmount: endAmount,
+        reason: (notes == null || notes.isEmpty)
+            ? 'Cierre de turno de otro usuario, autorizado en el POS'
+            : 'Cierre de turno de otro usuario, autorizado en el POS | $notes',
+      );
+
+      final difference = (row['difference'] as num?)?.toDouble();
+      final closedAmount =
+          (row['end_amount'] as num?)?.toDouble() ?? endAmount;
+
+      return <String, dynamic>{
+        'success': true,
+        'forced_close': true,
+        'difference': difference,
+        if (difference != null) ...<String, dynamic>{
+          'expected': closedAmount - difference,
+          'expected_amount': closedAmount - difference,
+          'expected_cash': closedAmount - difference,
+        },
+        'end_amount': closedAmount,
+      };
+    } catch (e) {
+      debugPrint(
+        'closeSession: CLOSE_DENIED y el force-close tampoco procedió. '
+        'Error: $e',
+      );
+      return null;
     }
   }
 
