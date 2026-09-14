@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/core/offline/hub/hub_client.dart';
+import 'package:mangopos/core/offline/hub/hub_lease_service.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_op_log.dart';
 import 'package:mangopos/core/offline/hub/hub_order_projector.dart';
@@ -34,6 +35,7 @@ class OfflineQueueSyncResult {
     this.lastMappedOrderId,
     this.lastError,
     this.conflicts = const <OfflineSyncConflict>[],
+    this.leaseLostToDeviceId,
   });
 
   final int processed;
@@ -54,6 +56,11 @@ class OfflineQueueSyncResult {
   /// update sobre un item desaparecido, etc. La accion se marca como
   /// completed (no reintenta) pero el cashier debe saberlo.
   final List<OfflineSyncConflict> conflicts;
+
+  /// H7: no-null cuando este equipo intentó subir el op-log del Hub y la lease
+  /// la tenía OTRO equipo (un respaldo promovido). No subió y dejó de ser el
+  /// Hub. Trae el id del equipo que tiene la lease ('' si no se supo).
+  final String? leaseLostToDeviceId;
 
   bool get didWork => processed > 0;
   bool get hasFailures => failed > 0;
@@ -209,6 +216,10 @@ class OfflinePosService {
   /// drena este log a Supabase. Misma key/SP que el agente, así que comparten
   /// el mismo registro.
   final HubOpLog _hubOpLog = HubOpLog();
+  final HubLeaseService _hubLease = HubLeaseService();
+  final Map<String, Future<OfflineQueueSyncResult>> _hubUplinkInFlight = {};
+  DateTime? _lastBackupAckAt;
+  static const Duration _backupAckEvery = Duration(seconds: 60);
 
   /// Activa/desactiva el enrutado al Hub. Lo llama HubModeController según el
   /// modo. Pasar null vuelve al encolado local puro.
@@ -1322,9 +1333,76 @@ class OfflinePosService {
     required PrintingService printingService,
     required InventoryRepository inventoryRepository,
     required CashierRepository cashierRepository,
+  }) {
+    // Una sola subida a la vez por negocio. En el Hub corren dos disparadores
+    // (el drenaje de 4 s y el sync de 3 min de SalesViewModel): si se pisaban,
+    // los dos leían la misma op pendiente antes de que alguno la marcara
+    // completada y la subían dos veces. El segundo recibe el resultado del
+    // primero.
+    final running = _hubUplinkInFlight[businessId];
+    if (running != null) return running;
+    final run = _syncHubOpLogOnce(
+      businessId: businessId,
+      salesRepository: salesRepository,
+      printingService: printingService,
+      inventoryRepository: inventoryRepository,
+      cashierRepository: cashierRepository,
+    ).whenComplete(() => _hubUplinkInFlight.remove(businessId));
+    _hubUplinkInFlight[businessId] = run;
+    return run;
+  }
+
+  Future<OfflineQueueSyncResult> _syncHubOpLogOnce({
+    required String businessId,
+    required SalesRepository salesRepository,
+    required PrintingService printingService,
+    required InventoryRepository inventoryRepository,
+    required CashierRepository cashierRepository,
   }) async {
+    // Marca de agua ANTES de leer: toda op con seq ≤ uplinkSeq está en `ops`.
+    // Es el tope de la poda de abajo.
+    final uplinkSeq = await _hubOpLog.currentSeq(businessId);
     final ops = await _hubOpLog.since(businessId); // orden seq (FIFO)
     if (ops.isEmpty) return const OfflineQueueSyncResult();
+
+    // H7 — Candado 1: solo el equipo con ROL de Hub sube el op-log del Hub.
+    //
+    // Este método corre en TODO equipo: el sync de 3 min de SalesViewModel lo
+    // llama con kHubModeEnabled. Mientras la réplica al respaldo no funcionaba,
+    // el op-log de cajas y respaldos estaba vacío y esto salía arriba. Con la
+    // réplica funcionando, el RESPALDO tiene el op-log lleno de copias: sin
+    // este candado las subía cada 3 minutos en paralelo con el Hub, y como la
+    // BD no tiene llave de idempotencia cada venta se aplicaba dos veces. La
+    // lease sola no alcanza: sin fila, el primero que confirma se la queda, y
+    // podía ser el respaldo pasivo.
+    final role = await HubConfigService().getDeviceRole(businessId);
+    if (!hubUplinkAllowedForRole(role)) return const OfflineQueueSyncResult();
+
+    final completedOps = await _readCompletedOps(businessId);
+    final completedFingerprints = await _readCompletedFingerprints(businessId);
+    final pendingOps = ops
+        .where(
+          (op) => !_isHubOpUploaded(op, completedOps, completedFingerprints),
+        )
+        .length;
+
+    // H7 — Candado 2: la lease en Supabase, solo si hay algo que SUBIR. Si otro
+    // equipo fue promovido a Hub, este NO sube y deja de actuar como Hub. Con el
+    // log lleno solo de mesas abiertas ya aplicadas no se pregunta cada 4 s: el
+    // latido de HubHostUplink la revisa aparte.
+    if (pendingOps > 0) {
+      final gate = await checkHubLease(businessId, pendingOps: pendingOps);
+      switch (gate.decision) {
+        case HubUplinkDecision.proceed:
+          break;
+        case HubUplinkDecision.skipRetryLater:
+          return const OfflineQueueSyncResult();
+        case HubUplinkDecision.stepDown:
+          return OfflineQueueSyncResult(
+            leaseLostToDeviceId: gate.holder ?? '',
+          );
+      }
+    }
 
     var processed = 0;
     var completed = 0;
@@ -1332,8 +1410,6 @@ class OfflinePosService {
     String? lastMappedOrderId;
     String? lastError;
     final conflicts = <OfflineSyncConflict>[];
-    final completedOps = await _readCompletedOps(businessId);
-    final completedFingerprints = await _readCompletedFingerprints(businessId);
 
     for (final op in ops) {
       final opId = op['op_id']?.toString() ?? op['id']?.toString();
@@ -1398,14 +1474,52 @@ class OfflinePosService {
     // cajas cliente proyectan. Ahora conservamos las ops de las mesas AÚN
     // ABIERTAS (incl. las `hub_applied` del host) y podamos el resto: órdenes
     // cerradas/anuladas y ops sin order_id (caja/inventario) ya subidas.
+    Set<String>? prunedKeep;
+    var pruned = false;
     if (failed == 0) {
       final remaining = await _hubOpLog.since(businessId, seq: 0);
       final keep = HubOrderProjector.openOrderIds(remaining);
-      if (keep.isEmpty) {
-        await _hubOpLog.clear(businessId);
-      } else {
-        await _hubOpLog.retainOrders(businessId, keep);
+      // Tope `uplinkSeq`: lo que entró DURANTE esta subida todavía no subió y no
+      // se puede podar, aunque su orden ya esté cerrada (venta rápida) o no
+      // tenga orden (movimiento de caja). Antes se borraba sin llegar a Supabase.
+      final quedan = await _hubOpLog.retainOrders(
+        businessId,
+        keep,
+        upToSeq: uplinkSeq,
+      );
+      pruned = quedan < remaining.length;
+      prunedKeep = keep;
+    }
+
+    // H7: avisar al respaldo qué ya está en Supabase, para que no lo repita si
+    // lo promueven. Cuenta todo lo que este equipo dio por completado: aplicado
+    // online por el host (`hub_applied`), subido en esta vuelta, o ya subido
+    // antes (por op_id o por fingerprint). Lo que falló NO va: sigue pendiente.
+    // Fire-and-forget: el respaldo es red de seguridad, no dependencia.
+    final doneOps = await _readCompletedOps(businessId);
+    final doneFingerprints = await _readCompletedFingerprints(businessId);
+    final ackedOpIds = <String>{};
+    for (final op in ops) {
+      final id = _hubOpId(op);
+      if (id != null && _isHubOpUploaded(op, doneOps, doneFingerprints)) {
+        ackedOpIds.add(id);
       }
+    }
+    // Se manda cuando algo cambió, y al menos cada minuto aunque no: si un ack
+    // se perdió (respaldo apagado un rato), la poda del siguiente lo corrige.
+    final now = DateTime.now();
+    final ackDue = _lastBackupAckAt == null ||
+        now.difference(_lastBackupAckAt!) >= _backupAckEvery;
+    if (ackedOpIds.isNotEmpty && (processed > 0 || pruned || ackDue)) {
+      _lastBackupAckAt = now;
+      unawaited(
+        _ackBackup(
+          businessId,
+          ackedOpIds,
+          keepOrderIds: prunedKeep,
+          upToSeq: prunedKeep == null ? null : uplinkSeq,
+        ),
+      );
     }
 
     return OfflineQueueSyncResult(
@@ -1452,6 +1566,125 @@ class OfflinePosService {
       return;
     }
     await _queueDao!.writeQueue(businessId, queue);
+  }
+
+  /// H7: confirma la lease del Hub en Supabase. Si es de OTRO equipo (un
+  /// respaldo fue promovido), cede: pasa este equipo a respaldo y lo registra.
+  /// Lo usan el uplink, antes de subir, y el latido de HubHostUplink, para
+  /// enterarse aunque no haya nada que subir.
+  Future<({HubUplinkDecision decision, String? holder})> checkHubLease(
+    String businessId, {
+    int? pendingOps,
+  }) async {
+    final lease = await _hubLease.acquire(businessId);
+    final decision = decideHubUplink(lease);
+    if (decision == HubUplinkDecision.stepDown) {
+      await _stepDownAfterLeaseLost(
+        businessId,
+        lease,
+        pendingOps ?? await pendingHubUplinkCount(businessId),
+      );
+    }
+    return (decision: decision, holder: lease.holderDeviceId);
+  }
+
+  /// Ops del op-log del Hub que todavía NO están en Supabase. Ajustes lo usa
+  /// para no dejar que el Hub cambie de rol con ventas sin subir: solo el
+  /// equipo con rol Hub las sube, así que quedarían varadas.
+  Future<int> pendingHubUplinkCount(String businessId) async {
+    final ops = await _hubOpLog.since(businessId);
+    if (ops.isEmpty) return 0;
+    final doneOps = await _readCompletedOps(businessId);
+    final doneFingerprints = await _readCompletedFingerprints(businessId);
+    return ops
+        .where((op) => !_isHubOpUploaded(op, doneOps, doneFingerprints))
+        .length;
+  }
+
+  static String? _hubOpId(Map<String, dynamic> op) {
+    final id = op['op_id']?.toString() ?? op['id']?.toString();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// ¿La op ya está en Supabase? Aplicada online por el host (`hub_applied`) o
+  /// subida antes (por op_id o por fingerprint). Mismo criterio con el que el
+  /// loop de [syncHubOpLog] la salta.
+  static bool _isHubOpUploaded(
+    Map<String, dynamic> op,
+    Set<String> doneOps,
+    Set<String> doneFingerprints,
+  ) {
+    if (op['hub_applied'] == true) return true;
+    final id = _hubOpId(op);
+    if (id != null && doneOps.contains(id)) return true;
+    final fp = op['fingerprint']?.toString();
+    return fp != null && doneFingerprints.contains(fp);
+  }
+
+  /// H7: marca como completadas ops que el Hub primario ya subió (llegan por
+  /// `/hub/replica/ack` al respaldo). Si este equipo es promovido a Hub, su
+  /// uplink las salta en vez de subirlas de nuevo. Devuelve cuántas marcó.
+  Future<int> markHubOpsCompleted(
+    String businessId,
+    Iterable<String> opIds,
+  ) async {
+    var marcadas = 0;
+    for (final id in opIds) {
+      if (id.isEmpty) continue;
+      await _markOpCompleted(businessId: businessId, opId: id);
+      marcadas++;
+    }
+    return marcadas;
+  }
+
+  /// H7: otro equipo tiene la lease (un respaldo fue promovido). Este equipo NO
+  /// sube, pasa a respaldo y deja registrado el porqué para que Ajustes → Red
+  /// local lo explique. Su op-log NO se borra: lo que alcanzó a replicarse lo
+  /// sube el Hub nuevo, y lo que no queda a salvo en este disco y visible en el
+  /// aviso — en vez de subirse dos veces.
+  Future<void> _stepDownAfterLeaseLost(
+    String businessId,
+    HubLeaseResult lease,
+    int pendingOps,
+  ) async {
+    debugPrint(
+      '[HubUplink] la lease la tiene ${lease.holderDeviceId}: este equipo deja '
+      'de ser el Hub y NO sube ($pendingOps ops quedan en su disco).',
+    );
+    try {
+      final config = HubConfigService();
+      await config.setDeviceRole(businessId, HubDeviceRole.hubBackup);
+      await config.writeLeaseLost(
+        businessId,
+        holderDeviceId: lease.holderDeviceId,
+        epoch: lease.epoch,
+        pendingOps: pendingOps,
+      );
+    } catch (e) {
+      debugPrint('[HubUplink] no se pudo registrar la cesión del Hub: $e');
+    }
+  }
+
+  /// Manda al respaldo configurado el ack de lo ya subido. Best-effort.
+  Future<void> _ackBackup(
+    String businessId,
+    Set<String> opIds, {
+    Set<String>? keepOrderIds,
+    int? upToSeq,
+  }) async {
+    try {
+      final backupUrl = await HubConfigService().getBackupUrl(businessId);
+      if (backupUrl == null || backupUrl.isEmpty) return;
+      await HubClient().ackReplica(
+        backupUrl,
+        businessId: businessId,
+        completedOpIds: opIds,
+        keepOrderIds: keepOrderIds,
+        upToSeq: upToSeq,
+      );
+    } catch (_) {
+      // Best-effort: el ack nunca puede afectar el uplink del Hub.
+    }
   }
 
   Future<void> _markOpCompleted({

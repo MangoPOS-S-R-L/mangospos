@@ -176,4 +176,96 @@ void main() {
       expect(llamadas, 0);
     });
   });
+
+  // ── Ack de lo subido (H7) ────────────────────────────────────────────────
+  //
+  // Sin el ack, al promover el respaldo subiría también lo que el Hub ya había
+  // subido antes de morir, y como la BD no tiene llave de idempotencia sería
+  // venta doble.
+  group('ackReplica', () {
+    test('manda a /hub/replica/ack los op_id subidos, resolviendo el puerto',
+        () async {
+      Map<String, dynamic>? recibido;
+      final vistos = <String>[];
+      final mock = MockClient((req) async {
+        vistos.add('${req.url.port}${req.url.path}');
+        if (req.url.port != 4100) return http.Response('no', 404);
+        recibido = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      });
+      final client = HubClient(httpClient: mock);
+
+      final ok = await client.ackReplica(
+        '192.168.1.51',
+        businessId: 'biz-1',
+        completedOpIds: ['op-1', 'op-2'],
+      );
+
+      expect(ok, isTrue);
+      expect(vistos.last, '4100/hub/replica/ack');
+      expect(recibido?['business_id'], 'biz-1');
+      expect(recibido?['completed_op_ids'], ['op-1', 'op-2']);
+    });
+
+    test('sin poda no manda keep_order_ids', () async {
+      Map<String, dynamic>? recibido;
+      final mock = MockClient((req) async {
+        recibido = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      });
+      final client = HubClient(httpClient: mock);
+
+      await client.ackReplica(
+        'http://h:4000',
+        businessId: 'biz-1',
+        completedOpIds: ['op-1'],
+      );
+
+      expect(recibido?.containsKey('keep_order_ids'), isFalse);
+      expect(recibido?.containsKey('up_to_seq'), isFalse);
+    });
+
+    test('con poda manda las órdenes a conservar y el tope de seq', () async {
+      Map<String, dynamic>? recibido;
+      final mock = MockClient((req) async {
+        recibido = jsonDecode(req.body) as Map<String, dynamic>;
+        return http.Response('{}', 200);
+      });
+      final client = HubClient(httpClient: mock);
+
+      await client.ackReplica(
+        'http://h:4000',
+        businessId: 'biz-1',
+        completedOpIds: ['op-1'],
+        keepOrderIds: {'orden-viva'},
+        upToSeq: 42,
+      );
+
+      expect(recibido?['keep_order_ids'], ['orden-viva']);
+      expect(recibido?['up_to_seq'], 42);
+    });
+
+    // Réplica y ack comparten el puerto recordado: tras encontrar el 4100 con
+    // una réplica, el ack va directo sin volver a sondear.
+    test('reusa el puerto que encontró la réplica', () async {
+      var llamadas = 0;
+      final mock = MockClient((req) async {
+        llamadas++;
+        return req.url.port == 4100
+            ? http.Response('{}', 200)
+            : http.Response('no', 404);
+      });
+      final client = HubClient(httpClient: mock);
+
+      await client.replicateOp('192.168.1.51', {'op_id': 'a', 'seq': 1});
+      final trasReplica = llamadas;
+      await client.ackReplica(
+        '192.168.1.51',
+        businessId: 'biz-1',
+        completedOpIds: ['a'],
+      );
+
+      expect(llamadas - trasReplica, 1);
+    });
+  });
 }

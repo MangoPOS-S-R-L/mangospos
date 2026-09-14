@@ -147,6 +147,9 @@ class MobilePrintAgent {
     // vez de asignar uno nuevo: los dos logs tienen que ser comparables para
     // que una promoción no le cambie el rango a los clientes.
     router.post('/hub/replica', _handleHubReplica);
+    // Ack del Hub primario: qué ops ya subieron, para que el respaldo no las
+    // repita si lo promueven (H7).
+    router.post('/hub/replica/ack', _handleHubReplicaAck);
     router.get('/hub/state', _handleHubState);
 
     // H3: estado del salón + detalle de orden reconstruidos del op-log.
@@ -410,8 +413,6 @@ class MobilePrintAgent {
     }
   }
 
-  /// F3b: sirve el delta del op-log desde `since` (query param) para que un
-  /// terminal/KDS se ponga al día. Devuelve `{seq, ops}`.
   /// H7: recibe una op replicada del Hub primario.
   ///
   /// El respaldo la GUARDA pero no la sube nunca mientras esté pasivo — el
@@ -429,6 +430,50 @@ class MobilePrintAgent {
     return _jsonOk({'stored': guardada, 'seq': body['seq']});
   }
 
+  /// H7: el Hub primario avisa qué operaciones YA SUBIERON a Supabase.
+  ///
+  /// El respaldo las marca como completadas para saltarlas si algún día lo
+  /// promueven: sus réplicas no saben qué se subió y la BD no tiene llave de
+  /// idempotencia, así que sin esto promover el respaldo repetiría ventas ya
+  /// subidas. Si vienen `keep_order_ids` y `up_to_seq`, replica también la poda
+  /// del primario para que el op-log del respaldo no crezca sin límite.
+  Future<shelf.Response> _handleHubReplicaAck(shelf.Request request) async {
+    final body = await _readJson(request);
+    if (body == null) return _jsonError('Invalid JSON body', 400);
+    final businessId = body['business_id']?.toString() ?? '';
+    if (businessId.isEmpty) return _jsonError('Missing business_id', 400);
+
+    final ids = (body['completed_op_ids'] as List? ?? const [])
+        .map((e) => e?.toString() ?? '')
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+    try {
+      final marcadas =
+          await OfflinePosService().markHubOpsCompleted(businessId, ids);
+      var quedan = -1;
+      final keepRaw = body['keep_order_ids'];
+      final upToSeq = (body['up_to_seq'] as num?)?.toInt();
+      // Sin tope NO se poda: se borrarían réplicas que llegaron después de la
+      // subida del primario y que él todavía no ha subido.
+      if (keepRaw is List && upToSeq != null) {
+        final keep = keepRaw
+            .map((e) => e?.toString() ?? '')
+            .where((e) => e.isNotEmpty)
+            .toSet();
+        quedan = await _hubOpLog.retainOrders(
+          businessId,
+          keep,
+          upToSeq: upToSeq,
+        );
+      }
+      return _jsonOk({'marked': marcadas, 'remaining': quedan});
+    } catch (e) {
+      return _jsonError('ack failed: $e', 500);
+    }
+  }
+
+  /// F3b: sirve el delta del op-log desde `since` (query param) para que un
+  /// terminal/KDS se ponga al día. Devuelve `{seq, ops}`.
   Future<shelf.Response> _handleHubState(shelf.Request request) async {
     final q = request.url.queryParameters;
     final businessId = q['business_id'] ?? '';

@@ -334,18 +334,34 @@ class HubOpLogDao {
   /// [keepOrderIds] (las mesas AÚN ABIERTAS que las cajas siguen proyectando por
   /// `/hub/salon`). Borra el resto — órdenes ya cerradas o anuladas, y ops sin
   /// `order_id` (caja, inventario) que ya subieron. Devuelve cuántas quedaron.
-  Future<int> retainOrders(String businessId, Set<String> keepOrderIds) async {
+  ///
+  /// [upToSeq] limita la poda a lo que el uplink tenía en la mano: solo borra
+  /// ops con `seq` ≤ ese valor. Sin él, una venta rápida o un movimiento de caja
+  /// que entró DURANTE la subida —y por eso no subió en esa vuelta— se borraba
+  /// sin haber llegado nunca a Supabase.
+  Future<int> retainOrders(
+    String businessId,
+    Set<String> keepOrderIds, {
+    int? upToSeq,
+  }) async {
     await _migrateLegacyIfNeeded(businessId);
 
-    if (keepOrderIds.isEmpty) {
+    if (keepOrderIds.isEmpty && upToSeq == null) {
       await clear(businessId);
       return 0;
     }
 
-    await (_db.delete(_db.hubOps)
-          ..where((t) => t.businessId.equals(businessId))
-          ..where((t) => t.orderId.isNull() | t.orderId.isNotIn(keepOrderIds)))
-        .go();
+    final delete = _db.delete(_db.hubOps)
+      ..where((t) => t.businessId.equals(businessId));
+    if (upToSeq != null) {
+      delete.where((t) => t.seq.isSmallerOrEqualValue(upToSeq));
+    }
+    if (keepOrderIds.isNotEmpty) {
+      delete.where(
+        (t) => t.orderId.isNull() | t.orderId.isNotIn(keepOrderIds),
+      );
+    }
+    await delete.go();
 
     return length(businessId);
   }

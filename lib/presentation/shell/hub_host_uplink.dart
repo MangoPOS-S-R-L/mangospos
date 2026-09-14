@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/network/connectivity_service.dart';
 import '../../core/offline/hub/hub_config.dart';
+import '../../core/offline/hub/hub_lease_service.dart';
 import '../../core/offline/hub/hub_mode_controller.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../data/repositories/cashier_repository.dart';
@@ -36,8 +37,10 @@ class HubHostUplink {
   ProviderSubscription<TerminalMode>? _sub;
   Timer? _timer;
   bool _busy = false;
+  DateTime? _lastLeaseCheck;
 
   static const Duration _interval = Duration(seconds: 4);
+  static const Duration _leaseHeartbeat = Duration(seconds: 60);
 
   void _apply(TerminalMode mode) {
     if (mode == TerminalMode.hubHost) {
@@ -57,13 +60,36 @@ class HubHostUplink {
     try {
       final client = Supabase.instance.client;
       // syncHubOpLog sale temprano si el op-log está vacío → barato en idle.
-      await OfflinePosService().syncHubOpLog(
+      final result = await OfflinePosService().syncHubOpLog(
         businessId: businessId,
         salesRepository: SalesRepository(client),
         printingService: PrintingService(client),
         inventoryRepository: InventoryRepository(client),
         cashierRepository: CashierRepository(client),
       );
+      var leaseLost = result.leaseLostToDeviceId != null;
+
+      // H7: latido de la lease. syncHubOpLog solo la consulta cuando hay algo
+      // que subir; sin esto, un Hub viejo que vuelve con el op-log al día no se
+      // enteraría de que promovieron a otro y seguiría recibiendo ventas de las
+      // cajas que aún apuntan a él — ventas que ya no podría subir.
+      final now = DateTime.now();
+      if (!leaseLost &&
+          (_lastLeaseCheck == null ||
+              now.difference(_lastLeaseCheck!) >= _leaseHeartbeat)) {
+        _lastLeaseCheck = now;
+        final gate = await OfflinePosService().checkHubLease(businessId);
+        leaseLost = gate.decision == HubUplinkDecision.stepDown;
+      }
+
+      // Otro equipo fue promovido a Hub y este ya quedó como respaldo: recargar
+      // la config saca el modo de hubHost ahora mismo (se apaga este drenaje y
+      // el servidor se re-evalúa) en vez de esperar a que alguien abra Ajustes.
+      if (leaseLost) {
+        unawaited(
+          _ref.read(hubModeProvider.notifier).reloadConfigAndRefresh(),
+        );
+      }
     } catch (e) {
       debugPrint('[HubHostUplink] drenaje falló (ignorado): $e');
     } finally {

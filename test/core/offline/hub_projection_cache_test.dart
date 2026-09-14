@@ -200,8 +200,12 @@ class _CountingLog implements HubOpLog {
   Future<void> clear(String businessId) => _inner.clear(businessId);
 
   @override
-  Future<int> retainOrders(String businessId, Set<String> keepOrderIds) =>
-      _inner.retainOrders(businessId, keepOrderIds);
+  Future<int> retainOrders(
+    String businessId,
+    Set<String> keepOrderIds, {
+    int? upToSeq,
+  }) =>
+      _inner.retainOrders(businessId, keepOrderIds, upToSeq: upToSeq);
 
   @override
   noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

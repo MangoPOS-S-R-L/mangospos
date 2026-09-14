@@ -219,6 +219,58 @@ void main() {
       final delta = await dao.since(biz, seq: ultimoVisto);
       expect(delta.map((e) => e['op_id']), ['nueva']);
     });
+
+    // EL BUG QUE CIERRA EL TOPE: el uplink sube lo que leyó y después poda con
+    // el log completo. Una venta rápida (orden ya cerrada) o un movimiento de
+    // caja (sin orden) que entró DURANTE la subida no subió en esa vuelta — y
+    // sin tope la poda lo borraba sin haber llegado nunca a Supabase.
+    test('upToSeq NO poda lo que entró después del tope', () async {
+      await dao.append(biz, {'op_id': 'subida', 'order_id': 'cerrada'});
+      final tope = await dao.currentSeq(biz); // lo que el uplink tenía en mano
+      await dao.append(biz, {'op_id': 'rapida', 'order_id': 'otra-cerrada'});
+      await dao.append(biz, {'op_id': 'caja', 'type': 'cash_transaction'});
+
+      final quedan = await dao.retainOrders(biz, <String>{}, upToSeq: tope);
+
+      expect(quedan, 2);
+      expect((await dao.since(biz)).map((e) => e['op_id']), ['rapida', 'caja']);
+    });
+
+    test('upToSeq se combina con las órdenes vivas', () async {
+      await dao.append(biz, {'op_id': 'a', 'order_id': 'viva'});
+      await dao.append(biz, {'op_id': 'b', 'order_id': 'cerrada'});
+      await dao.append(biz, {'op_id': 'c', 'type': 'cash_transaction'});
+      await dao.append(biz, {'op_id': 'd', 'order_id': 'cerrada'}); // después
+
+      final quedan = await dao.retainOrders(biz, {'viva'}, upToSeq: 3);
+
+      expect(quedan, 2);
+      expect((await dao.since(biz)).map((e) => e['op_id']), ['a', 'd']);
+    });
+
+    test('upToSeq con conjunto vacío NO vacía el log entero', () async {
+      await dao.append(biz, {'op_id': 'a', 'order_id': 'x'});
+      await dao.append(biz, {'op_id': 'b', 'order_id': 'y'});
+
+      expect(await dao.retainOrders(biz, <String>{}, upToSeq: 1), 1);
+      expect((await dao.since(biz)).single['op_id'], 'b');
+    });
+
+    // En el respaldo las réplicas guardan el seq del primario, así que el tope
+    // que manda el ack significa lo mismo en los dos discos.
+    test('upToSeq sobre réplicas usa el seq del primario', () async {
+      await dao.appendReplica(
+        biz,
+        {'op_id': 'r5', 'seq': 5, 'order_id': 'cerrada'},
+      );
+      await dao.appendReplica(
+        biz,
+        {'op_id': 'r9', 'seq': 9, 'order_id': 'cerrada'},
+      );
+
+      expect(await dao.retainOrders(biz, <String>{}, upToSeq: 7), 1);
+      expect((await dao.since(biz)).single['op_id'], 'r9');
+    });
   });
 
   // ── Replicación al respaldo (paso 11) ──────────────────────────────────

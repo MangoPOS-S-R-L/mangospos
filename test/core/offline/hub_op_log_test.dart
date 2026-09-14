@@ -105,5 +105,16 @@ void main() {
       expect(await log.retainOrders(biz, {'o1', 'o2'}), 2);
       expect(await log.length(biz), 2);
     });
+
+    // Mismo tope que la versión SQLite: lo que entró durante la subida no se
+    // poda aunque no tenga orden viva.
+    test('con upToSeq no poda lo que entró después del tope', () async {
+      await log.append(biz, {'op_id': '1', 'type': 'open_table', 'order_id': 'o1'});
+      await log.append(biz, {'op_id': '2', 'type': 'cash_transaction'});
+      await log.append(biz, {'op_id': '3', 'type': 'cash_transaction'}); // después
+
+      expect(await log.retainOrders(biz, <String>{}, upToSeq: 2), 1);
+      expect((await log.since(biz)).single['op_id'], '3');
+    });
   });
 }

@@ -182,9 +182,55 @@ class HubClient {
   /// Best-effort a propósito: el respaldo es red de seguridad, no dependencia.
   /// Si no responde, el primario opera normal; se pierde la protección, no la
   /// venta.
-  Future<bool> replicateOp(
+  Future<bool> replicateOp(String backupAddress, Map<String, dynamic> op) =>
+      _postToBackup(backupAddress, '/hub/replica', op);
+
+  /// H7: le avisa al respaldo qué operaciones YA SUBIERON a Supabase.
+  ///
+  /// Sin esto, al promover el respaldo subiría también lo que el Hub ya había
+  /// subido antes de morir: sus réplicas no saben qué se subió y la BD no tiene
+  /// llave de idempotencia → venta doble. Con el ack, el respaldo marca esas
+  /// operaciones como completadas y las salta.
+  ///
+  /// [keepOrderIds] replica la poda del Hub: si viene, el respaldo conserva solo
+  /// las ops de esas órdenes (las mesas aún abiertas). Si es null, el Hub no
+  /// podó en esta vuelta y el respaldo tampoco.
+  ///
+  /// [upToSeq] es el tope de esa poda: el respaldo solo borra ops con `seq` ≤
+  /// ese valor (las réplicas guardan el seq del Hub, así que significa lo mismo
+  /// en los dos discos). Sin tope el respaldo no poda: borraría réplicas que
+  /// llegaron después y que el Hub todavía no sube.
+  ///
+  /// Queda una ventana residual: si el Hub sube y muere antes de mandar el ack
+  /// (segundos), el respaldo promovido repetiría esas ops. Es raro sobre raro, y
+  /// va en la dirección visible — un duplicado se ve y se corrige; una venta
+  /// perdida no se entera nadie.
+  Future<bool> ackReplica(
+    String backupAddress, {
+    required String businessId,
+    required Iterable<String> completedOpIds,
+    Set<String>? keepOrderIds,
+    int? upToSeq,
+  }) {
+    final payload = <String, dynamic>{
+      'business_id': businessId,
+      'completed_op_ids': completedOpIds.toList(growable: false),
+    };
+    if (keepOrderIds != null) {
+      payload['keep_order_ids'] = keepOrderIds.toList(growable: false);
+    }
+    if (upToSeq != null) payload['up_to_seq'] = upToSeq;
+    return _postToBackup(backupAddress, '/hub/replica/ack', payload);
+  }
+
+  /// POST al respaldo resolviendo su puerto como el primario (tal cual si trae
+  /// puerto, y el mismo host en 4000 y 4100), recordando el que respondió y
+  /// respetando el respiro cuando no responde en ninguno. La réplica y el ack
+  /// comparten cache y respiro: si el respaldo está caído, los dos lo saltan.
+  Future<bool> _postToBackup(
     String backupAddress,
-    Map<String, dynamic> op,
+    String path,
+    Map<String, dynamic> body,
   ) async {
     final address = backupAddress.trim();
     if (address.isEmpty) return false;
@@ -194,14 +240,14 @@ class HubClient {
 
     final cached = _replicaUrlCache[address];
     if (cached != null) {
-      if (await _postReplica(cached, op, _opTimeout)) return true;
+      if (await _post(cached, path, body, _opTimeout)) return true;
       // Cambió de puerto (se reinstaló) o dejó de responder: re-sondear.
       _replicaUrlCache.remove(address);
     }
 
     for (final url in _hubCandidateUrls(address)) {
       if (url == cached) continue; // ya se probó arriba
-      if (await _postReplica(url, op, _probeTimeout)) {
+      if (await _post(url, path, body, _probeTimeout)) {
         _replicaUrlCache[address] = url;
         _replicaDownUntil.remove(address);
         return true;
@@ -210,23 +256,24 @@ class HubClient {
 
     _replicaDownUntil[address] = DateTime.now().add(_replicaBackoff);
     debugPrint(
-      '[HubClient] el respaldo $address no aceptó la réplica en ningún puerto; '
+      '[HubClient] el respaldo $address no aceptó $path en ningún puerto; '
       'reintento en ${_replicaBackoff.inSeconds}s (no crítico).',
     );
     return false;
   }
 
-  Future<bool> _postReplica(
+  Future<bool> _post(
     String baseUrl,
-    Map<String, dynamic> op,
+    String path,
+    Map<String, dynamic> body,
     Duration timeout,
   ) async {
     try {
       final resp = await _http
           .post(
-            Uri.parse('${_normalize(baseUrl)}/hub/replica'),
+            Uri.parse('${_normalize(baseUrl)}$path'),
             headers: await _headers(),
-            body: jsonEncode(op),
+            body: jsonEncode(body),
           )
           .timeout(timeout);
       return resp.statusCode == 200;

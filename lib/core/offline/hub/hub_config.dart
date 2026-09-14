@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../storage/storage_service.dart';
 import 'hub_mode.dart';
 
@@ -155,5 +157,51 @@ class HubConfigService {
     } else {
       await storage.write(_backupUrlKey(businessId), clean);
     }
+  }
+
+  static String _leaseLostKey(String businessId) => 'hub_lease_lost_$businessId';
+
+  /// H7: registra que ESTE equipo cedió el Hub porque otro fue promovido.
+  ///
+  /// Lo escribe el uplink al descubrir que la lease es de otro; lo lee Ajustes
+  /// → Red local para explicar por qué el equipo dejó de ser el Hub y cuántas
+  /// operaciones quedaron en su disco.
+  Future<void> writeLeaseLost(
+    String businessId, {
+    String? holderDeviceId,
+    int? epoch,
+    required int pendingOps,
+  }) async {
+    if (businessId.isEmpty) return;
+    final storage = await StorageService.getInstance();
+    await storage.write(
+      _leaseLostKey(businessId),
+      jsonEncode({
+        'holder_device_id': holderDeviceId,
+        'epoch': epoch,
+        'pending_ops': pendingOps,
+        'at': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+  }
+
+  /// Registro de cesión, o `null` si este equipo no cedió el Hub.
+  Future<Map<String, dynamic>?> readLeaseLost(String businessId) async {
+    if (businessId.isEmpty) return null;
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(_leaseLostKey(businessId));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearLeaseLost(String businessId) async {
+    if (businessId.isEmpty) return;
+    final storage = await StorageService.getInstance();
+    await storage.delete(_leaseLostKey(businessId));
   }
 }

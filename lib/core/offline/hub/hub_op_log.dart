@@ -141,13 +141,22 @@ class HubOpLog {
   /// proyectando por `/hub/salon` y `/hub/order`). Elimina el resto —órdenes ya
   /// cerradas/anuladas y ops sin `order_id` (caja/inventario) ya subidas—. A
   /// diferencia de [clear], NO borra el estado vivo del salón. Devuelve cuántas
-  /// ops quedaron.
-  Future<int> retainOrders(String businessId, Set<String> keepOrderIds) async {
-    if (_useSqlite) return _dao.retainOrders(businessId, keepOrderIds);
+  /// ops quedaron. Con [upToSeq] solo poda ops con `seq` ≤ ese valor (ver
+  /// [HubOpLogDao.retainOrders]).
+  Future<int> retainOrders(
+    String businessId,
+    Set<String> keepOrderIds, {
+    int? upToSeq,
+  }) async {
+    if (_useSqlite) {
+      return _dao.retainOrders(businessId, keepOrderIds, upToSeq: upToSeq);
+    }
 
     final storage = await _storage;
     final log = await _readLog(businessId);
     final kept = log.where((e) {
+      final seq = (e['seq'] as num?)?.toInt() ?? 0;
+      if (upToSeq != null && seq > upToSeq) return true;
       final oid = e['order_id']?.toString() ?? '';
       return oid.isNotEmpty && keepOrderIds.contains(oid);
     }).toList(growable: false);

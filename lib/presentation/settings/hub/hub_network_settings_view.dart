@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/offline/hub/hub_client.dart';
 import '../../../core/offline/hub/hub_config.dart';
+import '../../../core/offline/hub/hub_lease_service.dart';
+import '../../../core/network/connectivity_service.dart';
 import 'hub_single_point_of_failure_banner.dart';
 import '../../../core/offline/hub/hub_lan_scan.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
@@ -46,6 +48,8 @@ class _HubNetworkSettingsViewState
   int _pendingCount = 0; // operaciones sin subir al servidor (cola + dead)
   int _hubOpLogCount = 0; // ops en el op-log del Hub (solo si este equipo es Hub)
   String? _backupUrl; // respaldo configurado; null = el Hub es punto único de falla
+  Map<String, dynamic>? _leaseLost; // este equipo cedió el Hub a otro
+  bool _promoting = false;
 
   @override
   void initState() {
@@ -73,10 +77,12 @@ class _HubNetworkSettingsViewState
       final role = await _hubConfig.getDeviceRole(bizId);
       final url = await _hubConfig.getHubUrl(bizId);
       final backup = await _hubConfig.getBackupUrl(bizId);
+      final leaseLost = await _hubConfig.readLeaseLost(bizId);
       if (!mounted) return;
       _backupController.text = backup ?? '';
       setState(() {
         _backupUrl = backup;
+        _leaseLost = leaseLost;
         _businessId = bizId;
         _policy = networkPolicyFromString(modeStr);
         _role = role;
@@ -137,10 +143,113 @@ class _HubNetworkSettingsViewState
 
   Future<void> _saveRole(HubDeviceRole r) async {
     final bizId = _businessId;
-    if (bizId == null) return;
+    if (bizId == null || r == _role || _promoting) return;
+
+    // H7: solo el equipo con rol Hub sube su op-log. Si deja de serlo con
+    // ventas sin subir, quedarían varadas en este disco.
+    if (_role == HubDeviceRole.hub) {
+      final pendientes = await OfflinePosService().pendingHubUplinkCount(bizId);
+      if (!mounted) return;
+      if (pendientes > 0) {
+        _toast(
+          'Este equipo tiene $pendientes operaciones sin subir a la nube. '
+          'Espera a que suban (necesita internet) antes de cambiarle el rol.',
+        );
+        return;
+      }
+    }
+
+    // H7: ser el Hub pasa por la lease. Si otro equipo la tiene y este sube
+    // igual, las ventas se duplican.
+    if (r == HubDeviceRole.hub) {
+      await _claimHubRole(bizId);
+      return;
+    }
+
     setState(() => _role = r);
     await _hubConfig.setDeviceRole(bizId, r);
     // Efecto inmediato: recalcular el modo con el nuevo rol de este equipo.
+    unawaited(ref.read(hubModeProvider.notifier).reloadConfigAndRefresh());
+  }
+
+  /// Asigna el rol de Hub tomando la lease. Si otro equipo la tiene, pide
+  /// confirmación (y ser dueño) antes de quitársela.
+  Future<void> _claimHubRole(String bizId) async {
+    if (!ConnectivityService().isConnected) {
+      _toast(
+        'Se necesita internet para convertir este equipo en el Hub: sin '
+        'conexión no se puede confirmar que no haya otro Hub subiendo ventas.',
+      );
+      return;
+    }
+    setState(() => _promoting = true);
+    try {
+      final leases = HubLeaseService();
+      var lease = await leases.acquire(bizId);
+      if (!mounted) return;
+      if (lease.status == HubLeaseStatus.heldByOther) {
+        if (!ref.read(sessionProvider).isOwner) {
+          _toast(
+            'Otro equipo es el Hub de este local. Solo el dueño puede quitarle '
+            'el control.',
+          );
+          return;
+        }
+        if (await _confirmTakeover() != true || !mounted) return;
+        lease = await leases.acquire(bizId, force: true);
+        if (!mounted) return;
+      }
+      // Migración sin aplicar: no hay lease que proteger y se asigna como
+      // antes. Cualquier otro caso exige la lease tomada de verdad.
+      if (lease.status != HubLeaseStatus.unavailable &&
+          !canPromoteWithLease(lease)) {
+        _toast(
+          'No se pudo tomar el control del Hub. Revisa la conexión e '
+          'inténtalo de nuevo.',
+        );
+        return;
+      }
+      await _applyHubRole(bizId);
+    } finally {
+      if (mounted) setState(() => _promoting = false);
+    }
+  }
+
+  Future<bool?> _confirmTakeover() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Otro equipo es el Hub'),
+        content: const Text(
+          'Hay otro equipo registrado como Hub de este local. Si ese equipo ya '
+          'no se usa o se dañó, este puede tomar el control.\n\n'
+          'Si el otro sigue encendido, dejará de subir ventas y quedará como '
+          'respaldo.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Tomar el control'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Deja este equipo como Hub y recalcula el modo (arranca el servidor LAN y
+  /// el drenaje hacia la nube).
+  Future<void> _applyHubRole(String bizId) async {
+    await _hubConfig.setDeviceRole(bizId, HubDeviceRole.hub);
+    await _hubConfig.clearLeaseLost(bizId);
+    if (!mounted) return;
+    setState(() {
+      _role = HubDeviceRole.hub;
+      _leaseLost = null;
+    });
     unawaited(ref.read(hubModeProvider.notifier).reloadConfigAndRefresh());
   }
 
@@ -220,7 +329,11 @@ class _HubNetworkSettingsViewState
                     _policySelector(isOwner),
                     if (_policy == NetworkPolicy.hub) ...[
                       const SizedBox(height: 16),
-                      _singlePointOfFailureWarning(),
+                      if (_leaseLost != null) _leaseLostNotice(),
+                      // Solo el Hub es punto único de falla: en una caja o en
+                      // el respaldo este aviso era falso y confundía.
+                      if (_role == HubDeviceRole.hub)
+                        _singlePointOfFailureWarning(),
                       _sectionTitle('Rol de este dispositivo'),
                       _roleSelector(),
                       if (_role == HubDeviceRole.hub) ...[
@@ -232,6 +345,11 @@ class _HubNetworkSettingsViewState
                         const SizedBox(height: 16),
                         _sectionTitle('Dirección del Hub'),
                         _urlField(),
+                      ],
+                      if (_role == HubDeviceRole.hubBackup) ...[
+                        const SizedBox(height: 16),
+                        _sectionTitle('Promover a Hub'),
+                        _promoteCard(isOwner),
                       ],
                     ],
                   ],
@@ -423,6 +541,161 @@ class _HubNetworkSettingsViewState
     );
   }
 
+  /// H7: este equipo era el Hub y otro fue promovido mientras estaba apagado o
+  /// sin red. Ya no sube (para no duplicar ventas) y quedó como respaldo.
+  Widget _leaseLostNotice() {
+    final lost = _leaseLost ?? const <String, dynamic>{};
+    final pendientes = (lost['pending_ops'] as num?)?.toInt() ?? 0;
+    final detalle = pendientes > 0
+        ? ' Quedaron $pendientes operaciones en este equipo; lo que alcanzó a '
+            'copiarse al respaldo ya lo sube el Hub nuevo.'
+        : '';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF3C7),
+        border: Border.all(color: const Color(0xFFF59E0B)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Este equipo dejó de ser el Hub',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF92400E),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Otro equipo fue promovido a Hub, así que este ya no sube ventas '
+            'para no duplicarlas.$detalle',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF92400E)),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _dismissLeaseLost,
+              child: const Text('Entendido'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _dismissLeaseLost() async {
+    final bizId = _businessId;
+    if (bizId == null) return;
+    await _hubConfig.clearLeaseLost(bizId);
+    if (mounted) setState(() => _leaseLost = null);
+  }
+
+  /// H7: failover MANUAL. Lo aprieta alguien que vio que el Hub murió; nunca se
+  /// dispara solo, para que un corte de Wi-Fi de segundos no parta el local en
+  /// dos Hubs.
+  Widget _promoteCard(bool isOwner) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Si el Hub principal se daña, este equipo puede tomar su lugar. Tiene '
+          'copia de las ventas del Hub, así que no se pierde nada. Necesita '
+          'internet en el momento de promover.',
+          style: TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 10),
+        FilledButton.icon(
+          onPressed: (!isOwner || _promoting) ? null : _promote,
+          icon: _promoting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.swap_horiz, size: 18),
+          label: const Text('Promover este equipo a Hub'),
+        ),
+        if (!isOwner)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'Solo el dueño puede promover.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _promote() async {
+    final bizId = _businessId;
+    if (bizId == null || bizId.isEmpty || _promoting) return;
+
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Promover este equipo a Hub'),
+        content: const Text(
+          'Úsalo solo si el Hub principal se dañó o no va a volver pronto.\n\n'
+          'Este equipo toma el control y sube a la nube las ventas que tiene '
+          'copiadas. Si el Hub viejo vuelve a encenderse, verá que perdió el '
+          'control y no subirá nada.\n\n'
+          'Después cambia la dirección del Hub en cada caja a la IP de este '
+          'equipo.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Promover'),
+          ),
+        ],
+      ),
+    );
+    if (confirmar != true || !mounted) return;
+
+    // Sin internet no hay lease, y sin lease no hay forma de impedir que el Hub
+    // viejo vuelva y suba lo mismo. Las ventas no corren riesgo esperando: están
+    // en este disco.
+    if (!ConnectivityService().isConnected) {
+      _toast(
+        'Se necesita internet para promover: sin conexión no hay forma de '
+        'asegurar que el Hub viejo no suba lo mismo. Las ventas siguen a salvo '
+        'en este equipo.',
+      );
+      return;
+    }
+
+    setState(() => _promoting = true);
+    try {
+      final lease = await HubLeaseService().acquire(bizId, force: true);
+      if (!canPromoteWithLease(lease)) {
+        _toast(
+          lease.status == HubLeaseStatus.unavailable
+              ? 'No se puede promover: falta aplicar la migración '
+                    '20260914_0050 en la base de datos.'
+              : 'No se pudo tomar el control del Hub. Revisa la conexión e '
+                    'inténtalo de nuevo.',
+        );
+        return;
+      }
+      await _applyHubRole(bizId);
+      if (!mounted) return;
+      _toast(
+        'Este equipo ahora es el Hub. Cambia la dirección del Hub en cada caja '
+        'a la IP de este equipo.',
+      );
+    } finally {
+      if (mounted) setState(() => _promoting = false);
+    }
+  }
+
   Widget _roleSelector() {
     return RadioGroup<HubDeviceRole>(
       groupValue: _role,
@@ -446,7 +719,8 @@ class _HubNetworkSettingsViewState
             value: HubDeviceRole.hubBackup,
             title: Text('Respaldo del Hub'),
             subtitle: Text(
-                'Toma el control si la caja principal se apaga (failover).'),
+                'Guarda copia de las ventas del Hub. Si el Hub se daña, se '
+                'promueve a mano desde aquí.'),
           ),
         ],
       ),
