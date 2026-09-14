@@ -150,6 +150,19 @@ class HubClient {
     }
   }
 
+  /// Dirección que aceptó la última réplica, por respaldo configurado. Evita
+  /// volver a sondear los candidatos de puerto en cada op.
+  final Map<String, String> _replicaUrlCache = <String, String>{};
+
+  /// Hasta cuándo no se reintenta un respaldo que no respondió en ningún
+  /// candidato.
+  final Map<String, DateTime> _replicaDownUntil = <String, DateTime>{};
+
+  /// Respiro tras un respaldo que no respondió en ningún puerto. La réplica es
+  /// fire-and-forget: sin esto, con el respaldo apagado cada op del local
+  /// dispararía varios sondeos de 2 s que se irían apilando.
+  static const Duration _replicaBackoff = Duration(seconds: 30);
+
   /// H7: manda una op YA APLICADA al Hub de respaldo, conservando su `seq`.
   ///
   /// Sin esto, una op que el Hub acepta vive en UN SOLO disco: el terminal se
@@ -157,10 +170,57 @@ class HubClient {
   /// equipo se rompe antes de subir, la venta se pierde — y de todas las cajas
   /// del local.
   ///
-  /// Best-effort a propósito: el respaldo es una red de seguridad, no una
-  /// dependencia. Si no responde, el primario sigue operando normal; lo que se
-  /// pierde es la protección, no la venta.
-  Future<bool> replicateOp(String baseUrl, Map<String, dynamic> op) async {
+  /// [backupAddress] es lo que el operador escribió en Ajustes: normalmente una
+  /// IP pelada (`192.168.1.51`). La primera versión la usaba tal cual
+  /// (`Uri.parse('192.168.1.51/hub/replica')`): sin esquema ni puerto, cada
+  /// réplica tronaba, el catch la registraba como "no crítica" y devolvía
+  /// `false`. La replicación NUNCA funcionó con el valor que pedía la pantalla.
+  /// Ahora se resuelve igual que el primario: la dirección tal cual si trae
+  /// puerto, y el mismo host en 4000 (agente Dart en Mac/tablet) y 4100
+  /// (servidor dedicado en Windows/Linux).
+  ///
+  /// Best-effort a propósito: el respaldo es red de seguridad, no dependencia.
+  /// Si no responde, el primario opera normal; se pierde la protección, no la
+  /// venta.
+  Future<bool> replicateOp(
+    String backupAddress,
+    Map<String, dynamic> op,
+  ) async {
+    final address = backupAddress.trim();
+    if (address.isEmpty) return false;
+
+    final downUntil = _replicaDownUntil[address];
+    if (downUntil != null && DateTime.now().isBefore(downUntil)) return false;
+
+    final cached = _replicaUrlCache[address];
+    if (cached != null) {
+      if (await _postReplica(cached, op, _opTimeout)) return true;
+      // Cambió de puerto (se reinstaló) o dejó de responder: re-sondear.
+      _replicaUrlCache.remove(address);
+    }
+
+    for (final url in _hubCandidateUrls(address)) {
+      if (url == cached) continue; // ya se probó arriba
+      if (await _postReplica(url, op, _probeTimeout)) {
+        _replicaUrlCache[address] = url;
+        _replicaDownUntil.remove(address);
+        return true;
+      }
+    }
+
+    _replicaDownUntil[address] = DateTime.now().add(_replicaBackoff);
+    debugPrint(
+      '[HubClient] el respaldo $address no aceptó la réplica en ningún puerto; '
+      'reintento en ${_replicaBackoff.inSeconds}s (no crítico).',
+    );
+    return false;
+  }
+
+  Future<bool> _postReplica(
+    String baseUrl,
+    Map<String, dynamic> op,
+    Duration timeout,
+  ) async {
     try {
       final resp = await _http
           .post(
@@ -168,10 +228,9 @@ class HubClient {
             headers: await _headers(),
             body: jsonEncode(op),
           )
-          .timeout(_opTimeout);
+          .timeout(timeout);
       return resp.statusCode == 200;
-    } catch (e) {
-      debugPrint('[HubClient] réplica al respaldo falló (no crítico): $e');
+    } catch (_) {
       return false;
     }
   }
