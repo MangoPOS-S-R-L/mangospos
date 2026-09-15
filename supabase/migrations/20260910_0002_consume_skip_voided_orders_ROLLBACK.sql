@@ -14,6 +14,28 @@
 
 begin;
 
+-- GUARDIA DE RAMA (agregada 2026-09-15 · ver 20260915_0002_consume_unified).
+-- Este ROLLBACK reinstala una versión vieja de consume_inventory_from_order.
+-- Si la viva ya tiene otra rama o es la unificada, reinstalarla la borraría en
+-- silencio: se aborta sin revertir nada.
+do $guard$
+declare
+  v_src text;
+begin
+  select pg_get_functiondef(p.oid) into v_src
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname = 'consume_inventory_from_order'
+   limit 1;
+  v_src := coalesce(v_src, '');
+  if v_src like '%UNIFICADA 20260915_0002%' or v_src like '%fn_resolve_area_warehouse%' then
+    raise exception 'Guardia de rama: la función viva no es la que dejó esta migración (tiene otra rama o es la unificada). Revertir con 20260915_0002_consume_unified_ROLLBACK.sql. No se revirtió nada.';
+  end if;
+end
+$guard$;
+
+
 drop trigger if exists trg_orders_reconcile_inventory_on_status on public.orders;
 drop function if exists public.fn_orders_reconcile_inventory_on_status();
 

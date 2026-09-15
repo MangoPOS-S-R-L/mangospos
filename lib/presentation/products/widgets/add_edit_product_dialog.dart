@@ -18,6 +18,7 @@ import 'package:mangopos/data/repositories/printing_v2_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
 import 'package:mangopos/presentation/inventory/view/widgets/item_form_dialog.dart';
+import 'package:mangopos/presentation/inventory/view/widgets/unit_dropdown.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/areas/viewmodel/print_areas_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/tax/state/taxes_state.dart';
 import 'package:mangopos/presentation/settings/more settings/system settings/tax/viewmodel/taxes_viewmodel.dart';
@@ -1223,11 +1224,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                 _buildDropdown<String>(
                   value: _invBaseUnit,
                   hint: 'Unidad base',
-                  items: baseUnitOptions
-                      .map(
-                        (u) => DropdownMenuItem(value: u, child: Text(u)),
-                      )
-                      .toList(),
+                  items: unitDropdownItems(_invBaseSections),
+                  selectedItemBuilder:
+                      unitDropdownSelectedBuilder(_invBaseSections),
                   onChanged: (v) {
                     if (v != null) setState(() => _invBaseUnit = v);
                   },
@@ -1241,10 +1240,25 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _fieldLabel('Unidad de compra'),
-                          _buildTextField(
-                            controller: _invPurchaseUnitController,
-                            hintText: 'botella, caja',
-                            onChanged: (_) => setState(() {}),
+                          _buildDropdown<String>(
+                            value: _invPurchaseUnitController.text,
+                            hint: 'Sin empaque',
+                            items: unitDropdownItems(
+                              purchaseUnitSections(),
+                              emptyLabel: 'Sin empaque',
+                            ),
+                            selectedItemBuilder: unitDropdownSelectedBuilder(
+                              purchaseUnitSections(),
+                              emptyLabel: 'Sin empaque',
+                            ),
+                            onChanged: (v) => setState(() {
+                              _invPurchaseUnitController.text = v ?? '';
+                              // Si la compra es una medida (lb, gal) el
+                              // contenido sale solo: lo escrito ya no aplica.
+                              if (_invAutoPackSize != null) {
+                                _invPackSizeController.clear();
+                              }
+                            }),
                           ),
                         ],
                       ),
@@ -1257,7 +1271,13 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                           _fieldLabel('Contenido por empaque'),
                           _buildTextField(
                             controller: _invPackSizeController,
-                            hintText: '700',
+                            hintText: _invAutoPackSize != null
+                                ? 'automático'
+                                : '24',
+                            enabled: _invAutoPackSize == null &&
+                                _invPurchaseUnitController.text
+                                    .trim()
+                                    .isNotEmpty,
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
@@ -1470,16 +1490,36 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   /// Preview "1 botella = 700 ml" para el bloque de conversión del producto
   /// inventariable. Null si no hay empaque definido.
+  List<UnitSection> get _invBaseSections => baseUnitSections();
+
+  /// Contenido que sale solo cuando se compra en una medida convertible.
+  double? get _invAutoPackSize =>
+      _invPurchaseUnitController.text.trim().isEmpty
+          ? null
+          : autoPackSize(
+              purchaseUnit: _invPurchaseUnitController.text,
+              baseUnit: _invBaseUnit,
+            );
+
+  double _invPackSizeValue() => resolvePackSize(
+        purchaseUnit: _invPurchaseUnitController.text,
+        baseUnit: _invBaseUnit,
+        manual: double.tryParse(
+          _invPackSizeController.text.trim().replaceAll(',', '.'),
+        ),
+      );
+
+  /// «700 mL / Botella» bajo el bloque de empaque.
   String? _invPackPreview() {
     final pu = _invPurchaseUnitController.text.trim();
-    final size = double.tryParse(
-      _invPackSizeController.text.trim().replaceAll(',', '.'),
+    if (pu.isEmpty) return null;
+    final size = _invPackSizeValue();
+    if (size == 1) return null;
+    return packLabel(
+      packSize: size,
+      baseUnit: _invBaseUnit,
+      purchaseUnit: pu,
     );
-    if (pu.isEmpty || size == null || size <= 1) return null;
-    final s = size == size.roundToDouble()
-        ? size.toStringAsFixed(0)
-        : size.toStringAsFixed(2);
-    return '1 $pu = $s $_invBaseUnit';
   }
 
   Widget _fieldLabel(String text, {bool required = false}) {
@@ -1744,6 +1784,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
     required String hint,
     required List<DropdownMenuItem<T>> items,
     required ValueChanged<T?> onChanged,
+    DropdownButtonBuilder? selectedItemBuilder,
   }) {
     return Container(
       height: 58,
@@ -1762,6 +1803,7 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
           ),
           icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 24),
           items: items,
+          selectedItemBuilder: selectedItemBuilder,
           onChanged: onChanged,
           style: TextStyle(
             color: AppColors.foreground,
@@ -2079,10 +2121,9 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
                   ? null
                   : _invPurchaseUnitController.text.trim())
             : null,
-        packSize: _isInventoryTracked
-            ? (double.tryParse(
-                _invPackSizeController.text.trim().replaceAll(',', '.'),
-              ))
+        packSize: _isInventoryTracked &&
+                _invPurchaseUnitController.text.trim().isNotEmpty
+            ? _invPackSizeValue()
             : null,
       );
     }

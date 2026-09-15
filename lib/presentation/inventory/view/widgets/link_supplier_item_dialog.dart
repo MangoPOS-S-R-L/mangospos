@@ -22,6 +22,8 @@ import '../../../../core/theme/app_radius.dart';
 import '../../../../data/repositories/suppliers_repository.dart';
 import '../../state/inventory_state.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
+import 'package:mangopos/core/inventory/unit_conversion.dart';
+import 'package:mangopos/presentation/inventory/view/widgets/unit_dropdown.dart';
 
 /// Abre el diálogo. Devuelve `true` si algo cambió.
 Future<bool> showLinkSupplierItemDialog(
@@ -226,9 +228,11 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
                               : () => setState(() {
                                   _selected = item;
                                   if (_unitCtrl.text.trim().isEmpty) {
-                                    _unitCtrl.text = item.purchaseUnit.isEmpty
-                                        ? item.unit
-                                        : item.purchaseUnit;
+                                    _unitCtrl.text = normalizeUnitCode(
+                                      item.purchaseUnit.isEmpty
+                                          ? item.unit
+                                          : item.purchaseUnit,
+                                    );
                                   }
                                 }),
                           leading: Icon(
@@ -279,13 +283,34 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
                 ),
                 const SizedBox(width: 10),
                 SizedBox(
-                  width: 130,
-                  child: TextField(
-                    controller: _unitCtrl,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: 'Unidad',
-                    ),
+                  width: 150,
+                  child: Builder(
+                    builder: (_) {
+                      final sections =
+                          purchaseUnitSections(current: _unitCtrl.text);
+                      return DropdownButtonFormField<String>(
+                        // FormField ignora un initialValue nuevo: la key lo
+                        // rehace cuando elegir un insumo propone su unidad.
+                        key: ValueKey(_unitCtrl.text),
+                        initialValue: unitSelectionValue(
+                          sections,
+                          _unitCtrl.text,
+                          fallback: '',
+                        ),
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          labelText: 'Unidad de compra',
+                        ),
+                        items: unitDropdownItems(sections, emptyLabel: '—'),
+                        selectedItemBuilder: unitDropdownSelectedBuilder(
+                          sections,
+                          emptyLabel: '—',
+                        ),
+                        onChanged: (v) =>
+                            setState(() => _unitCtrl.text = v ?? ''),
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(width: 10),

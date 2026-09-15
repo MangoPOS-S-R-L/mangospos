@@ -105,6 +105,79 @@ class InventoryRepository {
     return false;
   }
 
+  /// Equivalencia propia del insumo (1 ea = 200 g), migración
+  /// `20260915_0001_inventory_item_unit_conversion`. Tri-estado: `null` = no
+  /// se probó, `false` = este servidor no la tiene.
+  ///
+  /// ESTÁTICO a propósito: las columnas existen o no en el SERVIDOR, no por
+  /// repositorio. El refresco offline crea un `InventoryRepository` nuevo en
+  /// cada pasada; con el tri-estado por instancia, TODO negocio —tenga insumos
+  /// o no— pagaría una consulta fallida más en cada refresco mientras la
+  /// migración no esté aplicada. Así se prueba una vez por sesión de la app.
+  static bool? _itemConversionSupported;
+
+  bool? get itemConversionSupport => _itemConversionSupported;
+
+  static const _conversionColumns = 'conversion_unit, conversion_factor';
+
+  /// Corre una lectura de insumos pidiendo además la equivalencia. Si el
+  /// servidor no tiene la migración (42703), repite la misma lectura sin esas
+  /// columnas: pedirlas a ciegas dejaría sin lista de insumos a todo negocio
+  /// que todavía no la aplicó.
+  Future<T> _withConversionColumns<T>(
+    String columns,
+    Future<T> Function(String columns) run,
+  ) async {
+    if (_itemConversionSupported == false) return run(columns);
+    try {
+      final result = await run('$columns, $_conversionColumns');
+      _itemConversionSupported = true;
+      return result;
+    } catch (e) {
+      if (!_isMissingSectionsSchema(e)) rethrow;
+      _itemConversionSupported = false;
+      return run(columns);
+    }
+  }
+
+  /// Payload de la equivalencia. `unit` null = no tocarla; vacía o con un
+  /// factor no positivo = borrarla (las dos columnas en null, que es lo único
+  /// que acepta el check de pareja).
+  static Map<String, dynamic>? _conversionPayload(String? unit, double? factor) {
+    if (unit == null) return null;
+    final trimmed = unit.trim();
+    final valid = trimmed.isNotEmpty && factor != null && factor > 0;
+    return {
+      'conversion_unit': valid ? trimmed : null,
+      'conversion_factor': valid ? factor : null,
+    };
+  }
+
+  /// Escribe un insumo con la equivalencia. Sin la migración, PostgREST
+  /// responde PGRST204: si solo se estaba BORRANDO se repite sin esas
+  /// columnas; si se quería guardar una, se avisa en vez de perderla en
+  /// silencio.
+  Future<T> _writeWithConversion<T>(
+    Map<String, dynamic> payload,
+    Future<T> Function(Map<String, dynamic> payload) run,
+  ) async {
+    final carriesConversion = payload.containsKey('conversion_unit');
+    try {
+      return await run(payload);
+    } catch (e) {
+      if (!carriesConversion || !_isMissingSectionsSchema(e)) rethrow;
+      _itemConversionSupported = false;
+      if (payload['conversion_unit'] != null) {
+        throw const InventoryConversionUnsupportedException();
+      }
+      return run(
+        Map<String, dynamic>.of(payload)
+          ..remove('conversion_unit')
+          ..remove('conversion_factor'),
+      );
+    }
+  }
+
   /// PRD 9 Fase 1B: lista todas las bodegas del business (incluye inactivas
   /// y la virtual `__IN_TRANSIT__`), con dirección y flag is_active para CRUD.
   /// F0: agrega tipo, área de producción y responsable cuando el esquema los
@@ -473,11 +546,14 @@ class InventoryRepository {
     final ids = warehouses.map((w) => w.id).toList(growable: false);
 
     final results = await Future.wait<dynamic>([
-      _client
-          .from(InventoryQueries.tableInventoryItems)
-          .select(_itemColumns)
-          .eq('business_id', businessId)
-          .order('name', ascending: true),
+      _withConversionColumns(
+        _itemColumns,
+        (columns) => _client
+            .from(InventoryQueries.tableInventoryItems)
+            .select(columns)
+            .eq('business_id', businessId)
+            .order('name', ascending: true),
+      ),
       _fetchStockRows(ids),
       _pendingTransfersOrEmpty(businessId),
       _lastCompletedCounts(businessId),
@@ -785,11 +861,14 @@ class InventoryRepository {
       // uso real (el cajero siempre busca). Con catálogos POS típicos
       // (~hasta unos miles de items) la diferencia es despreciable y
       // ganamos hidratación garantizada del snapshot offline.
-      final itemsResponse = await _client
-          .from(InventoryQueries.tableInventoryItems)
-          .select(columns)
-          .eq('business_id', businessId)
-          .order('name');
+      final itemsResponse = await _withConversionColumns(
+        columns,
+        (cols) => _client
+            .from(InventoryQueries.tableInventoryItems)
+            .select(cols)
+            .eq('business_id', businessId)
+            .order('name'),
+      );
       final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
 
       final stockResponse = await _client
@@ -921,11 +1000,14 @@ class InventoryRepository {
         'id, sku, name, description, unit, cost, min_stock, max_stock, '
         'is_active, costing_method, barcode, tracks_lots, item_classification, '
         'purchase_unit, pack_size';
-    final row = await _client
-        .from(InventoryQueries.tableInventoryItems)
-        .select(columns)
-        .eq('id', itemId)
-        .maybeSingle();
+    final row = await _withConversionColumns(
+      columns,
+      (cols) => _client
+          .from(InventoryQueries.tableInventoryItems)
+          .select(cols)
+          .eq('id', itemId)
+          .maybeSingle(),
+    );
     if (row == null) return null;
     return InventoryItemSummary.fromMap(
       Map<String, dynamic>.from(row),
@@ -995,11 +1077,14 @@ class InventoryRepository {
       // `order(column, {bool ascending = false})`, al revés que PostgREST.
       // Sin esto la lista salía de la Z a la A.
       final responses = await Future.wait<dynamic>([
-        _client
-            .from(InventoryQueries.tableInventoryItems)
-            .select(columns)
-            .eq('business_id', businessId)
-            .order('name', ascending: true),
+        _withConversionColumns(
+          columns,
+          (cols) => _client
+              .from(InventoryQueries.tableInventoryItems)
+              .select(cols)
+              .eq('business_id', businessId)
+              .order('name', ascending: true),
+        ),
         if (warehouseIds.isNotEmpty)
           _client
               .from(InventoryQueries.tableInventoryStock)
@@ -1640,30 +1725,40 @@ class InventoryRepository {
     String? itemClassification,
     String? purchaseUnit,
     double? packSize,
+    // Equivalencia propia: null = no tocarla; '' = borrarla.
+    String? conversionUnit,
+    double? conversionFactor,
   }) async {
-    final response = await _client
-        .from(InventoryQueries.tableInventoryItems)
-        .insert(
-          {
-            'business_id': businessId,
-            'name': name,
-            'sku': sku,
-            'description': description,
-            'unit': unit,
-            'cost': cost,
-            'min_stock': minStock,
-            'max_stock': maxStock,
-            'is_active': isActive,
-            'costing_method': costingMethod,
-            'barcode': barcode,
-            'tracks_lots': tracksLots,
-            'item_classification': itemClassification,
-            'purchase_unit': purchaseUnit,
-            'pack_size': packSize,
-          }..removeWhere((key, value) => value == null),
-        )
-        .select()
-        .single();
+    final row = <String, dynamic>{
+      'business_id': businessId,
+      'name': name,
+      'sku': sku,
+      'description': description,
+      'unit': unit,
+      'cost': cost,
+      'min_stock': minStock,
+      'max_stock': maxStock,
+      'is_active': isActive,
+      'costing_method': costingMethod,
+      'barcode': barcode,
+      'tracks_lots': tracksLots,
+      'item_classification': itemClassification,
+      'purchase_unit': purchaseUnit,
+      'pack_size': packSize,
+    }..removeWhere((key, value) => value == null);
+    // Al crear solo se manda una equivalencia VÁLIDA: no hay nada que borrar.
+    final conversion = _conversionPayload(conversionUnit, conversionFactor);
+    if (conversion != null && conversion['conversion_unit'] != null) {
+      row.addAll(conversion);
+    }
+    final response = await _writeWithConversion(
+      row,
+      (payload) => _client
+          .from(InventoryQueries.tableInventoryItems)
+          .insert(payload)
+          .select()
+          .single(),
+    );
 
     final newItemId = response['id']?.toString();
     // Presencia (qty 0) en el almacén PRINCIPAL para que el insumo nuevo
@@ -1715,6 +1810,9 @@ class InventoryRepository {
     String? itemClassification,
     String? purchaseUnit,
     double? packSize,
+    // Equivalencia propia: null = no tocarla; '' = borrarla.
+    String? conversionUnit,
+    double? conversionFactor,
   }) async {
     final payload = <String, dynamic>{
       'name': name,
@@ -1742,10 +1840,16 @@ class InventoryRepository {
     }
     if (packSize != null) payload['pack_size'] = packSize;
     payload.removeWhere((key, value) => value == null);
-    await _client
-        .from(InventoryQueries.tableInventoryItems)
-        .update(payload)
-        .eq('id', itemId);
+    // Después del removeWhere: borrar la equivalencia ES mandar null.
+    final conversion = _conversionPayload(conversionUnit, conversionFactor);
+    if (conversion != null) payload.addAll(conversion);
+    await _writeWithConversion(
+      payload,
+      (data) => _client
+          .from(InventoryQueries.tableInventoryItems)
+          .update(data)
+          .eq('id', itemId),
+    );
   }
 
   /// Activa/desactiva un insumo (soft-delete). Update mínimo de `is_active`
@@ -2320,4 +2424,19 @@ class InventoryRepository {
     }
     return <String, dynamic>{};
   }
+}
+
+/// Se quiso guardar una equivalencia (1 ea = 200 g) en un negocio cuya base no
+/// tiene la migración `20260915_0001`. La ficha NO se guardó, para no perder
+/// en silencio lo que se escribió.
+class InventoryConversionUnsupportedException implements Exception {
+  const InventoryConversionUnsupportedException();
+
+  String get message =>
+      'Este negocio todavía no tiene activada la equivalencia de unidades '
+      '(migración 20260915_0001). Quita la equivalencia para guardar el '
+      'insumo, o aplica la migración.';
+
+  @override
+  String toString() => message;
 }

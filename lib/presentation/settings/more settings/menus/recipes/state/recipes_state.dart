@@ -33,6 +33,11 @@ class RecipeInventoryItem {
   final String? purchaseUnit;
   final double packSize;
 
+  /// Equivalencia propia del insumo (1 ea = 200 g): permite escribir la
+  /// receta en gramos aunque el insumo se cuente por unidad.
+  final String? conversionUnit;
+  final double conversionFactor;
+
   const RecipeInventoryItem({
     required this.id,
     required this.name,
@@ -42,6 +47,8 @@ class RecipeInventoryItem {
     required this.isActive,
     this.purchaseUnit,
     this.packSize = 1,
+    this.conversionUnit,
+    this.conversionFactor = 0,
   });
 
   factory RecipeInventoryItem.fromMap(Map<String, dynamic> map) {
@@ -52,6 +59,7 @@ class RecipeInventoryItem {
 
     final rawPack = toDouble(map['pack_size']);
     final pu = map['purchase_unit']?.toString().trim();
+    final cu = map['conversion_unit']?.toString().trim();
     return RecipeInventoryItem(
       id: map['id']?.toString() ?? '',
       name: map['name']?.toString() ?? 'Insumo',
@@ -61,6 +69,8 @@ class RecipeInventoryItem {
       isActive: map['is_active'] != false,
       purchaseUnit: (pu == null || pu.isEmpty) ? null : pu,
       packSize: rawPack <= 0 ? 1 : rawPack,
+      conversionUnit: (cu == null || cu.isEmpty) ? null : cu,
+      conversionFactor: toDouble(map['conversion_factor']),
     );
   }
 }

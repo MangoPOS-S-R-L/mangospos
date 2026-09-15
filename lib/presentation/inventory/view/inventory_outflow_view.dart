@@ -7,8 +7,10 @@ import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../../core/inventory/unit_conversion.dart';
 import '../../../core/theme/app_shadows.dart';
 import 'widgets/inventory_back_button.dart';
+import 'widgets/unit_dropdown.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
@@ -538,6 +540,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                 initialStock: payload.initialStock,
                 purchaseUnit: payload.purchaseUnit,
                 packSize: payload.packSize,
+                conversionUnit: payload.conversionUnit,
+                conversionFactor: payload.conversionFactor,
               );
         },
       ),
@@ -568,6 +572,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                 isActive: payload.isActive,
                 purchaseUnit: payload.purchaseUnit,
                 packSize: payload.packSize,
+                conversionUnit: payload.conversionUnit,
+                conversionFactor: payload.conversionFactor,
               );
         },
       ),
@@ -699,6 +705,9 @@ class _ItemDialogPayload {
   final bool isActive;
   final String? purchaseUnit;
   final double packSize;
+  // Equivalencia propia: null = no tocarla; '' = borrarla.
+  final String? conversionUnit;
+  final double? conversionFactor;
 
   const _ItemDialogPayload({
     required this.name,
@@ -712,6 +721,8 @@ class _ItemDialogPayload {
     required this.isActive,
     required this.purchaseUnit,
     required this.packSize,
+    this.conversionUnit,
+    this.conversionFactor,
   });
 }
 
@@ -746,24 +757,17 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   String _selectedPresentation = 'unidad';
   bool _isActive = true;
   bool _saving = false;
-
-  final List<String> _presentationOptions = [
-    'unidad',
-    'lb',
-    'kg',
-    'oz',
-    'gr',
-    'gal',
-    'lt',
-    'ml',
-    'caja',
-    'paquete',
-    'botella',
-    'saco',
-    'lata',
-    'porcion',
-    'bandeja',
-  ];
+  // Secciones del catálogo según lo GUARDADO: una unidad fuera del catálogo
+  // queda en «Actual» para no perderla al editar.
+  late final List<UnitSection> _baseSections;
+  late final List<UnitSection> _purchaseSections;
+  // Equivalencia propia: 1 [unidad base] = N [otra unidad] (1 ea = 200 g).
+  late final TextEditingController _conversionFactorController;
+  String _conversionUnit = '';
+  // Si la ficha llegó sabiendo qué equivalencia tenía. Si no (esquema viejo)
+  // y nadie la toca, al guardar no se manda: así no se borra una que exista.
+  late final bool _conversionKnown;
+  bool _conversionTouched = false;
 
   @override
   void initState() {
@@ -775,12 +779,16 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
       text: item?.description ?? '',
     );
     _unitController = TextEditingController(text: item?.unit ?? 'unidad');
-    _selectedPresentation = (item?.unit ?? 'unidad').toLowerCase();
-
-    // Si la unidad actual no esta en las opciones, la agregamos temporalmente
-    if (!_presentationOptions.contains(_selectedPresentation)) {
-      _presentationOptions.add(_selectedPresentation);
-    }
+    _baseSections = baseUnitSections(current: item?.unit);
+    _purchaseSections = purchaseUnitSections(current: item?.purchaseUnit);
+    // Antes la unidad se pasaba a minúsculas y un «L» se guardaba «l». Ahora
+    // arranca como su código del catálogo («gr» → g) o, si no está en el
+    // catálogo, tal cual.
+    _selectedPresentation = unitSelectionValue(
+      _baseSections,
+      item?.unit,
+      fallback: 'unidad',
+    );
 
     _costController = TextEditingController(
       text: item == null ? '' : item.cost.toStringAsFixed(2),
@@ -793,7 +801,18 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     );
     _initialStockController = TextEditingController();
     _purchaseUnitController = TextEditingController(
-      text: item?.purchaseUnit ?? '',
+      text: unitSelectionValue(
+        _purchaseSections,
+        item?.purchaseUnit,
+        fallback: '',
+      ),
+    );
+    _conversionKnown = item == null || item.conversionKnown;
+    _conversionUnit = item?.conversionUnit ?? '';
+    _conversionFactorController = TextEditingController(
+      text: (item != null && item.conversionFactor > 0)
+          ? _trimNum(item.conversionFactor)
+          : '',
     );
     _packSizeController = TextEditingController(
       text: (item != null && item.packSize > 1)
@@ -815,6 +834,7 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     _initialStockController.dispose();
     _purchaseUnitController.dispose();
     _packSizeController.dispose();
+    _conversionFactorController.dispose();
     super.dispose();
   }
 
@@ -825,23 +845,87 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     return s;
   }
 
-  double get _packSizeValue {
-    final v = double.tryParse(_packSizeController.text.trim().replaceAll(',', '.'));
-    return (v == null || v <= 0) ? 1 : v;
+  /// Contenido que sale solo cuando se compra en una medida convertible
+  /// (1 lb = 453.59 g, 1 gal = 3785.41 mL).
+  double? get _autoPackSize {
+    final pu = _purchaseUnitController.text.trim();
+    if (pu.isEmpty) return null;
+    return autoPackSize(
+      purchaseUnit: pu,
+      baseUnit: _selectedPresentation,
+      conversionUnit: _conversion?.unit,
+      conversionFactor: _conversion?.factor,
+    );
   }
 
-  /// Texto bajo el bloque de empaque: "1 botella = 700 ml" + costo por base.
+  double get _packSizeValue => resolvePackSize(
+        purchaseUnit: _purchaseUnitController.text,
+        baseUnit: _selectedPresentation,
+        conversionUnit: _conversion?.unit,
+        conversionFactor: _conversion?.factor,
+        manual: double.tryParse(
+          _packSizeController.text.trim().replaceAll(',', '.'),
+        ),
+      );
+
+  double? get _conversionFactorValue => double.tryParse(
+        _conversionFactorController.text.trim().replaceAll(',', '.'),
+      );
+
+  List<UnitSection> get _conversionSections => conversionUnitSections(
+        baseUnit: _selectedPresentation,
+        current: _conversionUnit,
+      );
+
+  /// La equivalencia válida para la base elegida, o null.
+  ({String unit, double factor})? get _conversion => resolveItemConversion(
+        baseUnit: _selectedPresentation,
+        unit: _conversionUnit,
+        factor: _conversionFactorValue,
+      );
+
+  /// Qué mandar al guardar: null = no tocarla (la ficha llegó sin saber cuál
+  /// tenía y nadie la cambió); '' = borrarla; si no, la unidad.
+  String? get _conversionUnitForSave {
+    final conversion = _conversion;
+    if (conversion != null) return conversion.unit;
+    if (!_conversionKnown && !_conversionTouched) return null;
+    return '';
+  }
+
+  /// Texto bajo la equivalencia: «1 ea = 200 g», o por qué no se guardará.
+  String? _conversionHint() {
+    final conversion = _conversion;
+    if (conversion != null) {
+      return conversionLabel(
+        baseUnit: _selectedPresentation,
+        unit: conversion.unit,
+        factor: conversion.factor,
+      );
+    }
+    if (_conversionUnit.trim().isEmpty) return null;
+    if ((_conversionFactorValue ?? 0) <= 0) {
+      return '¿Cuánto equivale 1 ${unitShortLabel(_selectedPresentation)}?';
+    }
+    return 'No aplica con esta unidad base: no se guardará';
+  }
+
+  /// Texto bajo el bloque de empaque: «700 mL / Botella» + costo por base.
   String? _packPreview() {
     final pu = _purchaseUnitController.text.trim();
-    final base = _selectedPresentation.trim();
     final size = _packSizeValue;
-    if (pu.isEmpty || size <= 1) return null;
-    final baseLabel = base.isEmpty ? 'unidad' : base;
+    if (pu.isEmpty || size == 1) return null;
+    final baseLabel = unitShortLabel(_selectedPresentation);
     final cost = double.tryParse(_costController.text.trim().replaceAll(',', '.'));
     final perBase = (cost != null && cost > 0)
         ? '  ·  costo ${_trimNum(cost / size)} / $baseLabel'
         : '';
-    return '1 $pu = ${_trimNum(size)} $baseLabel$perBase';
+    final pack = packLabel(
+      packSize: size,
+      baseUnit: _selectedPresentation,
+      purchaseUnit: pu,
+    );
+    return '$pack$perBase';
   }
 
   @override
@@ -893,14 +977,10 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                           borderSide: BorderSide(color: AppColors.primary, width: 2),
                         ),
                       ),
-                      items: _presentationOptions
-                          .map(
-                            (opt) => DropdownMenuItem(
-                              value: opt,
-                              child: Text(opt),
-                            ),
-                          )
-                          .toList(),
+                      isExpanded: true,
+                      items: unitDropdownItems(_baseSections),
+                      selectedItemBuilder:
+                          unitDropdownSelectedBuilder(_baseSections),
                       onChanged: (val) {
                         if (val != null) {
                           setState(() => _selectedPresentation = val);
@@ -927,24 +1007,48 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
               Row(
                 children: [
                   Expanded(
-                    child: _field(
-                      _purchaseUnitController,
-                      'Unidad de compra (opcional)',
-                      hint: 'botella, caja',
-                      onChanged: (_) => setState(() {}),
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _purchaseUnitController.text,
+                      isExpanded: true,
+                      dropdownColor: AppColors.card,
+                      decoration: _dropdownDecoration('Unidad de compra'),
+                      items: unitDropdownItems(
+                        _purchaseSections,
+                        emptyLabel: 'Sin empaque',
+                      ),
+                      selectedItemBuilder: unitDropdownSelectedBuilder(
+                        _purchaseSections,
+                        emptyLabel: 'Sin empaque',
+                      ),
+                      onChanged: (v) => setState(
+                        () => _purchaseUnitController.text = v ?? '',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: _field(
-                      _packSizeController,
-                      'Contenido por empaque',
-                      hint: '700',
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
+                    child: _autoPackSize != null
+                        ? InputDecorator(
+                            decoration:
+                                _dropdownDecoration('Contenido por empaque'),
+                            child: Text(
+                              '${formatUnitQty(_autoPackSize!)} '
+                              '${unitShortLabel(_selectedPresentation)} · automático',
+                              style: TextStyle(
+                                color: AppColors.mutedForeground,
+                              ),
+                            ),
+                          )
+                        : _field(
+                            _packSizeController,
+                            'Contenido por empaque',
+                            hint: '24',
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
                   ),
                 ],
               ),
@@ -958,6 +1062,81 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                       color: AppColors.primary,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              // Equivalencia propia: cuánto pesa o mide UNA unidad base. Con
+              // ella una receta en gramos descuenta de un insumo que se cuenta
+              // por unidad (1 ea = 200 g de aguacate).
+              Row(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      '1 ${unitShortLabel(_selectedPresentation)} =',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 110,
+                    child: _field(
+                      _conversionFactorController,
+                      'Cantidad',
+                      hint: '200',
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      onChanged: (_) =>
+                          setState(() => _conversionTouched = true),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      // Las opciones dependen de la base: al cambiarla, la key
+                      // rehace el campo con la lista nueva.
+                      key: ValueKey('conversion|$_selectedPresentation'),
+                      initialValue: unitSelectionValue(
+                        _conversionSections,
+                        _conversionUnit,
+                        fallback: '',
+                      ),
+                      isExpanded: true,
+                      dropdownColor: AppColors.card,
+                      decoration: _dropdownDecoration('Equivale a (opcional)'),
+                      items: unitDropdownItems(
+                        _conversionSections,
+                        emptyLabel: 'Sin equivalencia',
+                      ),
+                      selectedItemBuilder: unitDropdownSelectedBuilder(
+                        _conversionSections,
+                        emptyLabel: 'Sin equivalencia',
+                      ),
+                      onChanged: (v) => setState(() {
+                        _conversionUnit = v ?? '';
+                        _conversionTouched = true;
+                      }),
+                    ),
+                  ),
+                ],
+              ),
+              if (_conversionHint() != null) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _conversionHint()!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _conversion != null
+                          ? AppColors.primary
+                          : AppColors.mutedForeground,
                     ),
                   ),
                 ),
@@ -1033,6 +1212,25 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
     );
   }
 
+  /// Mismo borde que el selector de unidad base, para los campos que no son
+  /// texto (unidad de compra, contenido automático).
+  InputDecoration _dropdownDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        borderSide: BorderSide(color: AppColors.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        borderSide: BorderSide(color: AppColors.primary, width: 2),
+      ),
+    );
+  }
+
   Widget _field(
     TextEditingController controller,
     String label, {
@@ -1094,6 +1292,8 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
               ? null
               : _purchaseUnitController.text.trim(),
           packSize: _packSizeValue,
+          conversionUnit: _conversionUnitForSave,
+          conversionFactor: _conversion?.factor,
         ),
       );
       if (!mounted) return;

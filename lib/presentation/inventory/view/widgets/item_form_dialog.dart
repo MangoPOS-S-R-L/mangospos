@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/inventory/unit_conversion.dart';
 import '../../../../core/theme/app_colors.dart';
+import 'unit_dropdown.dart';
 import '../../../../data/repositories/inventory_repository.dart';
 import '../../state/inventory_state.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
@@ -71,6 +72,17 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
   late bool _tracksLots;
   // PRD inventario avanzado: clasificación del item.
   late String _itemClassification;
+  // Secciones del selector según lo GUARDADO: una unidad fuera del catálogo
+  // («bolsa» como base) queda en «Actual» aunque se elija otra.
+  late final List<UnitSection> _baseSections;
+  late final List<UnitSection> _purchaseSections;
+  // Equivalencia propia: 1 [unidad base] = N [otra unidad] (1 ea = 200 g).
+  late final TextEditingController _conversionFactorCtrl;
+  String _conversionUnit = '';
+  // Si la ficha llegó sabiendo qué equivalencia tenía. Si no (esquema viejo)
+  // y nadie la toca, al guardar no se manda: así no se borra una que exista.
+  late final bool _conversionKnown;
+  bool _conversionTouched = false;
   bool _saving = false;
   String? _error;
 
@@ -88,10 +100,29 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
       text: e?.barcode ?? widget.initialBarcode?.trim() ?? '',
     );
     _descCtrl = TextEditingController(text: e?.description ?? '');
-    _unitCtrl = TextEditingController(text: e?.unit ?? 'unidad');
-    _purchaseUnitCtrl = TextEditingController(text: e?.purchaseUnit ?? '');
+    _baseSections = baseUnitSections(current: e?.unit);
+    _purchaseSections = purchaseUnitSections(current: e?.purchaseUnit);
+    // «gr», «CAJAS» o «LIBRA» arrancan como su unidad del catálogo. Es la misma
+    // unidad con otro nombre: ninguna cantidad cambia.
+    _unitCtrl = TextEditingController(
+      text: unitSelectionValue(_baseSections, e?.unit, fallback: 'unidad'),
+    );
+    _purchaseUnitCtrl = TextEditingController(
+      text: unitSelectionValue(
+        _purchaseSections,
+        e?.purchaseUnit,
+        fallback: '',
+      ),
+    );
     _packSizeCtrl = TextEditingController(
       text: (e != null && e.packSize != 1) ? _trimNum(e.packSize) : '',
+    );
+    _conversionKnown = e == null || e.conversionKnown;
+    _conversionUnit = e?.conversionUnit ?? '';
+    _conversionFactorCtrl = TextEditingController(
+      text: (e != null && e.conversionFactor > 0)
+          ? _trimNum(e.conversionFactor)
+          : '',
     );
     _costCtrl = TextEditingController(text: e?.cost.toString() ?? '0');
     _minStockCtrl =
@@ -155,6 +186,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
     _unitCtrl.dispose();
     _purchaseUnitCtrl.dispose();
     _packSizeCtrl.dispose();
+    _conversionFactorCtrl.dispose();
     _costCtrl.dispose();
     _minStockCtrl.dispose();
     _maxStockCtrl.dispose();
@@ -169,41 +201,84 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
     return double.tryParse(t.replaceAll(',', '.'));
   }
 
-  /// Contenido por empaque a guardar. Vacío o inválido → 1 (sin empaque),
-  /// lo que también resetea un valor previo al editar.
-  double _packSizeForSave() {
-    final raw = _packSizeCtrl.text.trim();
-    if (raw.isEmpty) return 1;
-    final v = double.tryParse(raw.replaceAll(',', '.'));
-    return (v == null || v <= 0) ? 1 : v;
+  /// Contenido por empaque a guardar. Si la unidad de compra es una MEDIDA
+  /// (lb, gal, docena) sale de la conversión; si es un contenedor (caja, saco)
+  /// manda lo escrito. Sin unidad de compra → 1 (sin empaque), lo que también
+  /// resetea un valor previo al editar.
+  double _packSizeForSave() => resolvePackSize(
+        purchaseUnit: _purchaseUnitCtrl.text,
+        baseUnit: _unitCtrl.text,
+        manual: _toDoubleOrNull(_packSizeCtrl.text),
+        conversionUnit: _conversion?.unit,
+        conversionFactor: _conversion?.factor,
+      );
+
+  /// Contenido que sale solo cuando se compra en una medida convertible.
+  double? get _autoPackSize => _purchaseUnitCtrl.text.trim().isEmpty
+      ? null
+      : autoPackSize(
+          purchaseUnit: _purchaseUnitCtrl.text,
+          baseUnit: _unitCtrl.text,
+          conversionUnit: _conversion?.unit,
+          conversionFactor: _conversion?.factor,
+        );
+
+  double? get _conversionFactorValue =>
+      _toDoubleOrNull(_conversionFactorCtrl.text);
+
+  List<UnitSection> get _conversionSections => conversionUnitSections(
+        baseUnit: _unitCtrl.text,
+        current: _conversionUnit,
+      );
+
+  /// La equivalencia válida para la base elegida, o null.
+  ({String unit, double factor})? get _conversion => resolveItemConversion(
+        baseUnit: _unitCtrl.text,
+        unit: _conversionUnit,
+        factor: _conversionFactorValue,
+      );
+
+  /// Qué mandar al guardar: null = no tocarla (la ficha llegó sin saber cuál
+  /// tenía y nadie la cambió); '' = borrarla; si no, la unidad.
+  String? get _conversionUnitForSave {
+    final conversion = _conversion;
+    if (conversion != null) return conversion.unit;
+    if (!_conversionKnown && !_conversionTouched) return null;
+    return '';
   }
 
-  /// Opciones del dropdown de unidad base: las canónicas (unidad/ml/L/oz/g/kg)
-  /// + la unidad actual del insumo si no está en la lista (para no perder
-  /// valores legacy como 'lb' o 'gal' al editar).
-  List<String> _baseUnitOptionsList() {
-    final cur = _unitCtrl.text.trim();
-    final opts = <String>[...baseUnitOptions];
-    if (cur.isNotEmpty && !opts.contains(cur)) {
-      opts.insert(0, cur);
+  /// Ayuda bajo la equivalencia: «1 ea = 200 g», o por qué no se guardará.
+  String? _conversionHint() {
+    final conversion = _conversion;
+    if (conversion != null) {
+      return conversionLabel(
+        baseUnit: _unitCtrl.text,
+        unit: conversion.unit,
+        factor: conversion.factor,
+      );
     }
-    return opts;
+    if (_conversionUnit.trim().isEmpty) {
+      return 'Para recetas en otra clase de unidad (1 ea = 200 g)';
+    }
+    if ((_conversionFactorValue ?? 0) <= 0) {
+      return '¿Cuánto equivale 1 ${unitShortLabel(_unitCtrl.text)}?';
+    }
+    return 'No aplica con esta unidad base: no se guardará';
   }
 
-  /// Valor seleccionado del dropdown (cae a la primera opción si está vacío).
-  String _baseUnitValue() {
-    final cur = _unitCtrl.text.trim();
-    final opts = _baseUnitOptionsList();
-    return opts.contains(cur) ? cur : opts.first;
-  }
-
-  /// Texto de ayuda bajo el campo de empaque: "1 botella = 750 ml".
+  /// Ayuda bajo el campo de empaque: «24 ea / Caja».
   String? _packHelperText() {
     final pu = _purchaseUnitCtrl.text.trim();
-    final base = _unitCtrl.text.trim();
-    final size = double.tryParse(_packSizeCtrl.text.trim().replaceAll(',', '.'));
-    if (pu.isEmpty || size == null || size <= 0) return null;
-    return '1 $pu = ${_trimNum(size)} ${base.isEmpty ? 'unidad' : base}';
+    if (pu.isEmpty) return null;
+    if (_autoPackSize == null &&
+        (_toDoubleOrNull(_packSizeCtrl.text) ?? 0) <= 0) {
+      return '¿Cuánto trae cada ${unitShortLabel(pu)}?';
+    }
+    return packLabel(
+      packSize: _packSizeForSave(),
+      baseUnit: _unitCtrl.text,
+      purchaseUnit: pu,
+    );
   }
 
   Future<void> _save() async {
@@ -236,6 +311,8 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           itemClassification: _itemClassification,
           purchaseUnit: _purchaseUnitCtrl.text.trim(),
           packSize: _packSizeForSave(),
+          conversionUnit: _conversionUnitForSave,
+          conversionFactor: _conversion?.factor,
         );
       } else {
         final created = await widget.repo.createItem(
@@ -256,6 +333,8 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           itemClassification: _itemClassification,
           purchaseUnit: _orNull(_purchaseUnitCtrl.text),
           packSize: _packSizeForSave(),
+          conversionUnit: _conversionUnitForSave,
+          conversionFactor: _conversion?.factor,
         );
         widget.onCreated?.call(created);
       }
@@ -264,7 +343,9 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = FriendlyError.from(e);
+          _error = e is InventoryConversionUnsupportedException
+              ? e.message
+              : FriendlyError.from(e);
         });
       }
     }
@@ -318,19 +399,16 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  SizedBox(
-                    width: 160,
+                  Expanded(
                     child: DropdownButtonFormField<String>(
-                      initialValue: _baseUnitValue(),
+                      initialValue: _unitCtrl.text,
                       isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: 'Unidad base (stock)',
+                        labelText: 'Unidad base (stock y receta)',
                       ),
-                      items: _baseUnitOptionsList()
-                          .map(
-                            (u) => DropdownMenuItem(value: u, child: Text(u)),
-                          )
-                          .toList(growable: false),
+                      items: unitDropdownItems(_baseSections),
+                      selectedItemBuilder:
+                          unitDropdownSelectedBuilder(_baseSections),
                       onChanged: (v) {
                         if (v != null) setState(() => _unitCtrl.text = v);
                       },
@@ -352,38 +430,120 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
                 ],
               ),
               const SizedBox(height: 12),
-              // Conversión de empaque: comprar/recibir en otra unidad (ej.
-              // botella) que contiene N unidades base (ej. 750 ml). Vacío =
-              // se compra en la unidad base.
+              // Empaque de compra: en qué se compra (caja, saco, libra) y cuánto
+              // trae en la unidad base («24 ea / Caja»). Si se compra en una
+              // MEDIDA convertible el contenido sale solo: 1 lb = 453.59 g.
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: TextField(
-                      controller: _purchaseUnitCtrl,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _purchaseUnitCtrl.text,
+                      isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: 'Unidad de compra (opcional)',
-                        hintText: 'botella, caja',
+                        labelText: 'Unidad de compra',
                       ),
-                      onChanged: (_) => setState(() {}),
+                      items: unitDropdownItems(
+                        _purchaseSections,
+                        emptyLabel: 'Sin empaque',
+                      ),
+                      selectedItemBuilder: unitDropdownSelectedBuilder(
+                        _purchaseSections,
+                        emptyLabel: 'Sin empaque',
+                      ),
+                      onChanged: (v) =>
+                          setState(() => _purchaseUnitCtrl.text = v ?? ''),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
+                    child: _autoPackSize != null
+                        ? InputDecorator(
+                            decoration: InputDecoration(
+                              labelText: 'Contenido por empaque',
+                              helperText: _packHelperText(),
+                            ),
+                            child: Text(
+                              '${formatUnitQty(_autoPackSize!)} '
+                              '${unitShortLabel(_unitCtrl.text)} · automático',
+                            ),
+                          )
+                        : TextField(
+                            controller: _packSizeCtrl,
+                            enabled: _purchaseUnitCtrl.text.trim().isNotEmpty,
+                            decoration: InputDecoration(
+                              labelText: 'Contenido por empaque',
+                              hintText: '24',
+                              helperText: _packHelperText(),
+                              suffixText: unitShortLabel(_unitCtrl.text),
+                            ),
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Equivalencia propia: cuánto pesa o mide UNA unidad base. Con
+              // ella una receta en gramos descuenta de un insumo que se cuenta
+              // por unidad (1 ea = 200 g de aguacate).
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 20, right: 8),
+                    child: Text(
+                      '1 ${unitShortLabel(_unitCtrl.text)} =',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 110,
                     child: TextField(
-                      controller: _packSizeCtrl,
-                      decoration: InputDecoration(
-                        labelText: 'Contenido por empaque',
-                        hintText: '750',
-                        helperText: _packHelperText(),
-                        suffixText: _unitCtrl.text.trim().isEmpty
-                            ? null
-                            : _unitCtrl.text.trim(),
+                      controller: _conversionFactorCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Cantidad',
+                        hintText: '200',
                       ),
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) =>
+                          setState(() => _conversionTouched = true),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      // Las opciones dependen de la base: al cambiarla, la key
+                      // rehace el campo con la lista nueva.
+                      key: ValueKey('conversion|${_unitCtrl.text}'),
+                      initialValue: unitSelectionValue(
+                        _conversionSections,
+                        _conversionUnit,
+                        fallback: '',
+                      ),
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'Equivale a (opcional)',
+                        helperText: _conversionHint(),
+                        helperMaxLines: 2,
+                      ),
+                      items: unitDropdownItems(
+                        _conversionSections,
+                        emptyLabel: 'Sin equivalencia',
+                      ),
+                      selectedItemBuilder: unitDropdownSelectedBuilder(
+                        _conversionSections,
+                        emptyLabel: 'Sin equivalencia',
+                      ),
+                      onChanged: (v) => setState(() {
+                        _conversionUnit = v ?? '';
+                        _conversionTouched = true;
+                      }),
                     ),
                   ),
                 ],

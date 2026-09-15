@@ -39,6 +39,29 @@ class RecipesRepository {
     return rows;
   }
 
+  /// Equivalencia propia del insumo (migración 20260915_0001). Sin ella se
+  /// repite la lectura sin esas columnas: la receta se arma igual, solo que sin
+  /// convertir contra la equivalencia.
+  // Estático: la columna existe o no en el SERVIDOR. Por instancia, cada
+  // repositorio nuevo volvería a pagar la consulta fallida.
+  static bool? _conversionSupported;
+
+  Future<T> _withConversionColumns<T>(
+    String columns,
+    Future<T> Function(String columns) run,
+  ) async {
+    if (_conversionSupported == false) return run(columns);
+    try {
+      final result = await run('$columns, conversion_unit, conversion_factor');
+      _conversionSupported = true;
+      return result;
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && e.code != 'PGRST204') rethrow;
+      _conversionSupported = false;
+      return run(columns);
+    }
+  }
+
   Future<List<RecipeMenuProduct>> getMenuProducts(String businessId) async {
     final response = await _client
         .from('menu_items')
@@ -52,12 +75,15 @@ class RecipesRepository {
   }
 
   Future<List<RecipeInventoryItem>> getInventoryItems(String businessId) async {
-    final response = await _client
-        .from('inventory_items')
-        .select('id, name, sku, unit, cost, is_active, purchase_unit, pack_size')
-        .eq('business_id', businessId)
-        .eq('is_active', true)
-        .order('name');
+    final response = await _withConversionColumns(
+      'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
+      (columns) => _client
+          .from('inventory_items')
+          .select(columns)
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('name'),
+    );
 
     return List<Map<String, dynamic>>.from(
       response,
@@ -96,11 +122,14 @@ class RecipesRepository {
 
     final inventoryById = <String, RecipeInventoryItem>{};
     if (inventoryIds.isNotEmpty) {
-      final inventoryRows = await _selectInBatches(
-        table: 'inventory_items',
-        select: 'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
-        column: 'id',
-        values: inventoryIds,
+      final inventoryRows = await _withConversionColumns(
+        'id, name, sku, unit, cost, is_active, purchase_unit, pack_size',
+        (columns) => _selectInBatches(
+          table: 'inventory_items',
+          select: columns,
+          column: 'id',
+          values: inventoryIds,
+        ),
       );
 
       for (final row in inventoryRows) {

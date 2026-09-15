@@ -68,6 +68,8 @@ List<ModifierIngredientDraft> buildModifierIngredientDrafts({
       baseUnit: baseUnit,
       purchaseUnit: item?.purchaseUnit,
       packSize: item?.packSize ?? 1,
+      conversionUnit: item?.conversionUnit,
+      conversionFactor: item?.conversionFactor,
     );
 
     drafts.add(

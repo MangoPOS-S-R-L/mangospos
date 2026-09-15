@@ -191,4 +191,37 @@ void main() {
       expect(unitOptionsFor(baseUnit: 'unidad'), <String>['unidad']);
     });
   });
+
+  group('equivalencia propia', () {
+    test('«Aguacate extra»: 100 g de un insumo por unidad con 1 ea = 200 g',
+        () {
+      const aguacate = ModifierInventoryItem(
+        id: 'aguacate',
+        name: 'Aguacate',
+        sku: 'A-1',
+        unit: 'unidad',
+        cost: 25,
+        conversionUnit: 'g',
+        conversionFactor: 200,
+      );
+      final drafts = buildModifierIngredientDrafts(
+        rows: [_row('aguacate', '100', 'g')],
+        inventoryItems: const [aguacate],
+      );
+      expect(drafts.single.quantity, closeTo(0.5, 1e-9));
+      expect(drafts.single.unit, 'unidad');
+    });
+
+    test('la fila del catálogo trae la equivalencia', () {
+      final item = ModifierInventoryItem.fromMap({
+        'id': 'aguacate',
+        'name': 'Aguacate',
+        'unit': 'unidad',
+        'conversion_unit': 'g',
+        'conversion_factor': 200,
+      });
+      expect(item.conversionUnit, 'g');
+      expect(item.conversionFactor, 200);
+    });
+  });
 }

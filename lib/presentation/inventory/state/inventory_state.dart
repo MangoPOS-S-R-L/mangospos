@@ -292,6 +292,15 @@ class InventoryItemSummary {
   /// sin empaque (se compra en la unidad base).
   final String purchaseUnit;
   final double packSize;
+
+  /// Equivalencia propia (1 ea = 200 g): `1 [unit] = conversionFactor
+  /// [conversionUnit]`. Vacía / 0 = sin equivalencia.
+  final String conversionUnit;
+  final double conversionFactor;
+
+  /// Si la lectura trajo las columnas de la equivalencia. Una ficha armada sin
+  /// ellas (esquema viejo) NO debe borrarla al guardarse.
+  final bool conversionKnown;
   final double cost;
   final double minStock;
   final double? maxStock;
@@ -315,6 +324,9 @@ class InventoryItemSummary {
     required this.unit,
     this.purchaseUnit = '',
     this.packSize = 1,
+    this.conversionUnit = '',
+    this.conversionFactor = 0,
+    this.conversionKnown = false,
     required this.cost,
     required this.minStock,
     required this.maxStock,
@@ -332,6 +344,8 @@ class InventoryItemSummary {
   /// Sin el guard de `minStock > 0`, todo insumo sin mínimo y en cero salía
   /// como alerta — ruido que tapaba las reposiciones reales.
   bool get isLowStock => isActive && minStock > 0 && stock <= minStock;
+
+  bool get hasConversion => conversionUnit.isNotEmpty && conversionFactor > 0;
 
   /// Severidad, alineada con el `alert_level` de la vista SQL. `null` si el
   /// insumo no está bajo mínimo.
@@ -367,6 +381,9 @@ class InventoryItemSummary {
       unit: map['unit']?.toString() ?? 'unidad',
       purchaseUnit: map['purchase_unit']?.toString() ?? '',
       packSize: map['pack_size'] == null ? 1 : toDouble(map['pack_size']),
+      conversionUnit: map['conversion_unit']?.toString() ?? '',
+      conversionFactor: toDouble(map['conversion_factor']),
+      conversionKnown: map.containsKey('conversion_unit'),
       cost: toDouble(map['cost']),
       minStock: toDouble(map['min_stock']),
       maxStock: map['max_stock'] == null ? null : toDouble(map['max_stock']),

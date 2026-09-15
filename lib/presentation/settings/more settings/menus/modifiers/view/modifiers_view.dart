@@ -1446,6 +1446,7 @@ class _ModifierFormDialogState extends State<_ModifierFormDialog> {
     return unitOptionsFor(
       baseUnit: item?.unit ?? 'unidad',
       purchaseUnit: item?.purchaseUnit,
+      conversionUnit: item?.conversionUnit,
     );
   }
 

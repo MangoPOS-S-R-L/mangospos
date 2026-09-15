@@ -1,3 +1,5 @@
+-- ⚠️ 2026-09-15: en lo que toca a consume_inventory_from_order, SUPERADA por
+--    20260915_0002_consume_unified. Trae guardia: no borra la otra rama.
 -- =============================================================================
 -- Varias bodegas alimentando el punto de venta: suma para mostrar, cascada
 -- para descontar.
@@ -351,6 +353,30 @@ comment on function public.fn_recompute_menu_items_availability(uuid) is
 -- 7. El consumo, con reparto en cascada
 -- ---------------------------------------------------------------------------
 
+-- CONSUME-GUARD-DESDE ---------------------------------------------------------
+-- GUARDIA DE RAMA (agregada 2026-09-15 · ver 20260915_0002_consume_unified).
+-- 20260901_0006 y 20260907_0003/20260910_0002 reescribían esta MISMA función
+-- desde la misma base sin traer la una lo de la otra: aplicar una encima de la
+-- otra borraba lo ya puesto. La guardia mira la función viva y, si
+-- reemplazarla borraría algo, SE SALTA el reemplazo (el resto del archivo
+-- aplica igual). Después corresponde 20260915_0002.
+do $guard$
+declare
+  v_src text;
+begin
+  select pg_get_functiondef(p.oid) into v_src
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname = 'consume_inventory_from_order'
+   limit 1;
+  v_src := coalesce(v_src, '');
+  if v_src like '%modifier_ingredients%' or v_src like '%status_ext%' then
+    raise notice 'Guardia de rama: consume_inventory_from_order NO se reemplazó. La viva ya descuenta modificadores o devuelve órdenes anuladas (o es la unificada) y esta versión lo borraría. Aplicar 20260915_0002.';
+    return;
+  end if;
+
+  execute $consume_ddl$
 create or replace function public.consume_inventory_from_order(_order_id uuid)
 returns void
 language plpgsql
@@ -600,7 +626,11 @@ begin
     );
   end loop;
 end;
-$function$;
+$function$
+$consume_ddl$;
+end
+$guard$;
+-- CONSUME-GUARD-HASTA ---------------------------------------------------------
 
 comment on function public.consume_inventory_from_order(uuid) is
   'Reconcilia el consumo de una orden. Los productos con área salen de la '

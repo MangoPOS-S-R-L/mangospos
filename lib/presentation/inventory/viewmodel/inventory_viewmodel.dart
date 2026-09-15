@@ -164,6 +164,8 @@ class InventoryViewModel extends ChangeNotifier {
     double initialStock = 0,
     String? purchaseUnit,
     double? packSize,
+    String? conversionUnit,
+    double? conversionFactor,
   }) async {
     final businessId = _state.businessId;
     final warehouseId = _state.selectedWarehouseId;
@@ -186,6 +188,8 @@ class InventoryViewModel extends ChangeNotifier {
         maxStock: maxStock,
         purchaseUnit: purchaseUnit,
         packSize: packSize,
+        conversionUnit: conversionUnit,
+        conversionFactor: conversionFactor,
       );
 
       final itemId = created['id']?.toString();
@@ -226,6 +230,8 @@ class InventoryViewModel extends ChangeNotifier {
     required bool isActive,
     String? purchaseUnit,
     double? packSize,
+    String? conversionUnit,
+    double? conversionFactor,
   }) async {
     _state = _state.copyWith(saving: true, clearError: true);
     notifyListeners();
@@ -243,6 +249,8 @@ class InventoryViewModel extends ChangeNotifier {
         isActive: isActive,
         purchaseUnit: purchaseUnit,
         packSize: packSize,
+        conversionUnit: conversionUnit,
+        conversionFactor: conversionFactor,
       );
       _state = _state.copyWith(saving: false);
       await refresh();

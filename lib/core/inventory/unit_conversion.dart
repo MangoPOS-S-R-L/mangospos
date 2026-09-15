@@ -1,9 +1,11 @@
-/// Conversión entre unidades de la MISMA familia (volumen, peso, conteo).
+/// Conversión entre unidades de la MISMA clase (volumen, peso, conteo).
 ///
-/// Complementa [pack_conversion.dart] (que maneja el empaque por insumo:
-/// 1 botella = N unidades base). Esta capa permite escribir recetas en
-/// onzas/litros/cl y que el sistema descuente del stock en la unidad base
-/// del insumo (ml/g), convirtiendo automáticamente.
+/// Qué unidades existen, cómo se llaman y cuánto valen vive en
+/// [unit_catalog.dart]; acá está cómo se convierte entre ellas. Complementa
+/// [pack_conversion.dart], que maneja el empaque por insumo (1 botella = N
+/// unidades base). Esta capa permite escribir recetas en onzas, litros o
+/// cucharadas y que el sistema descuente del stock en la unidad base del
+/// insumo, convirtiendo automáticamente.
 ///
 /// Unidad base canónica por familia: volumen → ml, peso → g, conteo → unidad.
 /// Funciones puras, sin estado.
@@ -15,43 +17,11 @@
 /// vieja. Si se cambia una unidad con recetas vivas, hay que rehacerlas.
 library;
 
-enum UnitFamily { volume, weight, count, unknown }
+import 'unit_catalog.dart';
 
-/// Factor de cada unidad hacia la base canónica de su familia.
-/// `1 unidad = toBase` (en la unidad base de la familia).
-const Map<String, ({UnitFamily family, double toBase})> _units = {
-  // Volumen (base: ml)
-  'ml': (family: UnitFamily.volume, toBase: 1),
-  'cc': (family: UnitFamily.volume, toBase: 1),
-  'l': (family: UnitFamily.volume, toBase: 1000),
-  'lt': (family: UnitFamily.volume, toBase: 1000),
-  'litro': (family: UnitFamily.volume, toBase: 1000),
-  'litros': (family: UnitFamily.volume, toBase: 1000),
-  'cl': (family: UnitFamily.volume, toBase: 10),
-  // Peso (base: g)
-  'mg': (family: UnitFamily.weight, toBase: 0.001),
-  'g': (family: UnitFamily.weight, toBase: 1),
-  'gr': (family: UnitFamily.weight, toBase: 1),
-  'gramo': (family: UnitFamily.weight, toBase: 1),
-  'gramos': (family: UnitFamily.weight, toBase: 1),
-  'kg': (family: UnitFamily.weight, toBase: 1000),
-  'kilo': (family: UnitFamily.weight, toBase: 1000),
-  'kilos': (family: UnitFamily.weight, toBase: 1000),
-  // La libra es la unidad de compra real de una cocina dominicana: la carne,
-  // el queso y el embutido se piden por libra, no por kilo. Faltaba, y su
-  // ausencia empujaba a la gente a escoger «L» en el selector — que es litro.
-  'lb': (family: UnitFamily.weight, toBase: 453.59237),
-  'lbs': (family: UnitFamily.weight, toBase: 453.59237),
-  'libra': (family: UnitFamily.weight, toBase: 453.59237),
-  'libras': (family: UnitFamily.weight, toBase: 453.59237),
-  // Conteo (base: unidad)
-  'unidad': (family: UnitFamily.count, toBase: 1),
-  'unidades': (family: UnitFamily.count, toBase: 1),
-  'und': (family: UnitFamily.count, toBase: 1),
-  'u': (family: UnitFamily.count, toBase: 1),
-  'pieza': (family: UnitFamily.count, toBase: 1),
-  'piezas': (family: UnitFamily.count, toBase: 1),
-};
+export 'unit_catalog.dart';
+
+enum UnitFamily { volume, weight, count, unknown }
 
 /// La ONZA no dice de qué familia es: en el bar son 29.5735 ml de ron y en la
 /// cocina son 28.3495 g de pechuga. La misma palabra, dos cosas distintas.
@@ -59,41 +29,58 @@ const Map<String, ({UnitFamily family, double toBase})> _units = {
 /// No se puede elegir una y ya: si se fija en volumen, la receta de un sólido
 /// no convierte y el descuento sale 16 veces más grande; si se fija en peso,
 /// se rompen los cócteles. Se resuelve por CONTEXTO — contra la unidad del
-/// otro lado de la conversión, que es como lo lee una persona.
-const Map<String, ({double volume, double weight})> _ambiguous = {
-  'oz': (volume: 29.5735, weight: 28.349523125),
-  'onz': (volume: 29.5735, weight: 28.349523125),
-  'onza': (volume: 29.5735, weight: 28.349523125),
-  'onzas': (volume: 29.5735, weight: 28.349523125),
-};
+/// otro lado de la conversión, que es como lo lee una persona. Quien quiera
+/// decirlo sin ambigüedad tiene `fl oz` en el catálogo.
+const double _ozVolume = 29.5735;
+const double _ozWeight = 28.349523125;
 
-String _norm(String u) => u.trim().toLowerCase();
+UnitFamily _familyOf(UnitClass unitClass) {
+  switch (unitClass) {
+    case UnitClass.weight:
+      return UnitFamily.weight;
+    case UnitClass.volume:
+      return UnitFamily.volume;
+    case UnitClass.count:
+      return UnitFamily.count;
+    case UnitClass.container:
+      return UnitFamily.unknown;
+  }
+}
 
 /// Resuelve una unidad contra la familia de su contraparte. Devuelve null si
-/// la unidad no existe en ninguna de las dos tablas.
+/// la unidad no está en el catálogo o no convierte por factor (contenedores).
 ({UnitFamily family, double toBase})? _resolve(String u, UnitFamily? hint) {
-  final fixed = _units[u];
-  if (fixed != null) return fixed;
-  final amb = _ambiguous[u];
-  if (amb == null) return null;
-  // Sin pista, la onza es líquida: es el uso histórico y el del bar.
-  final fam = (hint == UnitFamily.weight) ? UnitFamily.weight : UnitFamily.volume;
-  return (
-    family: fam,
-    toBase: fam == UnitFamily.weight ? amb.weight : amb.volume,
-  );
+  final def = findUnit(u);
+  final factor = def?.toBase;
+  if (def == null || factor == null) return null;
+  if (def.ambiguous) {
+    // Sin pista, la onza es líquida: es el uso histórico y el del bar.
+    final fam =
+        (hint == UnitFamily.weight) ? UnitFamily.weight : UnitFamily.volume;
+    return (
+      family: fam,
+      toBase: fam == UnitFamily.weight ? _ozWeight : _ozVolume,
+    );
+  }
+  final fam = _familyOf(def.unitClass);
+  if (fam == UnitFamily.unknown) return null;
+  return (family: fam, toBase: factor);
 }
 
 /// La familia de una unidad SIN contexto — null si es ambigua.
-UnitFamily? _fixedFamily(String u) => _units[u]?.family;
+UnitFamily? _fixedFamily(String u) {
+  final def = findUnit(u);
+  if (def == null || def.ambiguous || def.toBase == null) return null;
+  final fam = _familyOf(def.unitClass);
+  return fam == UnitFamily.unknown ? null : fam;
+}
 
-/// Familia de una unidad (o [UnitFamily.unknown] si no está en el catálogo).
+/// Familia de una unidad (o [UnitFamily.unknown] si no convierte).
 UnitFamily unitFamily(String unit) =>
-    _resolve(_norm(unit), null)?.family ?? UnitFamily.unknown;
+    _resolve(unit, null)?.family ?? UnitFamily.unknown;
 
 /// ¿`from` y `to` son convertibles entre sí (misma familia conocida)?
-bool areConvertible(String from, String to) =>
-    _pair(_norm(from), _norm(to)) != null;
+bool areConvertible(String from, String to) => _pair(from, to) != null;
 
 /// Resuelve AMBAS unidades tomando cada una como pista de la otra. Null si
 /// alguna es desconocida o si acaban en familias distintas.
@@ -110,50 +97,42 @@ bool areConvertible(String from, String to) =>
 /// Devuelve `null` si no son convertibles (familias distintas o unidad
 /// desconocida) — el caller decide el fallback.
 double? convertUnit(double qty, String from, String to) {
-  final p = _pair(_norm(from), _norm(to));
+  final p = _pair(from, to);
   if (p == null || p.to.toBase == 0) return null;
   return qty * p.from.toBase / p.to.toBase;
 }
 
-/// Unidades base canónicas ofrecidas en el selector del formulario de insumo.
-///
-/// `lb` va junto a `g`/`kg` porque es la unidad con que de verdad se compra en
-/// la cocina. `oz` queda en la familia de VOLUMEN (onza líquida) porque es la
-/// que usa el bar en sus cócteles; para un sólido que viene en onzas —una
-/// bolsa de 10 oz— la unidad base es la bolsa y el peso se declara en el
-/// empaque (`pack_size`), que es justamente para lo que existe.
-const List<String> baseUnitOptions = <String>[
-  'unidad',
-  'ml',
-  'L',
-  'oz',
-  'g',
-  'kg',
-  'lb',
-];
+/// ¿El insumo declara una equivalencia propia usable?
+bool _hasConversion(String? unit, double? factor) =>
+    unit != null && unit.trim().isNotEmpty && factor != null && factor > 0;
 
-/// Unidades de compra/empaque comunes (no convertibles por factor: usan el
-/// `pack_size` del insumo). Solo para sugerencias en el selector.
-const List<String> purchaseUnitOptions = <String>[
-  'Botella',
-  'Caja',
-  'Paquete',
-  'Galón',
-  'Lata',
-  'Bolsa',
-  'Libra',
-  'Saco',
-  'Funda',
-];
+/// ¿Es una MEDIDA (lb, gal, docena) y no un contenedor ni una porción?
+bool _isMeasure(String? unit) {
+  final def = findUnit(unit);
+  return def != null && !def.isContainer && def.toBase != null;
+}
+
+/// La familia de una unidad usada como EQUIVALENCIA. La onza a secas va con
+/// el peso, que es donde la pone el selector: «1 porción = 8 oz».
+UnitFamily _conversionFamily(String unit) {
+  final def = findUnit(unit);
+  if (def == null || def.toBase == null) return UnitFamily.unknown;
+  return def.ambiguous ? UnitFamily.weight : _familyOf(def.unitClass);
+}
 
 /// Convierte `quantity` (escrita en `fromUnit`) a la UNIDAD BASE del insumo.
 ///
-/// Es la regla que ya usaba el formulario de recetas, extraída acá para que el
-/// formulario de modificadores descuente con el mismo criterio:
+/// Es la regla que usan el formulario de recetas y el de modificadores, en
+/// este orden:
 ///   1. si la unidad escrita es la unidad de COMPRA del insumo → × `packSize`
-///      (1 botella = 700 ml);
+///      (1 botella = 700 ml). «CAJAS» y «Caja» cuentan como la misma;
 ///   2. si es de la misma familia que la base → factor de conversión;
-///   3. si no se reconoce → se asume que ya venía en unidad base.
+///   3. si convierte contra la EQUIVALENCIA propia del insumo (1 ea = 200 g)
+///      → se lleva a esa unidad y se divide por el factor: 400 g de aguacate
+///      son 2 aguacates;
+///   4. si la compra es una MEDIDA (1 lb = 3 ea) y la unidad escrita convierte
+///      contra ella → se lleva a esa medida y se multiplica por el empaque;
+///   5. si no se reconoce → se asume que ya venía en unidad base.
 ///
 /// Preserva el SIGNO: los modificadores guardan cantidades negativas para
 /// anular lo que la receta base descuenta («sin queso»).
@@ -163,17 +142,51 @@ double toBaseQuantity({
   required String baseUnit,
   String? purchaseUnit,
   double packSize = 1,
+  String? conversionUnit,
+  double? conversionFactor,
 }) {
   final from = fromUnit.trim();
   if (from.isEmpty) return quantity;
 
   final pu = purchaseUnit?.trim();
-  if (pu != null && pu.isNotEmpty && from.toLowerCase() == pu.toLowerCase()) {
+  if (pu != null && pu.isNotEmpty && sameUnit(from, pu)) {
     return quantity * (packSize <= 0 ? 1 : packSize);
   }
 
   final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
-  return convertUnit(quantity, from, base) ?? quantity;
+  final direct = convertUnit(quantity, from, base);
+  if (direct != null) return direct;
+
+  if (_hasConversion(conversionUnit, conversionFactor)) {
+    final inConversion = convertUnit(quantity, from, conversionUnit!.trim());
+    if (inConversion != null) return inConversion / conversionFactor!;
+  }
+
+  if (pu != null && packSize > 0 && _isMeasure(pu)) {
+    final inPurchase = convertUnit(quantity, from, pu);
+    if (inPurchase != null) return inPurchase * packSize;
+  }
+
+  return quantity;
+}
+
+const List<String> _volumeOptions = [
+  'ml', 'L', 'oz', 'fl oz', 'gal', 'qt', 'cup', 'tbsp', 'tsp', //
+];
+const List<String> _weightOptions = ['g', 'kg', 'lb', 'oz'];
+const List<String> _countOptions = ['unidad', 'dz'];
+
+List<String> _familyOptions(UnitFamily family) {
+  switch (family) {
+    case UnitFamily.volume:
+      return _volumeOptions;
+    case UnitFamily.weight:
+      return _weightOptions;
+    case UnitFamily.count:
+      return _countOptions;
+    case UnitFamily.unknown:
+      return const [];
+  }
 }
 
 /// Unidades que se le ofrecen al usuario para un insumo: su unidad base + las
@@ -181,22 +194,190 @@ double toBaseQuantity({
 ///
 /// `oz` aparece en peso además de en volumen: contra un insumo de peso la
 /// conversión la resuelve como onza de peso (la pechuga se compra por libra y
-/// la receta la pide en onzas).
-List<String> unitOptionsFor({required String baseUnit, String? purchaseUnit}) {
-  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
-  final opts = <String>{base};
-  switch (unitFamily(base)) {
-    case UnitFamily.volume:
-      opts.addAll(const ['ml', 'cl', 'L', 'oz']);
-      break;
-    case UnitFamily.weight:
-      opts.addAll(const ['g', 'kg', 'lb', 'oz']);
-      break;
-    case UnitFamily.count:
-    case UnitFamily.unknown:
-      break;
+/// la receta la pide en onzas). Si la BASE es `oz` a secas se ofrecen las dos
+/// familias, porque lo guardado así puede ser de la cocina o del bar.
+///
+/// Con una EQUIVALENCIA propia (1 ea = 200 g) se ofrece también la familia de
+/// esa unidad, y lo mismo si se compra en una medida (por libra).
+///
+/// `current` conserva la unidad con que se escribió una fila aunque ya no se
+/// ofrezca (`cl`), siempre que el insumo la pueda convertir.
+List<String> unitOptionsFor({
+  required String baseUnit,
+  String? purchaseUnit,
+  String? current,
+  String? conversionUnit,
+}) {
+  final base = normalizeUnitCode(
+    baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim(),
+  );
+  final opts = <String>[base];
+  void add(String unit) {
+    if (!opts.any((o) => sameUnit(o, unit))) opts.add(unit);
   }
+
+  if (findUnit(base)?.ambiguous ?? false) {
+    _weightOptions.forEach(add);
+    _volumeOptions.forEach(add);
+  } else if (unitFamily(base) != UnitFamily.count) {
+    // En conteo va la base sola: la docena aparece si una equivalencia o la
+    // compra la hacen convertible.
+    _familyOptions(unitFamily(base)).forEach(add);
+  }
+
   final pu = purchaseUnit?.trim();
-  if (pu != null && pu.isNotEmpty) opts.add(pu);
-  return opts.toList(growable: false);
+  if (pu != null && pu.isNotEmpty) {
+    add(normalizeUnitCode(pu));
+    if (_isMeasure(pu)) _familyOptions(unitFamily(pu)).forEach(add);
+  }
+
+  final cu = conversionUnit?.trim();
+  if (cu != null && cu.isNotEmpty) {
+    add(normalizeUnitCode(cu));
+    _familyOptions(_conversionFamily(cu)).forEach(add);
+  }
+
+  final cur = current?.trim();
+  if (cur != null && cur.isNotEmpty) {
+    final reachable = areConvertible(cur, base) ||
+        (pu != null &&
+            pu.isNotEmpty &&
+            (sameUnit(cur, pu) || (_isMeasure(pu) && areConvertible(cur, pu)))) ||
+        (cu != null && cu.isNotEmpty && areConvertible(cur, cu));
+    if (reachable) add(cur);
+  }
+  return List.unmodifiable(opts);
+}
+
+/// Contenido por empaque que sale SOLO: cuando la unidad de compra es una
+/// medida que convierte contra la base (1 lb = 453.59 g, 1 gal = 3785.41 mL,
+/// 1 dz = 12 unidades), o contra la equivalencia del insumo (con 1 ea = 200 g,
+/// una libra trae 2.27 unidades). Null si la compra es un contenedor (una caja
+/// trae lo que el proveedor diga) o si no hay cómo convertir.
+double? autoPackSize({
+  required String purchaseUnit,
+  required String baseUnit,
+  String? conversionUnit,
+  double? conversionFactor,
+}) {
+  final pu = findUnit(purchaseUnit);
+  if (pu == null || pu.isContainer || pu.toBase == null) return null;
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit;
+  final direct = convertUnit(1, pu.code, base);
+  if (direct != null) return direct;
+  if (!_hasConversion(conversionUnit, conversionFactor)) return null;
+  final inConversion = convertUnit(1, pu.code, conversionUnit!.trim());
+  return inConversion == null ? null : inConversion / conversionFactor!;
+}
+
+/// El `pack_size` a guardar. Sin unidad de compra → 1 (sin empaque). Si la
+/// compra es una medida convertible manda la conversión, aunque se haya
+/// escrito otro número. Si no, lo escrito (o 1 si no es válido).
+double resolvePackSize({
+  required String purchaseUnit,
+  required String baseUnit,
+  double? manual,
+  String? conversionUnit,
+  double? conversionFactor,
+}) {
+  if (purchaseUnit.trim().isEmpty) return 1;
+  final auto = autoPackSize(
+    purchaseUnit: purchaseUnit,
+    baseUnit: baseUnit,
+    conversionUnit: conversionUnit,
+    conversionFactor: conversionFactor,
+  );
+  if (auto != null && auto > 0) return auto;
+  return (manual == null || manual <= 0) ? 1 : manual;
+}
+
+/// Secciones del selector de EQUIVALENCIA: las medidas de las OTRAS clases.
+/// Contra una base en unidades se ofrece peso y volumen; contra una en libras,
+/// volumen y conteo. Si la base no convierte («bolsa», porción) se ofrecen
+/// todas. `current` conserva la guardada aunque ya no aplique, para que el
+/// selector no reviente cuando se cambia la base.
+List<UnitSection> conversionUnitSections({
+  required String baseUnit,
+  String? current,
+}) {
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
+  final baseFamily = (findUnit(base)?.ambiguous ?? false)
+      ? UnitFamily.unknown
+      : unitFamily(base);
+  final sections = <UnitSection>[
+    for (final unitClass in const [
+      UnitClass.weight,
+      UnitClass.volume,
+      UnitClass.count,
+    ])
+      if (_familyOf(unitClass) != baseFamily)
+        UnitSection(unitClassTitles[unitClass]!, [
+          for (final code in offeredUnitCodes(unitClass))
+            if (findUnit(code)?.toBase != null) code,
+        ]),
+  ];
+  final raw = current?.trim() ?? '';
+  if (raw.isEmpty ||
+      sections.any((s) => s.codes.any((c) => sameUnit(c, raw)))) {
+    return sections;
+  }
+  return [
+    UnitSection('Actual', [raw], legacy: true),
+    ...sections,
+  ];
+}
+
+/// La equivalencia que se guarda, o null si no sirve: sin unidad, factor no
+/// positivo, unidad fuera del catálogo o que no convierte (contenedor,
+/// porción), o de la MISMA familia que la base — 1 lb = 453.59 g ya lo sabe el
+/// catálogo, y una propia distinta lo contradiría.
+({String unit, double factor})? resolveItemConversion({
+  required String baseUnit,
+  required String? unit,
+  required double? factor,
+}) {
+  final raw = unit?.trim() ?? '';
+  if (raw.isEmpty || factor == null || factor <= 0) return null;
+  final def = findUnit(raw);
+  if (def == null || def.isContainer || def.toBase == null) return null;
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit.trim();
+  final baseAmbiguous = findUnit(base)?.ambiguous ?? false;
+  if (!baseAmbiguous && _conversionFamily(def.code) == unitFamily(base)) {
+    return null;
+  }
+  return (unit: def.code, factor: factor);
+}
+
+/// Cómo se lee una equivalencia: «1 ea = 200 g».
+String conversionLabel({
+  required String baseUnit,
+  required String unit,
+  required double factor,
+}) {
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit;
+  return '1 ${unitShortLabel(base)} = ${formatUnitQty(factor)} '
+      '${unitShortLabel(unit)}';
+}
+
+/// Cómo se lee un empaque, al estilo Toast: «24 ea / Caja»,
+/// «750 mL / Botella», «50 lb / Saco».
+String packLabel({
+  required double packSize,
+  required String baseUnit,
+  required String purchaseUnit,
+}) {
+  final base = baseUnit.trim().isEmpty ? 'unidad' : baseUnit;
+  return '${formatUnitQty(packSize)} ${unitShortLabel(base)} / '
+      '${unitShortLabel(purchaseUnit)}';
+}
+
+/// Cantidad sin ceros sobrantes: 2 decimales desde 1, 4 por debajo (una onza
+/// en libras es 0.0625).
+String formatUnitQty(double value) {
+  var s = value.toStringAsFixed(value.abs() >= 1 ? 2 : 4);
+  if (s.contains('.')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '');
+    if (s.endsWith('.')) s = s.substring(0, s.length - 1);
+  }
+  return s;
 }

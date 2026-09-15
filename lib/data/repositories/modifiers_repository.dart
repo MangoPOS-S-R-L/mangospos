@@ -257,16 +257,41 @@ class ModifiersRepository {
   // «Queso extra» baja queso, «Pan integral» baja pan integral y sube el pan
   // sobao que la receta base iba a descontar (cantidad negativa).
 
+  /// Equivalencia propia del insumo (migración 20260915_0001). Sin ella se
+  /// repite la lectura sin esas columnas y el formulario sigue funcionando.
+  // Estático: la columna existe o no en el SERVIDOR. Por instancia, cada
+  // repositorio nuevo volvería a pagar la consulta fallida.
+  static bool? _conversionSupported;
+
+  Future<T> _withConversionColumns<T>(
+    String columns,
+    Future<T> Function(String columns) run,
+  ) async {
+    if (_conversionSupported == false) return run(columns);
+    try {
+      final result = await run('$columns, conversion_unit, conversion_factor');
+      _conversionSupported = true;
+      return result;
+    } on PostgrestException catch (e) {
+      if (e.code != '42703' && e.code != 'PGRST204') rethrow;
+      _conversionSupported = false;
+      return run(columns);
+    }
+  }
+
   /// Catálogo de insumos activos del negocio para el selector del formulario.
   Future<List<ModifierInventoryItem>> getInventoryItems(
     String businessId,
   ) async {
-    final response = await _client
-        .from('inventory_items')
-        .select('id, name, sku, unit, cost, purchase_unit, pack_size')
-        .eq('business_id', businessId)
-        .eq('is_active', true)
-        .order('name');
+    final response = await _withConversionColumns(
+      'id, name, sku, unit, cost, purchase_unit, pack_size',
+      (columns) => _client
+          .from('inventory_items')
+          .select(columns)
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('name'),
+    );
 
     return List<Map<String, dynamic>>.from(
       response,

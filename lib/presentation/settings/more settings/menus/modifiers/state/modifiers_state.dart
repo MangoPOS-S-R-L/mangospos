@@ -111,6 +111,11 @@ class ModifierInventoryItem {
   final String? purchaseUnit;
   final double packSize;
 
+  /// Equivalencia propia del insumo (1 ea = 200 g): permite capturar «50 g»
+  /// de un insumo que se cuenta por unidad.
+  final String? conversionUnit;
+  final double conversionFactor;
+
   const ModifierInventoryItem({
     required this.id,
     required this.name,
@@ -119,6 +124,8 @@ class ModifierInventoryItem {
     required this.cost,
     this.purchaseUnit,
     this.packSize = 1,
+    this.conversionUnit,
+    this.conversionFactor = 0,
   });
 
   factory ModifierInventoryItem.fromMap(Map<String, dynamic> map) {
@@ -129,6 +136,7 @@ class ModifierInventoryItem {
 
     final rawPack = toDouble(map['pack_size']);
     final pu = map['purchase_unit']?.toString().trim();
+    final cu = map['conversion_unit']?.toString().trim();
     return ModifierInventoryItem(
       id: map['id']?.toString() ?? '',
       name: map['name']?.toString() ?? 'Insumo',
@@ -137,6 +145,8 @@ class ModifierInventoryItem {
       cost: toDouble(map['cost']),
       purchaseUnit: (pu == null || pu.isEmpty) ? null : pu,
       packSize: rawPack <= 0 ? 1 : rawPack,
+      conversionUnit: (cu == null || cu.isEmpty) ? null : cu,
+      conversionFactor: toDouble(map['conversion_factor']),
     );
   }
 }

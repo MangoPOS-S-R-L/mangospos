@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../../../../core/inventory/unit_conversion.dart';
+import 'package:mangopos/presentation/inventory/view/widgets/unit_dropdown.dart';
 import '../../../../../../../app/router/routes.dart';
 import '../../../../../../../app/theme/mango_tokens.dart';
 import '../state/recipes_state.dart';
@@ -594,20 +595,19 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
             Expanded(
               child: Builder(
                 builder: (_) {
-                  final options = _unitOptionsFor(row.inventoryItemId);
                   final current = row.unit.text.trim();
-                  final value = options.contains(current)
-                      ? current
-                      : (options.isNotEmpty ? options.first : null);
+                  final options = _unitOptionsFor(
+                    row.inventoryItemId,
+                    current: current,
+                  );
+                  final value = matchUnitOption(options, current) ??
+                      (options.isNotEmpty ? options.first : null);
                   return DropdownButtonFormField<String>(
                     initialValue: value,
                     isExpanded: true,
                     decoration: const InputDecoration(labelText: 'Unidad'),
-                    items: options
-                        .map(
-                          (u) => DropdownMenuItem(value: u, child: Text(u)),
-                        )
-                        .toList(growable: false),
+                    items: unitOptionItems(options),
+                    selectedItemBuilder: unitOptionSelectedBuilder(options),
                     onChanged: (u) {
                       if (u != null) setState(() => row.unit.text = u);
                     },
@@ -655,46 +655,32 @@ class _RecipeFormDialogState extends State<_RecipeFormDialog> {
         .firstWhere((item) => item != null, orElse: () => null);
   }
 
-  /// Unidades ofrecidas para un ingrediente: su unidad base + las de su misma
-  /// familia (oz/ml/L… ó g/kg) + la unidad de compra del insumo (ej. botella).
-  List<String> _unitOptionsFor(String? itemId) {
+  /// Unidades ofrecidas para un ingrediente. La regla vive en el catálogo
+  /// (`unitOptionsFor`), la misma que usan los modificadores; `current`
+  /// conserva la unidad con que se guardó la fila aunque ya no se ofrezca.
+  List<String> _unitOptionsFor(String? itemId, {String? current}) {
     final item = _itemById(itemId);
-    final base = (item?.unit.trim().isNotEmpty ?? false)
-        ? item!.unit.trim()
-        : 'unidad';
-    final opts = <String>{base};
-    switch (unitFamily(base)) {
-      case UnitFamily.volume:
-        opts.addAll(const ['ml', 'cl', 'L', 'oz']);
-        break;
-      case UnitFamily.weight:
-        // `oz` va acá aunque su familia por defecto sea volumen: contra un
-        // insumo de peso la conversión la resuelve como onza de peso. Es el
-        // caso de la pechuga — se compra por libra y la receta la pide en oz.
-        opts.addAll(const ['g', 'kg', 'lb', 'oz']);
-        break;
-      case UnitFamily.count:
-      case UnitFamily.unknown:
-        break;
-    }
-    final pu = item?.purchaseUnit?.trim();
-    if (pu != null && pu.isNotEmpty) opts.add(pu);
-    return opts.toList(growable: false);
+    return unitOptionsFor(
+      baseUnit: item?.unit ?? 'unidad',
+      purchaseUnit: item?.purchaseUnit,
+      current: current,
+      conversionUnit: item?.conversionUnit,
+    );
   }
 
-  /// Convierte `qty` (en `fromUnit`) a la unidad base del insumo:
-  /// 1) si es la unidad de compra → ×pack_size; 2) si es de la misma familia
-  /// → factor; 3) si no → se asume ya en unidad base.
-  double _toBaseQty(double qty, String fromUnit, RecipeInventoryItem item) {
-    final from = fromUnit.trim();
-    if (from.isEmpty) return qty;
-    final pu = item.purchaseUnit?.trim();
-    if (pu != null && pu.isNotEmpty && from.toLowerCase() == pu.toLowerCase()) {
-      return qty * (item.packSize <= 0 ? 1 : item.packSize);
-    }
-    final converted = convertUnit(qty, from, item.unit);
-    return converted ?? qty;
-  }
+  /// Convierte `qty` (en `fromUnit`) a la unidad base del insumo con la regla
+  /// compartida: unidad de compra → ×pack_size; misma familia → factor; si no
+  /// → se asume ya en unidad base.
+  double _toBaseQty(double qty, String fromUnit, RecipeInventoryItem item) =>
+      toBaseQuantity(
+        quantity: qty,
+        fromUnit: fromUnit,
+        baseUnit: item.unit,
+        purchaseUnit: item.purchaseUnit,
+        packSize: item.packSize,
+        conversionUnit: item.conversionUnit,
+        conversionFactor: item.conversionFactor,
+      );
 
   void _submit() {
     final menuItemId = _menuItemId;
