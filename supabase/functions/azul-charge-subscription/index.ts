@@ -16,6 +16,8 @@
 //     attempt_number) de azul_charges es el candado; si choca, devolvemos la charge
 //     existente sin recobrar.
 //   - Política de reintentos D11: intentos 1/2/3; tras el 3º declinado → suspended.
+//   - Monto: subscription_effective_price_cents (migración 20260915_0006) — precio
+//     especial del cliente si tiene uno vigente para su plan, si no el de lista.
 
 import { corsPreflight, errorResponse, jsonResponse } from "../_shared/responses.ts";
 import { getAzulEnv } from "../_shared/env.ts";
@@ -107,7 +109,7 @@ Deno.serve(async (req) => {
 
   const { data: plan, error: pErr } = await service
     .from("plans")
-    .select("price_cents_monthly, currency_code")
+    .select("currency_code")
     .eq("id", membership.plan_id)
     .maybeSingle();
   if (pErr || !plan) {
@@ -130,16 +132,38 @@ Deno.serve(async (req) => {
     return errorResponse(422, "payment_method_not_verified", `Payment method status is '${pm.status}'`);
   }
 
-  // 2. Monto. v1 sin prorrateo (azul_plan_adjustments no existe todavía).
-  const amountCents = plan.price_cents_monthly as number;
-  const itbisCents = 0;
-  const currencyCode = (plan.currency_code as string) ?? "DOP";
-
-  // 3. Período de facturación.
+  // 2. Período de facturación. Va ANTES del monto: el precio especial puede
+  //    tener vencimiento y se evalúa contra el período que se cobra, no contra
+  //    "hoy" — un reintento de un pago atrasado no debe perder el descuento del
+  //    mes al que corresponde.
   const today = todayUtcIso();
   const periodStart = (body.billing_period_start ?? membership.next_billing_date ??
     membership.current_period_end ?? today) as string;
   const periodEnd = addMonthIso(periodStart);
+
+  // 3. Monto. v1 sin prorrateo (azul_plan_adjustments no existe todavía).
+  //    Lo decide subscription_effective_price_cents: precio especial vigente
+  //    para ESTE plan o, si no hay, el de lista. Es la misma función que usan
+  //    las facturas y el MRR, para que lo cobrado y lo facturado no diverjan.
+  //
+  //    Falla CERRADA: si no se puede resolver el precio efectivo, NO se cobra.
+  //    Caer al precio de lista le cobraría de más a un cliente con descuento;
+  //    no cobrar hoy solo lo difiere al próximo ciclo del cron.
+  const { data: effectivePrice, error: priceErr } = await service.rpc(
+    "subscription_effective_price_cents",
+    { p_membership_id: membershipId, p_on: periodStart },
+  );
+  if (priceErr || typeof effectivePrice !== "number") {
+    return errorResponse(
+      500,
+      "price_unresolved",
+      "Could not resolve the effective price for this membership",
+      priceErr?.message ?? `unexpected value: ${JSON.stringify(effectivePrice)}`,
+    );
+  }
+  const amountCents = effectivePrice;
+  const itbisCents = 0;
+  const currencyCode = (plan.currency_code as string) ?? "DOP";
 
   // 4. OrderNumber determinístico (≤15 alfanumérico).
   const orderNumber = generateChargeOrderNumber(
@@ -200,9 +224,12 @@ Deno.serve(async (req) => {
     }
     // Transitoria (error/pending) → reintentar sobre la misma fila.
     chargeId = existing.id;
+    // El monto se reescribe: si el precio cambió entre intentos (se cargó o
+    // quitó un precio especial), la fila tiene que reflejar lo que se cobra
+    // AHORA, no lo que se intentó la primera vez.
     await service
       .from("azul_charges")
-      .update({ status: "pending", attempted_at: nowIso })
+      .update({ status: "pending", attempted_at: nowIso, amount_cents: amountCents })
       .eq("id", chargeId);
   } else {
     chargeId = inserted!.id;

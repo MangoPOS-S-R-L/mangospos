@@ -6,6 +6,41 @@
   (14/09/2026 18:29) con 828 artículos. Trae código, costo, precio y existencia, pero
   **ninguna categoría**: las categorías las asignó el generador por palabra clave.
 
+## ⏳ Fase 2 (16/09/2026): los 1,043 que faltaban. Lista, sin correr en prod
+
+El PDF de la fase 1 **no era todo el catálogo**: solo traía el tramo de códigos
+`7622201776664`–`9002490291709`. El maestro real del sistema anterior (`ARTICULO.csv`, tabla
+ARTICULOS) tiene 3,831 artículos. El dueño decidió cargar solo los **1,043 activos que faltaban**:
+los que vendieron en los últimos 12 meses o tienen existencia. Entre ellos están los que más se
+venden: Presidente, café, empanadas, Dasani y Planeta Azul.
+
+**Cómo se corre:** `00_diagnostico_fase2.sql`, pegar el resultado, y después
+`IMPORT_FASE2.sql`. El reporte final tiene 16 filas y todas deben decir ✓. Si hace falta
+deshacerla, `99_rollback_fase2.sql`. Después, cada caja tiene que volver a bajar el catálogo.
+
+| | |
+|---|---|
+| Fuente | `~/Desktop/ARTICULO.csv`, **no** `ARTICULOS.csv`: ese pasó por Excel y perdió el 0 inicial de 675 códigos. El `.py` lo detecta y aborta |
+| Qué entra | 1,043 productos en 23 categorías; se crean 3 nuevas (**Café y batidos**, **Helados**, **Souvenirs y regalos**). 902 con código de barras. 669 con existencia inicial: 21,753 u, RD$1,477,571.36 a costo |
+| Qué queda fuera | 1,950 dormidos (sin venta en un año y sin existencia) y 10 de uso interno |
+| Precio / costo | `ar_predet` / `ar_ultcos`, las mismas columnas que dio el PDF (828/828). El costo 0 **y el 1.00 de relleno** entran en `null` |
+| Existencia | `ar_exitem` (coincide con el PDF en 805/828); los negativos entran en 0. `ar_exiact` es teórica, no sirve |
+| ITBIS | 18% incluido para todos, como en la fase 1. El CSV de revisión marca los 45 que el sistema anterior cobraba al 0/16/17% |
+| Inventario | 1:1 para todos, también elaborados y consignación, con `allow_negative_sale = true` |
+| Fase 1 | Solo se le cambia la **posición** (orden alfabético con los nuevos), y solo si sigue en su categoría original. La caja ordena por `position` y después por nombre |
+| Ya creado a mano | Si alguien creó uno de estos productos con su código, se actualiza, pero su existencia **no** se toca si el insumo ya tiene movimientos. Sale en un aviso |
+| Aborta si | la fase 1 no está cargada; o un código de la fase 2 apunta a un producto de la fase 1 |
+
+Archivos: `build_fase2_3c5c3b8e.py` (reglas de categoría propias, que se evalúan antes que las
+de la fase 1), `_tpl_*_fase2.sql`, `catalogo_fase2_revision.csv` (la columna `nota` marca
+posibles duplicados, ITBIS distinto y costo ≥ precio). Ensayo:
+`PGPORT=<puerto> ensayo/run_tests_fase2.sh`, con 9 escenarios, todos en verde el 16/09.
+
+```bash
+python3 scripts/import_3c5c3b8e/build_fase2_3c5c3b8e.py ~/Desktop/ARTICULO.csv
+python3 scripts/import_3c5c3b8e/build_fase2_3c5c3b8e.py --clasificar   # solo categorías
+```
+
 ## ✅ Corrido en producción (15/09/2026)
 
 Se corrió `IMPORT_COMPLETO.sql` sin el diagnóstico previo. El reporte salió con las 15 filas

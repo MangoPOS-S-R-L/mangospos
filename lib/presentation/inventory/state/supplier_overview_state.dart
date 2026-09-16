@@ -594,7 +594,14 @@ class SupplierItemLink {
   final String supplierCode;
   final String purchaseUnit;
 
-  /// Precio de lista acordado (`supplier_items.last_price`).
+  /// Unidades base que trae [purchaseUnit] (1 = sin empaque).
+  final double packSize;
+
+  /// Mínimo de compra del suplidor, en unidades de compra.
+  final double? minOrderQty;
+
+  /// Precio de lista acordado (`supplier_items.last_price`), por UNIDAD DE
+  /// COMPRA.
   final double? listPrice;
 
   /// Último precio realmente PAGADO y el anterior, de las líneas de las
@@ -617,6 +624,8 @@ class SupplierItemLink {
     this.unit = '',
     this.supplierCode = '',
     this.purchaseUnit = '',
+    this.packSize = 1,
+    this.minOrderQty,
     this.listPrice,
     this.lastPaidPrice,
     this.previousPaidPrice,
@@ -629,6 +638,14 @@ class SupplierItemLink {
   /// Precio a mostrar: lo último que se pagó manda sobre la lista, porque es
   /// lo que de verdad costó.
   double? get price => lastPaidPrice ?? listPrice;
+
+  /// Lo último pagado llevado a precio por UNIDAD DE COMPRA, que es la unidad
+  /// de `supplier_items.last_price`. Las líneas de orden guardan el costo por
+  /// unidad base: sin esta conversión, declarar el vínculo guardaba «RD$22»
+  /// junto a «Caja» cuando la caja cuesta RD$528.
+  double? get lastPaidPricePerPurchaseUnit => lastPaidPrice == null
+      ? null
+      : lastPaidPrice! * (packSize > 0 ? packSize : 1);
 
   /// Variación porcentual entre las dos últimas compras. `null` cuando hay
   /// una sola: sin punto de comparación no hay tendencia.
@@ -729,6 +746,7 @@ class SupplierDetail {
         sku: item?.sku ?? '',
         unit: item?.unit ?? '',
         purchaseUnit: item?.purchaseUnit ?? '',
+        packSize: item?.packSize ?? 1,
       );
     }
 
@@ -756,6 +774,8 @@ class SupplierDetail {
         unit: link.unit,
         supplierCode: link.supplierCode,
         purchaseUnit: link.purchaseUnit,
+        packSize: link.packSize,
+        minOrderQty: link.minOrderQty,
         listPrice: link.listPrice,
         lastPaidPrice: last,
         previousPaidPrice: previous,

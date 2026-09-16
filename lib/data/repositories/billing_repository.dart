@@ -69,6 +69,7 @@ class BillingRepository {
           trial_ends_at, current_period_start, current_period_end,
           next_billing_date, consent_granted_at, current_attempt_number,
           suspended_at, cancelled_at, cancellation_reason, created_at,
+          price_override_cents, price_override_plan_id, price_override_ends_on,
           plan:plans(*),
           last_successful_charge:azul_charges_public!last_successful_charge_id(*),
           last_failed_charge:azul_charges_public!last_failed_charge_id(*)
@@ -519,10 +520,15 @@ class BillingRepository {
   ///   creditoNoUsadoA = P_A * diasRestantes / M
   ///   cargoProrrateadoB = P_B * diasRestantes / M
   ///   ajuste = cargoProrrateadoB - creditoNoUsadoA
+  ///
+  /// [currentPriceCents] es lo que el cliente REALMENTE paga hoy (precio
+  /// especial incluido). Sin él se acreditaría el precio de lista y el cliente
+  /// con descuento vería un crédito mayor al que le corresponde.
   ProrationPreview previewProration({
     required BillingPlan currentPlan,
     required BillingPlan newPlan,
     required DateTime today,
+    int? currentPriceCents,
   }) {
     if (currentPlan.id == newPlan.id) {
       return const ProrationPreview(
@@ -536,8 +542,8 @@ class BillingRepository {
     final lastDayOfMonth = DateTime(today.year, today.month + 1, 0).day;
     final daysRemaining = lastDayOfMonth - today.day + 1;
 
-    final creditA =
-        (currentPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
+    final currentCents = currentPriceCents ?? currentPlan.priceCentsMonthly;
+    final creditA = (currentCents * daysRemaining) ~/ lastDayOfMonth;
     final chargeB =
         (newPlan.priceCentsMonthly * daysRemaining) ~/ lastDayOfMonth;
     final adjustment = chargeB - creditA;

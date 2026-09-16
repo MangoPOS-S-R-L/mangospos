@@ -75,6 +75,9 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
   final _codeCtrl = TextEditingController();
   final _unitCtrl = TextEditingController();
   final _priceCtrl = TextEditingController();
+  // Contenido de la unidad de compra y mínimo de compra de ESTE suplidor.
+  final _packCtrl = TextEditingController();
+  final _minCtrl = TextEditingController();
 
   List<InventoryItemSummary> _catalog = const [];
   InventoryItemSummary? _selected;
@@ -95,6 +98,8 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
     _codeCtrl.dispose();
     _unitCtrl.dispose();
     _priceCtrl.dispose();
+    _packCtrl.dispose();
+    _minCtrl.dispose();
     super.dispose();
   }
 
@@ -132,7 +137,7 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
   Future<void> _save() async {
     final item = _selected;
     if (item == null) {
-      setState(() => _error = 'Elegí el insumo que provee.');
+      setState(() => _error = 'Elige el insumo que provee.');
       return;
     }
     setState(() {
@@ -150,6 +155,19 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
         purchaseUnit: _unitCtrl.text.trim().isEmpty
             ? null
             : _unitCtrl.text.trim(),
+        // Unidades base que trae la unidad de compra. Si la unidad es una
+        // medida (lb, gal) sale sola; si es un contenedor, lo escrito.
+        packSize: _unitCtrl.text.trim().isEmpty
+            ? null
+            : resolvePackSize(
+                purchaseUnit: _unitCtrl.text,
+                baseUnit: item.unit,
+                manual: double.tryParse(
+                  _packCtrl.text.trim().replaceAll(',', '.'),
+                ),
+              ),
+        minOrderQty: double.tryParse(_minCtrl.text.trim().replaceAll(',', '.')),
+        // Precio por UNIDAD DE COMPRA (columna documentada en 20260915_0003).
         listPrice: double.tryParse(_priceCtrl.text.trim().replaceAll(',', '')),
       );
 
@@ -233,6 +251,9 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
                                           ? item.unit
                                           : item.purchaseUnit,
                                     );
+                                  }
+                                  if (_packCtrl.text.trim().isEmpty && item.packSize != 1) {
+                                    _packCtrl.text = formatUnitQty(item.packSize);
                                   }
                                 }),
                           leading: Icon(
@@ -324,6 +345,58 @@ class _LinkSupplierItemDialogState extends State<LinkSupplierItemDialog> {
                     decoration: const InputDecoration(
                       isDense: true,
                       labelText: 'Precio lista',
+                      hintText: 'por unidad de compra',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Builder(
+                    builder: (_) {
+                      final item = _selected;
+                      // Con una medida (lb, gal) el contenido sale solo y el
+                      // campo no se escribe; con un contenedor, sí.
+                      final auto = (item == null || _unitCtrl.text.trim().isEmpty)
+                          ? null
+                          : autoPackSize(
+                              purchaseUnit: _unitCtrl.text,
+                              baseUnit: item.unit,
+                            );
+                      return TextField(
+                        controller: _packCtrl,
+                        enabled: auto == null,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          labelText: 'Contenido por unidad de compra',
+                          hintText: auto != null
+                              ? '${formatUnitQty(auto)} · automático'
+                              : 'Ej: 24',
+                          suffixText:
+                              item == null ? null : unitShortLabel(item.unit),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 150,
+                  child: TextField(
+                    controller: _minCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Mínimo de compra',
                     ),
                   ),
                 ),

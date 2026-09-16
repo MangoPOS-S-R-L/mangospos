@@ -155,14 +155,50 @@ class _PlanStatusCard extends StatelessWidget {
                     ),
                     if (plan != null) ...[
                       const SizedBox(height: 4),
-                      Text(
-                        '${plan.formattedPrice} / mes',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: MangoColors.muted,
-                          fontWeight: FontWeight.w600,
+                      // Con precio especial: lo que paga, la lista tachada y
+                      // la marca. Si solo viera el precio normal, el primer
+                      // cobro menor parecería un error.
+                      if (state.hasSpecialPrice)
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 2,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              '${state.formattedEffectivePrice} / mes',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: MangoColors.darkGray,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            Text(
+                              plan.formattedPrice,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: MangoColors.muted,
+                                decoration: TextDecoration.lineThrough,
+                              ),
+                            ),
+                            const Text(
+                              'Precio especial',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: MangoColors.primaryOrange,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Text(
+                          '${plan.formattedPrice} / mes',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: MangoColors.muted,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
                     ],
                   ],
                 ),
@@ -247,7 +283,7 @@ class _TrialCountdownCard extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Primer cobro: ${formatter.format(state.nextBillingDate!)}'
-              '${state.plan != null ? ' · ${state.plan!.formattedPrice}' : ''}',
+              '${state.formattedEffectivePrice != null ? ' · ${state.formattedEffectivePrice}' : ''}',
               style: const TextStyle(
                 fontSize: 13,
                 color: MangoColors.darkGray,
@@ -326,7 +362,7 @@ class _NextBillingCard extends StatelessWidget {
           if (state.plan != null) ...[
             const SizedBox(height: 4),
             Text(
-              'Monto: ${state.plan!.formattedPrice}',
+              'Monto: ${state.formattedEffectivePrice ?? state.plan!.formattedPrice}',
               style: const TextStyle(
                 fontSize: 13,
                 color: MangoColors.darkGray,

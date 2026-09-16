@@ -272,12 +272,17 @@ class SuppliersRepository {
     }
 
     try {
-      return await fetch('id, name, sku, unit, preferred_supplier_id');
+      return await fetch(
+        'id, name, sku, unit, purchase_unit, pack_size, preferred_supplier_id',
+      );
     } catch (e) {
       if (_isSchemaGap(e)) {
         // `preferred_supplier_id` llega con 20260813_0001.
         try {
-          return await fetch('id, name, sku, unit', preferred: false);
+          return await fetch(
+            'id, name, sku, unit, purchase_unit, pack_size',
+            preferred: false,
+          );
         } catch (inner) {
           debugPrint('[proveedores] no se pudo leer el catálogo: $inner');
           return const [];
@@ -390,6 +395,12 @@ class SuppliersRepository {
               purchaseUnit: link.purchaseUnit.isNotEmpty
                   ? link.purchaseUnit
                   : (catalogById[link.itemId]?.purchaseUnit ?? ''),
+              // El empaque va en pareja con la unidad: el del vínculo si lo
+              // declaró, si no el del insumo.
+              packSize: link.purchaseUnit.isNotEmpty && (link.packSize ?? 0) > 0
+                  ? link.packSize!
+                  : (catalogById[link.itemId]?.packSize ?? 1),
+              minOrderQty: link.minOrderQty,
               listPrice: link.lastPrice,
               linked: true,
             ),
@@ -620,9 +631,16 @@ class SuppliersRepository {
   }) async {
     if (_linksSupported == false) return false;
     try {
+      // Se DESACTIVA, no se borra (B4): el vínculo guarda código, precio y
+      // empaque del suplidor, y la siembra desde compras (D8) respeta un
+      // vínculo desactivado en vez de volver a crearlo. Vincular de nuevo lo
+      // reactiva (el upsert escribe is_active = true).
       await _client
           .from('supplier_items')
-          .delete()
+          .update({
+            'is_active': false,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
           .eq('supplier_id', supplierId)
           .eq('inventory_item_id', itemId);
       return true;
@@ -706,6 +724,8 @@ class _CatalogItem {
   final String name;
   final String sku;
   final String unit;
+  final String purchaseUnit;
+  final double packSize;
   final String? preferredSupplierId;
 
   const _CatalogItem({
@@ -713,6 +733,8 @@ class _CatalogItem {
     required this.name,
     this.sku = '',
     this.unit = '',
+    this.purchaseUnit = '',
+    this.packSize = 1,
     this.preferredSupplierId,
   });
 
@@ -724,6 +746,10 @@ class _CatalogItem {
     name: map['name']?.toString() ?? 'Insumo',
     sku: map['sku']?.toString() ?? '',
     unit: map['unit']?.toString() ?? '',
+    purchaseUnit: map['purchase_unit']?.toString() ?? '',
+    packSize: map['pack_size'] == null
+        ? 1
+        : SuppliersRepository._toDouble(map['pack_size']),
     preferredSupplierId: withPreferred
         ? map['preferred_supplier_id']?.toString()
         : null,
@@ -735,6 +761,8 @@ class _CatalogItem {
     name: name,
     description: '',
     unit: unit,
+    purchaseUnit: purchaseUnit,
+    packSize: packSize > 0 ? packSize : 1,
     cost: 0,
     minStock: 0,
     maxStock: null,
@@ -748,6 +776,12 @@ class _LinkRow {
   final String itemId;
   final String supplierCode;
   final String purchaseUnit;
+
+  /// Unidades base que trae la unidad de compra de ESTE suplidor.
+  final double? packSize;
+  final double? minOrderQty;
+
+  /// Precio por UNIDAD DE COMPRA (ver comentario de la columna, 20260915_0003).
   final double? lastPrice;
 
   const _LinkRow({
@@ -755,6 +789,8 @@ class _LinkRow {
     required this.itemId,
     this.supplierCode = '',
     this.purchaseUnit = '',
+    this.packSize,
+    this.minOrderQty,
     this.lastPrice,
   });
 
@@ -763,6 +799,12 @@ class _LinkRow {
     itemId: map['inventory_item_id']?.toString() ?? '',
     supplierCode: map['supplier_code']?.toString() ?? '',
     purchaseUnit: map['purchase_unit']?.toString() ?? '',
+    packSize: map['pack_size'] == null
+        ? null
+        : SuppliersRepository._toDouble(map['pack_size']),
+    minOrderQty: map['min_order_qty'] == null
+        ? null
+        : SuppliersRepository._toDouble(map['min_order_qty']),
     lastPrice: map['last_price'] == null
         ? null
         : SuppliersRepository._toDouble(map['last_price']),

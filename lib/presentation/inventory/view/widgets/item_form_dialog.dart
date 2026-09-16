@@ -13,6 +13,10 @@ import 'unit_dropdown.dart';
 import '../../../../data/repositories/inventory_repository.dart';
 import '../../state/inventory_state.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import '../../../../core/inventory/item_presentations.dart';
+import '../../../../data/repositories/item_presentations_repository.dart';
+import 'item_presentations_editor.dart';
 
 class ItemFormDialog extends StatefulWidget {
   final String businessId;
@@ -86,7 +90,32 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
   bool _saving = false;
   String? _error;
 
-  bool get _isEdit => widget.edit != null;
+  // Presentaciones de dos niveles (Compras F5a). Se muestran solo si la base
+  // ya tiene la tabla (20260915_0009) y se guardan DESPUÉS del insumo.
+  ItemPresentationsRepository? _presentationsRepo;
+  List<PresentationDraft> _presentations = const [];
+  bool _presentationsLoading = true;
+  bool _presentationsSupported = false;
+  bool _presentationsTouched = false;
+
+  /// Id del insumo recién creado cuando falló guardar sus presentaciones: el
+  /// siguiente «Guardar» actualiza ese insumo en vez de crear otro igual.
+  String? _savedItemId;
+
+  bool get _isEdit => widget.edit != null || _savedItemId != null;
+
+  String? get _itemIdForUpdate => widget.edit?.id ?? _savedItemId;
+
+  /// La presentación marcada como de compra, si la lista es válida: manda
+  /// sobre la unidad y el contenido de compra de la ficha.
+  ResolvedPresentation? get _purchaseFromPresentation {
+    if (!_presentationsSupported || _presentations.isEmpty) return null;
+    final check = checkPresentations(_presentations, _unitCtrl.text);
+    final chosen = check.purchaseDefault;
+    return (check.isValid && chosen != null && chosen.baseQty != null)
+        ? chosen
+        : null;
+  }
 
   @override
   void initState() {
@@ -133,6 +162,32 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
     _isActive = e?.isActive ?? true;
     _tracksLots = e?.tracksLots ?? false;
     _itemClassification = _normalizeClassification(e?.itemClassification);
+    _loadPresentations();
+  }
+
+  Future<void> _loadPresentations() async {
+    try {
+      final repo = _presentationsRepo ??=
+          ItemPresentationsRepository(Supabase.instance.client);
+      // Insumo nuevo: una lectura vacía dice si la base ya las soporta.
+      final list = await repo.getForItem(
+        widget.edit?.id ?? '00000000-0000-0000-0000-000000000000',
+      );
+      if (!mounted) return;
+      setState(() {
+        _presentationsSupported = list != null;
+        _presentations = widget.edit == null ? const [] : (list ?? const []);
+        _presentationsLoading = false;
+      });
+    } catch (e) {
+      debugPrint('[insumos] no se pudieron leer las presentaciones: $e');
+      if (mounted) {
+        setState(() {
+          _presentationsSupported = false;
+          _presentationsLoading = false;
+        });
+      }
+    }
   }
 
   static const _classificationOptions = <String, String>{
@@ -287,14 +342,22 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
       setState(() => _error = 'El nombre es obligatorio.');
       return;
     }
+    if (_presentationsTouched) {
+      final check = checkPresentations(_presentations, _unitCtrl.text);
+      if (!check.isValid) {
+        setState(() => _error = 'Revisa las presentaciones: ${check.errors.first}');
+        return;
+      }
+    }
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
+      final fromPresentation = _purchaseFromPresentation;
       if (_isEdit) {
         await widget.repo.updateItem(
-          itemId: widget.edit!.id,
+          itemId: _itemIdForUpdate!,
           name: name,
           sku: _orNull(_skuCtrl.text),
           description: _orNull(_descCtrl.text),
@@ -309,8 +372,8 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           barcode: _orNull(_barcodeCtrl.text) ?? '',
           tracksLots: _tracksLots,
           itemClassification: _itemClassification,
-          purchaseUnit: _purchaseUnitCtrl.text.trim(),
-          packSize: _packSizeForSave(),
+          purchaseUnit: fromPresentation?.unit ?? _purchaseUnitCtrl.text.trim(),
+          packSize: fromPresentation?.baseQty ?? _packSizeForSave(),
           conversionUnit: _conversionUnitForSave,
           conversionFactor: _conversion?.factor,
         );
@@ -331,12 +394,34 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
           barcode: _orNull(_barcodeCtrl.text),
           tracksLots: _tracksLots,
           itemClassification: _itemClassification,
-          purchaseUnit: _orNull(_purchaseUnitCtrl.text),
-          packSize: _packSizeForSave(),
+          purchaseUnit: fromPresentation?.unit ?? _orNull(_purchaseUnitCtrl.text),
+          packSize: fromPresentation?.baseQty ?? _packSizeForSave(),
           conversionUnit: _conversionUnitForSave,
           conversionFactor: _conversion?.factor,
         );
+        _savedItemId = created['id']?.toString();
         widget.onCreated?.call(created);
+      }
+      final itemId = _itemIdForUpdate;
+      final presentationsRepo = _presentationsRepo;
+      if (_presentationsSupported &&
+          _presentationsTouched &&
+          itemId != null &&
+          presentationsRepo != null) {
+        try {
+          // Reemplaza el juego y aplana la de compra en la ficha.
+          await presentationsRepo.save(itemId, _presentations);
+          _presentationsTouched = false;
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _saving = false;
+              _error = 'Se guardó el insumo, pero no sus presentaciones: '
+                  '${ItemPresentationsRepository.reason(e)}';
+            });
+          }
+          return;
+        }
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -353,6 +438,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final purchaseFromPresentation = _purchaseFromPresentation;
     return AlertDialog(
       title: Text(_isEdit ? 'Editar insumo' : 'Nuevo insumo'),
       content: SizedBox(
@@ -433,6 +519,8 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
               // Empaque de compra: en qué se compra (caja, saco, libra) y cuánto
               // trae en la unidad base («24 ea / Caja»). Si se compra en una
               // MEDIDA convertible el contenido sale solo: 1 lb = 453.59 g.
+              // Con una presentación marcada como de compra, manda ella.
+              if (purchaseFromPresentation == null)
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -485,7 +573,37 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
                           ),
                   ),
                 ],
-              ),
+              )
+              else
+                InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Unidad de compra',
+                    helperText: 'Sale de la presentación marcada con ★',
+                  ),
+                  child: Text(
+                    presentationChainLabel(
+                      purchaseFromPresentation,
+                      _unitCtrl.text,
+                    ),
+                  ),
+                ),
+              if (_presentationsLoading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: LinearProgressIndicator(minHeight: 2),
+                )
+              else if (_presentationsSupported) ...[
+                const SizedBox(height: 12),
+                ItemPresentationsEditor(
+                  baseUnit: _unitCtrl.text,
+                  initial: _presentations,
+                  enabled: !_saving,
+                  onChanged: (list) => setState(() {
+                    _presentations = list;
+                    _presentationsTouched = true;
+                  }),
+                ),
+              ],
               const SizedBox(height: 12),
               // Equivalencia propia: cuánto pesa o mide UNA unidad base. Con
               // ella una receta en gramos descuenta de un insumo que se cuenta

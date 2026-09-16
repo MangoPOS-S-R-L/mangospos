@@ -131,6 +131,7 @@ class AppRoutes {
   static const inventoryProduction = '$inventoryHome/production';
   static const inventoryPhysicalCount = '$inventoryHome/physical-count';
   static const inventoryReorder = '$inventoryHome/reorder';
+  static const inventoryMinStock = '$inventoryHome/min-stock';
   static const inventoryConsolidated = '$inventoryHome/consolidated';
   static const printingBase = '$settings/printing';
 

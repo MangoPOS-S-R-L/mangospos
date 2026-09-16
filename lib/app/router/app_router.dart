@@ -66,7 +66,8 @@ import '../../presentation/inventory/view/requirements_view.dart';
 import '../../presentation/inventory/view/stock_reconciliation_view.dart';
 import '../../presentation/inventory/view/production_orders_view.dart';
 import '../../presentation/inventory/view/physical_count_view.dart';
-import '../../presentation/inventory/view/inventory_reorder_view.dart';
+import '../../presentation/inventory/view/purchase_suggested_order_view.dart';
+import '../../presentation/inventory/view/min_stock_bulk_view.dart';
 import '../../presentation/inventory/view/requisitions_view.dart';
 import '../../presentation/inventory/view/transfers_view.dart';
 import '../../presentation/purchases/view/purchase_order_detail_view.dart';
@@ -863,7 +864,15 @@ class AppRouter {
           ),
           GoRoute(
             path: AppRoutes.inventoryReorder,
-            builder: (context, state) => const InventoryReorderView(),
+            // Pedido sugerido (Compras F2). Cae a la vista vieja de Reorden
+            // si la base no tiene fn_purchase_projection.
+            builder: (context, state) => const PurchaseSuggestedOrderView(),
+          ),
+          GoRoute(
+            path: AppRoutes.inventoryMinStock,
+            // Mínimos en lote (Compras F3). Ver o exportar pide acceso a
+            // inventario; guardar lo valida la base.
+            builder: (context, state) => const MinStockBulkView(),
           ),
           ]),
 

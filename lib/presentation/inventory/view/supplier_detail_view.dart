@@ -198,7 +198,11 @@ class _SupplierDetailViewState extends ConsumerState<SupplierDetailView> {
         supplierId: widget.supplierId,
         itemId: item.itemId,
         purchaseUnit: item.purchaseUnit.isEmpty ? null : item.purchaseUnit,
-        listPrice: item.price,
+        // `last_price` es por UNIDAD DE COMPRA y lo pagado viene por unidad
+        // base (B4). Sin empaque, las dos cosas son lo mismo.
+        packSize: item.purchaseUnit.isEmpty ? null : item.packSize,
+        minOrderQty: item.minOrderQty,
+        listPrice: item.lastPaidPricePerPurchaseUnit ?? item.listPrice,
       );
       if (!mounted) return;
       if (!ok) {

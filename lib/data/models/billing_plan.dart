@@ -34,9 +34,14 @@ class BillingPlan {
 
   /// Precio formateado en la moneda del plan, sin centavos si son 0.
   /// Ej. priceCentsMonthly=150000, currency=DOP → "RD$ 1,500.00"
-  String get formattedPrice {
-    final whole = priceCentsMonthly ~/ 100;
-    final cents = priceCentsMonthly % 100;
+  String get formattedPrice => formatCents(priceCentsMonthly, currencyCode);
+
+  /// Formatea centavos en [currencyCode]: 300000, DOP → "RD$ 3,000.00".
+  /// Estático para que el precio especial de la suscripción se muestre con
+  /// exactamente el mismo formato que el precio de lista.
+  static String formatCents(int amountCents, String currencyCode) {
+    final whole = amountCents ~/ 100;
+    final cents = amountCents % 100;
     final wholeStr = whole.toString().replaceAllMapped(
       RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
       (m) => '${m[1]},',

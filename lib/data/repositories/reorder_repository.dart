@@ -40,6 +40,30 @@ class ReorderSuggestion {
     this.lastPurchaseAt,
   });
 
+  /// La misma sugerencia con el suplidor, el costo y la última compra que
+  /// decidió `fn_purchase_resolve_suppliers`. Si la función resolvió, manda
+  /// ELLA aunque diga «sin suplidor»: la vista contaba borradores y canceladas.
+  ReorderSuggestion withResolved(ResolvedSupplier? resolved) {
+    if (resolved == null) return this;
+    return ReorderSuggestion(
+      inventoryItemId: inventoryItemId,
+      businessId: businessId,
+      name: name,
+      unit: unit,
+      cost: cost,
+      minStock: minStock,
+      currentStock: currentStock,
+      deficit: deficit,
+      suggestedQty: suggestedQty,
+      sku: sku,
+      maxStock: maxStock,
+      suggestedSupplierId: resolved.supplierId,
+      suggestedSupplierName: resolved.supplierName,
+      lastUnitCost: resolved.unitCostBase ?? lastUnitCost,
+      lastPurchaseAt: resolved.lastPurchaseAt ?? lastPurchaseAt,
+    );
+  }
+
   /// Costo unitario "preferido" para usar en una OC: último costo real si
   /// existe, sino el costo del insumo, sino 0.
   double get preferredUnitCost {
@@ -86,9 +110,104 @@ class ReorderSuggestion {
   }
 }
 
+/// A quién comprarle un insumo y en qué presentación, según
+/// `fn_purchase_resolve_suppliers` (20260915_0003): preferido → único vínculo
+/// activo → última compra RECIBIDA.
+class ResolvedSupplier {
+  final String itemId;
+  final String? supplierId;
+  final String? supplierName;
+
+  /// 'preferido' | 'vinculo' | 'ultima_compra' | null (nadie).
+  final String? source;
+  final int? leadTimeDays;
+
+  /// Presentación de compra y cuántas unidades base trae (1 = sin empaque).
+  final String purchaseUnit;
+  final double packSize;
+
+  /// Mínimo de compra del suplidor, en unidades de compra.
+  final double? minOrderQty;
+
+  /// Costo por unidad BASE y de dónde salió: 'ultima_compra' | 'lista' | 'insumo'.
+  final double? unitCostBase;
+  final String? costSource;
+  final DateTime? lastPurchaseAt;
+
+  const ResolvedSupplier({
+    required this.itemId,
+    this.supplierId,
+    this.supplierName,
+    this.source,
+    this.leadTimeDays,
+    this.purchaseUnit = '',
+    this.packSize = 1,
+    this.minOrderQty,
+    this.unitCostBase,
+    this.costSource,
+    this.lastPurchaseAt,
+  });
+
+  factory ResolvedSupplier.fromMap(Map<String, dynamic> map) {
+    double? optional(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString());
+    }
+
+    final pack = optional(map['pack_size']);
+    return ResolvedSupplier(
+      itemId: map['item_id']?.toString() ?? '',
+      supplierId: map['supplier_id']?.toString(),
+      supplierName: map['supplier_name']?.toString(),
+      source: map['supplier_source']?.toString(),
+      leadTimeDays: (map['lead_time_days'] as num?)?.toInt(),
+      purchaseUnit: map['purchase_unit']?.toString() ?? '',
+      packSize: (pack == null || pack <= 0) ? 1 : pack,
+      minOrderQty: optional(map['min_order_qty']),
+      unitCostBase: optional(map['unit_cost_base']),
+      costSource: map['cost_source']?.toString(),
+      lastPurchaseAt: map['last_purchase_at'] == null
+          ? null
+          : DateTime.tryParse(map['last_purchase_at'].toString()),
+    );
+  }
+}
+
 class ReorderRepository {
   ReorderRepository(this._client);
   final SupabaseClient _client;
+
+  /// Tri-estado de `fn_purchase_resolve_suppliers`. Estático: la función existe
+  /// o no en el servidor, no por instancia.
+  static bool? _resolverSupported;
+
+  /// Suplidor, presentación y costo por insumo. Mapa vacío si la base no tiene
+  /// la función (20260915_0003 sin aplicar): la pantalla sigue con la vista.
+  Future<Map<String, ResolvedSupplier>> resolveSuppliers(
+    String businessId,
+    List<String> itemIds,
+  ) async {
+    if (itemIds.isEmpty || _resolverSupported == false) return const {};
+    try {
+      final rows = await _client.rpc(
+        'fn_purchase_resolve_suppliers',
+        params: {'p_business_id': businessId, 'p_item_ids': itemIds},
+      );
+      _resolverSupported = true;
+      return {
+        for (final row in (rows as List).whereType<Map>())
+          row['item_id'].toString():
+              ResolvedSupplier.fromMap(Map<String, dynamic>.from(row)),
+      };
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202' || e.code == '42883') {
+        _resolverSupported = false;
+        return const {};
+      }
+      rethrow;
+    }
+  }
 
   static const _view = 'v_inventory_reorder_suggestions';
 

@@ -234,10 +234,18 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                 ),
                 _HubCard(
                   icon: Icons.shopping_cart_outlined,
-                  title: 'Sugerencias de reorden',
+                  title: 'Pedido sugerido',
                   subtitle:
-                      'Productos bajo mínimo + crear OC directo al proveedor',
+                      'Cuánto pedir según consumo y entrega · órdenes por suplidor',
                   route: AppRoutes.inventoryReorder,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.low_priority_outlined,
+                  title: 'Mínimos en lote',
+                  subtitle:
+                      'Ajusta mínimos de muchos insumos con el sugerido por consumo',
+                  route: AppRoutes.inventoryMinStock,
                   available: true,
                 ),
                 _HubCard(

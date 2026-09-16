@@ -45,6 +45,7 @@ import 'item_adjust_dialog.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/item_form_dialog.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
+import 'package:mangopos/presentation/inventory/view/widgets/price_comparison_dialog.dart';
 
 /// Estado del filtro de actividad. `min_stock` y las bajas viven en el
 /// maestro, así que el default es "solo activos": lo dado de baja no debería
@@ -2305,6 +2306,14 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         switch (value) {
           case 'edit':
             _openForm(edit: item);
+          case 'prices':
+            // Compras F4: qué cobró cada suplidor, desde lo recibido.
+            showPriceComparisonDialog(
+              context,
+              itemId: item.id,
+              itemName: item.name,
+              unit: item.unit,
+            );
           case 'toggle':
             _toggleActive(item);
           case 'delete':
@@ -2312,6 +2321,15 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
         }
       },
       itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'prices',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.price_change_outlined, size: 18),
+            title: Text('Comparar precios'),
+          ),
+        ),
         if (canEdit)
           const PopupMenuItem(
             value: 'edit',

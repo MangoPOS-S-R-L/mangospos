@@ -77,9 +77,16 @@ class PlanSelectionView extends ConsumerWidget {
             itemBuilder: (context, i) {
               final plan = plans[i];
               final isCurrent = currentPlan?.id == plan.id;
+              final currentState = stateAsync.value;
               return _PlanCard(
                 plan: plan,
                 isCurrent: isCurrent,
+                // Solo el plan actual puede tener precio especial: está
+                // amarrado a ese plan y no viaja a los demás.
+                specialPrice:
+                    isCurrent && (currentState?.hasSpecialPrice ?? false)
+                        ? currentState!.formattedEffectivePrice
+                        : null,
                 onSelect: isCurrent
                     ? null
                     : () => _onSelectPlan(
@@ -87,6 +94,7 @@ class PlanSelectionView extends ConsumerWidget {
                           ref: ref,
                           newPlan: plan,
                           currentPlan: currentPlan,
+                          currentState: currentState,
                         ),
               );
             },
@@ -101,6 +109,7 @@ class PlanSelectionView extends ConsumerWidget {
     required WidgetRef ref,
     required BillingPlan newPlan,
     required BillingPlan? currentPlan,
+    required BillingState? currentState,
   }) async {
     final repo = ref.read(billingRepositoryProvider);
     final preview = currentPlan != null
@@ -108,6 +117,7 @@ class PlanSelectionView extends ConsumerWidget {
             currentPlan: currentPlan,
             newPlan: newPlan,
             today: DateTime.now(),
+            currentPriceCents: currentState?.effectivePriceCents,
           )
         : null;
 
@@ -119,6 +129,9 @@ class PlanSelectionView extends ConsumerWidget {
         currentPlan: currentPlan,
         newPlan: newPlan,
         proration: preview,
+        currentSpecialPrice: (currentState?.hasSpecialPrice ?? false)
+            ? currentState!.formattedEffectivePrice
+            : null,
       ),
     );
     if (confirmed != true) return;
@@ -143,10 +156,14 @@ class _PlanCard extends StatelessWidget {
   final bool isCurrent;
   final VoidCallback? onSelect;
 
+  /// Precio especial formateado del cliente en este plan, o null.
+  final String? specialPrice;
+
   const _PlanCard({
     required this.plan,
     required this.isCurrent,
     required this.onSelect,
+    this.specialPrice,
   });
 
   @override
@@ -217,6 +234,24 @@ class _PlanCard extends StatelessWidget {
               ),
             ],
           ),
+          if (specialPrice != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFE6D5),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                'Tu precio especial: $specialPrice / mes',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: MangoColors.primaryOrange,
+                ),
+              ),
+            ),
+          ],
           if (plan.description != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -302,10 +337,14 @@ class _ChangePlanSheet extends StatelessWidget {
   final BillingPlan newPlan;
   final ProrationPreview? proration;
 
+  /// Precio especial que el cliente PIERDE al cambiar de plan, o null.
+  final String? currentSpecialPrice;
+
   const _ChangePlanSheet({
     required this.currentPlan,
     required this.newPlan,
     required this.proration,
+    this.currentSpecialPrice,
   });
 
   @override
@@ -351,7 +390,31 @@ class _ChangePlanSheet extends StatelessWidget {
             if (currentPlan != null)
               _DetailLine(
                 label: 'Plan actual',
-                value: '${currentPlan!.name} · ${currentPlan!.formattedPrice} / mes',
+                value: '${currentPlan!.name} · '
+                    '${currentSpecialPrice ?? currentPlan!.formattedPrice} / mes',
+              ),
+            // El precio especial está amarrado al plan: decirlo ANTES de
+            // confirmar. Enterarse en el siguiente cobro es la peor forma.
+            if (currentSpecialPrice != null && currentPlan != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF4E5),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFFD8A8)),
+                ),
+                child: Text(
+                  'Tu precio especial de $currentSpecialPrice es solo para el '
+                  'plan ${currentPlan!.name}. Si cambias a ${newPlan.name} '
+                  'pagarás su precio normal: ${newPlan.formattedPrice} / mes.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
               ),
             if (proration != null) ...[
               const SizedBox(height: 6),

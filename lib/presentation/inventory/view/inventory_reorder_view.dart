@@ -11,6 +11,8 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/inventory/purchase_quantity.dart';
+import 'package:mangopos/core/inventory/unit_conversion.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/reorder_repository.dart';
 import 'package:mangopos/presentation/inventory/state/inventory_state.dart';
@@ -39,6 +41,8 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
   final Set<String> _selected = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   String? _creatingForSupplier; // ID del proveedor con OC en vuelo.
+  // Suplidor, presentación y costo por insumo (fn_purchase_resolve_suppliers).
+  Map<String, ResolvedSupplier> _resolved = const {};
 
   @override
   void initState() {
@@ -68,16 +72,33 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         repo.getSuggestions(id),
         invRepo.getWarehouses(id),
       ]);
+      final raw = results[0] as List<ReorderSuggestion>;
+      // A quién comprarle y en qué empaque. Si la función no está o falla, la
+      // pantalla sigue con lo que trae la vista.
+      Map<String, ResolvedSupplier> resolved = const {};
+      try {
+        resolved = await repo.resolveSuppliers(
+          id,
+          [for (final s in raw) s.inventoryItemId],
+        );
+      } catch (e) {
+        debugPrint('[reorden] no se pudo resolver el suplidor: $e');
+      }
       if (!mounted) return;
       setState(() {
-        _suggestions = results[0] as List<ReorderSuggestion>;
+        _resolved = resolved;
+        _suggestions = [
+          for (final s in raw) s.withResolved(resolved[s.inventoryItemId]),
+        ];
         _warehouses = (results[1] as List<InventoryWarehouse>)
             .where((w) => w.name != '__IN_TRANSIT__')
             .toList(growable: false);
         for (final s in _suggestions) {
           _qtyControllers.putIfAbsent(
             s.inventoryItemId,
-            () => TextEditingController(text: _fmtQty(s.suggestedQty)),
+            () => TextEditingController(
+              text: _fmtQty(_roundedSuggestion(s).baseQuantity),
+            ),
           );
         }
         _loading = false;
@@ -89,6 +110,20 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         _loading = false;
       });
     }
+  }
+
+  /// Lo sugerido redondeado HACIA ARRIBA a empaques completos del suplidor y a
+  /// su mínimo de compra (D7). En unidad base, que es lo que edita la fila.
+  PurchaseRounding _roundedSuggestion(ReorderSuggestion s) {
+    final presentation = _resolved[s.inventoryItemId];
+    final family = unitFamily(s.unit);
+    return roundUpToPurchase(
+      suggestedBase: s.suggestedQty,
+      packSize: presentation?.packSize ?? 1,
+      minOrderPacks: presentation?.minOrderQty,
+      baseIsCountable:
+          family != UnitFamily.weight && family != UnitFamily.volume,
+    );
   }
 
   Map<String?, List<ReorderSuggestion>> get _groupedBySupplier {
@@ -154,12 +189,17 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
             '';
         final qty = double.tryParse(raw) ?? 0;
         if (qty <= 0) continue;
+        final presentation = _resolved[s.inventoryItemId];
         draftItems.add(
           PurchaseDraftItem(
             inventoryItemId: s.inventoryItemId,
             description: s.name,
             quantity: qty,
             unitCost: s.preferredUnitCost,
+            // Foto del empaque: la orden se ve y se recibe en cajas, no en
+            // unidades sueltas (B2).
+            purchaseUnit: presentation?.purchaseUnit ?? '',
+            packSize: presentation?.packSize ?? 1,
           ),
         );
       }
@@ -168,22 +208,36 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         return;
       }
 
-      final orderNumber = _generateOrderNumber();
-      await ref.read(purchasesRepositoryProvider).createPurchaseOrder(
-            businessId: _businessId!,
-            supplierId: supplierId,
-            warehouseId: warehouse.id,
-            orderNumber: orderNumber,
-            status: 'pending',
-            expectedDate: DateTime.now().add(const Duration(days: 3)),
-            notes: 'OC generada desde sugerencias de reorden',
-            items: draftItems,
-          );
+      final purchasesRepo = ref.read(purchasesRepositoryProvider);
+      // Tiempo de entrega del suplidor; mientras no lo tenga, el de por
+      // defecto (D9). Antes era «hoy + 3» fijo.
+      int? leadDays;
+      for (final s in selectedItems) {
+        leadDays ??= _resolved[s.inventoryItemId]?.leadTimeDays;
+      }
+      final created = await purchasesRepo.createPurchaseOrderWithNumber(
+        businessId: _businessId!,
+        supplierId: supplierId,
+        warehouseId: warehouse.id,
+        // Mismo formato PO-00000 que el registro; la base asigna el siguiente
+        // si ese ya está tomado.
+        orderNumber: await purchasesRepo.generateNextOrderNumber(_businessId!),
+        // Borrador. 'pending' no existe en el enum de la base: con ese valor
+        // la orden nunca llegó a crearse (B1, confirmado en prod).
+        status: 'draft',
+        expectedDate: DateTime.now().add(
+          Duration(days: leadDays ?? kDefaultSupplierLeadTimeDays),
+        ),
+        notes: 'OC generada desde sugerencias de reorden',
+        items: draftItems,
+        idempotencyKey:
+            'reorden-$supplierId-${DateTime.now().millisecondsSinceEpoch}',
+      );
 
       if (!mounted) return;
       AppToast.success(
         context,
-        'OC $orderNumber creada para ${supplierName ?? 'proveedor'} '
+        'OC ${created.orderNumber} creada para ${supplierName ?? 'proveedor'} '
         'con ${draftItems.length} líneas',
       );
       // Limpiar selección de este grupo y recargar.
@@ -254,14 +308,6 @@ class _InventoryReorderViewState extends ConsumerState<InventoryReorderView> {
         );
       },
     );
-  }
-
-  String _generateOrderNumber() {
-    final now = DateTime.now();
-    final stamp =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-'
-        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-    return 'REORD-$stamp';
   }
 
   @override

@@ -91,6 +91,13 @@ class BillingState {
   final BillingCharge? lastFailedCharge;
   final DateTime createdAt;
 
+  /// Precio especial acordado con el cliente (centavos), el plan para el que
+  /// se acordó y el último día en que aplica. Ver migración
+  /// 20260915_0006_subscription_price_override.sql.
+  final int? priceOverrideCents;
+  final String? priceOverridePlanId;
+  final DateTime? priceOverrideEndsOn;
+
   const BillingState({
     required this.membershipId,
     required this.businessId,
@@ -110,6 +117,9 @@ class BillingState {
     required this.lastSuccessfulCharge,
     required this.lastFailedCharge,
     required this.createdAt,
+    this.priceOverrideCents,
+    this.priceOverridePlanId,
+    this.priceOverrideEndsOn,
   });
 
   /// Días restantes del trial (negativo si ya pasó).
@@ -154,12 +164,49 @@ class BillingState {
     return h != null && h <= 48;
   }
 
+  /// Precio especial vigente en [on] (por defecto, la fecha del próximo cobro),
+  /// ya acotado al precio de lista. `null` si no hay uno que aplique.
+  ///
+  /// Réplica de `subscription_price_override_cents` SOLO para mostrar. Lo que
+  /// se cobra lo decide el servidor: si esta regla y la SQL divergieran, la
+  /// pantalla quedaría mal pero el cobro no.
+  int? priceOverrideCentsOn([DateTime? on]) {
+    final cents = priceOverrideCents;
+    final p = plan;
+    if (cents == null || p == null) return null;
+    // Amarrado al plan: si cambió de plan, el precio especial ya no corre.
+    if (priceOverridePlanId != p.id) return null;
+
+    DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
+    final reference = day(on ?? nextBillingDate ?? DateTime.now());
+    final ends = priceOverrideEndsOn;
+    // Inclusive: si vence el mismo día del cobro, ese cobro todavía aplica.
+    if (ends != null && day(ends).isBefore(reference)) return null;
+
+    // Nunca por encima de la lista.
+    return cents < p.priceCentsMonthly ? cents : p.priceCentsMonthly;
+  }
+
+  bool get hasSpecialPrice => priceOverrideCentsOn() != null;
+
+  /// Monto mensual que se le cobra: precio especial vigente o el de lista.
+  int? get effectivePriceCents =>
+      priceOverrideCentsOn() ?? plan?.priceCentsMonthly;
+
+  /// [effectivePriceCents] formateado ("RD$ 3,000.00").
+  String? get formattedEffectivePrice {
+    final cents = effectivePriceCents;
+    if (cents == null) return null;
+    return BillingPlan.formatCents(cents, plan?.currencyCode ?? 'DOP');
+  }
+
   /// Crea desde una row de memberships joineada con plans + opcionales charges.
   /// El SELECT del repo debe traer:
   ///   id, user_id, business_id, plan_id, is_billing_anchor, billing_status,
   ///   trial_ends_at, current_period_start, current_period_end, next_billing_date,
   ///   consent_granted_at, current_attempt_number, suspended_at, cancelled_at,
   ///   cancellation_reason, created_at,
+  ///   price_override_cents, price_override_plan_id, price_override_ends_on,
   ///   plan:plans(*), last_successful_charge:azul_charges_public!last_successful_charge_id(*),
   ///   last_failed_charge:azul_charges_public!last_failed_charge_id(*)
   factory BillingState.fromJson(Map<String, dynamic> json) {
@@ -193,6 +240,9 @@ class BillingState {
             )
           : null,
       createdAt: DateTime.parse(json['created_at'] as String),
+      priceOverrideCents: (json['price_override_cents'] as num?)?.toInt(),
+      priceOverridePlanId: json['price_override_plan_id'] as String?,
+      priceOverrideEndsOn: _parseDate(json['price_override_ends_on']),
     );
   }
 

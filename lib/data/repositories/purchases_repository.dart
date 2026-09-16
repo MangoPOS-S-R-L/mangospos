@@ -306,7 +306,122 @@ class PurchasesRepository {
 
   /// Crea la orden (y postea stock si va "Recibida"). Devuelve el id de la
   /// orden creada — lo usa la compra a crédito para vincular la CxP.
+  /// Crea la orden y devuelve su id (camino de siempre del registro de compra).
+  /// Ver [createPurchaseOrderWithNumber] para el número real que quedó.
   Future<String> createPurchaseOrder({
+    required String businessId,
+    required String supplierId,
+    required String warehouseId,
+    required String orderNumber,
+    required String status,
+    required DateTime expectedDate,
+    String? notes,
+    String? invoiceNumber,
+    String? ncf,
+    required List<PurchaseDraftItem> items,
+    double discount = 0,
+    String? idempotencyKey,
+  }) async {
+    final created = await createPurchaseOrderWithNumber(
+      businessId: businessId,
+      supplierId: supplierId,
+      warehouseId: warehouseId,
+      orderNumber: orderNumber,
+      status: status,
+      expectedDate: expectedDate,
+      notes: notes,
+      invoiceNumber: invoiceNumber,
+      ncf: ncf,
+      items: items,
+      discount: discount,
+      idempotencyKey: idempotencyKey,
+    );
+    return created.id;
+  }
+
+  /// Tri-estado de `fn_purchase_order_create` (20260915_0003): `null` = no se
+  /// probó, `false` = esta base no la tiene y se usa el camino viejo. Estático:
+  /// la función existe o no en el SERVIDOR, no por instancia.
+  static bool? _atomicCreateSupported;
+
+  /// Cabecera y líneas en UNA transacción, con número bajo candado por negocio.
+  /// Devuelve null si la base no tiene la función (el caller cae al camino
+  /// viejo); cualquier otro error sube tal cual.
+  Future<CreatedPurchaseOrder?> _createPurchaseOrderAtomic({
+    required String businessId,
+    required String supplierId,
+    required String warehouseId,
+    required String orderNumber,
+    required String status,
+    required DateTime expectedDate,
+    required List<PurchaseDraftItem> items,
+    required double subtotal,
+    required double tax,
+    required double discount,
+    required double total,
+    String? notes,
+    String? invoiceNumber,
+    String? ncf,
+    String? idempotencyKey,
+  }) async {
+    if (_atomicCreateSupported == false) return null;
+    try {
+      final result = await _client.rpc(
+        'fn_purchase_order_create',
+        params: {
+          'p_business_id': businessId,
+          'p_warehouse_id': warehouseId,
+          'p_supplier_id': supplierId,
+          'p_lines': [
+            for (final item in items)
+              {
+                'inventory_item_id': item.inventoryItemId,
+                'description': item.description,
+                // En unidad BASE, igual que el camino viejo.
+                'quantity_ordered': item.quantity,
+                'unit_cost': item.unitCost,
+                'tax_rate': item.taxRate,
+                'total': item.total,
+                'discount': item.discountAmount,
+                'purchase_unit': item.purchaseUnit.trim().isEmpty
+                    ? null
+                    : item.purchaseUnit.trim(),
+                'pack_size': item.packSize,
+              },
+          ],
+          'p_status': status,
+          'p_expected_date': expectedDate.toIso8601String().split('T').first,
+          'p_header': {
+            'order_number': orderNumber,
+            'subtotal': subtotal,
+            'tax': tax,
+            'discount': discount,
+            'total': total,
+            'notes': notes,
+            'invoice_number': invoiceNumber,
+            'ncf': ncf,
+          },
+          'p_idempotency_key': idempotencyKey,
+        },
+      );
+      _atomicCreateSupported = true;
+      final map = Map<String, dynamic>.from(result as Map);
+      return CreatedPurchaseOrder(
+        id: map['id'].toString(),
+        orderNumber: map['order_number']?.toString() ?? orderNumber,
+        reused: map['reused'] == true,
+      );
+    } on PostgrestException catch (e) {
+      // PGRST202: PostgREST no encuentra la función (migración sin aplicar).
+      if (e.code == 'PGRST202' || e.code == '42883') {
+        _atomicCreateSupported = false;
+        return null;
+      }
+      rethrow;
+    }
+  }
+
+  Future<CreatedPurchaseOrder> createPurchaseOrderWithNumber({
     required String businessId,
     required String supplierId,
     required String warehouseId,
@@ -324,6 +439,7 @@ class PurchasesRepository {
     // Los descuentos POR LÍNEA no viajan aquí: ya vienen dentro del unitCost
     // (descontado) + discountAmount informativo de cada PurchaseDraftItem.
     double discount = 0,
+    String? idempotencyKey,
   }) async {
     if (items.isEmpty) {
       throw Exception('Debes agregar al menos una linea a la orden.');
@@ -350,75 +466,102 @@ class PurchasesRepository {
     final String insertStatus =
         (status == 'received') ? 'sent' : status;
 
-    final Map<String, dynamic> createdOrder;
-    try {
-      createdOrder = await _client
-          .from(PurchasesQueries.tablePurchaseOrders)
-          .insert({
-            'business_id': businessId,
-            'supplier_id': supplierId,
-            'warehouse_id': warehouseId,
-            'order_number': orderNumber,
-            'invoice_number': invoiceNumber,
-            // Igual que `discount`: solo viaja cuando hay valor, para no
-            // depender de la migración en negocios que no la aplicaron. Con
-            // NCF digitado y columna ausente el guardado FALLA con motivo —
-            // perder el comprobante en silencio sería peor.
-            if (ncf != null && ncf.trim().isNotEmpty) 'ncf': ncf.trim(),
-            'status': insertStatus,
-            'subtotal': subtotal,
-            'tax': tax,
-            // Solo se manda la columna cuando hay descuento: así las compras
-            // sin descuento siguen funcionando aunque la migración
-            // 20260725_0001 (columna discount) no esté aplicada todavía.
-            if (orderDiscount > 0) 'discount': orderDiscount,
-            'total': total,
-            'expected_date': expectedDate.toIso8601String().split('T').first,
-            'notes': notes,
-          }..removeWhere((key, value) => value == null || value == ''))
-          .select('id')
-          .single();
-    } on PostgrestException catch (e) {
-      if (e.code == '42703' && (e.message).contains('ncf')) {
-        throw Exception(
-          'La columna `ncf` no existe todavía en purchase_orders. Aplica la '
-          'migración 20260814_0003_purchase_ncf_and_payment_terms.sql o deja '
-          'el NCF vacío para guardar esta compra.',
-        );
-      }
-      rethrow;
-    }
-
-    final orderId = createdOrder['id']?.toString();
-    if (orderId == null || orderId.isEmpty) {
-      throw Exception('No se pudo crear la orden de compra.');
-    }
-
-    await _client.from(PurchasesQueries.tablePurchaseOrderItems).insert(
-      items
-          .map(
-            (item) => {
-              'purchase_order_id': orderId,
-              'inventory_item_id': item.inventoryItemId,
-              'description': item.description,
-              // quantity_ordered y unit_cost van en unidad BASE (la vista
-              // ya convirtió desde la unidad de compra). El snapshot de
-              // empaque permite mostrar/recibir en la unidad de compra.
-              'quantity_ordered': item.quantity,
-              // unit_cost va YA descontado (costo real): kardex y costo
-              // maestro correctos sin tocar la RPC de recepción. El
-              // descuento de la línea queda aparte como dato de auditoría.
-              'unit_cost': item.unitCost,
-              'tax_rate': item.taxRate,
-              'total': item.total,
-              if (item.discountAmount > 0) 'discount': item.discountAmount,
-              'purchase_unit':
-                  item.purchaseUnit.trim().isEmpty ? null : item.purchaseUnit.trim(),
-              'pack_size': item.packSize,
-            },
-          )
-          .toList(growable: false),
+    final atomic = await _createPurchaseOrderAtomic(
+      businessId: businessId,
+      supplierId: supplierId,
+      warehouseId: warehouseId,
+      orderNumber: orderNumber,
+      status: insertStatus,
+      expectedDate: expectedDate,
+      items: items,
+      subtotal: subtotal,
+      tax: tax,
+      discount: orderDiscount,
+      total: total,
+      notes: notes,
+      invoiceNumber: invoiceNumber,
+      ncf: ncf,
+      idempotencyKey: idempotencyKey,
     );
+
+    final CreatedPurchaseOrder created;
+    if (atomic != null) {
+      created = atomic;
+    } else {
+      // Base sin 20260915_0003: el camino de siempre, cabecera y líneas por
+      // separado.
+      final Map<String, dynamic> createdOrder;
+      try {
+        createdOrder = await _client
+            .from(PurchasesQueries.tablePurchaseOrders)
+            .insert({
+              'business_id': businessId,
+              'supplier_id': supplierId,
+              'warehouse_id': warehouseId,
+              'order_number': orderNumber,
+              'invoice_number': invoiceNumber,
+              // Igual que `discount`: solo viaja cuando hay valor, para no
+              // depender de la migración en negocios que no la aplicaron. Con
+              // NCF digitado y columna ausente el guardado FALLA con motivo —
+              // perder el comprobante en silencio sería peor.
+              if (ncf != null && ncf.trim().isNotEmpty) 'ncf': ncf.trim(),
+              'status': insertStatus,
+              'subtotal': subtotal,
+              'tax': tax,
+              // Solo se manda la columna cuando hay descuento: así las compras
+              // sin descuento siguen funcionando aunque la migración
+              // 20260725_0001 (columna discount) no esté aplicada todavía.
+              if (orderDiscount > 0) 'discount': orderDiscount,
+              'total': total,
+              'expected_date': expectedDate.toIso8601String().split('T').first,
+              'notes': notes,
+            }..removeWhere((key, value) => value == null || value == ''))
+            .select('id')
+            .single();
+      } on PostgrestException catch (e) {
+        if (e.code == '42703' && (e.message).contains('ncf')) {
+          throw Exception(
+            'La columna `ncf` no existe todavía en purchase_orders. Aplica la '
+            'migración 20260814_0003_purchase_ncf_and_payment_terms.sql o deja '
+            'el NCF vacío para guardar esta compra.',
+          );
+        }
+        rethrow;
+      }
+
+      final orderId = createdOrder['id']?.toString();
+      if (orderId == null || orderId.isEmpty) {
+        throw Exception('No se pudo crear la orden de compra.');
+      }
+
+      await _client.from(PurchasesQueries.tablePurchaseOrderItems).insert(
+        items
+            .map(
+              (item) => {
+                'purchase_order_id': orderId,
+                'inventory_item_id': item.inventoryItemId,
+                'description': item.description,
+                // quantity_ordered y unit_cost van en unidad BASE (la vista
+                // ya convirtió desde la unidad de compra). El snapshot de
+                // empaque permite mostrar/recibir en la unidad de compra.
+                'quantity_ordered': item.quantity,
+                // unit_cost va YA descontado (costo real): kardex y costo
+                // maestro correctos sin tocar la RPC de recepción. El
+                // descuento de la línea queda aparte como dato de auditoría.
+                'unit_cost': item.unitCost,
+                'tax_rate': item.taxRate,
+                'total': item.total,
+                if (item.discountAmount > 0) 'discount': item.discountAmount,
+                'purchase_unit':
+                    item.purchaseUnit.trim().isEmpty ? null : item.purchaseUnit.trim(),
+                'pack_size': item.packSize,
+              },
+            )
+            .toList(growable: false),
+      );
+
+      created = CreatedPurchaseOrder(id: orderId, orderNumber: orderNumber);
+    }
 
     // Postea el stock al inventario cuando la compra se registra "Recibida".
     // `fn_receive_purchase_order` crea los movimientos (tipo 'purchase') por
@@ -432,11 +575,13 @@ class PurchasesRepository {
     // el movimiento —último precio, mig 20260714_0001, aplicada en prod—, y
     // así una orden que quede en Borrador o se cancele no deja el costo
     // movido. Antes esta función pisaba `inventory_items.cost` al guardar.
-    if (receiveNow) {
-      await receivePurchaseOrder(orderId, notes: notes);
+    // Una orden REUSADA (misma llave de idempotencia) ya pasó por acá: no se
+    // vuelve a recibir.
+    if (receiveNow && !created.reused) {
+      await receivePurchaseOrder(created.id, notes: notes);
     }
 
-    return orderId;
+    return created;
   }
 
   /// §6.4 — La compra se guardó a crédito pero la CxP no llegó a nacer.
@@ -915,4 +1060,21 @@ class GoodsReceiptUnavailable implements Exception {
   String toString() =>
       'GoodsReceiptUnavailable: falta la migración 20260828_0001 '
       '(fn_receive_purchase_order_v2).';
+}
+
+/// Orden recién creada: su id y el número que realmente quedó (la base puede
+/// asignar otro si el pedido ya estaba tomado).
+class CreatedPurchaseOrder {
+  final String id;
+  final String orderNumber;
+
+  /// La base devolvió una orden que ya existía con la misma llave de
+  /// idempotencia (doble clic, reintento).
+  final bool reused;
+
+  const CreatedPurchaseOrder({
+    required this.id,
+    required this.orderNumber,
+    this.reused = false,
+  });
 }

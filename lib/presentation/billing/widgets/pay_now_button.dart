@@ -38,7 +38,9 @@ class _PayNowButtonState extends ConsumerState<PayNowButton> {
   bool _loading = false;
 
   Future<void> _pay() async {
-    final amount = widget.state.plan?.formattedPrice;
+    // Precio efectivo, no el de lista: con precio especial el diálogo diría
+    // "Se cobrará RD$4,799" y a la tarjeta le llegaría otro monto.
+    final amount = widget.state.formattedEffectivePrice;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -141,7 +143,7 @@ class _PayNowButtonState extends ConsumerState<PayNowButton> {
       );
     }
 
-    final amount = state.plan?.formattedPrice;
+    final amount = state.formattedEffectivePrice;
     return SizedBox(
       width: double.infinity,
       child: FilledButton.icon(

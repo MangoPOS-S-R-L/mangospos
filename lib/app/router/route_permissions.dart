@@ -57,6 +57,7 @@ const Map<String, String> routePermissions = <String, String>{
   '/inventory/production': 'produccion.acceso',
   '/inventory/physical-count': 'inventario.conteo.acceso',
   '/inventory/reorder': 'inventario.acceso',
+  '/inventory/min-stock': 'inventario.acceso',
   '/settings/inventory-kardex': 'inventario.acceso',
   '/settings/inventory-requirements': 'inventario.acceso',
   '/settings/inventory-outflow': 'inventario.acceso',
