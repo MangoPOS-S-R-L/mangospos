@@ -351,6 +351,13 @@ verify_jwt = true
 # Activación de facturación electrónica. La app manda el JWT del usuario; la
 # función valida owner/admin del business y compara el RNC del negocio contra
 # el que Alanube tiene registrado para ese ULID antes de escribir nada.
+# También la llama el panel (mangopos_administrador) con JWT de operador.
+
+[functions.ecf-onboarding]
+verify_jwt = true
+# Alta e-CF desde el panel. Solo operadores de MangoPOS (is_platform_operator).
+# Recibe el certificado .p12 + contraseña y los pasa directo a Alanube sin
+# guardarlos.
 
 [analytics]
 enabled = true

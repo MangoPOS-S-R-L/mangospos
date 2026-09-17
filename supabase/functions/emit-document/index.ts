@@ -9,6 +9,7 @@ import {
   buildAlanubePayload,
   EcfTaxBreakdown,
   FiscalDocument,
+  cancelledBeforeSendError,
   isCreditNoteType,
   ModifiedDocumentRef,
   OrderItem,
@@ -200,7 +201,7 @@ async function loadContext(
         // este select haria que PostgREST tumbe la emision de TODAS las
         // facturas si la funcion se despliega antes que su migracion. Se leen
         // aparte, solo cuando el documento es una nota.
-        "id, business_id, order_id, ncf_type, ncf_number, customer_rnc, customer_name, customer_address, subtotal, discount, tax_exempt, taxable_amount, itbis_amount, service_fee, tip, total, is_electronic, alanube_document_id, issued_at, idempotency_key, related_document_id",
+        "id, business_id, order_id, ncf_type, ncf_number, customer_rnc, customer_name, customer_address, subtotal, discount, tax_exempt, taxable_amount, itbis_amount, service_fee, tip, total, is_electronic, status, alanube_document_id, issued_at, idempotency_key, related_document_id",
       )
       .eq("id", outbox.fiscal_document_id)
       .single(),
@@ -340,6 +341,18 @@ async function submitOne(
   if (doc.alanube_document_id) {
     console.log(`doc ${doc.id} already submitted (alanube_id=${doc.alanube_document_id})`);
     return { ok: true };
+  }
+
+  // Anulado sin haber llegado a la DGII: no se envia nunca. Muerto (no
+  // reintentable) a proposito: completeOutbox lo deja en 'failed' con
+  // ecf_status 'rejected', que es como fn_issue_credit_note y
+  // v_fiscal_docs_pending_credit_note reconocen "no existe ante la DGII" y no
+  // piden nota de credito. Va antes que todo: ni el reintento del panel
+  // (admin_mark_ecf_for_retry) ni un batch lo pueden mandar.
+  const cancelledError = cancelledBeforeSendError(doc);
+  if (cancelledError) {
+    console.warn(`doc ${doc.id} (${doc.ncf_number}) anulado antes de enviarse: no se envia`);
+    return { ok: false, retryable: false, error: cancelledError };
   }
 
   if (!doc.is_electronic) {

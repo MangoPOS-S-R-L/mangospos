@@ -53,18 +53,28 @@ class MultimeseroRepository {
     );
   }
 
-  /// Empleado que abrió la mesa (`table_sessions.opened_by_employee_id`, lo
-  /// fija el PIN multimesero al abrirla). Null si la abrió alguien sin PIN
-  /// (cajero/admin) o la sesión no existe en el servidor.
-  Future<String?> tableOpenerEmployeeId(String sessionId) async {
-    if (sessionId.isEmpty) return null;
+  /// Quién abrió la mesa: el empleado identificado con PIN
+  /// (`opened_by_employee_id`, null si se abrió sin PIN multimesero) y la
+  /// cuenta de usuario que la abrió (`opened_by`). Ambos null si la sesión no
+  /// existe en el servidor.
+  Future<({String? employeeId, String? userId})> tableOpener(
+    String sessionId,
+  ) async {
+    if (sessionId.isEmpty) return (employeeId: null, userId: null);
     final row = await _client
         .from('table_sessions')
-        .select('opened_by_employee_id')
+        .select('opened_by_employee_id, opened_by')
         .eq('id', sessionId)
         .maybeSingle();
-    final id = row?['opened_by_employee_id']?.toString().trim();
-    return (id == null || id.isEmpty) ? null : id;
+    String? clean(Object? raw) {
+      final value = raw?.toString().trim();
+      return (value == null || value.isEmpty) ? null : value;
+    }
+
+    return (
+      employeeId: clean(row?['opened_by_employee_id']),
+      userId: clean(row?['opened_by']),
+    );
   }
 
   /// Actualiza el toggle. Solo callable por owner/admin del business

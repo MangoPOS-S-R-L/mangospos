@@ -7,6 +7,8 @@ export interface AlanubeRequestOptions {
   method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   body?: unknown;
+  /** multipart/form-data (firma de documentos de habilitacion). Excluye `body`. */
+  form?: FormData;
   idempotencyKey?: string;
   companyId?: string;
   timeoutMs?: number;
@@ -39,9 +41,10 @@ export class AlanubeClient {
     const url = `${this.baseUrl}${opts.path}`;
     const headers: Record<string, string> = {
       "Authorization": `Bearer ${this.jwt}`,
-      "Content-Type": "application/json",
       "Accept": "application/json",
     };
+    // Con FormData el boundary lo pone fetch: fijar Content-Type lo rompe.
+    if (!opts.form) headers["Content-Type"] = "application/json";
     if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
     if (opts.companyId) headers["X-Company-Id"] = opts.companyId;
 
@@ -52,7 +55,7 @@ export class AlanubeClient {
       const res = await fetch(url, {
         method: opts.method,
         headers,
-        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
         signal: controller.signal,
       });
 

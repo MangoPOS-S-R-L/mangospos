@@ -16,7 +16,7 @@
 // Errores:
 //   400 invalid_request         — body invalido
 //   401 unauthorized            — sin JWT
-//   403 forbidden               — el usuario no es owner/admin del negocio
+//   403 forbidden               — ni owner/admin del negocio ni operador de MangoPOS
 //   404 company_not_found       — el ULID no existe en Alanube
 //   409 company_already_assigned— ese ULID ya es de otro negocio
 //   409 preflight_failed        — hay chequeos en `fail`; NO se escribio nada
@@ -136,11 +136,21 @@ Deno.serve(async (req: Request) => {
     return errorResponse(500, "rpc_error", "No se pudo resolver el rol", roleErr.message);
   }
   if (!role || !ALLOWED_ROLES.has(role as string)) {
-    return errorResponse(
-      403,
-      "forbidden",
-      "Solo el owner o un admin del negocio puede activar la facturacion electronica",
-    );
+    // El alta la hace MangoPOS desde el panel: el operador no es miembro del
+    // negocio, pero puede activarlo.
+    const { data: isOperator, error: opErr } = await userClient.rpc("is_platform_operator", {
+      uid: userData.user.id,
+    });
+    if (opErr) {
+      return errorResponse(500, "rpc_error", "No se pudo verificar el operador", opErr.message);
+    }
+    if (isOperator !== true) {
+      return errorResponse(
+        403,
+        "forbidden",
+        "Solo el owner o un admin del negocio, o un operador de MangoPOS, puede activar la facturacion electronica",
+      );
+    }
   }
 
   // ── 2. Cliente Alanube ──────────────────────────────────────────────────

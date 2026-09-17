@@ -21,6 +21,7 @@ Deno.env.set("SUPABASE_URL", "https://x.supabase.co");
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "srv");
 
 import {
+  chargeWithToken,
   processPaymentWith3DS,
   processThreeDSChallenge,
   processThreeDSMethod,
@@ -233,6 +234,41 @@ Deno.test("processThreeDSChallenge: arma método y CRes", async () => {
     assertEquals(method, "ProcessThreeDSChallenge");
     assertEquals(p.AzulOrderId, "39306");
     assertEquals(p.CRes, "ewogICAiYWN...base64...Igo9");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("chargeWithToken: manda el CustomOrderId del cobro para poder verificarlo después", async () => {
+  const { calls, restore } = stubFetch();
+  try {
+    await chargeWithToken({
+      dataVaultToken: "tok",
+      amountCents: 299999,
+      itbisCents: 0,
+      orderNumber: "MP2BD6142608161",
+      customOrderId: "mpch-b01e3351a28a4cf386f795f8a9d103c9",
+    });
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].method, "ProcessPayment");
+    assertEquals(calls[0].payload.TrxType, "Sale");
+    assertEquals(calls[0].payload.OrderNumber, "MP2BD6142608161");
+    assertEquals(calls[0].payload.CustomOrderId, "mpch-b01e3351a28a4cf386f795f8a9d103c9");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("chargeWithToken: sin customOrderId no manda la clave", async () => {
+  const { calls, restore } = stubFetch();
+  try {
+    await chargeWithToken({
+      dataVaultToken: "tok",
+      amountCents: 100,
+      itbisCents: 0,
+      orderNumber: "MP1",
+    });
+    assertEquals("CustomOrderId" in calls[0].payload, false);
   } finally {
     restore();
   }

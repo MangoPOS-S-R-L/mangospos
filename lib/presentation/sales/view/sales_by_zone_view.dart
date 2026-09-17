@@ -1566,10 +1566,11 @@ Future<void> _handleMergeTable(
     );
   }
 
-  /// "Cada mesero es dueño de su mesa": solo el mesero que abrió la mesa
-  /// entra. Otro mesero ve de quién es y puede pedir a un supervisor que
-  /// autorice con su PIN (cambio de turno, el dueño ya se fue). Devuelve
-  /// true si puede entrar. Regla en `core/multimesero/table_ownership.dart`.
+  /// "Cada mesero es dueño de su mesa": solo quien abrió la mesa entra (el
+  /// mesero con PIN, o la cuenta de admin/cajero que la abrió). Otro mesero ve
+  /// de quién es y puede pedir a un supervisor que autorice con su PIN (cambio
+  /// de turno, el dueño ya se fue). Devuelve true si puede entrar. Regla en
+  /// `core/multimesero/table_ownership.dart`.
   Future<bool> _checkTableOwnership(
     BuildContext context,
     WidgetRef ref, {
@@ -1577,11 +1578,14 @@ Future<void> _handleMergeTable(
     required String sessionId,
     required ActiveWaiter waiter,
   }) async {
-    String? openerEmployeeId;
+    // Se ve libre (cuenta huérfana sin órdenes): ni se consulta el dueño.
+    if (_isEffectivelyEmpty(ts)) return true;
+
+    ({String? employeeId, String? userId}) opener;
     try {
-      openerEmployeeId = await ref
+      opener = await ref
           .read(multimeseroRepositoryProvider)
-          .tableOpenerEmployeeId(sessionId)
+          .tableOpener(sessionId)
           .timeout(const Duration(seconds: 3));
     } catch (e) {
       // Sin red no se sabe de quién es la mesa. Se deja entrar: una lectura
@@ -1593,7 +1597,8 @@ Future<void> _handleMergeTable(
     final decision = decideTableEntry(
       tableOwnerOnly: true,
       sessionId: sessionId,
-      openerEmployeeId: openerEmployeeId,
+      openerEmployeeId: opener.employeeId,
+      openerUserId: opener.userId,
       waiter: waiter,
     );
     if (decision == TableEntryDecision.allowed) return true;
@@ -1601,7 +1606,7 @@ Future<void> _handleMergeTable(
 
     final owner = ts.waiterName?.trim().isNotEmpty == true
         ? ts.waiterName!.trim()
-        : 'otro mesero';
+        : 'otra persona';
     final wantsOverride = await showDialog<bool>(
       context: context,
       builder: (dctx) => AlertDialog(

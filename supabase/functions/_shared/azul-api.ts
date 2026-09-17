@@ -214,6 +214,9 @@ export interface ChargeWithTokenInput {
   itbisCents: number;
   orderNumber: string;
   customerEmail?: string;
+  /** CustomOrderId del cobro: llave de VerifyPayment para saber después si una
+   *  venta con resultado desconocido pasó (migración 20260917_0004). */
+  customOrderId?: string;
 }
 
 export function chargeWithToken(input: ChargeWithTokenInput) {
@@ -239,6 +242,7 @@ export function chargeWithToken(input: ChargeWithTokenInput) {
     // MIT no lleva 3D Secure: no hay tarjetahabiente presente para el desafío.
     ForceNo3DS: "1",
     ...(input.customerEmail ? { CustomerServiceEmail: input.customerEmail } : {}),
+    ...(input.customOrderId ? { CustomOrderId: input.customOrderId } : {}),
   });
 }
 

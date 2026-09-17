@@ -25,6 +25,8 @@ export interface FiscalDocument {
   tip: number | null;
   total: number | null;
   is_electronic: boolean;
+  /** `active | cancelled`. Opcional para no romper llamadores que no lo leen. */
+  status?: string | null;
   alanube_document_id: string | null;
   issued_at: string | null;
   idempotency_key: string | null;
@@ -44,7 +46,23 @@ export interface ModifiedDocumentRef {
 }
 
 /** Tipos que llevan `sequenceDueDate` (E32 y las notas NO lo llevan). */
-const TYPES_WITH_SEQUENCE_DUE_DATE = ["E31", "E44", "E45"];
+export const TYPES_WITH_SEQUENCE_DUE_DATE = ["E31", "E44", "E45"];
+
+/**
+ * Un comprobante anulado ANTES de llegar a la DGII no se envia: para la DGII
+ * nunca existio, y mandarlo lo deja aceptado y obliga a reversarlo con una nota
+ * de credito. Paso con Tropella el 2026-09-17: E320000000428 y 429, anulados el
+ * 09-08 con la emision pendiente, salieron aceptados al correr la cola.
+ *
+ * Devuelve el motivo para `last_error`, o null si se puede enviar.
+ */
+export function cancelledBeforeSendError(
+  doc: Pick<FiscalDocument, "status" | "ncf_number">,
+): string | null {
+  if (doc.status !== "cancelled") return null;
+  return `El comprobante ${doc.ncf_number} se anulo antes de enviarse a la DGII: ` +
+    `no se envia. Para la DGII no existe, asi que no lleva nota de credito.`;
+}
 
 /** Notas de credito/debito: llevan informationReference en vez de vencimiento. */
 export function isCreditNoteType(ncfType: string): boolean {

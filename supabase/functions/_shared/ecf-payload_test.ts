@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildAlanubePayload, FiscalDocument, OrderItem, Sender } from "./ecf-payload.ts";
+import { buildAlanubePayload, cancelledBeforeSendError, FiscalDocument, OrderItem, Sender } from "./ecf-payload.ts";
 import { EcfTaxLine, summarizeEcfTaxLines } from "./ecf-tax-lines.ts";
 import { r2 } from "./dgii-rounding.ts";
 
@@ -594,4 +594,19 @@ Deno.test("sin doc.total utilizable el monto no facturable no se toca", () => {
     sender, ticketTropella, breakdown, null, "2027-12-31",
   );
   assertEquals((payload.totals as Record<string, number>).nonBillableAmount, 63.79);
+});
+
+// ── Anulado antes de enviarse ──────────────────────────────────────────────
+// Tropella 2026-09-17: E320000000428/429 anulados el 09-08 con la emision
+// pendiente salieron ACEPTADOS al correr la cola.
+
+Deno.test("anulado antes de enviarse: no se envia y explica por que", () => {
+  const msg = cancelledBeforeSendError({ status: "cancelled", ncf_number: "E320000000428" });
+  assertEquals(typeof msg, "string");
+  assertEquals(msg!.includes("E320000000428"), true);
+});
+
+Deno.test("activo o sin status (llamadores viejos): se envia", () => {
+  assertEquals(cancelledBeforeSendError({ status: "active", ncf_number: "E320000000430" }), null);
+  assertEquals(cancelledBeforeSendError({ status: undefined, ncf_number: "E320000000430" }), null);
 });

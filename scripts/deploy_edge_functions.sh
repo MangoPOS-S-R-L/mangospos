@@ -19,7 +19,17 @@
 #   ./scripts/deploy_edge_functions.sh                    # emit-document + _shared
 #   ./scripts/deploy_edge_functions.sh emit-document alanube-webhook
 #   DRY=1 ./scripts/deploy_edge_functions.sh              # muestra que haria
+#   CHECK=1 ./scripts/deploy_edge_functions.sh ...        # lista que archivos difieren
+#                                                         # del VPS (checksum), sin copiar
+#                                                         # ni reiniciar
+#   SKIP_SHARED="azul-api.ts" ./scripts/deploy_edge_functions.sh ...
+#                                                         # deja esos archivos de _shared
+#                                                         # como estan en el VPS
 #   VPS=root@otra.ip SERVICE=<id> ./scripts/deploy_edge_functions.sh
+#
+# ANTES DE DESPLEGAR, CHECK=1: `_shared` viaja completo, y si el VPS tiene un
+# archivo mas nuevo que el repo (alguien desplego sin commitear) se pisa en
+# silencio. Lo que salga en la lista y no sea tuyo va en SKIP_SHARED.
 
 set -euo pipefail
 
@@ -27,6 +37,9 @@ VPS="${VPS:-root@31.97.40.114}"
 SERVICE="${SERVICE:-n84o0s8s0w08cko8c48gsog4}"
 REMOTE="/data/coolify/services/${SERVICE}/volumes/functions"
 DRY="${DRY:-0}"
+CHECK="${CHECK:-0}"
+# Nombres de archivo dentro de _shared, separados por espacio.
+SKIP_SHARED="${SKIP_SHARED:-}"
 
 # _shared no se lista: va siempre, porque todo lo demas depende de el.
 FUNCS=("$@")
@@ -42,6 +55,7 @@ done
 echo "VPS:      $VPS"
 echo "Destino:  $REMOTE"
 echo "Funciones: _shared ${FUNCS[*]}"
+[[ -n "$SKIP_SHARED" ]] && echo "Sin tocar en _shared: $SKIP_SHARED"
 echo
 
 if [[ "$DRY" == "1" ]]; then
@@ -65,6 +79,33 @@ SSH=(ssh -S "$CTRL" "$VPS")
   echo "  ssh $VPS \"docker ps --format '{{.Names}}' | grep -i edge\"" >&2
   exit 1
 }
+
+# SIN --delete a proposito: el volumen del servidor puede tener archivos que
+# este repo no conoce (la carpeta salio del repo mangopos-backend y se ha
+# tocado a mano). Borrar lo que no vemos es como se rompen las funciones
+# vecinas. Los *_test.ts se quedan en casa: el runtime no los usa.
+RSYNC_OPTS=(-avz --exclude '*_test.ts' --exclude '.env*' -e "ssh -S $CTRL")
+
+# Opciones por carpeta en OPTS: SKIP_SHARED solo aplica a _shared. Sin
+# mapfile a proposito: el bash de macOS es 3.2.
+set_opts_for() {
+  OPTS=("${RSYNC_OPTS[@]}")
+  if [[ "$1" == "_shared" ]]; then
+    for skip in $SKIP_SHARED; do OPTS+=(--exclude "/$skip"); done
+  fi
+}
+
+# ── Solo revisar ──────────────────────────────────────────────────────────
+if [[ "$CHECK" == "1" ]]; then
+  echo "(CHECK=1) Archivos que se copiarian (por checksum). No se toca nada."
+  for dir in "_shared" "${FUNCS[@]}"; do
+    echo "→ $dir"
+    set_opts_for "$dir"
+    rsync "${OPTS[@]}" -n --checksum "$LOCAL/$dir/" "$VPS:$REMOTE/$dir/" \
+      | grep -vE '^(sending|sent |total size|Transfer starting|building file list|$)' || true
+  done
+  exit 0
+fi
 
 # ── Que contenedor sirve ESE volumen (asi se distingue del clon) ──────────
 echo "Buscando el contenedor que monta ese volumen..."
@@ -96,15 +137,10 @@ echo "Rollback: ssh $VPS \"cd $REMOTE && tar xzf $BACKUP && docker restart $CONT
 echo
 
 # ── Copia ─────────────────────────────────────────────────────────────────
-# SIN --delete a proposito: el volumen del servidor puede tener archivos que
-# este repo no conoce (la carpeta salio del repo mangopos-backend y se ha
-# tocado a mano). Borrar lo que no vemos es como se rompen las funciones
-# vecinas. Los *_test.ts se quedan en casa: el runtime no los usa.
-RSYNC_OPTS=(-avz --exclude '*_test.ts' --exclude '.env*' -e "ssh -S $CTRL")
-
 for dir in "_shared" "${FUNCS[@]}"; do
   echo "→ $dir"
-  rsync "${RSYNC_OPTS[@]}" "$LOCAL/$dir/" "$VPS:$REMOTE/$dir/"
+  set_opts_for "$dir"
+  rsync "${OPTS[@]}" "$LOCAL/$dir/" "$VPS:$REMOTE/$dir/"
 done
 
 # ── Reinicio + verificacion ───────────────────────────────────────────────

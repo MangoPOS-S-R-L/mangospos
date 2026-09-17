@@ -22,8 +22,9 @@ enum CreditNoteStatus {
   /// La anulación siguió; la nota queda pendiente.
   noSequence,
 
-  /// No aplica: el documento no tiene NCF, ya es una nota, o es un e-CF que
-  /// la DGII rechazó (no existe ante ella, no hay nada que reversar).
+  /// No aplica: el documento no tiene NCF, ya es una nota, es un e-CF que la
+  /// DGII rechazó o que nunca le llegó (no existe ante ella, no hay nada que
+  /// reversar), o es papel sin crédito fiscal (solo B01 lleva B04).
   notApplicable,
 
   /// El documento no existe.
@@ -54,7 +55,8 @@ class CreditNoteResult {
   final String? originalNcf;
 
   /// Motivo cuando el estado no es `issued`: 'sin_ncf', 'es_nota',
-  /// 'rechazado', o el mensaje del error.
+  /// 'rechazado', 'no_enviado', 'papel_sin_credito_fiscal', o el mensaje del
+  /// error.
   final String? reason;
 
   const CreditNoteResult({
@@ -137,6 +139,12 @@ class CreditNoteResult {
                 'de crédito.';
           case 'es_nota':
             return 'El documento ya es una nota de crédito.';
+          case 'no_enviado':
+            return 'La factura electrónica no llegó a la DGII: no lleva nota '
+                'de crédito.';
+          case 'papel_sin_credito_fiscal':
+            return 'Comprobante sin crédito fiscal: no lleva nota de crédito, '
+                'queda como anulado.';
           default:
             return 'La venta no tenía comprobante fiscal: no lleva nota de '
                 'crédito.';

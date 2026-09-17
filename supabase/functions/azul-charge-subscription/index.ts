@@ -13,8 +13,15 @@
 //     sidecar. chargeWithToken ya manda los campos correctos.
 //   - OrderNumber debe ser alfanumérico ≤15 (ver generateChargeOrderNumber).
 //   - Idempotencia: el índice UNIQUE (membership_id, billing_period_start,
-//     attempt_number) de azul_charges es el candado; si choca, devolvemos la charge
-//     existente sin recobrar.
+//     attempt_number) de azul_charges es el candado. Si choca, decide
+//     retry_policy.ts: terminal → se devuelve sin recobrar; `pending` reciente →
+//     409 "en curso" SIN llamar a Azul; `error` o `pending` viejo → se reintenta
+//     reclamando la fila con un UPDATE condicional (un solo pedido gana).
+//   - Resultado desconocido: cada cobro manda un CustomOrderId único (columna
+//     custom_order_id, migración 20260917_0004). Antes de reintentar un `error`
+//     o un `pending` viejo se consulta VerifyPayment: si Azul ya lo cobró, se
+//     registra como aprobado SIN volver a cobrar; si no lo tiene, se reintenta;
+//     si no se puede saber, no se cobra.
 //   - Política de reintentos D11: intentos 1/2/3; tras el 3º declinado → suspended.
 //   - Monto: subscription_effective_price_cents (migración 20260915_0006) — precio
 //     especial del cliente si tiene uno vigente para su plan, si no el de lista.
@@ -23,7 +30,13 @@ import { corsPreflight, errorResponse, jsonResponse } from "../_shared/responses
 import { getAzulEnv } from "../_shared/env.ts";
 import { getServiceClient } from "../_shared/supabase.ts";
 import { generateChargeOrderNumber } from "../_shared/azul.ts";
-import { AzulCallError, chargeWithToken } from "../_shared/azul-api.ts";
+import { AzulCallError, chargeWithToken, verifyPayment } from "../_shared/azul-api.ts";
+import {
+  chargeCustomOrderId,
+  classifyChargeVerify,
+  decideOnExistingCharge,
+  inFlightCutoffIso,
+} from "./retry_policy.ts";
 
 interface RequestBody {
   membership_id?: string;
@@ -49,6 +62,52 @@ function addMonthIso(baseIso: string): string {
   const d = new Date(`${baseIso}T00:00:00Z`);
   d.setUTCMonth(d.getUTCMonth() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+type ServiceClient = ReturnType<typeof getServiceClient>;
+
+/** Suscripción al día tras un cobro aprobado (venta nueva o recuperada con
+ *  VerifyPayment). */
+async function markMembershipCharged(
+  service: ServiceClient,
+  membershipId: string,
+  chargeId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<void> {
+  await service
+    .from("memberships")
+    .update({
+      billing_status: "active",
+      current_attempt_number: 0,
+      last_successful_charge_id: chargeId,
+      current_period_start: periodStart,
+      current_period_end: periodEnd,
+      next_billing_date: periodEnd,
+    })
+    .eq("id", membershipId);
+}
+
+/** Bitácora forense de llamadas a Azul. El método va en raw_url: las
+ *  consultas VerifyPayment se distinguen así de las ventas (una verificación
+ *  repite el IsoCode 00 y no debe contarse como otra venta). */
+async function logWebservice(
+  service: ServiceClient,
+  chargeId: string,
+  method: string,
+  rawBody: string,
+  processingError: string | null,
+): Promise<void> {
+  const env = getAzulEnv();
+  await service.from("azul_webhook_events").insert({
+    event_type: "webservice_response",
+    http_method: "POST",
+    raw_url: `${env.azulProxyUrl}/call (${method})`,
+    raw_body: rawBody.slice(0, 10000),
+    related_charge_id: chargeId,
+    processed: true,
+    processing_error: processingError?.slice(0, 500) ?? null,
+  });
 }
 
 Deno.serve(async (req) => {
@@ -162,6 +221,21 @@ Deno.serve(async (req) => {
     );
   }
   const amountCents = effectivePrice;
+
+  // Precio 0 (plan gratis o precio especial en 0): no hay nada que cobrar.
+  // Azul rechaza una venta de RD$0; antes la fila quedaba en `error` y el cron
+  // la repetía todos los días ("cristian", desde el 24/06/2026). El cron ya no
+  // las encola (20260915_0007); esta es la segunda barrera, por si llega un
+  // pedido manual o el cron viejo sigue activo. Va ANTES del INSERT: ni fila
+  // ni llamada a Azul.
+  if (amountCents <= 0) {
+    return errorResponse(
+      422,
+      "zero_amount",
+      "El precio de este período es RD$0: no hay nada que cobrar.",
+      { membership_id: membershipId, billing_period_start: periodStart },
+    );
+  }
   const itbisCents = 0;
   const currencyCode = (plan.currency_code as string) ?? "DOP";
 
@@ -174,11 +248,18 @@ Deno.serve(async (req) => {
 
   // 5. INSERT charge en estado pending. El UNIQUE (membership, período, intento) es
   //    el candado de idempotencia.
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   let chargeId: string;
+  let customOrderId: string;
+  // Id y CustomOrderId se generan acá para ir juntos en el INSERT: el
+  // CustomOrderId tiene que quedar guardado ANTES de hablar con Azul.
+  const newChargeId = crypto.randomUUID();
   const { data: inserted, error: insErr } = await service
     .from("azul_charges")
     .insert({
+      id: newChargeId,
+      custom_order_id: chargeCustomOrderId(newChargeId),
       business_id: membership.business_id,
       membership_id: membershipId,
       payment_method_id: pm.id,
@@ -202,7 +283,7 @@ Deno.serve(async (req) => {
     }
     const { data: existing } = await service
       .from("azul_charges")
-      .select("id, status, iso_code, azul_order_id, response_message")
+      .select("id, status, iso_code, azul_order_id, response_message, attempted_at, custom_order_id")
       .eq("membership_id", membershipId)
       .eq("billing_period_start", periodStart)
       .eq("attempt_number", attempt)
@@ -210,8 +291,10 @@ Deno.serve(async (req) => {
     if (!existing) {
       return errorResponse(500, "db_error", "Could not create charge", insErr.message);
     }
+    const decision = decideOnExistingCharge(existing, nowMs);
+
     // Terminal (approved/declined) → idempotente: devolver sin recobrar.
-    if (existing.status === "approved" || existing.status === "declined") {
+    if (decision === "terminal") {
       return jsonResponse({
         ok: existing.status === "approved",
         idempotent: true,
@@ -222,17 +305,123 @@ Deno.serve(async (req) => {
         response_message: existing.response_message,
       });
     }
-    // Transitoria (error/pending) → reintentar sobre la misma fila.
-    chargeId = existing.id;
+    // En vuelo: otro pedido está cobrando este mismo período AHORA. Volver a
+    // llamar a Azul acá es exactamente lo que duplicó cobros en agosto 2026.
+    if (decision === "in_progress") {
+      return errorResponse(
+        409,
+        "charge_in_progress",
+        "Ya hay un cobro en curso para este período. No se volvió a enviar a Azul.",
+        { charge_id: existing.id },
+      );
+    }
+
+    // Reintentable, pero el intento anterior pudo haber cobrado sin que nos
+    // enteráramos (la llamada se cayó después de que Azul aprobó). Antes de
+    // volver a cobrar se le pregunta a Azul.
+    if (!existing.custom_order_id) {
+      // Cobro anterior a la migración 20260917_0004: no hay con qué
+      // verificarlo. No se reintenta solo — ver
+      // supabase/VERIFICAR_20260917_0004_custom_order_id.sql.
+      return errorResponse(
+        409,
+        "unverifiable_previous_attempt",
+        "El intento anterior de este cobro no se puede verificar con Azul. " +
+          `Revisar en el portal de Azul el OrderNumber ${orderNumber} antes de reintentar.`,
+        { charge_id: existing.id, order_number: orderNumber },
+      );
+    }
+
+    let verify;
+    try {
+      verify = await verifyPayment({ customOrderId: existing.custom_order_id });
+    } catch (e) {
+      const msg = e instanceof AzulCallError ? `${e.code}: ${e.message}` : String(e);
+      await logWebservice(service, existing.id, "VerifyPayment", `EXCEPTION: ${msg}`, msg);
+      return errorResponse(
+        502,
+        "verify_failed",
+        "No se pudo confirmar con Azul si el intento anterior se cobró. No se reintentó.",
+        { charge_id: existing.id },
+      );
+    }
+    await logWebservice(service, existing.id, "VerifyPayment", JSON.stringify(verify.body), null);
+
+    const verifyOutcome = classifyChargeVerify(verify.httpStatus, verify.body);
+    if (verifyOutcome === "unknown") {
+      return errorResponse(
+        502,
+        "verify_inconclusive",
+        "Azul no dio una respuesta clara sobre el intento anterior. No se reintentó; " +
+          "revisarlo en el portal de Azul.",
+        { charge_id: existing.id, order_number: orderNumber },
+      );
+    }
+    if (verifyOutcome === "approved") {
+      // Azul SÍ lo había cobrado: se registra la venta como si la respuesta
+      // hubiera llegado. Volver a cobrar acá era el cobro doble de julio.
+      const v = verify.body;
+      await service
+        .from("azul_charges")
+        .update({
+          status: "approved",
+          authorization_code: v.AuthorizationCode ?? null,
+          response_code: v.ResponseCode ?? null,
+          iso_code: v.IsoCode ?? null,
+          response_message: v.ResponseMessage ?? null,
+          error_description: null,
+          rrn: v.RRN ?? null,
+          azul_order_id: v.AzulOrderId ?? null,
+          raw_response: v,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+      await markMembershipCharged(service, membershipId, existing.id, periodStart, periodEnd);
+      return jsonResponse({
+        ok: true,
+        recovered: true,
+        charge_id: existing.id,
+        status: "approved",
+        iso_code: v.IsoCode ?? null,
+        azul_order_id: v.AzulOrderId ?? null,
+        response_message: v.ResponseMessage ?? null,
+      });
+    }
+    // not_charged: Azul no tiene la venta (o la rechazó): no se movió dinero.
+
+    // Reintentable (error, o pending viejo cuyo worker murió). Se RECLAMA la
+    // fila con un UPDATE condicional: solo pasa a pending si sigue en el mismo
+    // estado reintentable. Si dos pedidos reintentan a la vez, uno solo
+    // actualiza la fila; el otro recibe 0 filas y se trata como en vuelo.
+    //
     // El monto se reescribe: si el precio cambió entre intentos (se cargó o
     // quitó un precio especial), la fila tiene que reflejar lo que se cobra
     // AHORA, no lo que se intentó la primera vez.
-    await service
+    let claim = service
       .from("azul_charges")
       .update({ status: "pending", attempted_at: nowIso, amount_cents: amountCents })
-      .eq("id", chargeId);
+      .eq("id", existing.id)
+      .eq("status", existing.status);
+    if (existing.status === "pending") {
+      claim = claim.lt("attempted_at", inFlightCutoffIso(nowMs));
+    }
+    const { data: claimed, error: claimErr } = await claim.select("id");
+    if (claimErr) {
+      return errorResponse(500, "db_error", "Could not claim charge for retry", claimErr.message);
+    }
+    if (!claimed || claimed.length === 0) {
+      return errorResponse(
+        409,
+        "charge_in_progress",
+        "Ya hay un cobro en curso para este período. No se volvió a enviar a Azul.",
+        { charge_id: existing.id },
+      );
+    }
+    chargeId = existing.id;
+    customOrderId = existing.custom_order_id;
   } else {
     chargeId = inserted!.id;
+    customOrderId = chargeCustomOrderId(chargeId);
   }
 
   // raw_request para auditoría — el token se redacta (vive en azul_payment_methods,
@@ -244,6 +433,7 @@ Deno.serve(async (req) => {
     Amount: String(amountCents),
     Itbis: String(itbisCents),
     OrderNumber: orderNumber,
+    CustomOrderId: customOrderId,
     DataVaultToken: "***redacted***",
     CurrencyPosCode: "$",
   };
@@ -256,6 +446,7 @@ Deno.serve(async (req) => {
       amountCents,
       itbisCents,
       orderNumber,
+      customOrderId,
     });
   } catch (e) {
     // Error de red/sidecar/parsing → status='error'. NO cuenta como intento fallido
@@ -324,17 +515,7 @@ Deno.serve(async (req) => {
 
   // 9. Actualizar el estado de la suscripción (memberships).
   if (approved) {
-    await service
-      .from("memberships")
-      .update({
-        billing_status: "active",
-        current_attempt_number: 0,
-        last_successful_charge_id: chargeId,
-        current_period_start: periodStart,
-        current_period_end: periodEnd,
-        next_billing_date: periodEnd,
-      })
-      .eq("id", membershipId);
+    await markMembershipCharged(service, membershipId, chargeId, periodStart, periodEnd);
   } else if (declined) {
     if (attempt < 3) {
       // D11: reintentos en día 3 (attempt 1 → +2) y día 7 (attempt 2 → +4).
