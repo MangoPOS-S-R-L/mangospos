@@ -304,7 +304,6 @@ class _DestinationTile extends StatelessWidget {
           Switch.adaptive(
             value: visible,
             onChanged: busy ? null : onChanged,
-            activeThumbColor: MangoColors.primaryOrange,
           ),
         ],
       ),

@@ -780,21 +780,25 @@ class FiscalDocument extends Equatable {
       (ecfStatus == 'accepted' || ecfStatus == 'sent') &&
       (ecfSecurityCode?.isNotEmpty ?? false);
 
-  /// Construye la URL DGII de verificación del e-CF a partir de los campos
-  /// del documento. Esta es la URL que se encodea en el QR del ticket impreso.
+  /// URL de consulta del e-CF en la DGII, para el QR del ticket, armada
+  /// localmente. Es un RESPALDO: la fuente de verdad es `publicUrl`, que es el
+  /// `documentStampUrl` que devuelve Alanube al emitir.
   ///
-  /// Norma DGII 01-2020 — formato:
-  ///   https://ecf.dgii.gov.do/{env}/ConsultaTimbreFC?
-  ///     RncEmisor=...&ENCF=...&FechaEmision=DD-MM-YYYY&
-  ///     MontoTotal=...&CodigoSeguridad=...
+  /// Formatos (ejemplos de la API de Alanube):
+  ///   - E32 menor a RD\$250,000:
+  ///     https://fc.dgii.gov.do/{amb}/ConsultaTimbreFC?RncEmisor&ENCF&MontoTotal&CodigoSeguridad
+  ///   - Todo lo demás (E31, E32 grande, E44, E45…) va a
+  ///     https://ecf.dgii.gov.do/{amb}/ConsultaTimbre y lleva FechaEmision y
+  ///     FechaFirma EXACTAS de la firma. No se reconstruyen: una fecha mal
+  ///     armada da un QR que la DGII no valida.
+  /// {amb} = `ecf` en producción, `testecf` en pruebas.
   ///
-  /// Para E31 (crédito fiscal) DGII también exige `RncComprador`.
+  /// `MontoTotal` tiene que ser el DECLARADO (base + ITBIS + exento), que no
+  /// es `total` cuando la venta lleva propina legal. Por eso solo se arma
+  /// cuando `total` cuadra con base + ITBIS.
   ///
-  /// Se usa como **fallback** cuando `publicUrl` no fue populado por
-  /// Alanube todavía (típico en estado `sent` antes de que el webhook DGII
-  /// llegue). Si Alanube ya nos dio una URL, preferimos esa.
-  ///
-  /// Retorna null si faltan datos críticos (RNC emisor o security code).
+  /// Retorna null cuando no se puede armar con certeza: el ticket imprime el
+  /// estado en vez de un QR que no verifica.
   String? buildDgiiVerifyUrl({
     required String emitterRnc,
     required bool sandbox,
@@ -802,36 +806,20 @@ class FiscalDocument extends Equatable {
     final code = ecfSecurityCode;
     if (code == null || code.isEmpty) return null;
     if (emitterRnc.trim().isEmpty) return null;
+    if (ncfType != 'E32' || total >= 250000) return null;
+    if ((total - (taxableAmount + itbisAmount)).abs() > 0.01) return null;
 
-    final base = sandbox
-        ? 'https://ecf.dgii.gov.do/testecf/ConsultaTimbreFC'
-        : 'https://ecf.dgii.gov.do/ecf/ConsultaTimbreFC';
-
-    // FechaEmision en formato DD-MM-YYYY (no ISO).
-    final d = issuedAt;
-    final fecha =
-        '${d.day.toString().padLeft(2, '0')}-'
-        '${d.month.toString().padLeft(2, '0')}-'
-        '${d.year}';
-
+    final amb = sandbox ? 'testecf' : 'ecf';
     final params = <String, String>{
       'RncEmisor': emitterRnc.trim(),
       'ENCF': ncfNumber,
-      'FechaEmision': fecha,
       'MontoTotal': total.toStringAsFixed(2),
       'CodigoSeguridad': code,
     };
-    // E31 requiere RncComprador. Para E32/E44/E45 es opcional.
-    if (ncfType == 'E31' &&
-        customerRnc != null &&
-        customerRnc!.trim().isNotEmpty) {
-      params['RncComprador'] = customerRnc!.trim();
-    }
-
     final query = params.entries
         .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
         .join('&');
-    return '$base?$query';
+    return 'https://fc.dgii.gov.do/$amb/ConsultaTimbreFC?$query';
   }
 
   /// Mensaje legible del estado e-CF para imprimir cuando aún no hay QR.

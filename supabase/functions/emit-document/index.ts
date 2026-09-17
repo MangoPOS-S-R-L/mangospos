@@ -9,6 +9,7 @@ import {
   buildAlanubePayload,
   EcfTaxBreakdown,
   FiscalDocument,
+  alanubeEndpointForNcfType,
   cancelledBeforeSendError,
   isCreditNoteType,
   ModifiedDocumentRef,
@@ -40,24 +41,14 @@ interface Settings {
   mode: string;
 }
 
-function getEndpointForNcfType(ncfType: string): string | null {
-  switch (ncfType) {
-    case "E31": return "/fiscal-invoices";
-    case "E32": return "/invoices";
-    case "E44": return "/special-regimes";
-    case "E45": return "/gubernamentals";
-    // Nota de credito: es como se anula un e-CF que la DGII ya acepto.
-    case "E34": return "/credit-notes";
-    default: return null;
-  }
-}
-
 interface AlanubeSubmitResponse {
   id?: string;
   trackId?: string;
   securityCode?: string;
   signedAt?: string;
   status?: string;
+  /** URL de consulta en la DGII: es la que va en el QR del ticket. */
+  documentStampUrl?: string;
   publicUrl?: string;
   xmlUrl?: string;
   pdfUrl?: string;
@@ -362,7 +353,7 @@ async function submitOne(
     return { ok: false, retryable: false, error: "settings.mode=physical, should not be in queue" };
   }
 
-  const path = getEndpointForNcfType(doc.ncf_type);
+  const path = alanubeEndpointForNcfType(doc.ncf_type);
   if (!path) {
     return {
       ok: false,
@@ -450,7 +441,9 @@ async function submitOne(
       ecf_signed_at: resp.signedAt ?? null,
       ecf_status: mappedStatus,
       submitted_at: new Date().toISOString(),
-      public_url: resp.publicUrl ?? null,
+      // Alanube la manda como `documentStampUrl`. Con `publicUrl` (que no
+      // existe en su API) quedaba siempre null y el ticket armaba el QR a mano.
+      public_url: resp.documentStampUrl ?? resp.publicUrl ?? null,
       xml_url: resp.xmlUrl ?? null,
       pdf_url: resp.pdfUrl ?? null,
       last_error: null,

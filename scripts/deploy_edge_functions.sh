@@ -154,9 +154,16 @@ echo "── Ultimas lineas del log ──"
 "${SSH[@]}" "docker logs --tail 25 '$CONTAINER' 2>&1" || true
 
 echo
-echo "Listo. Verifica que responda:"
-echo "  curl -s -X POST https://supabase.mangopos.do/functions/v1/${FUNCS[0]}"
+echo "Listo. El reinicio sano se ve arriba como 'shutdown signal received: 15'"
+echo "seguido de 'main function started'."
 echo
-echo "En emit-document la respuesta sana es {\"ok\":true,\"mode\":\"batch\",...}:"
-echo "corre la cola de emision, asi que un 200 con ok:true significa que la"
-echo "funcion nueva arranco y proceso lo que hubiera pendiente."
+echo "NO llames emit-document para verificar: CUALQUIER peticion (GET incluido)"
+echo "corre la cola y manda comprobantes reales a la DGII. El 2026-09-17 eso"
+echo "envio dos facturas ANULADAS que quedaron aceptadas."
+echo
+echo "Para ver que el codigo nuevo carga, llama sin token a una funcion que corte"
+echo "en la autenticacion (responde 401 'Falta el Bearer token', no ejecuta nada):"
+echo "  curl -s -X POST -H 'Content-Type: application/json' -d '{}' \\"
+echo "    https://supabase.mangopos.do/functions/v1/provision-ecf"
+echo "Y para emit-document, mira el log en la proxima venta electronica:"
+echo "  ssh $VPS \"docker logs --since 15m $CONTAINER 2>&1 | grep -i 'boot error\\|emit'\""

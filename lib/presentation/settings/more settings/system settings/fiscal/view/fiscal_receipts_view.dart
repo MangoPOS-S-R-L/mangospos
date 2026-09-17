@@ -5,6 +5,7 @@ import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import '../viewmodel/fiscal_viewmodel.dart';
 import 'sales_note_settings_section.dart';
+import 'ecf_request_card.dart';
 import '../../../../../../data/models/fiscal_models.dart';
 import '../../../../../../core/theme/app_colors.dart';
 
@@ -107,6 +108,10 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
                   _sectionHeader('Datos del Emisor'),
                   const SizedBox(height: 16),
                   _buildBusinessCard(vm),
+                  const SizedBox(height: 32),
+                  _sectionHeader('Facturación electrónica'),
+                  const SizedBox(height: 16),
+                  EcfRequestCard(businessId: widget.businessId),
                   const SizedBox(height: 32),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -248,7 +253,6 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
                 onChanged: (v) => ref
                     .read(fiscalVmProvider.notifier)
                     .toggleElectronicBilling(widget.businessId, v),
-                activeThumbColor: MangoColors.primaryOrange,
               ),
             ],
           ),
@@ -910,7 +914,6 @@ class _FiscalFormDialogState extends ConsumerState<_FiscalFormDialog> {
                 Switch(
                   value: _activo,
                   onChanged: (v) => setState(() => _activo = v),
-                  activeThumbColor: MangoColors.primaryOrange,
                 ),
               ],
             ),

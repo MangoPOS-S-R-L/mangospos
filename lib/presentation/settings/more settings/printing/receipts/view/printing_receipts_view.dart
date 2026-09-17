@@ -849,7 +849,6 @@ class _OpenDrawerOnCashCard extends StatelessWidget {
             value: value,
             onChanged: busy ? null : onChanged,
             contentPadding: EdgeInsets.zero,
-            activeThumbColor: MangoColors.primaryOrange,
             title: const Text(
               'Al cobrar en efectivo',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -865,7 +864,6 @@ class _OpenDrawerOnCashCard extends StatelessWidget {
             value: onPayButton,
             onChanged: busy ? null : onPayButtonChanged,
             contentPadding: EdgeInsets.zero,
-            activeThumbColor: MangoColors.primaryOrange,
             title: const Text(
               'Al tocar el botón Pagar',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),

@@ -4,18 +4,21 @@ import {
   buildWebhooks,
   companiesMatchingRnc,
   defaultNcfTypeFor,
+  hasUsableEcfSequence,
   MAX_CERTIFICATE_BYTES,
   nextSetTestRetry,
   parseAssociatedPage,
   parseProviderInfo,
   parseSetTest,
   planSequenceWrite,
+  requestStage,
   suggestItemExample,
   summarizeCompany,
   TaxpayerData,
   validateCertificate,
   validateEnablingXml,
   validateItemExample,
+  validateRequestContact,
   validateTaxpayer,
 } from "./ecf-onboarding.ts";
 
@@ -520,4 +523,52 @@ Deno.test("sugerencia: solo exentos va con indicador 4", () => {
 
 Deno.test("sugerencia: sin productos con precio no inventa", () => {
   assertEquals(suggestItemExample([{ name: "GRATIS", price: 0, taxed: true }]), null);
+});
+
+// ── Solicitud del cliente ──────────────────────────────────────────────────
+
+Deno.test("contacto: telefono dominicano con formato", () => {
+  const r = validateRequestContact({ contact_name: " Ana Pérez ", contact_phone: "(809) 555-1234" });
+  assert(r.ok);
+  assertEquals(r.value.contact_name, "Ana Pérez");
+});
+
+Deno.test("contacto: faltan datos o telefono corto", () => {
+  assertEquals(errorsOf(validateRequestContact({})).length, 2);
+  assertEquals(errorsOf(validateRequestContact({ contact_name: "Ana", contact_phone: "555-1234" })).length, 1);
+});
+
+Deno.test("secuencias usables: E31 exige vencimiento vigente, E32 no", () => {
+  const today = "2026-09-17";
+  const e32 = { ncf_type: "E32", range_end: 1000, current_number: 824, expiration_date: null, is_active: true };
+  const e31SinFecha = { ncf_type: "E31", range_end: 100, current_number: 12, expiration_date: null, is_active: true };
+  const e31Vencida = { ...e31SinFecha, expiration_date: "2026-09-16" };
+  const b02 = { ncf_type: "B02", range_end: 100, current_number: 1, expiration_date: null, is_active: true };
+  assertEquals(hasUsableEcfSequence([e32], today), true);
+  assertEquals(hasUsableEcfSequence([e31SinFecha, e31Vencida, b02], today), false);
+  assertEquals(hasUsableEcfSequence([{ ...e32, current_number: 1000 }], today), false);
+});
+
+Deno.test("etapa de la solicitud", () => {
+  const base = {
+    requested: false,
+    hasCompany: false,
+    dgiiAuthorized: false,
+    usableSequences: false,
+    provisioned: false,
+    ecfEnabled: false,
+  };
+  assertEquals(requestStage(base), "none");
+  assertEquals(requestStage({ ...base, requested: true }), "company");
+  assertEquals(requestStage({ ...base, requested: true, hasCompany: true }), "certification");
+  assertEquals(requestStage({ ...base, requested: true, hasCompany: true, dgiiAuthorized: true }), "sequences");
+  assertEquals(
+    requestStage({ ...base, requested: true, hasCompany: true, dgiiAuthorized: true, usableSequences: true }),
+    "activation",
+  );
+  // Tropella: activada antes de que existieran las solicitudes.
+  assertEquals(
+    requestStage({ ...base, hasCompany: true, usableSequences: true, provisioned: true, ecfEnabled: true }),
+    "active",
+  );
 });

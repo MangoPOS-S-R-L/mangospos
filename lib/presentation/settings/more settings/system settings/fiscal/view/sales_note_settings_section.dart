@@ -93,7 +93,6 @@ class SalesNoteSettingsSection extends StatelessWidget {
             Switch(
               value: features.salesNoteEnabled,
               onChanged: onEnabledChanged,
-              activeThumbColor: MangoColors.primaryOrange,
             ),
           ],
         ),
@@ -128,7 +127,6 @@ class SalesNoteSettingsSection extends StatelessWidget {
               Switch(
                 value: features.salesNoteDefault,
                 onChanged: onDefaultChanged,
-                activeThumbColor: MangoColors.primaryOrange,
               ),
             ],
           ),

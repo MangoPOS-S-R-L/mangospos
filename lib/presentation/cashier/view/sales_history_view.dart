@@ -14,6 +14,7 @@ import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:mangopos/presentation/cashier/widgets/annulment_process_dialog.dart';
+import 'package:mangopos/presentation/cashier/widgets/ecf_document_links_section.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -2078,6 +2079,13 @@ mixin _PaymentActionsMixin {
                     );
                   },
                 ),
+                // Factura electrónica: consulta DGII, PDF y XML. No pinta nada
+                // si el comprobante es de papel.
+                if ((payment['fiscal_document_id']?.toString() ?? '')
+                    .isNotEmpty)
+                  EcfDocumentLinksSection(
+                    fiscalDocumentId: payment['fiscal_document_id'].toString(),
+                  ),
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

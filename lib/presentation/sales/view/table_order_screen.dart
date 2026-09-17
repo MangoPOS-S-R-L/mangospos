@@ -21,6 +21,7 @@ import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/ecf_documents_repository.dart';
 import 'package:mangopos/data/models/sales_note.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 import 'package:mangopos/data/models/bank_account.dart';
@@ -5918,7 +5919,11 @@ class _CartView extends ConsumerWidget {
                     ? fiscalDoc.publicUrl!
                     : (fiscalDoc.buildDgiiVerifyUrl(
                             emitterRnc: emitterRnc,
-                            sandbox: true,
+                            // Ambiente real del negocio: con `true` fijo el QR
+                    // de respaldo apuntaba a las pruebas de la DGII.
+                    sandbox: await ref
+                        .read(ecfDocumentsRepositoryProvider)
+                        .isSandbox(businessId),
                           ) ??
                           '');
                 if (qrUrl.isNotEmpty) {

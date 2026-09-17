@@ -30,6 +30,7 @@ import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/repositories/ecf_documents_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
@@ -381,7 +382,11 @@ Future<void> reprintInvoiceFromPayment(
               ? fiscalDoc.publicUrl!
               : (fiscalDoc.buildDgiiVerifyUrl(
                     emitterRnc: emitterRnc,
-                    sandbox: true,
+                    // Ambiente real del negocio: con `true` fijo el QR
+                    // de respaldo apuntaba a las pruebas de la DGII.
+                    sandbox: await ref
+                        .read(ecfDocumentsRepositoryProvider)
+                        .isSandbox(businessId),
                   ) ??
                   '');
           if (qrUrl.isNotEmpty) {

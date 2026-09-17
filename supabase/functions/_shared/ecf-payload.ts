@@ -64,6 +64,22 @@ export function cancelledBeforeSendError(
     `no se envia. Para la DGII no existe, asi que no lleva nota de credito.`;
 }
 
+/**
+ * Recurso de Alanube por tipo de e-CF. El mismo sirve para emitir
+ * (`POST /invoices`) y para consultar (`GET /invoices/{id}/idCompany/{idCompany}`).
+ */
+export function alanubeEndpointForNcfType(ncfType: string): string | null {
+  switch (ncfType) {
+    case "E31": return "/fiscal-invoices";
+    case "E32": return "/invoices";
+    case "E44": return "/special-regimes";
+    case "E45": return "/gubernamentals";
+    // Nota de credito: es como se anula un e-CF que la DGII ya acepto.
+    case "E34": return "/credit-notes";
+    default: return null;
+  }
+}
+
 /** Notas de credito/debito: llevan informationReference en vez de vencimiento. */
 export function isCreditNoteType(ncfType: string): boolean {
   return ncfType === "E34" || ncfType === "B04";

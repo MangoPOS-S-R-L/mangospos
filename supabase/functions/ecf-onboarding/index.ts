@@ -21,12 +21,19 @@
 //   create_set_test   { item_example }
 //   check_set_test    → estado del set de pruebas y enlaces de descarga
 //   set_dgii_authorized { authorized } — el operador marca que la DGII lo aprobo
+//   list_requests     → solicitudes hechas desde la POS (sin business_id)
+//
+// Solicitud del CLIENTE desde la POS (owner/admin del negocio, o operador):
+//   request_status    → en que va su facturacion electronica
+//   submit_request    { data, certificate, contact_name, contact_phone,
+//                       already_authorized, accept_terms }
+//                     → guarda la solicitud y registra la empresa en Alanube
 //
 // La activacion (`business_alanube_settings`) NO vive aqui: la hace
 // `provision-ecf`, que corre el preflight. El panel la llama directo.
 //
-// Solo operadores de MangoPOS (`is_platform_operator`). Todo se escribe con
-// service_role y queda en `noc_audit_log`. El certificado y su contrasena
+// Todo lo demas es solo para operadores de MangoPOS (`is_platform_operator`).
+// Se escribe con service_role y queda en `noc_audit_log`. El certificado y su contrasena
 // viajan a Alanube en la misma peticion y no se guardan ni se registran.
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
@@ -43,6 +50,7 @@ import {
   defaultNcfTypeFor,
   EnablingXmlInput,
   ExistingSequence,
+  hasUsableEcfSequence,
   ItemExampleInput,
   nextSetTestRetry,
   ONBOARDING_SEQUENCE_TYPES,
@@ -50,6 +58,7 @@ import {
   parseProviderInfo,
   parseSetTest,
   planSequenceWrite,
+  requestStage,
   SET_TEST_FINAL_STATUSES,
   SIGNED_AT_COLUMN,
   SequenceInput,
@@ -61,6 +70,7 @@ import {
   validateCertificate,
   validateEnablingXml,
   validateItemExample,
+  validateRequestContact,
   validateTaxpayer,
 } from "../_shared/ecf-onboarding.ts";
 
@@ -80,7 +90,12 @@ const ASSOCIATED_MAX_PAGES = 40;
 const ONBOARDING_COLUMNS =
   "business_id, rnc, legal_name, trade_name, fiscal_address, province, municipality, email, " +
   "alanube_company_id, company_linked_via, company_linked_at, set_test_id, set_test_created_at, " +
-  "postulation_signed_at, declaration_signed_at, roles_signed_at, dgii_authorized_at, created_at, updated_at";
+  "postulation_signed_at, declaration_signed_at, roles_signed_at, dgii_authorized_at, " +
+  "requested_at, contact_name, contact_phone, already_authorized, created_at, updated_at";
+
+/** Acciones que puede usar el dueño/admin del negocio desde la POS. */
+const CLIENT_ACTIONS = new Set(["request_status", "submit_request"]);
+const CLIENT_ROLES = new Set(["owner", "admin"]);
 
 interface RequestBody {
   action?: string;
@@ -94,6 +109,10 @@ interface RequestBody {
   xml?: Omit<EnablingXmlInput, "kind">;
   item_example?: ItemExampleInput;
   authorized?: boolean;
+  contact_name?: string;
+  contact_phone?: string;
+  already_authorized?: boolean;
+  accept_terms?: boolean;
 }
 
 interface OnboardingRow extends TaxpayerData {
@@ -107,6 +126,10 @@ interface OnboardingRow extends TaxpayerData {
   declaration_signed_at: string | null;
   roles_signed_at: string | null;
   dgii_authorized_at: string | null;
+  requested_at: string | null;
+  contact_name: string | null;
+  contact_phone: string | null;
+  already_authorized: boolean | null;
 }
 
 interface Ctx {
@@ -136,12 +159,15 @@ Deno.serve(async (req: Request) => {
     return errorResponse(400, "invalid_request", "El body debe ser JSON");
   }
 
+  // list_requests es la unica accion que no es de un negocio.
+  const needsBusiness = body.action !== "list_requests";
   const businessId = body.business_id?.trim() ?? "";
-  if (!UUID_RE.test(businessId)) {
+  if (needsBusiness && !UUID_RE.test(businessId)) {
     return errorResponse(400, "invalid_request", "business_id debe ser un UUID");
   }
 
-  // ── Autorizacion: solo operadores de MangoPOS ───────────────────────────
+  // ── Autorizacion ────────────────────────────────────────────────────────
+  // Operador de MangoPOS: todo. Dueño/admin del negocio: solo su solicitud.
   const userClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { headers: { Authorization: authHeader } },
@@ -157,12 +183,37 @@ Deno.serve(async (req: Request) => {
     return errorResponse(500, "rpc_error", "No se pudo verificar el operador", opErr.message);
   }
   if (isOperator !== true) {
-    return errorResponse(403, "forbidden", "Solo un operador de MangoPOS puede hacer el alta e-CF.");
+    if (!CLIENT_ACTIONS.has(body.action ?? "")) {
+      return errorResponse(403, "forbidden", "Solo un operador de MangoPOS puede hacer el alta e-CF.");
+    }
+    const { data: role, error: roleErr } = await userClient.rpc("user_business_role", {
+      _user_id: userData.user.id,
+      _business_id: businessId,
+    });
+    if (roleErr) {
+      return errorResponse(500, "rpc_error", "No se pudo resolver el rol", roleErr.message);
+    }
+    if (!CLIENT_ROLES.has(role as string)) {
+      return errorResponse(
+        403,
+        "forbidden",
+        "Solo el dueño o un administrador del negocio puede solicitar la facturación electrónica.",
+      );
+    }
   }
 
   const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  if (!needsBusiness) {
+    try {
+      return await actionListRequests(service);
+    } catch (e) {
+      if (e instanceof HttpError) return errorResponse(e.status, e.code, e.message, e.detail);
+      return errorResponse(500, "internal_error", e instanceof Error ? e.message : String(e));
+    }
+  }
 
   const { data: biz, error: bizErr } = await service
     .from("businesses")
@@ -202,6 +253,10 @@ Deno.serve(async (req: Request) => {
         return await actionCheckSetTest(ctx);
       case "set_dgii_authorized":
         return await actionSetDgiiAuthorized(ctx);
+      case "request_status":
+        return await actionRequestStatus(ctx);
+      case "submit_request":
+        return await actionSubmitRequest(ctx);
       default:
         return errorResponse(400, "invalid_request", `Accion desconocida: ${body.action ?? "(vacia)"}`);
     }
@@ -448,9 +503,23 @@ async function actionLinkCompany(ctx: Ctx): Promise<Response> {
 }
 
 async function actionRegisterCompany(ctx: Ctx): Promise<Response> {
+  const current = await loadOnboarding(ctx.service, ctx.businessId);
+  const { saved, created } = await registerCompany(ctx, current);
+  return jsonResponse({ ok: true, onboarding: saved, company: summarizeCompany(created) });
+}
+
+/**
+ * Da de alta la empresa en Alanube con el certificado de `ctx.body.certificate`
+ * y guarda el ULID. La usan el operador (register_company) y la solicitud del
+ * cliente (submit_request). Lanza HttpError con codigo: incomplete_data,
+ * already_linked, invalid_certificate, company_exists, alanube_rejected...
+ */
+async function registerCompany(
+  ctx: Ctx,
+  current: OnboardingRow | null,
+): Promise<{ saved: OnboardingRow; created: AssociatedCompany & Record<string, unknown> }> {
   const { service, businessId, userId, body } = ctx;
 
-  const current = await loadOnboarding(service, businessId);
   const data = validateTaxpayer(current ?? {}, { forRegistration: true });
   if (!data.ok) throw new HttpError(409, "incomplete_data", data.errors.join(" "), data.errors);
 
@@ -523,7 +592,7 @@ async function actionRegisterCompany(ctx: Ctx): Promise<Response> {
       certificate_issuer: created.certificate?.issuerName ?? null,
       certificate_end_date: created.certificate?.endDate ?? null,
     });
-    return jsonResponse({ ok: true, onboarding: saved, company: summarizeCompany(created) });
+    return { saved, created };
   } catch (e) {
     // La empresa YA existe en Alanube: sin el ID en la respuesta el operador
     // no tendria como vincularla.
@@ -858,6 +927,229 @@ async function actionSetDgiiAuthorized(ctx: Ctx): Promise<Response> {
   return jsonResponse({ ok: true, onboarding: saved });
 }
 
+// ── Solicitud del cliente (POS) ──────────────────────────────────────────
+
+function todayInSantoDomingo(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Santo_Domingo" });
+}
+
+async function actionRequestStatus(ctx: Ctx): Promise<Response> {
+  const { service, businessId } = ctx;
+  const [onboarding, settingsRes, fsRes, seqRes] = await Promise.all([
+    loadOnboarding(service, businessId),
+    service
+      .from("business_alanube_settings")
+      .select("alanube_company_id, mode")
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    service
+      .from("fiscal_settings")
+      .select("rnc, business_legal_name, ecf_enabled")
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    service
+      .from("ncf_sequences")
+      .select("ncf_type, range_end, current_number, expiration_date, is_active")
+      .eq("business_id", businessId),
+  ]);
+  for (const r of [settingsRes, fsRes, seqRes]) {
+    if (r.error) throw new HttpError(500, "db_error", "No se pudo leer el estado", r.error.message);
+  }
+  const settings = settingsRes.data as { alanube_company_id: string; mode: string } | null;
+  const fiscal = fsRes.data as { rnc: string | null; business_legal_name: string | null; ecf_enabled: boolean | null } | null;
+
+  const stage = requestStage({
+    requested: !!onboarding?.requested_at,
+    hasCompany: !!(onboarding?.alanube_company_id || settings?.alanube_company_id),
+    dgiiAuthorized: !!onboarding?.dgii_authorized_at,
+    usableSequences: hasUsableEcfSequence(
+      (seqRes.data ?? []) as Parameters<typeof hasUsableEcfSequence>[0],
+      todayInSantoDomingo(),
+    ),
+    provisioned: !!settings && settings.mode !== "physical",
+    ecfEnabled: fiscal?.ecf_enabled === true,
+  });
+
+  // Solo lo que el cliente mismo mando: nada de ULID, set de pruebas ni errores
+  // de Alanube.
+  return jsonResponse({
+    stage,
+    requested_at: onboarding?.requested_at ?? null,
+    contact_name: onboarding?.contact_name ?? null,
+    contact_phone: onboarding?.contact_phone ?? null,
+    already_authorized: onboarding?.already_authorized ?? null,
+    data: {
+      rnc: onboarding?.rnc ?? fiscal?.rnc ?? null,
+      legal_name: onboarding?.legal_name ?? fiscal?.business_legal_name ?? null,
+      trade_name: onboarding?.trade_name ?? null,
+      fiscal_address: onboarding?.fiscal_address ?? null,
+      province: onboarding?.province ?? null,
+      municipality: onboarding?.municipality ?? null,
+      email: onboarding?.email ?? null,
+    },
+  });
+}
+
+async function actionSubmitRequest(ctx: Ctx): Promise<Response> {
+  const { service, businessId, userId, body } = ctx;
+
+  const data = validateTaxpayer(body.data ?? {}, { forRegistration: true });
+  const contact = validateRequestContact(body);
+  const cert = validateCertificate(body.certificate ?? {});
+  const errors = [
+    ...(data.ok ? [] : data.errors),
+    ...(contact.ok ? [] : contact.errors),
+    ...(cert.ok ? [] : cert.errors),
+    ...(body.accept_terms === true ? [] : ["Falta autorizar a MangoPOS a registrar tu certificado."]),
+  ];
+  if (errors.length > 0 || !data.ok || !contact.ok) {
+    throw new HttpError(422, "invalid_request", errors.join(" "), errors);
+  }
+
+  const { data: settings, error: settingsErr } = await service
+    .from("business_alanube_settings")
+    .select("mode")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (settingsErr) throw new HttpError(500, "db_error", "No se pudo leer la activacion", settingsErr.message);
+  if (settings && (settings as { mode: string }).mode !== "physical") {
+    throw new HttpError(409, "already_active", "Tu negocio ya tiene la facturación electrónica activada.");
+  }
+
+  const current = await loadOnboarding(service, businessId);
+  if (current?.alanube_company_id) {
+    throw new HttpError(
+      409,
+      "already_in_progress",
+      "Tu solicitud ya está en proceso y tu empresa ya está registrada. MangoPOS te contactará.",
+    );
+  }
+
+  // La solicitud queda guardada aunque el alta en Alanube falle: MangoPOS la ve
+  // en el panel y le da seguimiento.
+  const now = new Date().toISOString();
+  const saved = await upsertOnboarding(service, businessId, userId, current, {
+    ...data.value,
+    ...contact.value,
+    already_authorized: body.already_authorized === true,
+    // Un reintento (contraseña equivocada, por ejemplo) no cambia quien ni
+    // cuando lo pidio.
+    ...(current?.requested_at ? {} : { requested_at: now, requested_by: userId }),
+  } as Partial<OnboardingRow>);
+  await audit(service, userId, businessId, "submit_request", {
+    already_authorized: body.already_authorized === true,
+    contact_name: contact.value.contact_name,
+    certificate_file: body.certificate?.filename ?? null,
+  });
+
+  try {
+    await registerCompany(ctx, saved);
+    return jsonResponse({ ok: true, company_registered: true, stage: "certification" });
+  } catch (e) {
+    if (!(e instanceof HttpError)) throw e;
+    if (e.code === "company_exists") {
+      // Ya registrada (otro intento o un operador): se vincula desde el panel.
+      return jsonResponse({
+        ok: true,
+        company_registered: false,
+        stage: "company",
+        message: "Tu RNC ya estaba registrado con nuestro proveedor. MangoPOS lo revisa y te contacta.",
+      });
+    }
+    if (e.code === "alanube_rejected") {
+      // Casi siempre: contraseña equivocada o un archivo que no es el
+      // certificado de firma. El detalle tecnico va aparte, no en el mensaje.
+      throw new HttpError(
+        422,
+        "certificate_rejected",
+        "No se pudo registrar tu certificado. Revisa que sea tu certificado de firma digital (.p12) " +
+          "y que la contraseña sea la correcta. Tu solicitud quedó guardada.",
+        { cause: e.message },
+      );
+    }
+    throw e;
+  }
+}
+
+async function actionListRequests(service: SupabaseClient): Promise<Response> {
+  const { data, error } = await service
+    .from("ecf_onboarding")
+    .select(
+      "business_id, rnc, legal_name, requested_at, contact_name, contact_phone, already_authorized, " +
+        "alanube_company_id, dgii_authorized_at",
+    )
+    .not("requested_at", "is", null)
+    .order("requested_at", { ascending: false })
+    .limit(200);
+  if (error) throw new HttpError(500, "db_error", "No se pudieron leer las solicitudes", error.message);
+
+  const rows = (data ?? []) as unknown as Array<{
+    business_id: string;
+    rnc: string | null;
+    legal_name: string | null;
+    requested_at: string;
+    contact_name: string | null;
+    contact_phone: string | null;
+    already_authorized: boolean | null;
+    alanube_company_id: string | null;
+    dgii_authorized_at: string | null;
+  }>;
+  if (rows.length === 0) return jsonResponse({ requests: [] });
+
+  const ids = rows.map((r) => r.business_id);
+  const [bizRes, settingsRes, fsRes, seqRes] = await Promise.all([
+    service.from("businesses").select("id, business_name").in("id", ids),
+    service.from("business_alanube_settings").select("business_id, alanube_company_id, mode").in("business_id", ids),
+    service.from("fiscal_settings").select("business_id, ecf_enabled").in("business_id", ids),
+    service
+      .from("ncf_sequences")
+      .select("business_id, ncf_type, range_end, current_number, expiration_date, is_active")
+      .in("business_id", ids),
+  ]);
+  for (const r of [bizRes, settingsRes, fsRes, seqRes]) {
+    if (r.error) throw new HttpError(500, "db_error", "No se pudieron leer las solicitudes", r.error.message);
+  }
+
+  const names = new Map((bizRes.data ?? []).map((b: { id: string; business_name: string }) => [b.id, b.business_name]));
+  const settingsBy = new Map(
+    (settingsRes.data ?? []).map((s: { business_id: string; alanube_company_id: string; mode: string }) => [s.business_id, s]),
+  );
+  const ecfBy = new Map(
+    (fsRes.data ?? []).map((f: { business_id: string; ecf_enabled: boolean | null }) => [f.business_id, f.ecf_enabled === true]),
+  );
+  const seqBy = new Map<string, Parameters<typeof hasUsableEcfSequence>[0]>();
+  for (const q of (seqRes.data ?? []) as Array<Parameters<typeof hasUsableEcfSequence>[0][number] & { business_id: string }>) {
+    const list = seqBy.get(q.business_id) ?? [];
+    list.push(q);
+    seqBy.set(q.business_id, list);
+  }
+  const today = todayInSantoDomingo();
+
+  return jsonResponse({
+    requests: rows.map((r) => {
+      const settings = settingsBy.get(r.business_id);
+      return {
+        business_id: r.business_id,
+        business_name: names.get(r.business_id) ?? null,
+        rnc: r.rnc,
+        legal_name: r.legal_name,
+        requested_at: r.requested_at,
+        contact_name: r.contact_name,
+        contact_phone: r.contact_phone,
+        already_authorized: r.already_authorized,
+        stage: requestStage({
+          requested: true,
+          hasCompany: !!(r.alanube_company_id || settings?.alanube_company_id),
+          dgiiAuthorized: !!r.dgii_authorized_at,
+          usableSequences: hasUsableEcfSequence(seqBy.get(r.business_id) ?? [], today),
+          provisioned: !!settings && settings.mode !== "physical",
+          ecfEnabled: ecfBy.get(r.business_id) === true,
+        }),
+      };
+    }),
+  });
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 class HttpError extends Error {
@@ -982,7 +1274,7 @@ async function loadOnboarding(service: SupabaseClient, businessId: string): Prom
       throw new HttpError(
         500,
         "migration_missing",
-        "Falta aplicar la migracion 20260917_0003_ecf_onboarding_certification.sql.",
+        "Faltan migraciones de ecf_onboarding (20260917_0003 y/o 20260917_0006).",
       );
     }
     throw new HttpError(500, "db_error", "No se pudo leer el alta e-CF", error.message);

@@ -708,3 +708,79 @@ export function suggestItemExample(
     unit_price: Math.max(1, Math.round(pick.price)),
   };
 }
+
+// ── Solicitud del cliente desde la POS ─────────────────────────────────────
+
+export interface RequestContactInput {
+  contact_name?: string | null;
+  contact_phone?: string | null;
+}
+
+export function validateRequestContact(
+  input: RequestContactInput,
+): Validation<{ contact_name: string; contact_phone: string }> {
+  const errors: string[] = [];
+  const name = clean(input.contact_name);
+  if (!name) errors.push("Falta el nombre de la persona de contacto.");
+  else if (name.length > 80) errors.push("El nombre de contacto es demasiado largo.");
+
+  const phone = clean(input.contact_phone);
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (!phone) errors.push("Falta el telefono de contacto.");
+  else if (digits.length < 10 || digits.length > 15) {
+    errors.push("El telefono de contacto no es valido (incluye el codigo de area).");
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: { contact_name: name as string, contact_phone: phone as string } };
+}
+
+export interface SequenceUsabilityRow {
+  ncf_type: string;
+  range_end: number;
+  current_number: number;
+  expiration_date: string | null;
+  is_active: boolean | null;
+}
+
+/** Hay al menos una secuencia electronica con la que se puede emitir hoy. */
+export function hasUsableEcfSequence(rows: SequenceUsabilityRow[], today: string): boolean {
+  return rows.some((s) =>
+    s.ncf_type.startsWith("E") &&
+    s.is_active === true &&
+    Number(s.current_number) < Number(s.range_end) &&
+    (s.expiration_date
+      ? s.expiration_date >= today
+      : !TYPES_WITH_SEQUENCE_DUE_DATE.includes(s.ncf_type))
+  );
+}
+
+/**
+ * En que va la facturacion electronica de un negocio, en los terminos que ve
+ * el cliente. Se DERIVA de lo que ya existe; no hay un estado guardado aparte
+ * que se pueda desincronizar.
+ *   none          → nunca la pidio y nadie la empezo
+ *   company       → pedida, falta registrar/vincular la empresa en Alanube
+ *   certification → falta la autorizacion de la DGII
+ *   sequences     → autorizado, faltan las secuencias e-NCF
+ *   activation    → todo listo, falta activar
+ *   active        → ya emite
+ */
+export type RequestStage = "none" | "company" | "certification" | "sequences" | "activation" | "active";
+
+export function requestStage(input: {
+  requested: boolean;
+  hasCompany: boolean;
+  dgiiAuthorized: boolean;
+  usableSequences: boolean;
+  provisioned: boolean;
+  ecfEnabled: boolean;
+}): RequestStage {
+  if (input.provisioned && input.ecfEnabled) return "active";
+  if (!input.requested && !input.hasCompany && !input.provisioned) return "none";
+  if (!input.hasCompany) return "company";
+  // La DGII no entrega secuencias E a quien no autorizo.
+  if (!input.dgiiAuthorized && !input.usableSequences && !input.provisioned) return "certification";
+  if (!input.usableSequences) return "sequences";
+  return "activation";
+}

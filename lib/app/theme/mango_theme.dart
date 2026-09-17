@@ -203,15 +203,22 @@ ThemeData buildMangoTheme() {
     // ---------------------------------------------------------------
     // Otros: switches/checkboxes/radios usan el naranja del primary.
     // ---------------------------------------------------------------
+    // Switch: pista naranja con el botón gris claro al encender; apagado, pista
+    // gris claro y botón gris. Sin borde (el de Material 3 lo hacía ver
+    // tosco). OJO: pasarle `activeThumbColor` naranja a un Switch lo deja
+    // naranja entero sobre esta pista — no se sobrescribe el botón.
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? Colors.white : muted,
+        (s) => s.contains(WidgetState.selected)
+            ? const Color(0xFFF3F4F6)
+            : muted,
       ),
       trackColor: WidgetStateProperty.resolveWith(
         (s) => s.contains(WidgetState.selected)
             ? primary
             : const Color(0xFFD1D5DB),
       ),
+      trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
     checkboxTheme: CheckboxThemeData(
       fillColor: WidgetStateProperty.resolveWith(

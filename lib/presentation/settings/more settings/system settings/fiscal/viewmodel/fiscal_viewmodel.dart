@@ -259,9 +259,19 @@ class FiscalViewModel extends Notifier<FiscalState> {
       final bizId = businessId == 'auto'
           ? ref.read(sessionProvider).activeBusinessId ?? ''
           : businessId;
-      await ref
+      final notSaved = await ref
           .read(posSettingsRepositoryProvider)
           .setBusinessFeatures(businessId: bizId, features: next);
+      // Sin la migración de nota de venta el guardado "funciona" quitando sus
+      // columnas: el switch quedaba encendido en pantalla y apagado en la BD,
+      // y el cobro seguía saliendo con comprobante de consumo sin explicación.
+      if (notSaved.any((c) => c.startsWith('sales_note_'))) {
+        state = state.copyWith(
+          features: previous,
+          error: 'La nota de venta no se guardó: al servidor le falta la '
+              'migración de notas de venta (20260910_0001_sales_notes).',
+        );
+      }
     } catch (e) {
       state = state.copyWith(
         features: previous,

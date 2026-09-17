@@ -353,6 +353,12 @@ verify_jwt = true
 # el que Alanube tiene registrado para ese ULID antes de escribir nada.
 # También la llama el panel (mangopos_administrador) con JWT de operador.
 
+[functions.ecf-document-links]
+verify_jwt = true
+# Enlaces de un e-CF emitido (consulta DGII, PDF, XML) para abrirlo desde el
+# historial. Valida acceso al negocio del comprobante; pide a Alanube el PDF y
+# el XML en el momento porque sus enlaces vencen.
+
 [functions.ecf-onboarding]
 verify_jwt = true
 # Alta e-CF desde el panel. Solo operadores de MangoPOS (is_platform_operator).

@@ -625,7 +625,6 @@ class _CashReasonDialogState extends ConsumerState<_CashReasonDialog> {
                   'pedirá PIN sin importar el monto.',
                   style: TextStyle(color: MangoColors.muted, fontSize: 12),
                 ),
-                activeThumbColor: MangoColors.primaryOrange,
               ),
             ],
           ),

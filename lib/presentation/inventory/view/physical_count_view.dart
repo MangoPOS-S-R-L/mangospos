@@ -582,7 +582,6 @@ class _CreatePhysicalCountDialogState
                       child: SwitchListTile(
                         value: _isBlind,
                         onChanged: (v) => setState(() => _isBlind = v),
-                        activeThumbColor: MangoColors.primaryOrange,
                         contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12,
                         ),

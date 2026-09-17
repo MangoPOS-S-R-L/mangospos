@@ -23,14 +23,22 @@
 //     registra como aprobado SIN volver a cobrar; si no lo tiene, se reintenta;
 //     si no se puede saber, no se cobra.
 //   - Política de reintentos D11: intentos 1/2/3; tras el 3º declinado → suspended.
-//   - Monto: subscription_effective_price_cents (migración 20260915_0006) — precio
-//     especial del cliente si tiene uno vigente para su plan, si no el de lista.
+//   - Monto: subscription_charge_breakdown (migración 0051 de mangopos_administrador)
+//     = precio efectivo del plan (precio especial vigente o lista, 20260915_0006)
+//     + facturas electrónicas aceptadas por encima de lo incluido. El desglose
+//     queda en la fila del cobro (ecf_overage_cents, ecf_detail, ecf_usage_*).
 
 import { corsPreflight, errorResponse, jsonResponse } from "../_shared/responses.ts";
 import { getAzulEnv } from "../_shared/env.ts";
 import { getServiceClient } from "../_shared/supabase.ts";
 import { generateChargeOrderNumber } from "../_shared/azul.ts";
 import { AzulCallError, chargeWithToken, verifyPayment } from "../_shared/azul-api.ts";
+import {
+  ecfChargeColumns,
+  type EcfOverage,
+  isMissingFunction,
+  parseChargeBreakdown,
+} from "./charge_breakdown.ts";
 import {
   chargeCustomOrderId,
   classifyChargeVerify,
@@ -200,27 +208,51 @@ Deno.serve(async (req) => {
     membership.current_period_end ?? today) as string;
   const periodEnd = addMonthIso(periodStart);
 
-  // 3. Monto. v1 sin prorrateo (azul_plan_adjustments no existe todavía).
-  //    Lo decide subscription_effective_price_cents: precio especial vigente
-  //    para ESTE plan o, si no hay, el de lista. Es la misma función que usan
-  //    las facturas y el MRR, para que lo cobrado y lo facturado no diverjan.
+  // 3. Monto = plan + facturas electrónicas extra. v1 sin prorrateo.
+  //    El plan lo decide subscription_effective_price_cents (la misma función
+  //    que usan las facturas y el MRR, para que lo cobrado y lo facturado no
+  //    diverjan); subscription_charge_breakdown le suma el extra de e-CF.
   //
-  //    Falla CERRADA: si no se puede resolver el precio efectivo, NO se cobra.
-  //    Caer al precio de lista le cobraría de más a un cliente con descuento;
-  //    no cobrar hoy solo lo difiere al próximo ciclo del cron.
-  const { data: effectivePrice, error: priceErr } = await service.rpc(
-    "subscription_effective_price_cents",
-    { p_membership_id: membershipId, p_on: periodStart },
+  //    Falla CERRADA: si no se puede resolver el monto, NO se cobra. Caer al
+  //    precio de lista le cobraría de más a un cliente con descuento; no
+  //    cobrar hoy solo lo difiere al próximo ciclo del cron. Única excepción:
+  //    si 0051 todavía no está aplicada (la función no existe), se cobra solo
+  //    el plan como antes, en vez de frenar todos los cobros.
+  let amountCents: number;
+  let ecf: EcfOverage | null = null;
+  let breakdownApplied = true;
+  const { data: breakdown, error: breakdownErr } = await service.rpc(
+    "subscription_charge_breakdown",
+    { p_membership_id: membershipId, p_period_start: periodStart },
   );
-  if (priceErr || typeof effectivePrice !== "number") {
-    return errorResponse(
-      500,
-      "price_unresolved",
-      "Could not resolve the effective price for this membership",
-      priceErr?.message ?? `unexpected value: ${JSON.stringify(effectivePrice)}`,
+  if (breakdownErr && isMissingFunction(breakdownErr)) {
+    breakdownApplied = false;
+    const { data: effectivePrice, error: priceErr } = await service.rpc(
+      "subscription_effective_price_cents",
+      { p_membership_id: membershipId, p_on: periodStart },
     );
+    if (priceErr || typeof effectivePrice !== "number") {
+      return errorResponse(
+        500,
+        "price_unresolved",
+        "Could not resolve the effective price for this membership",
+        priceErr?.message ?? `unexpected value: ${JSON.stringify(effectivePrice)}`,
+      );
+    }
+    amountCents = effectivePrice;
+  } else {
+    const parsed = breakdownErr ? null : parseChargeBreakdown(breakdown);
+    if (!parsed) {
+      return errorResponse(
+        500,
+        "price_unresolved",
+        "Could not resolve the charge amount for this membership",
+        breakdownErr?.message ?? `unexpected value: ${JSON.stringify(breakdown)}`,
+      );
+    }
+    amountCents = parsed.amountCents;
+    ecf = parsed.ecf;
   }
-  const amountCents = effectivePrice;
 
   // Precio 0 (plan gratis o precio especial en 0): no hay nada que cobrar.
   // Azul rechaza una venta de RD$0; antes la fila quedaba en `error` y el cron
@@ -272,6 +304,7 @@ Deno.serve(async (req) => {
       currency_code: currencyCode,
       status: "pending",
       attempted_at: nowIso,
+      ...ecfChargeColumns(ecf, breakdownApplied),
     })
     .select("id")
     .single();
@@ -399,7 +432,12 @@ Deno.serve(async (req) => {
     // AHORA, no lo que se intentó la primera vez.
     let claim = service
       .from("azul_charges")
-      .update({ status: "pending", attempted_at: nowIso, amount_cents: amountCents })
+      .update({
+        status: "pending",
+        attempted_at: nowIso,
+        amount_cents: amountCents,
+        ...ecfChargeColumns(ecf, breakdownApplied),
+      })
       .eq("id", existing.id)
       .eq("status", existing.status);
     if (existing.status === "pending") {
@@ -552,5 +590,6 @@ Deno.serve(async (req) => {
     iso_code: azul.IsoCode ?? null,
     azul_order_id: azul.AzulOrderId ?? null,
     response_message: azul.ResponseMessage ?? null,
+    ecf_overage_cents: ecf?.overageCents ?? 0,
   });
 });

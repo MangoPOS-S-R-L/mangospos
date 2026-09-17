@@ -213,7 +213,6 @@ class _UsdDisplaySettingsCardState
                   _enabled = v;
                   if (!v) _error = null;
                 }),
-                activeThumbColor: MangoColors.primaryOrange,
               ),
             ],
           ),

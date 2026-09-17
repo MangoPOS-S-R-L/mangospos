@@ -1264,7 +1264,12 @@ class PosSettingsRepository {
   /// Upsert atómico de los flags. La UI de admin envía el set completo
   /// al guardar; preferimos no hacer parciales para evitar inconsistencias
   /// si dos admins editan en simultáneo.
-  Future<void> setBusinessFeatures({
+  ///
+  /// Devuelve las columnas que NO se guardaron porque el servidor no las
+  /// tiene (migración sin aplicar). Vacío = se guardó todo. Quien cambia una
+  /// bandera joven tiene que revisarlo: si su columna está en la lista, el
+  /// switch se ve encendido pero en la BD no quedó nada.
+  Future<Set<String>> setBusinessFeatures({
     required String businessId,
     required BusinessFeatures features,
   }) async {
@@ -1301,6 +1306,7 @@ class PosSettingsRepository {
       await _client
           .from('business_settings')
           .upsert(payload, onConflict: 'business_id');
+      return const <String>{};
     } on PostgrestException catch (e) {
       // Banderas jóvenes: `require_goods_receipt` llega con la migración
       // 20260828_0001, `warehouse_sections_enabled` con 20260901_0001 e
@@ -1325,14 +1331,17 @@ class PosSettingsRepository {
         if (column == null || !payload.containsKey(column)) {
           // No se pudo identificar cuál falta: se cae al comportamiento
           // viejo y se quitan las tres jóvenes de una vez.
-          payload.remove('require_goods_receipt');
-          payload.remove('warehouse_sections_enabled');
-          payload.remove('inventory_costing_method');
-          payload.remove('multimesero_table_owner_only');
+          const legacy = {
+            'require_goods_receipt',
+            'warehouse_sections_enabled',
+            'inventory_costing_method',
+            'multimesero_table_owner_only',
+          };
+          legacy.forEach(payload.remove);
           await _client
               .from('business_settings')
               .upsert(payload, onConflict: 'business_id');
-          return;
+          return {...dropped, ...legacy};
         }
 
         payload.remove(column);
@@ -1342,7 +1351,7 @@ class PosSettingsRepository {
           await _client
               .from('business_settings')
               .upsert(payload, onConflict: 'business_id');
-          return;
+          return dropped;
         } on PostgrestException catch (retryError) {
           if (!_isMissingColumn(retryError)) rethrow;
           lastError = retryError;
