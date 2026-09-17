@@ -256,6 +256,40 @@ class PrintingRepository {
     }
   }
 
+  /// Guarda la velocidad de impresión en `connection_config.print_speed`
+  /// (ver `core/printing/star/print_speed.dart`). [speed] null = quitar el
+  /// ajuste y dejar la velocidad propia de la impresora.
+  ///
+  /// Lee y MEZCLA el jsonb: ahí también viven `emulation`, `render` y los
+  /// datos del transporte, que no se pueden pisar.
+  Future<void> setPrintSpeed({
+    required String printerId,
+    required String? speed,
+  }) async {
+    try {
+      final row = await _client
+          .from('printers')
+          .select('connection_config')
+          .eq('id', printerId)
+          .maybeSingle();
+      final config = Map<String, dynamic>.from(
+        (row?['connection_config'] as Map?) ?? const {},
+      );
+      if (speed == null) {
+        config.remove('print_speed');
+      } else {
+        config['print_speed'] = speed;
+      }
+      await _client
+          .from('printers')
+          .update({'connection_config': config})
+          .eq('id', printerId);
+      _clearLookupCaches();
+    } catch (e) {
+      throw Exception('Error al guardar la velocidad de impresión: $e');
+    }
+  }
+
   Future<Map<String, PrinterUsageSummary>> getPrinterUsageSummaries(
     String businessId,
   ) async {

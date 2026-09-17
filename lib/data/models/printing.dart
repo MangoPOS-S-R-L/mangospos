@@ -52,6 +52,7 @@ class PrinterDevice {
     required this.createdAt,
     this.hostDeviceId,
     this.fallbackPrinterId,
+    this.connectionConfig = const {},
   });
 
   final String id;
@@ -78,6 +79,10 @@ class PrinterDevice {
   /// NULL = sin respaldo (sigue retries normales).
   final String? fallbackPrinterId;
 
+  /// `printers.connection_config` (jsonb). Además de datos del transporte
+  /// guarda ajustes por impresora: `emulation`, `render`, `print_speed`.
+  final Map<String, dynamic> connectionConfig;
+
   factory PrinterDevice.fromMap(Map<String, dynamic> map) {
     final normalized = PrinterFieldMapper.normalize(map);
     return PrinterDevice(
@@ -96,6 +101,7 @@ class PrinterDevice {
       createdAt: normalized['created_at'] as DateTime,
       hostDeviceId: map['host_device_id'] as String?,
       fallbackPrinterId: map['fallback_printer_id'] as String?,
+      connectionConfig: PrinterConfig._readJsonMap(map['connection_config']),
     );
   }
 
@@ -116,6 +122,7 @@ class PrinterDevice {
       createdAt: config.createdAt,
       hostDeviceId: config.hostDeviceId,
       fallbackPrinterId: config.fallbackPrinterId,
+      connectionConfig: config.connectionConfig,
     );
   }
 
@@ -157,6 +164,7 @@ class PrinterDevice {
     DateTime? createdAt,
     String? hostDeviceId,
     String? fallbackPrinterId,
+    Map<String, dynamic>? connectionConfig,
   }) {
     return PrinterDevice(
       id: id ?? this.id,
@@ -174,6 +182,7 @@ class PrinterDevice {
       createdAt: createdAt ?? this.createdAt,
       hostDeviceId: hostDeviceId ?? this.hostDeviceId,
       fallbackPrinterId: fallbackPrinterId ?? this.fallbackPrinterId,
+      connectionConfig: connectionConfig ?? this.connectionConfig,
     );
   }
 }

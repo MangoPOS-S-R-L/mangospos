@@ -21,6 +21,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/presentation/cashier/services/cash_drawer_service.dart';
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
@@ -213,6 +214,9 @@ class _MainShellState extends ConsumerState<MainShell> {
                     children: [
                       // Pantalla completa
                       const _FullscreenButton(),
+
+                      // Abrir gaveta a mano (solo cajero / administrador).
+                      const _OpenDrawerButton(),
 
                       const SizedBox(width: 12),
 
@@ -1109,6 +1113,87 @@ class _FullscreenButtonState extends State<_FullscreenButton> {
             child: Icon(
               _fullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
               color: Colors.grey[700],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Abre la gaveta de dinero a mano, sin venta. Solo lo ven cajero y
+/// administrador (el dueño entra como administrador). El pulso va a la
+/// impresora de recibos de esta caja — ver `CashDrawerService`.
+class _OpenDrawerButton extends ConsumerStatefulWidget {
+  const _OpenDrawerButton();
+
+  @override
+  ConsumerState<_OpenDrawerButton> createState() => _OpenDrawerButtonState();
+}
+
+class _OpenDrawerButtonState extends ConsumerState<_OpenDrawerButton> {
+  bool _busy = false;
+
+  Future<void> _open() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final result = await ref.read(cashDrawerServiceProvider).open();
+    if (!mounted) return;
+    setState(() => _busy = false);
+    switch (result) {
+      case CashDrawerKickResult.opened:
+        AppToast.success(context, 'Gaveta abierta.');
+      case CashDrawerKickResult.printerless:
+        AppToast.info(
+          context,
+          'Modo sin impresora activo: no hay gaveta conectada.',
+        );
+      case CashDrawerKickResult.noPrinter:
+        AppToast.info(
+          context,
+          'No hay impresora de recibos configurada para esta caja.',
+        );
+      case CashDrawerKickResult.failed:
+        AppToast.error(
+          context,
+          'No se pudo abrir la gaveta. Revisa que la impresora esté encendida.',
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final role = ref.watch(sessionProvider.select((s) => s.activeRole));
+    if (role != PosRole.cajero && role != PosRole.administrador) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 8),
+      child: Tooltip(
+        message: 'Abrir gaveta',
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: _open,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      Icons.point_of_sale_rounded,
+                      color: Colors.grey[700],
+                    ),
             ),
           ),
         ),

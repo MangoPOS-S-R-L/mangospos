@@ -82,6 +82,12 @@ class EscPosRasterEncoder {
       if (data[i] == _gs && data[i + 1] == 0x76 && data[i + 2] == 0x30) {
         return true;
       }
+      // `GS ( K` de velocidad de impresión (ver `print_speed.dart`): se
+      // inserta tras el `ESC @` y lleva su longitud en pL pH.
+      if (data[i] == _gs && data[i + 1] == 0x28 && i + 4 < data.length) {
+        i += 5 + (data[i + 3] | (data[i + 4] << 8));
+        continue;
+      }
       if (data[i] != _esc) return false;
       switch (data[i + 1]) {
         case 0x4A: // ESC J n — avance en puntos

@@ -16,6 +16,7 @@ import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
 import '../../core/printing/ble_printer_connection_manager.dart';
 import '../../core/printing/printerless_mode.dart';
+import '../../core/printing/star/print_speed.dart';
 import '../../services/printing/print_ticket_service.dart';
 import '../../presentation/sales/state/sales_state.dart';
 import 'pos_settings_repository.dart';
@@ -481,6 +482,10 @@ class PrintingService {
     String? orderId,
     String? idempotencySuffix,
   }) async {
+    // Velocidad elegida para esta impresora. Las comandas no pasan por
+    // `StarPrintAdapter` (salen directo por TCP/agente/BT), así que se aplica
+    // aquí; si más abajo sí lo cruzan (USB directo) no se duplica.
+    bytes = applyPrintSpeed(bytes, resolvePrintSpeed(printer));
     // Clave de idempotencia del ticket, compartida por la cola BT y el cloud
     // queue. Ver [kitchenTicketIdempotencyKey].
     final ticketKey = kitchenTicketIdempotencyKey(

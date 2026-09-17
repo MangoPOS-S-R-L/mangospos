@@ -26,6 +26,7 @@ import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
+import 'package:mangopos/core/printing/star/print_speed.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
@@ -337,6 +338,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     String? encoding,
     String? fallbackPrinterId,
     bool clearFallback = false,
+    /// Null = no tocar la velocidad guardada.
+    PrintSpeed? printSpeed,
   }) async {
     final trimmedName = name.trim();
     if (trimmedName.isEmpty) {
@@ -364,6 +367,12 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         fallbackPrinterId: fallbackPrinterId,
         clearFallback: clearFallback,
       );
+      if (printSpeed != null) {
+        await _repo.setPrintSpeed(
+          printerId: printerId,
+          speed: printSpeed.wireValue,
+        );
+      }
       await load(businessId: b, force: true);
       return true;
     } catch (e, st) {
@@ -1935,6 +1944,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       encoding: printer.encoding,
       lastSeen: printer.lastSeen,
       createdAt: printer.createdAt,
+      // Sin esto la impresión de prueba ignoraba los ajustes por impresora
+      // (emulación Star, raster, velocidad) y no se parecía al ticket real.
+      connectionConfig: printer.connectionConfig,
     );
   }
 }

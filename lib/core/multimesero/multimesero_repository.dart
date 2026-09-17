@@ -30,6 +30,43 @@ class MultimeseroRepository {
     return value is bool ? value : false;
   }
 
+  /// Lee en UNA consulta el modo multimesero y su sub-opción "cada mesero es
+  /// dueño de su mesa" (`multimesero_table_owner_only`, 20260916_0002).
+  ///
+  /// `select()` y no la lista de columnas a propósito: en un servidor sin la
+  /// migración, pedir la columna nueva por nombre tumbaría la lectura y
+  /// apagaría el multimesero entero. Así la sub-opción simplemente llega en
+  /// false.
+  Future<({bool enabled, bool tableOwnerOnly})> readModes(
+    String businessId,
+  ) async {
+    if (businessId.isEmpty) return (enabled: false, tableOwnerOnly: false);
+    final row = await _client
+        .from('business_settings')
+        .select()
+        .eq('business_id', businessId)
+        .maybeSingle();
+    final enabled = row?['multimesero_enabled'] == true;
+    return (
+      enabled: enabled,
+      tableOwnerOnly: enabled && row?['multimesero_table_owner_only'] == true,
+    );
+  }
+
+  /// Empleado que abrió la mesa (`table_sessions.opened_by_employee_id`, lo
+  /// fija el PIN multimesero al abrirla). Null si la abrió alguien sin PIN
+  /// (cajero/admin) o la sesión no existe en el servidor.
+  Future<String?> tableOpenerEmployeeId(String sessionId) async {
+    if (sessionId.isEmpty) return null;
+    final row = await _client
+        .from('table_sessions')
+        .select('opened_by_employee_id')
+        .eq('id', sessionId)
+        .maybeSingle();
+    final id = row?['opened_by_employee_id']?.toString().trim();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
   /// Actualiza el toggle. Solo callable por owner/admin del business
   /// (validado por RLS de `business_settings`).
   Future<void> setEnabled({
@@ -87,6 +124,7 @@ class MultimeseroRepository {
       businessId: resolvedBusinessId,
       validatedAt: DateTime.now(),
       userId: userId,
+      role: map['role']?.toString(),
       permissions: await _loadWaiterPermissions(
         userId: userId,
         businessId: resolvedBusinessId,

@@ -46,6 +46,7 @@ import 'package:mangopos/presentation/split_bill/widgets/split_bill_modal.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
 import 'package:mangopos/services/dgii_lookup_service.dart';
 
+import 'package:mangopos/presentation/cashier/services/cash_drawer_service.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/services/printing/print_destination.dart';
 import 'package:mangopos/services/printing/print_ticket_service.dart';
@@ -2317,6 +2318,13 @@ class _CartView extends ConsumerWidget {
     // cierre (onFinish) son los mismos del cobro normal.
     bool creditMode = false,
   }) async {
+    // Gaveta al tocar "Pagar" (ajuste del negocio). Antes de cualquier await
+    // y sin esperar: el cajero tiene el cambio a mano mientras elige el
+    // método. El cobro a crédito no mueve efectivo.
+    if (!creditMode) {
+      unawaited(ref.read(cashDrawerServiceProvider).openOnPayButton());
+    }
+
     // Feature flag `kitchen_enabled`: si la cocina está apagada y hay
     // items draft/pending, los marcamos `ready` antes de abrir el pago
     // para no atascarnos en validaciones de estado. NO imprimimos

@@ -200,6 +200,11 @@ class BusinessFeatures {
   final bool barcodeEnabled;
   final InventoryMode inventoryMode;
   final bool multimeseroEnabled;
+
+  /// Sub-opción del multimesero: una mesa abierta solo la puede abrir el
+  /// mesero que la abrió (ver `core/multimesero/table_ownership.dart`).
+  /// Default false = cualquier mesero entra con su PIN, como siempre.
+  final bool multimeseroTableOwnerOnly;
   final bool transfersRequireApproval;
 
   /// Recepción de mercancía obligatoria: registrar una compra NO mueve stock;
@@ -263,6 +268,7 @@ class BusinessFeatures {
     this.barcodeEnabled = true,
     this.inventoryMode = InventoryMode.none,
     this.multimeseroEnabled = false,
+    this.multimeseroTableOwnerOnly = false,
     this.transfersRequireApproval = false,
     this.requireGoodsReceipt = false,
     this.inventoryCostingMethod = InventoryCostingMethod.lastPrice,
@@ -298,6 +304,8 @@ class BusinessFeatures {
       barcodeEnabled: map['barcode_enabled'] != false,
       inventoryMode: _inventoryModeFromWire(map['inventory_mode']?.toString()),
       multimeseroEnabled: map['multimesero_enabled'] == true,
+      // Columna de 20260916_0002; sin la migración no viene y queda apagada.
+      multimeseroTableOwnerOnly: map['multimesero_table_owner_only'] == true,
       transfersRequireApproval: map['transfers_require_approval'] == true,
       requireGoodsReceipt: map['require_goods_receipt'] == true,
       inventoryCostingMethod: _costingMethodFromWire(
@@ -359,6 +367,7 @@ class BusinessFeatures {
     bool? barcodeEnabled,
     InventoryMode? inventoryMode,
     bool? multimeseroEnabled,
+    bool? multimeseroTableOwnerOnly,
     bool? transfersRequireApproval,
     bool? requireGoodsReceipt,
     InventoryCostingMethod? inventoryCostingMethod,
@@ -389,6 +398,8 @@ class BusinessFeatures {
       barcodeEnabled: barcodeEnabled ?? this.barcodeEnabled,
       inventoryMode: inventoryMode ?? this.inventoryMode,
       multimeseroEnabled: multimeseroEnabled ?? this.multimeseroEnabled,
+      multimeseroTableOwnerOnly:
+          multimeseroTableOwnerOnly ?? this.multimeseroTableOwnerOnly,
       transfersRequireApproval:
           transfersRequireApproval ?? this.transfersRequireApproval,
       requireGoodsReceipt: requireGoodsReceipt ?? this.requireGoodsReceipt,
@@ -450,6 +461,9 @@ class PosSettingsRepository {
   /// Cache del flag "abrir gaveta en efectivo".
   static const Duration _openDrawerCacheTtl = Duration(minutes: 5);
   static final Map<String, _CachedBool> _openDrawerCache = {};
+
+  /// Cache del flag "abrir gaveta al tocar Pagar" (mismo TTL).
+  static final Map<String, _CachedBool> _openDrawerOnPayCache = {};
 
   /// Modo compacto: un solo modal con efectivo + tarjeta + transferencia.
   /// Comportamiento actual del POS.
@@ -1057,6 +1071,37 @@ class PosSettingsRepository {
     _openDrawerCache[businessId] = _CachedBool(enabled, DateTime.now());
   }
 
+  /// Flag "abrir gaveta al tocar Pagar" (migración 20260916_0001). Default
+  /// `false` si la columna aún no existe o la query falla.
+  Future<bool> getOpenDrawerOnPayButton(String businessId) async {
+    final cached = _openDrawerOnPayCache[businessId];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) < _openDrawerCacheTtl) {
+      return cached.value;
+    }
+
+    try {
+      final row = await _fetchAndCacheRow(businessId);
+      final value = row?['open_drawer_on_pay_button'] == true;
+      _openDrawerOnPayCache[businessId] = _CachedBool(value, DateTime.now());
+      return value;
+    } catch (_) {
+      return (await _cachedRow(businessId))?['open_drawer_on_pay_button'] ==
+          true;
+    }
+  }
+
+  Future<void> setOpenDrawerOnPayButton({
+    required String businessId,
+    required bool enabled,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'open_drawer_on_pay_button': enabled,
+    }, onConflict: 'business_id');
+    _openDrawerOnPayCache[businessId] = _CachedBool(enabled, DateTime.now());
+  }
+
   /// Printing v2 — Slice B: lee los flags de multi-copia automática para
   /// pre-cuenta y recibo. Default false si la fila no existe o falla.
   /// Cuando true, el orchestrator imprime en TODAS las impresoras del
@@ -1233,6 +1278,7 @@ class PosSettingsRepository {
       'barcode_enabled': features.barcodeEnabled,
       'inventory_mode': features.inventoryMode.wireValue,
       'multimesero_enabled': features.multimeseroEnabled,
+      'multimesero_table_owner_only': features.multimeseroTableOwnerOnly,
       'transfers_require_approval': features.transfersRequireApproval,
       'kitchen_banner_dine_in': features.kitchenBannerDineIn,
       'kitchen_banner_takeout': features.kitchenBannerTakeout,
@@ -1282,6 +1328,7 @@ class PosSettingsRepository {
           payload.remove('require_goods_receipt');
           payload.remove('warehouse_sections_enabled');
           payload.remove('inventory_costing_method');
+          payload.remove('multimesero_table_owner_only');
           await _client
               .from('business_settings')
               .upsert(payload, onConflict: 'business_id');

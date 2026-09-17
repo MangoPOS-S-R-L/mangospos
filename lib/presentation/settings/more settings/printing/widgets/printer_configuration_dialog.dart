@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/printing/star/print_speed.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -42,6 +43,8 @@ class _PrinterConfigurationDialogState
   late String _type;
   late String _encoding;
   late int _paperWidth;
+  late final PrintSpeed _initialPrintSpeed;
+  late PrintSpeed _printSpeed;
   late bool _isActive;
   /// Sprint 3 — id de la impresora de respaldo elegida en el dropdown.
   /// null = "Sin respaldo" → al guardar mandamos `clearFallback: true`.
@@ -59,6 +62,10 @@ class _PrinterConfigurationDialogState
     _type = printer.type.name;
     _encoding = printer.encoding;
     _paperWidth = printer.paperWidth == 58 ? 58 : 80;
+    _initialPrintSpeed = PrintSpeed.fromWire(
+      printer.connectionConfig[kPrintSpeedConfigKey],
+    );
+    _printSpeed = _initialPrintSpeed;
     _isActive = printer.online;
     _fallbackPrinterId = printer.fallbackPrinterId;
   }
@@ -112,6 +119,8 @@ class _PrinterConfigurationDialogState
       encoding: _encoding,
       fallbackPrinterId: _fallbackPrinterId,
       clearFallback: _fallbackPrinterId == null,
+      // Solo si cambió: evita reescribir connection_config en cada guardado.
+      printSpeed: _printSpeed == _initialPrintSpeed ? null : _printSpeed,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -419,6 +428,8 @@ class _PrinterConfigurationDialogState
           ],
         ),
         const SizedBox(height: 22),
+        _buildPrintSpeedSection(),
+        const SizedBox(height: 22),
         _buildFallbackSection(),
         const SizedBox(height: 22),
         const Text(
@@ -448,6 +459,89 @@ class _PrinterConfigurationDialogState
           'La impresora queda activa para asignaciones y pruebas dentro del sistema.',
           style: TextStyle(
             fontSize: 13,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Velocidad de impresión: la palanca de calidad del cabezal térmico.
+  /// Se aplica a todo lo que sale por esta impresora (facturas, precuentas,
+  /// comandas, cierres). Ver `core/printing/star/print_speed.dart`.
+  Widget _buildPrintSpeedSection() {
+    const options = <(PrintSpeed, IconData, String, String)>[
+      (
+        PrintSpeed.printerDefault,
+        Icons.settings_suggest_outlined,
+        'Predeterminada',
+        'La que trae la impresora',
+      ),
+      (PrintSpeed.fast, Icons.bolt_outlined, 'Rápida', 'Sale antes'),
+      (PrintSpeed.normal, Icons.speed_outlined, 'Normal', 'Equilibrio'),
+      (
+        PrintSpeed.slow,
+        Icons.high_quality_outlined,
+        'Lenta',
+        'Máxima nitidez',
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Velocidad de impresión',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Más lenta imprime letra, logo y QR más nítidos; más rápida saca '
+          'el ticket antes. Aplica a todo lo que sale por esta impresora.',
+          style: TextStyle(
+            fontSize: 12,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const spacing = 10.0;
+            final itemWidth = (constraints.maxWidth - spacing) / 2;
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final (speed, icon, label, hint) in options)
+                  SizedBox(
+                    width: itemWidth,
+                    child: _PrintSpeedOption(
+                      icon: icon,
+                      label: label,
+                      hint: hint,
+                      selected: _printSpeed == speed,
+                      onTap: _saving
+                          ? null
+                          : () => setState(() => _printSpeed = speed),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Funciona en Epson y compatibles y en Star. Si tu modelo no lo '
+          'soporta, el ticket sale igual que antes. Guarda y haz una '
+          'impresión de prueba para comparar.',
+          style: TextStyle(
+            fontSize: 11,
             color: MangoColors.muted,
             height: 1.35,
           ),
@@ -652,6 +746,71 @@ class _PaperWidthCard extends StatelessWidget {
                   style: TextStyle(fontSize: 14, color: MangoColors.darkGray),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrintSpeedOption extends StatelessWidget {
+  const _PrintSpeedOption({
+    required this.icon,
+    required this.label,
+    required this.hint,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String hint;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFFEFF4FF) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? const Color(0xFFF97316) : const Color(0xFFCFCFCF),
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 26, color: const Color(0xFF84A8F7)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  Text(
+                    hint,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),

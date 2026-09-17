@@ -16,6 +16,7 @@ import 'package:flutter/foundation.dart';
 import '../../../data/models/printing.dart';
 import 'esc_pos_raster_encoder.dart';
 import 'escpos_parser.dart';
+import 'print_speed.dart';
 import 'printer_emulation.dart';
 import 'star_raster_encoder.dart';
 import 'ticket_rasterizer.dart';
@@ -30,6 +31,22 @@ class StarPrintAdapter {
     required PrinterConfig printer,
     required List<int> escPosData,
     bool preferRaster = false,
+  }) async {
+    final adapted = await _adaptFormat(
+      printer: printer,
+      escPosData: escPosData,
+      preferRaster: preferRaster,
+    );
+    // Velocidad elegida para ESTA impresora (ver `print_speed.dart`). Va al
+    // final porque el comando depende del formato que realmente sale: ESC/POS
+    // tras el `ESC @`, o `ESC * r Q` dentro del raster Star.
+    return applyPrintSpeed(adapted, resolvePrintSpeed(printer));
+  }
+
+  static Future<List<int>> _adaptFormat({
+    required PrinterConfig printer,
+    required List<int> escPosData,
+    required bool preferRaster,
   }) async {
     if (escPosData.isEmpty) return escPosData;
 

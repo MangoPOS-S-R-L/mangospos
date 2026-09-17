@@ -39,6 +39,11 @@ class ActiveWaiter {
   /// fallo de lectura.
   final Set<String>? permissions;
 
+  /// Rol del empleado en el negocio (`owner`, `admin`, `manager`, `cashier`,
+  /// `waiter`…) tal como lo devuelve `fn_verify_employee_pin`. Null si no
+  /// tiene cuenta de login — el caso típico del mesero.
+  final String? role;
+
   const ActiveWaiter({
     required this.employeeId,
     required this.firstName,
@@ -47,6 +52,7 @@ class ActiveWaiter {
     this.lastName,
     this.userId,
     this.permissions,
+    this.role,
   });
 
   /// Nombre legible para mostrar en UI (tarjetas de mesa, etc.).
@@ -64,6 +70,7 @@ class ActiveWaiter {
     DateTime? validatedAt,
     String? userId,
     Set<String>? permissions,
+    String? role,
   }) {
     return ActiveWaiter(
       employeeId: employeeId ?? this.employeeId,
@@ -73,8 +80,18 @@ class ActiveWaiter {
       validatedAt: validatedAt ?? this.validatedAt,
       userId: userId ?? this.userId,
       permissions: permissions ?? this.permissions,
+      role: role ?? this.role,
     );
   }
+
+  /// Dueño, administrador, supervisor o cajero: operan en nombre del negocio
+  /// y entran a cualquier mesa aunque esté activo "cada mesero es dueño de
+  /// su mesa" (el cajero cobra mesas de todos). Mismo criterio que el gate
+  /// legacy de `sales_by_zone_view`.
+  bool get canEnterAnyTable => switch (role?.trim().toLowerCase()) {
+    'owner' || 'admin' || 'manager' || 'cashier' => true,
+    _ => false,
+  };
 
   /// Evalúa un permiso contra los del mesero identificado. Devuelve `null`
   /// cuando no hay permisos resueltos — el caller debe caer a la sesión.

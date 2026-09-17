@@ -40,6 +40,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
   bool _precheckMultiCopy = false;
   bool _receiptMultiCopy = false;
   bool _openDrawerOnCash = false;
+  bool _openDrawerOnPayButton = false;
   bool _busy = false;
 
   @override
@@ -80,6 +81,9 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
     final openDrawerOnCash = businessId.isEmpty
         ? false
         : await settingsRepo.getOpenDrawerOnCash(businessId);
+    final openDrawerOnPayButton = businessId.isEmpty
+        ? false
+        : await settingsRepo.getOpenDrawerOnPayButton(businessId);
     if (!mounted) return;
     setState(() {
       _cashierArea = bootstrap.cashierArea;
@@ -94,6 +98,7 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       _precheckMultiCopy = multiCopy.precheck;
       _receiptMultiCopy = multiCopy.receipt;
       _openDrawerOnCash = openDrawerOnCash;
+      _openDrawerOnPayButton = openDrawerOnPayButton;
     });
   }
 
@@ -127,6 +132,38 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
       setState(() {
         _busy = false;
         _openDrawerOnCash = !enabled;
+      });
+      AppToast.error(context, 'No se pudo guardar el cambio.');
+    }
+  }
+
+  Future<void> _toggleOpenDrawerOnPayButton(bool enabled) async {
+    final businessId = _resolvedBusinessId;
+    if (businessId.isEmpty) {
+      AppToast.info(context, 'No se pudo resolver el negocio activo.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _openDrawerOnPayButton = enabled;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setOpenDrawerOnPayButton(businessId: businessId, enabled: enabled);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      AppToast.info(
+        context,
+        enabled
+            ? 'La gaveta se abrirá al tocar el botón Pagar.'
+            : 'La gaveta ya no se abrirá al tocar Pagar.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _openDrawerOnPayButton = !enabled;
       });
       AppToast.error(context, 'No se pudo guardar el cambio.');
     }
@@ -443,8 +480,10 @@ class _PrintingReceiptsViewState extends ConsumerState<PrintingReceiptsView> {
                       width: cardWidth,
                       child: _OpenDrawerOnCashCard(
                         value: _openDrawerOnCash,
+                        onPayButton: _openDrawerOnPayButton,
                         busy: _busy,
                         onChanged: _toggleOpenDrawerOnCash,
+                        onPayButtonChanged: _toggleOpenDrawerOnPayButton,
                       ),
                     ),
                     SizedBox(
@@ -764,21 +803,27 @@ class _InvoiceTemplateCard extends StatelessWidget {
   }
 }
 
-/// Toggle de "abrir gaveta al cobrar en efectivo". Cuando ON, el flow
-/// de pago dispara el comando ESC/POS `ESC p` a la impresora asignada al
-/// área fiscal/cashier junto con la impresión del recibo. Si la impresora
-/// no tiene gaveta conectada, el comando se ignora silenciosamente (es
-/// el comportamiento estándar del hardware).
+/// Disparadores de la gaveta. Son independientes:
+///   - "al cobrar en efectivo": el flow de pago pega `ESC p` al recibo en la
+///     impresora fiscal/cashier.
+///   - "al tocar Pagar": el pulso sale en cuanto el cajero toca el botón,
+///     antes de elegir método (ver `CashDrawerService`).
+/// Si la impresora no tiene gaveta conectada, el comando se ignora
+/// silenciosamente (es el comportamiento estándar del hardware).
 class _OpenDrawerOnCashCard extends StatelessWidget {
   const _OpenDrawerOnCashCard({
     required this.value,
+    required this.onPayButton,
     required this.busy,
     required this.onChanged,
+    required this.onPayButtonChanged,
   });
 
   final bool value;
+  final bool onPayButton;
   final bool busy;
   final ValueChanged<bool> onChanged;
+  final ValueChanged<bool> onPayButtonChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -795,9 +840,8 @@ class _OpenDrawerOnCashCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Cuando está activado, los pagos en efectivo abren la gaveta '
-            'de dinero automáticamente al imprimir el recibo. Requiere '
-            'una gaveta RJ-11 conectada a la impresora fiscal.',
+            'Elige cuándo se abre la gaveta de dinero. Requiere una gaveta '
+            'RJ-11 conectada a la impresora de recibos.',
             style: TextStyle(fontSize: 13, color: MangoColors.muted),
           ),
           const SizedBox(height: 12),
@@ -806,14 +850,32 @@ class _OpenDrawerOnCashCard extends StatelessWidget {
             onChanged: busy ? null : onChanged,
             contentPadding: EdgeInsets.zero,
             activeThumbColor: MangoColors.primaryOrange,
-            title: Text(
+            title: const Text(
+              'Al cobrar en efectivo',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
               value
-                  ? 'Activada — abre en pagos en efectivo'
-                  : 'Desactivada — no se abre automáticamente',
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+                  ? 'Se abre al imprimir el recibo de un pago en efectivo.'
+                  : 'Desactivada.',
+              style: const TextStyle(fontSize: 12, color: MangoColors.muted),
+            ),
+          ),
+          SwitchListTile.adaptive(
+            value: onPayButton,
+            onChanged: busy ? null : onPayButtonChanged,
+            contentPadding: EdgeInsets.zero,
+            activeThumbColor: MangoColors.primaryOrange,
+            title: const Text(
+              'Al tocar el botón Pagar',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              onPayButton
+                  ? 'Se abre en cuanto el cajero toca Pagar, antes de elegir '
+                        'el método de pago.'
+                  : 'Desactivada.',
+              style: const TextStyle(fontSize: 12, color: MangoColors.muted),
             ),
           ),
         ],

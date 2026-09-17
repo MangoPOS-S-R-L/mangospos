@@ -478,6 +478,20 @@ class _BusinessFeaturesViewState extends ConsumerState<BusinessFeaturesView> {
                         _features.copyWith(multimeseroEnabled: v),
                       ),
                     ),
+                    if (_features.multimeseroEnabled)
+                      _FlagTile(
+                        icon: Icons.lock_person_outlined,
+                        label: 'Cada mesero es dueño de su mesa',
+                        subtitle:
+                            'Una mesa abierta solo la puede abrir el mesero '
+                            'que la abrió. Los demás meseros no pueden entrar '
+                            'sin el PIN de un supervisor. Dueño, administrador, '
+                            'supervisor y cajero siguen entrando a todas.',
+                        value: _features.multimeseroTableOwnerOnly,
+                        onChanged: (v) => _update(
+                          _features.copyWith(multimeseroTableOwnerOnly: v),
+                        ),
+                      ),
                     _FlagTile(
                       icon: Icons.fact_check_outlined,
                       label: 'Aprobación de transferencias',

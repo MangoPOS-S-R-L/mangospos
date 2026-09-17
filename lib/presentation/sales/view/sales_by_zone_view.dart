@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/multimesero/multimesero_repository.dart';
+import 'package:mangopos/core/multimesero/table_ownership.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -1371,20 +1373,25 @@ Future<void> _handleMergeTable(
     // entran a cualquier mesa directo. El cajero también porque suele
     // hacer cobros en cualquier mesa sin importar qué mesero la abrió.
     bool multimeseroEnabled = false;
+    // Sub-opción "cada mesero es dueño de su mesa" (solo con multimesero).
+    bool tableOwnerOnly = false;
     final isWaiterRole = session.activeRole == PosRole.mesero;
     if (isWaiterRole && businessIdForGate != null && businessIdForGate.isNotEmpty) {
       try {
         // timeout: sin internet esta lectura podía colgar y dejar el tap de
         // la mesa muerto (con `openingTables` marcado). 3s y default OFF.
-        multimeseroEnabled = await ref
+        final modes = await ref
             .read(multimeseroRepositoryProvider)
-            .isEnabled(businessIdForGate)
+            .readModes(businessIdForGate)
             .timeout(const Duration(seconds: 3));
+        multimeseroEnabled = modes.enabled;
+        tableOwnerOnly = modes.tableOwnerOnly;
       } catch (_) {
         // Si la lectura falla, asumimos OFF para no romper el flujo
         // operativo. El admin verá que el toggle no toma efecto y reabre
         // el setting.
         multimeseroEnabled = false;
+        tableOwnerOnly = false;
       }
     }
 
@@ -1415,6 +1422,25 @@ Future<void> _handleMergeTable(
       if (waiter == null) {
         byZone.setOpening(ts.tableId, false);
         return;
+      }
+
+      final sessionId = ts.sessionId;
+      if (tableOwnerOnly && sessionId != null && sessionId.isNotEmpty) {
+        if (!context.mounted) {
+          byZone.setOpening(ts.tableId, false);
+          return;
+        }
+        final canEnter = await _checkTableOwnership(
+          context,
+          ref,
+          ts: ts,
+          sessionId: sessionId,
+          waiter: waiter,
+        );
+        if (!canEnter) {
+          byZone.setOpening(ts.tableId, false);
+          return;
+        }
       }
     }
 
@@ -1538,6 +1564,76 @@ Future<void> _handleMergeTable(
         },
       ).toString(),
     );
+  }
+
+  /// "Cada mesero es dueño de su mesa": solo el mesero que abrió la mesa
+  /// entra. Otro mesero ve de quién es y puede pedir a un supervisor que
+  /// autorice con su PIN (cambio de turno, el dueño ya se fue). Devuelve
+  /// true si puede entrar. Regla en `core/multimesero/table_ownership.dart`.
+  Future<bool> _checkTableOwnership(
+    BuildContext context,
+    WidgetRef ref, {
+    required TableStatus ts,
+    required String sessionId,
+    required ActiveWaiter waiter,
+  }) async {
+    String? openerEmployeeId;
+    try {
+      openerEmployeeId = await ref
+          .read(multimeseroRepositoryProvider)
+          .tableOpenerEmployeeId(sessionId)
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      // Sin red no se sabe de quién es la mesa. Se deja entrar: una lectura
+      // fallida nunca debe dejar una mesa sin atender.
+      debugPrint('[multimesero] dueño de la mesa ${ts.code} no resuelto: $e');
+      return true;
+    }
+
+    final decision = decideTableEntry(
+      tableOwnerOnly: true,
+      sessionId: sessionId,
+      openerEmployeeId: openerEmployeeId,
+      waiter: waiter,
+    );
+    if (decision == TableEntryDecision.allowed) return true;
+    if (!context.mounted) return false;
+
+    final owner = ts.waiterName?.trim().isNotEmpty == true
+        ? ts.waiterName!.trim()
+        : 'otro mesero';
+    final wantsOverride = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('La mesa ${ts.code} es de $owner'),
+        content: Text(
+          'Solo $owner puede abrir esta mesa. Si necesitas entrar (cambio de '
+          'turno, $owner ya no está), pide a un supervisor que autorice con '
+          'su PIN.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('Entendido'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('Autorizar con supervisor'),
+          ),
+        ],
+      ),
+    );
+    if (wantsOverride != true || !context.mounted) return false;
+
+    final approverId = await showSupervisorApprovalPinModal(
+      context,
+      ref,
+      title: 'Autorizar entrada',
+      subtitle:
+          'PIN de supervisor para que ${waiter.displayName} entre a la mesa '
+          '${ts.code}',
+    );
+    return approverId != null;
   }
 
   Future<int?> _promptPeopleCount(
