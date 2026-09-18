@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:mangopos/core/auth/device_session_reporter.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/agent/hub_server_controller.dart';
@@ -78,6 +79,10 @@ class _MainShellState extends ConsumerState<MainShell> {
     // (read, no watch). Refresca catálogo/zonas/inventario del negocio activo
     // al reconectar y periódicamente, para operar offline con datos al día.
     ref.read(offlineSyncCoordinatorProvider);
+
+    // "Dispositivos conectados": reporta la sesión de este equipo cada 5 min
+    // y obedece el cierre de sesión remoto que pida un admin.
+    ref.read(deviceSessionReporterProvider);
 
     // Wrap del child con dos guards en orden de prioridad:
     //   1. PendingApprovalGuard: si la cuenta está pendiente de aprobación

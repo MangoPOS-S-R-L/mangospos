@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
@@ -26,6 +28,7 @@ enum SalesSubReport {
   byZone,
   byProductionArea,
   byHour,
+  byOffer,
 }
 
 enum SalesBreakdownFilter {
@@ -374,6 +377,14 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
   // siempre, incluso si la app entró con un load en vuelo.
   int _loadToken = 0;
 
+  /// Negocio y rango del `offersSummary` cargado. Ventas lo pide solo para el
+  /// sub-reporte "Por oferta" (la consulta de ofertas es aparte y pesada), así
+  /// que hay que saber si lo que está en el state corresponde al rango actual.
+  String? _offersSummaryKey;
+
+  static String _rangeKey(String businessId, DateTime from, DateTime to) =>
+      '$businessId|${from.toIso8601String()}|${to.toIso8601String()}';
+
   ReportsViewModel(this._repository, this._ref) : super(ReportsState.initial());
 
   /// Refresca [ReportsState.currency] desde el provider global. Se llama
@@ -486,16 +497,32 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             // Sin red / RPC no disponible: el subreporte por comprobante queda
             // vacío, pero las demás vistas de Ventas siguen funcionando.
           }
+          // "Por oferta" sale de la consulta de ofertas: solo se pide cuando
+          // ese sub-reporte está abierto. Best-effort como el fiscal.
+          Map<String, dynamic>? offers;
+          if (state.salesSubReport == SalesSubReport.byOffer) {
+            try {
+              offers = await _repository.getOffersSummary(
+                  businessId: businessId, from: from, to: to);
+            } catch (_) {
+              // Sin red: el sub-reporte por oferta queda vacío.
+            }
+          }
           if (myToken != _loadToken) return; // superseded
+          if (offers != null) {
+            _offersSummaryKey = _rangeKey(businessId, from, to);
+          }
           state = state.copyWith(
             salesSummary: salesSummary,
             productProjection: projection,
             fiscalSummary: fiscal ?? state.fiscalSummary,
+            offersSummary: offers,
           );
         case ReportCategory.offers:
           final summary = await _repository.getOffersSummary(
               businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
+          _offersSummaryKey = _rangeKey(businessId, from, to);
           state = state.copyWith(offersSummary: summary);
         case ReportCategory.delivery:
           final summary = await _repository.getDeliveryFeesSummary(
@@ -656,6 +683,23 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   void setSalesSubReport(SalesSubReport subReport) {
     state = state.copyWith(salesSubReport: subReport);
+    if (subReport == SalesSubReport.byOffer) {
+      unawaited(_ensureOffersForSales());
+    }
+  }
+
+  /// Carga las ofertas del rango actual si todavía no están. Recarga la
+  /// categoría completa para reusar el token anti-carreras y el indicador de
+  /// carga de la pantalla.
+  Future<void> _ensureOffersForSales() async {
+    try {
+      final businessId = await _requireBusinessId();
+      final key = _rangeKey(businessId, state.salesFrom, state.salesTo);
+      if (state.offersSummary != null && _offersSummaryKey == key) return;
+    } catch (_) {
+      return;
+    }
+    await loadCategory(ReportCategory.sales);
   }
 
   String salesSubReportLabel(SalesSubReport sub) {
@@ -682,6 +726,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Por área de producción';
       case SalesSubReport.byHour:
         return 'Por hora';
+      case SalesSubReport.byOffer:
+        return 'Por oferta';
     }
   }
 
@@ -1238,6 +1284,24 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             amount: (row['amount'] as num?)?.toDouble() ?? 0,
             quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
             count: (row['count'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  /// Ventas por oferta con la forma común de los desgloses: una fila por
+  /// oferta (`offersSummary['offers']`). `count` son las órdenes pagadas
+  /// distintas en que se aplicó (`tickets`), no las líneas.
+  List<SalesBreakdownRow> getOfferRows() {
+    final rows = (state.offersSummary?['offers'] as List?) ?? const [];
+    return rows
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .map(
+          (row) => SalesBreakdownRow(
+            label: row['name']?.toString() ?? 'Oferta',
+            amount: (row['net_sales'] as num?)?.toDouble() ?? 0,
+            quantity: (row['quantity'] as num?)?.toDouble() ?? 0,
+            count: (row['tickets'] as num?)?.toInt() ?? 0,
           ),
         )
         .toList(growable: false);

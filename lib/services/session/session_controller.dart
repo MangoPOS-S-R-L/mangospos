@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'package:flutter/foundation.dart'
     show debugPrint, kDebugMode, kIsWeb, setEquals;
+import 'package:mangopos/core/auth/device_session_service.dart';
 import 'package:mangopos/core/auth/offline_auth_service.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
@@ -1268,6 +1269,10 @@ class SessionController extends Notifier<SessionState> {
     // setUnauthenticated() activeBusinessId queda null y no sabríamos qué
     // limpiar.
     final businessId = state.activeBusinessId;
+    // "Dispositivos conectados": marcar la sesión de este equipo como cerrada
+    // ANTES de soltar el token (después el servidor ya no sabe quién es).
+    // Nunca lanza y tiene tope de 3 s, así que sin red no frena el logout.
+    await DeviceSessionService.reportSignedOut(businessId);
     try {
       await Supabase.instance.client.auth.signOut();
     } finally {

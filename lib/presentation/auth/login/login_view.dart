@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:mangopos/app/router/routes.dart';
+import 'package:mangopos/core/auth/device_session_service.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'login_state.dart';
@@ -23,6 +24,10 @@ class LoginView extends ConsumerStatefulWidget {
 }
 
 class _LoginViewState extends ConsumerState<LoginView> {
+  /// Un admin cerró la sesión de este equipo desde "Dispositivos
+  /// conectados". Se muestra una vez, en este arranque.
+  late final bool _closedRemotely = DeviceSessionService.consumeRevokedNotice();
+
   @override
   Widget build(BuildContext context) {
     ref.listen<LoginState>(loginVmProvider, (prev, next) {
@@ -80,6 +85,23 @@ class _LoginViewState extends ConsumerState<LoginView> {
                   fit: BoxFit.contain,
                 ),
                 const SizedBox(height: 20),
+
+                if (_closedRemotely) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFBF4),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0x33F59E0B)),
+                    ),
+                    child: const Text(
+                      'Un administrador cerró la sesión de este dispositivo. '
+                      'Inicia sesión de nuevo para continuar.',
+                      style: TextStyle(color: _dark, fontSize: 13, height: 1.35),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 _label('Correo electrónico'),
                 const SizedBox(height: 8),

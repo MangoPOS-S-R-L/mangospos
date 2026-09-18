@@ -3,9 +3,80 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../model/report_column.dart';
+import '../model/report_table_data.dart';
 import '../viewmodel/reports_viewmodel.dart';
 
 class ReportsCsvExportService {
+  /// CSV de la tabla personalizable: columnas visibles en su orden, filas en
+  /// el orden de la pantalla (con subtotales si está agrupada) y fila de
+  /// total. Sin formato: números planos, sin símbolo ni separador de miles.
+  static Future<void> exportTable(ReportTableExport export) async {
+    final csv = buildTableCsv(export);
+    // BOM: Excel en Windows abre el CSV como UTF-8 (acentos y ñ intactos).
+    await FilePicker.saveFile(
+      dialogTitle: 'Guardar reporte CSV',
+      fileName: '${export.fileStem}.csv',
+      bytes: utf8.encode('﻿$csv'),
+    );
+  }
+
+  static String buildTableCsv(ReportTableExport export) {
+    final table = export.table;
+    final width = table.columns.length;
+    final rows = <List<String>>[
+      [for (final column in table.columns) column.label],
+    ];
+    List<String> plainRow(List<ReportCell> cells) => [
+          for (var c = 0; c < width; c++)
+            plainValue(table.columns[c], cells[c],
+                decimals: export.currencyDecimals),
+        ];
+    for (final row in table.rows) {
+      if (row.type == ReportTableRowType.groupHeader) {
+        rows.add([
+          row.groupLabel ?? '',
+          for (var c = 1; c < width; c++) '',
+        ]);
+      } else {
+        rows.add(plainRow(row.cells));
+      }
+    }
+    rows.add(plainRow(table.totals));
+    return rows.map(_toCsvLine).join('\n');
+  }
+
+  /// Valor sin formato de una celda. Vacío cuando no hay dato o el total va
+  /// en blanco; el rótulo de total viaja tal cual.
+  static String plainValue(
+    ReportColumn column,
+    ReportCell cell, {
+    int decimals = 2,
+  }) {
+    final raw = cell.raw;
+    if (raw == null) return '';
+    if (raw is String) return raw;
+    if (raw is DateTime) return DateFormat('yyyy-MM-dd HH:mm').format(raw);
+    if (raw is! num) return raw.toString();
+    switch (column.kind) {
+      case ReportColumnKind.money:
+        return raw.toStringAsFixed(decimals);
+      case ReportColumnKind.percent:
+        return raw.toStringAsFixed(2);
+      case ReportColumnKind.integer:
+        return raw.round().toString();
+      case ReportColumnKind.decimal:
+        final fixed = raw.toStringAsFixed(4);
+        return fixed.contains('.')
+            ? fixed.replaceFirst(RegExp(r'\.?0+$'), '')
+            : fixed;
+      case ReportColumnKind.text:
+      case ReportColumnKind.status:
+      case ReportColumnKind.date:
+        return raw.toString();
+    }
+  }
+
   static Future<void> exportCurrentReport({
     required ReportCategory category,
     required ReportsState state,

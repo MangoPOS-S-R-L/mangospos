@@ -74,6 +74,9 @@ dependencies:
   equatable: ^2.0.7
   tuple: ^2.0.2
   shared_preferences: ^2.2.2
+  # Ya venía transitiva (wakelock_plus); directa para reportar la versión de
+  # la app en "Dispositivos conectados".
+  package_info_plus: ^10.2.1
   path_provider: ^2.1.3
   connectivity_plus: ^7.2.0
   crypto: ^3.0.3

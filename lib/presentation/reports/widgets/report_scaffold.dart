@@ -25,11 +25,25 @@ class ReportScaffold extends ConsumerStatefulWidget {
     required this.title,
     required this.category,
     required this.body,
+    this.subtitle,
+    this.showExportButtons = true,
+    this.showRangeSummary = true,
   });
 
   final String title;
   final ReportCategory category;
   final Widget Function(ReportsState state, ReportsViewModel viewModel) body;
+
+  /// Línea bajo el título (p. ej. "4 columnas · 12 filas · rango").
+  final Widget Function(ReportsState state, ReportsViewModel viewModel)?
+      subtitle;
+
+  /// False cuando la pantalla trae su propio botón Exportar (tabla
+  /// personalizable): así no conviven dos formas de exportar.
+  final bool showExportButtons;
+
+  /// False cuando la pantalla muestra el rango en su propia barra.
+  final bool showRangeSummary;
 
   @override
   ConsumerState<ReportScaffold> createState() => _ReportScaffoldState();
@@ -106,15 +120,23 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                         ),
                       ),
                       Expanded(
-                        child: Text(
-                          widget.title,
-                          style: TextStyle(
-                            fontSize: isMobile ? 18 : 28,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.foreground,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              widget.title,
+                              style: TextStyle(
+                                fontSize: isMobile ? 18 : 28,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.foreground,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (widget.subtitle != null)
+                              widget.subtitle!(state, viewModel),
+                          ],
                         ),
                       ),
                       if (state.loading && state.salesSummary == null)
@@ -143,6 +165,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
                     state: state,
                     viewModel: viewModel,
                     category: widget.category,
+                    showExportButtons: widget.showExportButtons,
+                    showRangeSummary: widget.showRangeSummary,
                   ),
                 ],
               ),
@@ -262,11 +286,15 @@ class _ReportToolbar extends StatelessWidget {
     required this.state,
     required this.viewModel,
     required this.category,
+    required this.showExportButtons,
+    required this.showRangeSummary,
   });
 
   final ReportsState state;
   final ReportsViewModel viewModel;
   final ReportCategory category;
+  final bool showExportButtons;
+  final bool showRangeSummary;
 
   @override
   Widget build(BuildContext context) {
@@ -332,56 +360,59 @@ class _ReportToolbar extends StatelessWidget {
           icon: const Icon(Icons.date_range_outlined),
           label: const Text('Rango personalizado'),
         ),
-        _ExportButton(
-          icon: Icons.picture_as_pdf_outlined,
-          label: 'PDF',
-          color: const Color(0xFFDC2626),
-          onPressed: () async {
-            await ReportsExportService.exportCurrentReport(
-              category: category,
-              state: state,
-              viewModel: viewModel,
-            );
-          },
-        ),
-        _ExportButton(
-          icon: Icons.table_chart_outlined,
-          label: 'Excel / CSV',
-          color: const Color(0xFF059669),
-          onPressed: () async {
-            await ReportsCsvExportService.exportCurrentReport(
-              category: category,
-              state: state,
-              viewModel: viewModel,
-            );
-          },
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: AppColors.secondary,
-            borderRadius: BorderRadius.circular(reportRadius),
-            border: Border.all(color: AppColors.border),
+        if (showExportButtons) ...[
+          _ExportButton(
+            icon: Icons.picture_as_pdf_outlined,
+            label: 'PDF',
+            color: const Color(0xFFDC2626),
+            onPressed: () async {
+              await ReportsExportService.exportCurrentReport(
+                category: category,
+                state: state,
+                viewModel: viewModel,
+              );
+            },
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.calendar_today,
-                size: 14,
-                color: AppColors.mutedForeground,
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Text(
-                '${dateFormat.format(state.salesFrom)} – ${dateFormat.format(displayedTo)}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
+          _ExportButton(
+            icon: Icons.table_chart_outlined,
+            label: 'Excel / CSV',
+            color: const Color(0xFF059669),
+            onPressed: () async {
+              await ReportsCsvExportService.exportCurrentReport(
+                category: category,
+                state: state,
+                viewModel: viewModel,
+              );
+            },
+          ),
+        ],
+        if (showRangeSummary)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.secondary,
+              borderRadius: BorderRadius.circular(reportRadius),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.calendar_today,
+                  size: 14,
+                  color: AppColors.mutedForeground,
                 ),
-              ),
-            ],
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  '${dateFormat.format(state.salesFrom)} – ${dateFormat.format(displayedTo)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }

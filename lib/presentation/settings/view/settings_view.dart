@@ -589,6 +589,18 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             color: const Color(0xFFFFE6D5),
             route: AppRoutes.settingsUsers,
           ),
+          // El servidor también lo exige (fn_device_sessions_list valida
+          // is_admin_of_business); esto solo evita mostrar una pantalla que
+          // al cajero le respondería "sin acceso".
+          if (ref.watch(sessionProvider).isOwner ||
+              ref.watch(sessionProvider).activeRole == PosRole.administrador)
+            const _SettingsOption(
+              title: 'Dispositivos conectados',
+              subtitle: 'Equipos con sesión iniciada; cerrar sesión a distancia',
+              icon: Icons.devices_other_rounded,
+              color: Color(0xFFEAF0FF),
+              route: AppRoutes.settingsDevices,
+            ),
           const _SettingsOption(
             title: 'Clientes',
             subtitle: 'Gestión de clientes y contactos',

@@ -103,6 +103,7 @@ class AppRoutes {
   static const settingsCurrencies = '$settings/currencies';
   static const settingsRegional = '$settings/regional';
   static const settingsDeviceBinding = '$settings/device-binding';
+  static const settingsDevices = '$settings/devices';
   static const inventoryKardex = '$settings/inventory-kardex';
   static const inventoryRequirements = '$settings/inventory-requirements';
   static const inventoryOutflow = '$settings/inventory-outflow';
