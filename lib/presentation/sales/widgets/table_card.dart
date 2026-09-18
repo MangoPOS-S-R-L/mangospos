@@ -38,6 +38,11 @@ class TableCard extends StatefulWidget {
   final bool isOpening;
   final bool enabled;
 
+  /// Saldo prepagado (abono) que la mesa tiene sin consumir. El saldo vive en
+  /// la mesa física, así que se ve aunque la mesa esté libre: lo que quedó de
+  /// anoche se consume hoy. 0 o null = no se pinta nada.
+  final double? depositBalance;
+
   const TableCard({
     super.key,
     required this.table,
@@ -46,6 +51,7 @@ class TableCard extends StatefulWidget {
     this.onLongPress,
     this.isOpening = false,
     this.enabled = true,
+    this.depositBalance,
   });
 
   @override
@@ -191,6 +197,47 @@ class _TableCardState extends State<TableCard> {
                 color: _getStatusColor(),
               ),
             ),
+
+            // Saldo abonado. Va en la identidad y no en el contexto porque
+            // la mesa puede estar LIBRE y tener saldo: es una propiedad de
+            // la mesa, no de la visita.
+            if ((widget.depositBalance ?? 0) > 0.005) ...[
+              const SizedBox(height: 4),
+              Consumer(
+                builder: (context, ref, _) {
+                  final currency = currentBusinessCurrencyOrFallback(ref);
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDCFCE7),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.account_balance_wallet_outlined,
+                          size: 11,
+                          color: Color(0xFF15803D),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          'Abono ${_formatCurrency(currency, widget.depositBalance!)}',
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF15803D),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
           ],
         ),
 

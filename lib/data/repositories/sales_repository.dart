@@ -612,6 +612,19 @@ class SalesRepository {
         );
       }
 
+      // Saldo de mesa: mismo problema que el crédito. El débito del saldo
+      // cuelga de un trigger de INSERT, así que cambiar el método aquí dejaría
+      // el saldo desfasado — pasar A saldo regalaría el consumo (nunca se
+      // descuenta) y salir DE saldo no lo devolvería. Anular y recobrar sí
+      // pasa por los dos triggers. La BD tiene el mismo candado como respaldo.
+      if (oldCode == 'table_deposit' || newCode == 'table_deposit') {
+        throw Exception(
+          'Los cobros con saldo de mesa no se pueden corregir desde aquí. '
+          'Anula el pago (el saldo vuelve solo a la mesa) y cobra de nuevo '
+          'con el método correcto.',
+        );
+      }
+
       // Cambia el método del pago.
       await _client
           .from('payments')

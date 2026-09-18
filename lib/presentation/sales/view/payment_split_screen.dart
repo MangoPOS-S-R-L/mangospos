@@ -261,6 +261,11 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
         case 'r':
           vm.setMethod(PaymentMethodType.transfer);
           return;
+        case 's':
+          if (state.hasTableDeposit) {
+            vm.setMethod(PaymentMethodType.tableDeposit);
+          }
+          return;
       }
     }
   }
@@ -662,6 +667,19 @@ class _LeftPanel extends ConsumerWidget {
               },
               compact: isPhone,
             ),
+            // Saldo abonado de la mesa. Solo aparece cuando hay saldo: en una
+            // mesa sin abono el cobro se ve exactamente como siempre.
+            if (state.hasTableDeposit) ...[
+              SizedBox(width: isPhone ? 6 : 8),
+              _MethodCard(
+                label: isPhone ? 'Saldo' : 'Saldo mesa',
+                icon: Icons.account_balance_wallet_outlined,
+                isSelected:
+                    state.activeMethod == PaymentMethodType.tableDeposit,
+                onTap: () => vm.setMethod(PaymentMethodType.tableDeposit),
+                compact: isPhone,
+              ),
+            ],
           ],
         ),
         if (state.activeMethod == PaymentMethodType.transfer) ...[
@@ -670,6 +688,10 @@ class _LeftPanel extends ConsumerWidget {
             account: state.selectedBankAccount,
             onChange: () => _openBankAccountPicker(context, ref),
           ),
+        ],
+        if (state.hasTableDeposit) ...[
+          SizedBox(height: isPhone ? 6 : 8),
+          _TableDepositBanner(state: state),
         ],
         SizedBox(height: isPhone ? 8 : 10),
         quickAmountChips(),
@@ -1945,6 +1967,70 @@ class _TotalsCard extends StatelessWidget {
   }
 }
 
+/// Saldo abonado de la mesa dentro del cobro.
+///
+/// Dice de quién es el abono (el saldo vive en la mesa física, así que el
+/// cajero tiene que poder ver que no es de otro cliente) y, cuando el consumo
+/// pasa del saldo, cuánta diferencia hay que cobrar aparte.
+class _TableDepositBanner extends StatelessWidget {
+  const _TableDepositBanner({required this.state});
+
+  final PaymentSplitState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final holder = state.tableDeposit?.holderName?.trim();
+    final shortfall = state.depositShortfall;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFBBF7D0)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.account_balance_wallet_outlined,
+            size: 16,
+            color: Color(0xFF15803D),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Saldo de la mesa: RD\$ '
+                  '${state.depositAvailable.toStringAsFixed(2)}'
+                  '${holder != null && holder.isNotEmpty ? ' · $holder' : ''}',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF15803D),
+                  ),
+                ),
+                if (shortfall > 0)
+                  Text(
+                    'No alcanza para el total: faltan RD\$ '
+                    '${shortfall.toStringAsFixed(2)} por cobrar con otro '
+                    'método.',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      color: Color(0xFF166534),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PaymentList extends StatelessWidget {
   final List<PaymentTransaction> transactions;
   final void Function(String id) onDelete;
@@ -1964,6 +2050,8 @@ class _PaymentList extends StatelessWidget {
         return Icons.credit_card;
       case PaymentMethodType.transfer:
         return Icons.qr_code_2;
+      case PaymentMethodType.tableDeposit:
+        return Icons.account_balance_wallet_outlined;
       case PaymentMethodType.other:
         return Icons.attach_money;
     }

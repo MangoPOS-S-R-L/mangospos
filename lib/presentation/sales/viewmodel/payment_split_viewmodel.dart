@@ -15,6 +15,7 @@ import '../../../data/models/sales_models.dart';
 
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
+import '../../../data/repositories/table_deposit_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart';
 import '../viewmodel/sales_viewmodel.dart';
@@ -24,7 +25,7 @@ import '../../../services/session/session_controller.dart';
 // 📦 MODELS
 // ==============================================================================
 
-enum PaymentMethodType { cash, card, transfer, other }
+enum PaymentMethodType { cash, card, transfer, tableDeposit, other }
 
 /// Sentinel para diferenciar "no se pasó argumento" de "se pasó null
 /// explícito" en `PaymentSplitState.copyWith` (sin esto no podríamos
@@ -65,6 +66,8 @@ class PaymentTransaction {
         return 'Tarjeta';
       case PaymentMethodType.transfer:
         return 'Transferencia';
+      case PaymentMethodType.tableDeposit:
+        return 'Saldo de mesa';
       case PaymentMethodType.other:
         return 'Otro';
     }
@@ -130,6 +133,12 @@ class PaymentSplitState {
   /// mostrarlo en el estado final igual que se muestra el NCF.
   final String? emittedSalesNote;
 
+  // ── Abono / saldo prepagado de la mesa ──
+  /// Saldo que la mesa tiene abonado. `null` mientras carga, y
+  /// `TableDepositAccount.empty` cuando la mesa no tiene saldo (o la venta no
+  /// es de mesa). El método "Saldo de mesa" solo aparece cuando hay saldo.
+  final TableDepositAccount? tableDeposit;
+
   const PaymentSplitState({
     this.totalAmount = 0,
     this.transactions = const [],
@@ -150,6 +159,7 @@ class PaymentSplitState {
     this.salesNoteAvailable = false,
     this.salesNoteSelected = false,
     this.emittedSalesNote,
+    this.tableDeposit,
   });
 
   PaymentSplitState copyWith({
@@ -172,6 +182,7 @@ class PaymentSplitState {
     bool? salesNoteAvailable,
     bool? salesNoteSelected,
     String? emittedSalesNote,
+    TableDepositAccount? tableDeposit,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -199,10 +210,35 @@ class PaymentSplitState {
       salesNoteAvailable: salesNoteAvailable ?? this.salesNoteAvailable,
       salesNoteSelected: salesNoteSelected ?? this.salesNoteSelected,
       emittedSalesNote: emittedSalesNote ?? this.emittedSalesNote,
+      tableDeposit: tableDeposit ?? this.tableDeposit,
     );
   }
 
   double get totalPaid => transactions.fold(0.0, (sum, t) => sum + t.amount);
+
+  /// Saldo de mesa que este cobro ya tiene apartado en transacciones.
+  double get depositApplied => transactions
+      .where((t) => t.method == PaymentMethodType.tableDeposit)
+      .fold(0.0, (sum, t) => sum + t.amount);
+
+  /// Saldo que todavía se puede aplicar: lo que la mesa tiene menos lo que
+  /// este mismo cobro ya apartó.
+  double get depositAvailable {
+    final balance = tableDeposit?.balance ?? 0;
+    final left = balance - depositApplied;
+    return left > 0 ? left : 0;
+  }
+
+  /// La mesa tiene saldo que ofrecer en este cobro.
+  bool get hasTableDeposit => depositAvailable > 0.005;
+
+  /// El saldo no alcanza para toda la cuenta: el cliente paga la diferencia
+  /// con otro método. Es el caso "consumió 9,500 y tenía 9,000".
+  double get depositShortfall {
+    if ((tableDeposit?.balance ?? 0) <= 0) return 0;
+    final diff = totalAmount - (tableDeposit?.balance ?? 0);
+    return diff > 0.005 ? diff : 0;
+  }
   double get remaining =>
       (totalAmount - totalPaid) > 0 ? (totalAmount - totalPaid) : 0;
   double get change =>
@@ -262,6 +298,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
        super(PaymentSplitState(totalAmount: total)) {
     unawaited(_connectivity.initialize());
     _loadOrderForReceipt();
+    _loadTableDeposit();
     // Cortesía 100%: cuando total == 0 no hay nada que cobrar, pero el
     // flujo de cierre necesita pasar por processPayment para generar
     // fiscal_document y cerrar orden/check. Pre-seedeamos una transacción
@@ -365,6 +402,22 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     } catch (_) {}
   }
 
+  /// Saldo prepagado de la mesa de esta orden.
+  ///
+  /// Fail-soft: si el módulo no está instalado, no hay red o la venta no es de
+  /// mesa, el saldo queda vacío y el cobro es exactamente el de siempre.
+  Future<void> _loadTableDeposit() async {
+    try {
+      final account = await _ref
+          .read(tableDepositRepositoryProvider)
+          .getBalanceForOrder(_orderId);
+      if (!mounted) return;
+      state = state.copyWith(tableDeposit: account);
+    } catch (e) {
+      debugPrint('[abono] no se pudo leer el saldo de la mesa: $e');
+    }
+  }
+
   /// Alterna entre comprobante fiscal y NOTA DE VENTA para este cobro.
   void setSalesNote(bool value) {
     if (state.salesNoteSelected == value) return;
@@ -441,6 +494,20 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // cajero tiene que volver a seleccionarla — UX explícita.
       selectedBankAccount: null,
     );
+    // Saldo de mesa: se precarga con lo que el saldo ALCANCE a cubrir, no con
+    // todo lo pendiente. Si la cuenta es 9,500 y la mesa tiene 9,000, el campo
+    // arranca en 9,000 y el cajero solo tiene que cobrar los 500 de diferencia
+    // con otro método.
+    if (method == PaymentMethodType.tableDeposit) {
+      final usable = state.depositAvailable < state.remaining
+          ? state.depositAvailable
+          : state.remaining;
+      if (usable > 0) {
+        state = state.copyWith(currentInput: usable.toStringAsFixed(2));
+      }
+      return;
+    }
+
     // Prefill with remaining for convenience when no input is present.
     if (presetRemaining && (state.inputAmount == 0) && state.remaining > 0) {
       state = state.copyWith(currentInput: state.remaining.toStringAsFixed(2));
@@ -501,6 +568,37 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             'una transacción primero.',
       );
       return;
+    }
+
+    // Saldo de mesa: no puede pasar de lo que la mesa tiene. El trigger de BD
+    // es el backstop (TABLE_DEPOSIT_INSUFFICIENT); acá damos el mensaje con el
+    // número exacto para que el cajero sepa cuánto falta cobrar aparte.
+    if (state.activeMethod == PaymentMethodType.tableDeposit) {
+      if (!state.hasTableDeposit) {
+        state = state.copyWith(
+          validationError: 'Esta mesa no tiene saldo abonado disponible.',
+        );
+        return;
+      }
+      if (amount - state.depositAvailable > 0.01) {
+        state = state.copyWith(
+          validationError:
+              'El saldo de la mesa es de RD\$ '
+              '${state.depositAvailable.toStringAsFixed(2)}. Cobra esa parte '
+              'con el saldo y la diferencia con otro método.',
+        );
+        return;
+      }
+      if (!_connectivity.isConnected) {
+        // El saldo se valida y se descuenta en el servidor. Si el cobro se
+        // encola offline, al sincronizar podría no haber saldo (otra caja lo
+        // consumió) y el pago quedaría rechazado con la mesa ya liberada.
+        state = state.copyWith(
+          validationError:
+              'El saldo de mesa no está disponible sin conexión.',
+        );
+        return;
+      }
     }
 
     final allowsChange = state.activeMethod == PaymentMethodType.cash;
@@ -584,6 +682,21 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   Future<List<Payment>?> _confirmPaymentOffline({
     required String cashierSessionId,
   }) async {
+    // El saldo de mesa NO viaja por la cola: se valida y se descuenta en el
+    // servidor. Si se encolara, al sincronizar podría ya no haber saldo (otra
+    // caja lo consumió) y el cobro quedaría rechazado con la mesa liberada y
+    // el ticket entregado. Preferimos fallar acá, con la mesa todavía abierta.
+    if (state.transactions.any(
+      (t) => t.method == PaymentMethodType.tableDeposit,
+    )) {
+      state = state.copyWith(
+        error:
+            'El cobro con saldo de mesa necesita conexión. Vuelve a intentar '
+            'cuando haya red, o cobra con otro método.',
+      );
+      return null;
+    }
+
     try {
       final businessId = await resolveBusinessIdOrNull(
         Supabase.instance.client,
@@ -843,6 +956,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           case PaymentMethodType.transfer:
             methodId = 'transfer';
             break;
+          case PaymentMethodType.tableDeposit:
+            methodId = TableDepositRepository.methodCode;
+            break;
           default:
             methodId = 'cash';
         }
@@ -858,7 +974,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             checkId: _checkId,
             paymentMethodId: methodId,
             amount: tx.amount,
-            changeAmount: isLast ? state.change : 0,
+            // El saldo de mesa nunca da vuelto (el trigger lo rechaza): el
+            // vuelto sale del efectivo, no del prepago.
+            changeAmount:
+                isLast && tx.method != PaymentMethodType.tableDeposit
+                ? state.change
+                : 0,
             closeOrder: isLast && _checkId == null,
             // Para split methods dentro de un check: solo cerrar el
             // check en la última transacción. Las intermedias dejan el

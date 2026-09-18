@@ -24,6 +24,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/services/session/session_controller.dart';
+import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:mangopos/presentation/sales/view/theme/sales_theme.dart';
 import 'package:mangopos/presentation/sales/widgets/table_card.dart';
@@ -34,6 +35,19 @@ import 'package:mangopos/core/utils/app_snackbar.dart';
 /// Delega al helper compartido [isTableEffectivelyEmpty] para que grid y
 /// floor map apliquen el mismo criterio de "ocupada fantasma".
 bool _isEffectivelyEmpty(TableStatus ts) => isTableEffectivelyEmpty(ts);
+
+/// Saldos abonados del negocio activo, para el badge de las cards del salón.
+///
+/// Envuelve [tableDepositBalancesProvider] resolviendo el negocio acá para que
+/// la card no tenga que saber de sesión. Sin negocio activo devuelve vacío.
+final _zoneDepositBalancesProvider =
+    FutureProvider.autoDispose<Map<String, TableDepositAccount>>((ref) async {
+      final businessId = ref.watch(
+        sessionProvider.select((s) => s.activeBusinessId),
+      );
+      if (businessId == null || businessId.isEmpty) return const {};
+      return ref.watch(tableDepositBalancesProvider(businessId).future);
+    });
 
 class SalesByZoneView extends ConsumerStatefulWidget {
   final String businessId;
@@ -1069,10 +1083,21 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                       .watch(byZoneVmProvider.select(
                         (s) => s.openingTables.contains(table.tableId),
                       ));
+                  // Abono: el saldo vive en la mesa física, así que se
+                  // muestra aunque la mesa esté libre — lo que quedó de
+                  // anoche se consume hoy. Fail-soft: sin módulo o sin red
+                  // el mapa viene vacío y el salón se ve como siempre.
+                  final depositBalance = ref
+                      .watch(_zoneDepositBalancesProvider)
+                      .maybeWhen(
+                        data: (map) => map[table.tableId]?.balance,
+                        orElse: () => null,
+                      );
                   return TableCard(
                     table: ventasTableFromStatus(table),
                     isOpening: opening,
                     enabled: widget.canOpenTables,
+                    depositBalance: depositBalance,
                     onTap: widget.canOpenTables
                         ? () => _handleTableAction(context, ref, table)
                         : null,

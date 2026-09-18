@@ -1283,6 +1283,11 @@ class PrintTicketService {
     /// `footer_message` del footer.
     String? footerMessage,
 
+    /// Saldo que le queda a la mesa después de este cobro, cuando la venta
+    /// se pagó (total o parcialmente) con el abono prepagado de la mesa.
+    /// Null = esta venta no tocó saldo y el ticket no imprime nada de abono.
+    double? tableDepositBalanceAfter,
+
     /// Lista ordenada + on/off de los bloques del header. Si null usa
     /// [TicketBlocks.defaultHeader] (orden canonico legacy).
     List<TicketBlock>? headerBlocks,
@@ -1985,6 +1990,26 @@ class PrintTicketService {
       }
     }
 
+    // ── SALDO DE LA MESA ──
+    // Lo que el cliente quiere ver: abonó 10,000, consumió 1,000, le quedan
+    // 9,000. Va después de los pagos porque es la consecuencia de haber
+    // pagado con el saldo, no otro pago.
+    if (tableDepositBalanceAfter != null) {
+      if (modern) {
+        ModernInvoiceLayout.amountRow(
+          gen,
+          'Saldo restante de la mesa',
+          _formatMoney(tableDepositBalanceAfter),
+          bold: true,
+        );
+      } else {
+        gen.lineFeed();
+        gen.setBold(true);
+        gen.textRow('SALDO RESTANTE:', _formatMoney(tableDepositBalanceAfter));
+        gen.setBold(false);
+      }
+    }
+
     // ============================================================
     // QR e-CF (DGII) — debajo de pagos
     // ============================================================
@@ -2379,6 +2404,9 @@ class PrintTicketService {
     final explicitCode =
         payment.paymentMethodCode?.toLowerCase().trim() ??
         payment.paymentMethodId.toLowerCase().trim();
+    // `table_deposit` va antes que 'cash'/'card': el código no los contiene,
+    // pero dejarlo explícito evita que un rename futuro lo mande a 'OTRO'.
+    if (explicitCode.contains('table_deposit')) return 'SALDO DE MESA';
     if (explicitCode.contains('cash')) return 'EFECTIVO';
     if (explicitCode.contains('card')) return 'TARJETA';
     if (explicitCode.contains('transfer')) return 'TRANSFERENCIA';

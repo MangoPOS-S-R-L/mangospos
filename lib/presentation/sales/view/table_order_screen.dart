@@ -64,6 +64,8 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.da
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
+import 'package:mangopos/data/repositories/table_deposit_repository.dart';
+import 'package:mangopos/presentation/sales/widgets/table_deposit_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -684,6 +686,31 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   bool get _canSellCredit {
     if (operatorIsOwner(ref)) return true;
     return operatorHasPermission(ref, 'creditos.vender');
+  }
+
+  /// Visibilidad de "Abono": necesita mesa (el saldo vive en la mesa física)
+  /// y el permiso de registrar o al menos de ver el saldo.
+  bool get _canManageTableDeposit {
+    if (widget.origin != OrderOrigin.table) return false;
+    if ((widget.tableId ?? '').isEmpty) return false;
+    if (operatorIsOwner(ref)) return true;
+    return operatorHasPermission(ref, 'ventas.abono_mesa.registrar') ||
+        operatorHasPermission(ref, 'ventas.abono_mesa.ver');
+  }
+
+  /// Abre el abono (saldo prepagado) de la mesa: registrar dinero adelantado,
+  /// ver el saldo y su historial. Lo que se cobre en esta mesa después se
+  /// descuenta de ahí.
+  Future<void> _handleTableDeposit(BuildContext context) async {
+    final tableId = widget.tableId;
+    if (tableId == null || tableId.isEmpty) return;
+    await showTableDepositDialog(
+      context,
+      tableId: tableId,
+      tableLabel: widget.tableCode?.isNotEmpty == true
+          ? widget.tableCode!
+          : 'Mesa',
+    );
   }
 
   /// "Cobrar a crédito" (riel/menú de opciones de la mesa): abre el cobro de
@@ -1374,6 +1401,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     onChargeCredit: _canSellCredit
                         ? () => _handleChargeToCredit(context)
                         : null,
+                    onTableDeposit: _canManageTableDeposit
+                        ? () => _handleTableDeposit(context)
+                        : null,
                   ),
                   Container(height: 1, color: _salesDivider),
                   if (isRetail) const _RetailCartTabs(),
@@ -1432,6 +1462,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     onMarkAllTakeout: () => _handleMarkAllTakeout(context),
                     onChargeCredit: _canSellCredit
                         ? () => _handleChargeToCredit(context)
+                        : null,
+                    onTableDeposit: _canManageTableDeposit
+                        ? () => _handleTableDeposit(context)
                         : null,
                   ),
                 // Usamos ancho fijo según especificación (400px o 320px)
@@ -1538,6 +1571,9 @@ class _MobileSalesHeader extends StatelessWidget {
   /// `creditos.vender` (mínimo supervisor) → la opción no se muestra.
   final VoidCallback? onChargeCredit;
 
+  /// Abono (saldo prepagado) de la mesa. Null = no es mesa o sin permiso.
+  final VoidCallback? onTableDeposit;
+
   const _MobileSalesHeader({
     required this.title,
     required this.showTableActions,
@@ -1549,6 +1585,7 @@ class _MobileSalesHeader extends StatelessWidget {
     required this.onApplyCourtesy,
     this.onMarkAllTakeout,
     this.onChargeCredit,
+    this.onTableDeposit,
   });
 
   @override
@@ -1606,6 +1643,9 @@ class _MobileSalesHeader extends StatelessWidget {
                     break;
                   case _MobileSalesAction.chargeCredit:
                     onChargeCredit?.call();
+                    break;
+                  case _MobileSalesAction.tableDeposit:
+                    onTableDeposit?.call();
                     break;
                 }
               },
@@ -1671,6 +1711,15 @@ class _MobileSalesHeader extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
+                if (onTableDeposit != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.tableDeposit,
+                    child: ListTile(
+                      leading: Icon(Icons.account_balance_wallet_outlined),
+                      title: Text('Abono de la mesa'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
               ],
             ),
         ],
@@ -1687,6 +1736,7 @@ enum _MobileSalesAction {
   applyCourtesy,
   markAllTakeout,
   chargeCredit,
+  tableDeposit,
 }
 
 /// Barra inferior persistente en el layout móvil. Lee `currentOrderProvider`
@@ -5854,6 +5904,24 @@ class _CartView extends ConsumerWidget {
           }
         }();
 
+        // Abono de la mesa: si esta venta se pagó (total o parcialmente) con
+        // el saldo prepagado, el ticket tiene que decir con cuánto quedó la
+        // mesa. Se lee por orden porque en cobro mixto son varios payments.
+        // Fail-soft: sin módulo, sin red o sin saldo, devuelve null y el
+        // ticket sale exactamente como siempre.
+        final Future<double?> tableDepositBalanceFuture = () async {
+          if (type != 'invoice') return null;
+          try {
+            final application = await ref
+                .read(tableDepositRepositoryProvider)
+                .getApplicationForOrder(orderObj.id);
+            return application?.balanceAfter;
+          } catch (e) {
+            debugPrint('print: saldo de mesa no cargó: $e');
+            return null;
+          }
+        }();
+
         // e-CF: pre-fetch del fiscal_document para resolver QR/estado.
         // Solo aplica al tipo 'invoice' (precheck no lleva NCF). El
         // fiscalDoc se resuelve por order_id; el trigger SQL lo crea
@@ -5947,6 +6015,7 @@ class _CartView extends ConsumerWidget {
         final usdSettings = await usdSettingsFuture;
         final invoiceTpl = await invoiceTplFuture;
         final bankAccountsByPaymentId = await bankAccountsFuture;
+        final tableDepositBalanceAfter = await tableDepositBalanceFuture;
 
         ticket = type == 'invoice'
             ? PrintTicketService.generateInvoice(
@@ -5989,6 +6058,7 @@ class _CartView extends ConsumerWidget {
                 headerBlocks: profileForPrint.profile?.effectiveHeaderBlocks,
                 footerBlocks: profileForPrint.profile?.effectiveFooterBlocks,
                 bankAccountsByPaymentId: bankAccountsByPaymentId,
+                tableDepositBalanceAfter: tableDepositBalanceAfter,
                 discountDisplayMode: discountDisplayMode,
                 template: invoiceTpl,
                 openCashDrawer: shouldOpenDrawer,
@@ -6857,6 +6927,10 @@ class _SalesToolsRail extends StatelessWidget {
   final VoidCallback? onTransferSession;
   final VoidCallback onMarkAllTakeout;
 
+  /// Abono (saldo prepagado) de la mesa. Null = no es mesa o el usuario no
+  /// tiene permiso.
+  final VoidCallback? onTableDeposit;
+
   /// Cobrar la cuenta completa a crédito. Null = usuario sin permiso
   /// `creditos.vender` (mínimo supervisor) → el botón no se muestra.
   final VoidCallback? onChargeCredit;
@@ -6875,6 +6949,7 @@ class _SalesToolsRail extends StatelessWidget {
     this.onTransferSession,
     required this.onMarkAllTakeout,
     this.onChargeCredit,
+    this.onTableDeposit,
     required this.width,
   });
 
@@ -6958,6 +7033,13 @@ class _SalesToolsRail extends StatelessWidget {
                       icon: Icons.request_quote_outlined,
                       label: 'Cobrar a\ncrédito',
                       onTap: onChargeCredit!,
+                    ),
+                  if (onTableDeposit != null)
+                    _RailButton(
+                      compact: compact,
+                      icon: Icons.account_balance_wallet_outlined,
+                      label: 'Abono\nmesa',
+                      onTap: onTableDeposit!,
                     ),
                 ],
                 const Spacer(),

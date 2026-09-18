@@ -33,6 +33,7 @@ import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/ecf_documents_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
+import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -411,6 +412,23 @@ Future<void> reprintInvoiceFromPayment(
     final profileForPrint =
         await businessProfileRepo.prepareForInvoicePrinting(businessId);
 
+    // Abono de la mesa: la reimpresión tiene que sacar el MISMO saldo que el
+    // ticket original, no el de hoy. Por eso se lee por pago (el movimiento
+    // guarda el balance_after del momento), no el saldo actual de la mesa.
+    double? tableDepositBalanceAfter;
+    try {
+      final repo = TableDepositRepository(Supabase.instance.client);
+      for (final p in printPayments) {
+        final application = await repo.getApplicationForPayment(p.id);
+        if (application != null) {
+          tableDepositBalanceAfter = application.balanceAfter;
+          break;
+        }
+      }
+    } catch (_) {
+      // Fail-soft: la reimpresión sale sin la línea de saldo.
+    }
+
     final ticket = PrintTicketService.generateInvoice(
       order: printOrder,
       items: printItems,
@@ -448,6 +466,7 @@ Future<void> reprintInvoiceFromPayment(
       isElectronicCf: isElectronicCf,
       ecfSecurityCode: ecfSecurityCode,
       ecfSignedAt: ecfSignedAt,
+      tableDepositBalanceAfter: tableDepositBalanceAfter,
       discountDisplayMode: discountDisplayMode,
       template: invoiceTpl,
       // Layout segun el papel de la impresora destino (58 u 80mm). Sin
