@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../../data/models/table_deposit_report.dart';
 import '../model/report_column.dart';
 import '../model/report_table_data.dart';
 import '../viewmodel/reports_viewmodel.dart';
@@ -82,18 +83,21 @@ class ReportsCsvExportService {
     required ReportsState state,
     required ReportsViewModel viewModel,
   }) async {
-    final csv = _buildCsv(category, state, viewModel);
+    final csv = buildCsv(category, state, viewModel);
     final filename =
         'reporte_${category.name}_${DateTime.now().millisecondsSinceEpoch}.csv';
 
+    // BOM igual que en `exportTable`: sin él, Excel en Windows abre el CSV
+    // como ANSI y los nombres con acento salen rotos ("PÃ©rez").
     await FilePicker.saveFile(
       dialogTitle: 'Guardar reporte CSV',
       fileName: filename,
-      bytes: utf8.encode(csv),
+      bytes: utf8.encode('\uFEFF$csv'),
     );
   }
 
-  static String _buildCsv(
+  /// Contenido del CSV por categoría (sin BOM). Público para pruebas.
+  static String buildCsv(
     ReportCategory category,
     ReportsState state,
     ReportsViewModel viewModel,
@@ -281,6 +285,69 @@ class ReportsCsvExportService {
           viewModel.deliveryTotalOrdersAmount.toStringAsFixed(2),
           viewModel.deliveryTotalFees.toStringAsFixed(2),
         ]);
+        rows.add([]);
+        break;
+      case ReportCategory.deposits:
+        final report = state.depositsReport ?? TableDepositReport.empty;
+        final depositDate = DateFormat('dd/MM/yyyy HH:mm:ss');
+        rows.add(['Saldos por mesa (balance al momento de exportar)']);
+        rows.add([
+          'Mesa',
+          'A nombre de',
+          'Referencia',
+          'Abonado',
+          'Consumido',
+          'Devuelto',
+          'Balance',
+        ]);
+        for (final a in report.accounts) {
+          rows.add([
+            a.tableLabel,
+            a.holderName ?? '',
+            a.referenceLabel,
+            a.deposited.toStringAsFixed(2),
+            a.consumed.toStringAsFixed(2),
+            a.returned.toStringAsFixed(2),
+            a.balance.toStringAsFixed(2),
+          ]);
+        }
+        rows.add([
+          'Total',
+          '',
+          '',
+          '',
+          '',
+          '',
+          report.outstandingBalance.toStringAsFixed(2),
+        ]);
+        rows.add([]);
+        rows.add(['Movimientos del rango']);
+        rows.add([
+          'Fecha',
+          'Mesa',
+          'A nombre de',
+          'Tipo',
+          'Referencia',
+          'Nota',
+          'Método',
+          'Monto',
+          'Balance',
+          'Registrado por',
+        ]);
+        for (final m in report.movements) {
+          rows.add([
+            depositDate.format(m.createdAt),
+            m.tableLabel,
+            m.holderName ?? '',
+            m.typeLabel,
+            m.reference ?? '',
+            m.note ?? '',
+            m.methodName ?? '',
+            m.amount.toStringAsFixed(2),
+            m.balanceAfter.toStringAsFixed(2),
+            m.createdByName ?? '',
+          ]);
+        }
         rows.add([]);
         break;
       case ReportCategory.offers:

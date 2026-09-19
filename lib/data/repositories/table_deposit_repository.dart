@@ -1,6 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/utils/app_time.dart';
+import '../models/table_deposit_report.dart';
+
+export '../models/table_deposit_coverage.dart';
+export '../models/table_deposit_report.dart';
+
 /// Saldo prepagado de una mesa (abono).
 ///
 /// El cliente abona un monto a la mesa, el dinero entra a la caja en ese
@@ -110,16 +116,7 @@ class TableDepositMovement {
   final String? note;
   final String? reference;
 
-  String get typeLabel => switch (type) {
-    'deposit' => 'Abono',
-    'consumption' => 'Consumo',
-    'reversal' => 'Devuelto por anulación',
-    'refund' => 'Devolución en efectivo',
-    'transfer_in' => 'Recibido de otra mesa',
-    'transfer_out' => 'Enviado a otra mesa',
-    'adjustment' => 'Ajuste',
-    _ => type,
-  };
+  String get typeLabel => tableDepositMovementTypeLabel(type);
 
   factory TableDepositMovement.fromRow(Map<String, dynamic> row) {
     return TableDepositMovement(
@@ -188,11 +185,16 @@ class TableDepositRepository {
   /// [TableDepositAccount.empty] para ventas sin mesa (rápida/manual) y si la
   /// migración todavía no está aplicada: el cobro tiene que abrir igual.
   Future<TableDepositAccount> getBalanceForOrder(String orderId) async {
+    // Orden local: el servidor no la conoce. Y la precuenta espera esto antes
+    // de imprimir, así que tampoco puede colgarse con la red caída.
+    if (orderId.startsWith('local-order-')) return TableDepositAccount.empty;
     try {
-      final res = await _client.rpc(
-        'fn_table_deposit_balance_for_order',
-        params: {'p_order_id': orderId},
-      );
+      final res = await _client
+          .rpc(
+            'fn_table_deposit_balance_for_order',
+            params: {'p_order_id': orderId},
+          )
+          .timeout(const Duration(seconds: 5));
       if (res == null) return TableDepositAccount.empty;
       final json = Map<String, dynamic>.from(res as Map);
       final tableId = json['table_id']?.toString();
@@ -337,6 +339,127 @@ class TableDepositRepository {
     }
   }
 
+  /// Reporte de abonos: las mesas con saldo hoy o con movimiento en el
+  /// período, y los movimientos del período. [from]/[to] en hora de pared
+  /// AST, [to] exclusivo, igual que el resto de Reportes.
+  Future<TableDepositReport> getReport({
+    required String businessId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    try {
+      final accountRows = List<Map<String, dynamic>>.from(
+        await _client
+            .from(_tableAccounts)
+            .select(
+              'id, table_id, balance, holder_name, last_movement_at, '
+              'dining_tables(code, label, zones(name))',
+            )
+            .eq('business_id', businessId),
+      );
+
+      // Una cuenta sin saldo que no se movió desde el inicio del período no
+      // puede tener movimientos en él: no hace falta traer su historia.
+      final fromUtc = AppTime.astToUtc(from);
+      final toUtc = AppTime.astToUtc(to);
+      final candidates = accountRows.where((row) {
+        if (TableDepositAccount._toDouble(row['balance']) > 0.005) return true;
+        final last = DateTime.tryParse(
+          row['last_movement_at']?.toString() ?? '',
+        );
+        return last != null && !last.isBefore(fromUtc);
+      }).toList(growable: false);
+      if (candidates.isEmpty) return TableDepositReport.empty;
+
+      final movementRows = await _movementHistory([
+        for (final row in candidates) row['id'].toString(),
+      ]);
+
+      final userIds = <String>{
+        for (final row in movementRows)
+          if (_isBetween(row['created_at'], fromUtc, toUtc) &&
+              (row['created_by']?.toString() ?? '').isNotEmpty)
+            row['created_by'].toString(),
+      };
+
+      return TableDepositReport.build(
+        accountRows: candidates,
+        movementRows: movementRows,
+        from: from,
+        to: to,
+        userNames: await _userNames(userIds.toList(growable: false)),
+      );
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('42P01') || msg.contains('PGRST205')) {
+        throw const TableDepositException(
+          'El módulo de abonos no está instalado en el servidor todavía.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// Historia completa de las cuentas, más vieja primero. Pagina porque
+  /// PostgREST corta cada respuesta en 1000 filas sin avisar, y una mesa con
+  /// un abono de temporada acumula un consumo por cada factura.
+  Future<List<Map<String, dynamic>>> _movementHistory(
+    List<String> accountIds,
+  ) async {
+    const batchSize = 150; // 414 URI Too Long con listas largas en inFilter.
+    const pageSize = 500;
+    final rows = <Map<String, dynamic>>[];
+    for (var start = 0; start < accountIds.length; start += batchSize) {
+      final end = start + batchSize > accountIds.length
+          ? accountIds.length
+          : start + batchSize;
+      final chunk = accountIds.sublist(start, end);
+      for (var offset = 0; ; offset += pageSize) {
+        final page = List<Map<String, dynamic>>.from(
+          await _client
+              .from(_tableMovements)
+              .select(
+                'id, account_id, type, amount, balance_after, reference, '
+                'note, created_at, created_by, payment_methods(name)',
+              )
+              .inFilter('account_id', chunk)
+              .order('created_at', ascending: true)
+              .order('id', ascending: true)
+              .range(offset, offset + pageSize - 1),
+        );
+        rows.addAll(page);
+        if (page.length < pageSize) break;
+      }
+    }
+    return rows;
+  }
+
+  /// Nombres para "Registrado por". Best-effort: sin nombres el reporte sale
+  /// igual.
+  Future<Map<String, String>> _userNames(List<String> userIds) async {
+    if (userIds.isEmpty) return const {};
+    try {
+      final rows = List<Map<String, dynamic>>.from(
+        await _client
+            .from('profiles')
+            .select('id, full_name')
+            .inFilter('id', userIds),
+      );
+      return {
+        for (final row in rows)
+          if ((row['full_name']?.toString().trim() ?? '').isNotEmpty)
+            row['id'].toString(): row['full_name'].toString().trim(),
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  static bool _isBetween(Object? value, DateTime fromUtc, DateTime toUtc) {
+    final at = DateTime.tryParse(value?.toString() ?? '');
+    return at != null && !at.isBefore(fromUtc) && at.isBefore(toUtc);
+  }
+
   /// Cuánto saldo se aplicó en un cobro y con cuánto quedó la mesa.
   ///
   /// Se lee por orden porque el ticket se arma cuando el cobro fue mixto y
@@ -437,25 +560,3 @@ final tableDepositRepositoryProvider = Provider<TableDepositRepository>((ref) {
   return TableDepositRepository(Supabase.instance.client);
 });
 
-/// Saldo de una mesa, para el badge y el panel de cobro.
-final tableDepositBalanceProvider =
-    FutureProvider.family<TableDepositAccount, String>((ref, tableId) async {
-      if (tableId.isEmpty) return TableDepositAccount.empty;
-      return ref.read(tableDepositRepositoryProvider).getBalance(tableId);
-    });
-
-/// Saldos con dinero de todo el negocio, indexados por `table_id`.
-///
-/// Es una sola consulta para pintar el salón entero. Devuelve mapa vacío si el
-/// módulo no está instalado o no hay red — el salón se pinta igual, sin
-/// badges.
-final tableDepositBalancesProvider =
-    FutureProvider.family<Map<String, TableDepositAccount>, String>((
-      ref,
-      businessId,
-    ) async {
-      if (businessId.isEmpty) return const {};
-      return ref
-          .read(tableDepositRepositoryProvider)
-          .getBalancesByTable(businessId);
-    });

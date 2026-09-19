@@ -10,9 +10,10 @@ import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
+import '../../../data/repositories/table_deposit_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, offers, delivery, purchases, finances, inventory, taxes, fiscal }
+enum ReportCategory { sales, offers, delivery, deposits, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
@@ -207,6 +208,10 @@ class ReportsState {
   final Map<String, dynamic>? salesSummary;
   final Map<String, dynamic>? offersSummary;
   final Map<String, dynamic>? deliverySummary;
+
+  /// Reporte de abonos de mesa. Los saldos son los de HOY; los movimientos,
+  /// los del rango.
+  final TableDepositReport? depositsReport;
   final Map<String, dynamic>? cashSummary;
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
@@ -247,6 +252,7 @@ class ReportsState {
     this.salesSummary,
     this.offersSummary,
     this.deliverySummary,
+    this.depositsReport,
     this.cashSummary,
     this.purchasesSummary,
     this.inventorySummary,
@@ -288,6 +294,7 @@ class ReportsState {
     Map<String, dynamic>? salesSummary,
     Map<String, dynamic>? offersSummary,
     Map<String, dynamic>? deliverySummary,
+    TableDepositReport? depositsReport,
     Map<String, dynamic>? cashSummary,
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
@@ -324,6 +331,7 @@ class ReportsState {
       salesSummary: salesSummary ?? this.salesSummary,
       offersSummary: offersSummary ?? this.offersSummary,
       deliverySummary: deliverySummary ?? this.deliverySummary,
+      depositsReport: depositsReport ?? this.depositsReport,
       cashSummary: cashSummary ?? this.cashSummary,
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
@@ -529,6 +537,12 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
               businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
           state = state.copyWith(deliverySummary: summary);
+        case ReportCategory.deposits:
+          final report = await _ref
+              .read(tableDepositRepositoryProvider)
+              .getReport(businessId: businessId, from: from, to: to);
+          if (myToken != _loadToken) return;
+          state = state.copyWith(depositsReport: report);
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
             businessId: businessId, from: from, to: to);
@@ -819,6 +833,16 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             title: 'Fees de delivery',
             description:
                 'Órdenes con delivery: ${numberFormat.format(deliveryCount)} | Total en fees: ${currency.format(deliveryFees)}',
+          ),
+        ];
+      case ReportCategory.deposits:
+        final report = state.depositsReport ?? TableDepositReport.empty;
+        final currency = state.currency.formatter;
+        return [
+          ReportItem(
+            title: 'Abonos de mesa',
+            description:
+                'Saldo vigente: ${currency.format(report.outstandingBalance)} | Mesas con saldo: ${report.accountsWithBalance} | Abonado en el rango: ${currency.format(report.periodDeposited)}',
           ),
         ];
       case ReportCategory.purchases:
@@ -2126,6 +2150,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Ventas por oferta';
       case ReportCategory.delivery:
         return 'Reporte de delivery';
+      case ReportCategory.deposits:
+        return 'Reporte de abonos';
       case ReportCategory.purchases:
         return 'Informe de compras';
       case ReportCategory.finances:
@@ -2147,6 +2173,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return Icons.local_offer;
       case ReportCategory.delivery:
         return Icons.delivery_dining;
+      case ReportCategory.deposits:
+        return Icons.account_balance_wallet;
       case ReportCategory.purchases:
         return Icons.shopping_cart;
       case ReportCategory.finances:

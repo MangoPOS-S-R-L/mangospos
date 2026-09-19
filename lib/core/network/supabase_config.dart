@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/friendly_error.dart';
+import 'connectivity_service.dart';
 import 'cookie_local_storage.dart';
+import 'resilient_http_client.dart';
 
 /// 🔧 Configuración personalizada de Supabase
 /// Incluye timeouts, reintentos y manejo de errores
@@ -62,9 +64,18 @@ class SupabaseConfig {
       cleanUrl = 'https://$cleanUrl';
     }
 
+    final connectivity = ConnectivityService();
     await Supabase.initialize(
       url: cleanUrl,
       anonKey: cleanAnonKey,
+      // Sin esto ninguna consulta tiene timeout: con WiFi sin internet la
+      // caja se congelaba esperando respuestas que nunca llegan.
+      httpClient: ResilientHttpClient(
+        // En web el sondeo pasa por CORS y no es evidencia confiable para
+        // dejar de intentar la red; ahí solo aplican los timeouts.
+        isKnownOffline: kIsWeb ? null : () => connectivity.isKnownOffline,
+        onTransportFailure: connectivity.reportTransportFailure,
+      ),
       debug: kDebugMode || kIsWeb, // Enable debug
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,

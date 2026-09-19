@@ -10,6 +10,8 @@ import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
+import 'package:mangopos/core/network/connectivity_service.dart';
+import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/widgets/min_extent_grid_delegate.dart';
 import 'package:mangopos/presentation/sales/layout/sales_surface.dart';
@@ -197,13 +199,32 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
   String? legalName;
 
   try {
-    final business = await client
-        .from('businesses')
-        .select(
-          'business_name, branch_name, address, phone, fiscal_rnc, fiscal_name',
-        )
-        .eq('id', businessId)
-        .maybeSingle();
+    // Sin red (o si la consulta falla) se usa la última copia en disco: sin
+    // ella la precuenta y la factura salían sin RNC ni dirección, y antes de
+    // eso cada impresión esperaba a que la consulta muriera por timeout.
+    Map<String, dynamic>? business;
+    if (ConnectivityService().isConnected) {
+      try {
+        business = await client
+            .from('businesses')
+            .select(
+              'business_name, branch_name, address, phone, fiscal_rnc, fiscal_name',
+            )
+            .eq('id', businessId)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 6));
+        if (business != null) {
+          unawaited(
+            PosLookupOfflineCache().saveReceiptBusinessRow(businessId, business),
+          );
+        }
+      } catch (e) {
+        debugPrint('[recibo] perfil del negocio sin red, uso caché: $e');
+      }
+    }
+    business ??= await PosLookupOfflineCache().loadReceiptBusinessRow(
+      businessId,
+    );
 
     final branchName = business?['branch_name']?.toString().trim();
     final businessName = business?['business_name']?.toString().trim();
@@ -260,8 +281,20 @@ double? _parseCartRatePercent(String label) {
 ///    empleado, usar el full_name del auth user.
 /// 4. **`sessionProvider.userName`** → fallback final cuando todo lo
 ///    anterior falla.
+/// El que abrió la mesa no cambia en la vida de la orden: se memoriza para no
+/// consultarlo en cada envío a cocina, precuenta y factura.
+final Map<String, String> _waiterNameByOrder = {};
+
 Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   final fallback = ref.read(sessionProvider).userName;
+  final known = _waiterNameByOrder[orderId];
+  if (known != null) return known;
+  // Orden local (el servidor no la conoce) o sin red: la consulta solo
+  // retrasaría el envío a cocina y la impresión. Corre ANTES de cada una.
+  if (orderId.startsWith('local-order-') ||
+      !ConnectivityService().isConnected) {
+    return fallback;
+  }
   final client = Supabase.instance.client;
 
   // Resolvemos el nombre del mesero que ABRIÓ la mesa (no quien agregó
@@ -276,13 +309,14 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   // al `fallback = sessionProvider.userName` y el ticket terminaba
   // imprimiendo el nombre del cajero logueado, no del opener real.
   try {
-    final result = await client.rpc(
-      'fn_order_opener_name',
-      params: {'p_order_id': orderId},
-    );
+    final result = await client
+        .rpc('fn_order_opener_name', params: {'p_order_id': orderId})
+        .timeout(const Duration(seconds: 4));
     final name = result?.toString().trim();
     if (name != null && name.isNotEmpty) {
-      return preferredDisplayName(fullName: name);
+      return _waiterNameByOrder[orderId] = preferredDisplayName(
+        fullName: name,
+      );
     }
   } catch (e) {
     debugPrint('[audit] fn_order_opener_name falló: $e');
@@ -2741,12 +2775,19 @@ class _CartView extends ConsumerWidget {
         // de producto fallan con "no hay orden activa".
         if (origin == OrderOrigin.quick || origin == OrderOrigin.manual) {
           () async {
-            try {
-              await ref
-                  .read(salesRepositoryProvider)
-                  .closeOrder(orderId: order.id, status: 'paid');
-            } catch (_) {
-              // Si ya estaba cerrada, processPayment lo hizo. OK.
+            // Sin red (o venta local) no hay nada que cerrar en el servidor:
+            // el replay del cobro la cierra al sincronizar. Esperar a que
+            // esta llamada muriera retrasaba abrir la siguiente venta.
+            if (ConnectivityService().isConnected &&
+                !order.id.startsWith('local-order-')) {
+              try {
+                await ref
+                    .read(salesRepositoryProvider)
+                    .closeOrder(orderId: order.id, status: 'paid')
+                    .timeout(const Duration(seconds: 8));
+              } catch (_) {
+                // Si ya estaba cerrada, processPayment lo hizo. OK.
+              }
             }
             await ref
                 .read(currentOrderProvider.notifier)
@@ -5179,6 +5220,25 @@ class _CartView extends ConsumerWidget {
                                         freshItems,
                                         forcedOrigin: freshState.origin,
                                       );
+                                  // Abono de la mesa: la precuenta dice cuánto
+                                  // tiene y cuánto es la diferencia a pagar.
+                                  // Solo en la cuenta COMPLETA: en una
+                                  // sub-cuenta, cada precuenta mostraría el
+                                  // saldo entero como si fuera suyo, y dos
+                                  // sub-cuentas de 6,000 sobre un abono de
+                                  // 9,000 dirían las dos "a pagar 0".
+                                  // Misma consulta que el cobro. Fail-soft:
+                                  // sin saldo o sin red, sale como siempre.
+                                  double? tableDepositBalance;
+                                  if (origin == OrderOrigin.table &&
+                                      selectedCheckId == null) {
+                                    final account = await ref
+                                        .read(tableDepositRepositoryProvider)
+                                        .getBalanceForOrder(freshOrder.id);
+                                    if (account.hasBalance) {
+                                      tableDepositBalance = account.balance;
+                                    }
+                                  }
                                   if (!context.mounted) return;
                                   final preCheckData = {
                                     'restaurantName': businessProfile.name,
@@ -5210,6 +5270,7 @@ class _CartView extends ConsumerWidget {
                                         freshSummary.serviceFee,
                                     'total': freshSummary.total,
                                     'totals': precheckTotals,
+                                    'tableDepositBalance': ?tableDepositBalance,
                                   };
 
                                   try {
@@ -6088,6 +6149,8 @@ class _CartView extends ConsumerWidget {
                 discountDisplayMode: discountDisplayMode,
                 template: invoiceTpl,
                 paperWidth: assignedPrinter?.paperWidth ?? 80,
+                tableDepositAvailable:
+                    (data['tableDepositBalance'] as num?)?.toDouble(),
               );
       }
 

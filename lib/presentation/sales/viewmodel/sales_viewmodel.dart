@@ -7,6 +7,7 @@ import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/offline/hub/hub_mode.dart' show kHubModeEnabled;
 import 'package:mangopos/core/offline/hub/hub_config.dart' show TerminalMode;
@@ -638,13 +639,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return;
     }
 
-    // Offline declarado con impuestos ya cargados de ESTE negocio: se
-    // conservan tal cual (la config fiscal es estable). Antes se intentaba
-    // el fetch en CADA apertura de mesa (el TTL es de 1s) y sin internet
-    // colgaba o pisaba los impuestos buenos con lista vacía + error.
-    if (!_connectivity.isConnected &&
-        _taxSettingsBusinessId == businessId &&
-        _cachedBusinessTaxes.isNotEmpty) {
+    // Sin red (o recién fallada por red): se conservan los últimos impuestos
+    // buenos de ESTE negocio, de memoria o de disco (la config fiscal es
+    // estable y el servidor recalcula al sincronizar). Antes se intentaba el
+    // fetch en CADA apertura de mesa y en CADA ítem (el TTL es de 1s) y, al
+    // fallar, se vaciaban los impuestos y se marcaba `taxConfigError`, que
+    // BLOQUEA el cobro: sin internet no se podía cobrar en toda la caída.
+    final retryNotBefore = _taxNetworkRetryNotBefore;
+    final inNetworkBackoff =
+        retryNotBefore != null && DateTime.now().isBefore(retryNotBefore);
+    if ((!_connectivity.isConnected || inNetworkBackoff) &&
+        await _restoreTaxesWithoutNetwork(businessId)) {
       return;
     }
 
@@ -665,7 +670,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             // previo al RPC de apertura).
             .timeout(const Duration(seconds: 8));
         _cachedBusinessTaxes = List<Map<String, dynamic>>.from(taxRows);
+        _taxNetworkRetryNotBefore = null;
+        unawaited(
+          PosLookupOfflineCache().saveBusinessTaxes(
+            businessId,
+            _cachedBusinessTaxes,
+          ),
+        );
       } catch (e) {
+        if (OfflinePosService.isTransportError(e)) {
+          _taxNetworkRetryNotBefore =
+              DateTime.now().add(const Duration(seconds: 20));
+          unawaited(_connectivity.forceReachabilityCheck());
+          if (await _restoreTaxesWithoutNetwork(businessId)) return;
+        }
         // Si falla la carga de `taxes`, no asumimos nada: lista vacía + error.
         _cachedBusinessTaxes = const [];
         throw TaxConfigException(
@@ -703,6 +721,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         e is TaxConfigException ? e.message : e.toString(),
       );
     }
+  }
+
+  /// Tras un fallo de RED no se reintenta la consulta de impuestos hasta esta
+  /// hora: el loader corre en cada ítem y cada apertura de mesa, y mientras el
+  /// detector aún no admite la caída cada intento esperaba su timeout.
+  DateTime? _taxNetworkRetryNotBefore;
+
+  /// Impuestos sin tocar la red: los de memoria si son de este negocio, o la
+  /// última copia en disco. `false` si no hay ninguna (primer uso sin red).
+  Future<bool> _restoreTaxesWithoutNetwork(String businessId) async {
+    if (_taxSettingsBusinessId == businessId &&
+        _lastTaxLoad != null &&
+        state.taxConfigError == null) {
+      return true;
+    }
+    final rows = await PosLookupOfflineCache().loadBusinessTaxes(businessId);
+    if (rows == null || _activeBusinessId != businessId) return false;
+    _cachedBusinessTaxes = rows;
+    _cachedTaxRatePct = 0.0;
+    for (final tx in _cachedBusinessTaxes) {
+      final def = TaxDef.fromMap(tx);
+      if (!def.isActive || def.rate <= 0) continue;
+      if (def.effectiveIsServiceFee) continue;
+      _cachedTaxRatePct = def.rate;
+      break;
+    }
+    _taxSettingsBusinessId = businessId;
+    _lastTaxLoad = DateTime.now();
+    _setTaxConfigError(null);
+    return true;
   }
 
   void _setTaxConfigError(String? message) {
@@ -2189,6 +2237,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ? const CurrentOrderState(loading: true)
         : state.copyWith(loading: true, error: null);
     try {
+      if (!_connectivity.isConnected) {
+        throw TimeoutException('Sin conexión: se abre la venta local');
+      }
       final res = await ref
           .read(salesRepositoryProvider)
           .openManualOrQuick(
@@ -2196,7 +2247,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             customerName: null,
             peopleCount: 1,
             businessId: _activeBusinessId,
-          );
+          )
+          .timeout(const Duration(seconds: 10));
       await _loadOrderDetail(
         res['order_id'] as String,
         origin: origin,
@@ -2204,6 +2256,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
     } catch (e) {
       final businessId = _activeBusinessId;
+      // Sin red: venta NUEVA local (no se recupera ninguna vieja, así que no
+      // choca con PRD 2.5). Al sincronizar, el replay abre la sesión real y
+      // remapea el local-order-… — el mismo camino que ya usan las mesas y
+      // los carritos de retail. Antes aquí se mostraba "No se pudo abrir
+      // Venta Rápida" y la caja rápida quedaba muerta toda la caída después
+      // del primer cobro offline.
+      if (businessId != null &&
+          businessId.isNotEmpty &&
+          _shouldTreatAsOffline(e)) {
+        final draft = await _offlinePos.createLocalDraft(
+          businessId: businessId,
+          origin: origin,
+        );
+        state = _normalizeHydratedState(draft.copyWith(loading: false));
+        unawaited(_hydrateFiscalSequencesOffline());
+        return;
+      }
       // PRD 2.5: ignoramos completamente el cache offline para Quick/Manual.
       // Cada sesión Quick/Manual es fresca por definición — recuperar state
       // viejo solo causa contaminación (orders zombie, items que se asignan
@@ -3292,9 +3361,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   ) async {
     final cached = _comboGroupsCache[menuItemId];
     if (cached != null) return cached;
-    final groups = await ref
-        .read(salesRepositoryProvider)
-        .getComboGroupsForMenuItem(menuItemId);
+    final groups = await _itemOptionsWithOfflineFallback(
+      fetch: () => ref
+          .read(salesRepositoryProvider)
+          .getComboGroupsForMenuItem(menuItemId),
+      loadCached: (bid) =>
+          PosLookupOfflineCache().loadComboGroups(bid, menuItemId),
+      saveCached: (bid, rows) =>
+          PosLookupOfflineCache().saveComboGroups(bid, menuItemId, rows),
+    );
     _comboGroupsCache[menuItemId] = groups;
     return groups;
   }
@@ -3304,11 +3379,51 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   ) async {
     final cached = _modifierGroupsCache[menuItemId];
     if (cached != null) return cached;
-    final groups = await ref
-        .read(salesRepositoryProvider)
-        .getModifierGroupsForMenuItem(menuItemId);
+    final groups = await _itemOptionsWithOfflineFallback(
+      fetch: () => ref
+          .read(salesRepositoryProvider)
+          .getModifierGroupsForMenuItem(menuItemId),
+      loadCached: (bid) =>
+          PosLookupOfflineCache().loadModifierGroups(bid, menuItemId),
+      saveCached: (bid, rows) =>
+          PosLookupOfflineCache().saveModifierGroups(bid, menuItemId, rows),
+    );
     _modifierGroupsCache[menuItemId] = groups;
     return groups;
+  }
+
+  /// Modificadores / grupos de combo de un producto sin que la red pueda
+  /// impedir agregarlo. Se piden ANTES de cada `addItem`: sin este respaldo,
+  /// con el internet caído ningún producto nuevo entraba a la orden.
+  ///
+  /// Sin red se sirve la última copia en disco (la bajada en background la
+  /// mantiene al día). Si este equipo nunca la bajó, el producto entra SIN
+  /// modificadores — el mesero puede anotarlo — en vez de perder la venta.
+  /// Los errores que no son de red se siguen lanzando.
+  Future<List<Map<String, dynamic>>> _itemOptionsWithOfflineFallback({
+    required Future<List<Map<String, dynamic>>> Function() fetch,
+    required Future<List<Map<String, dynamic>>?> Function(String businessId)
+        loadCached,
+    required Future<void> Function(
+      String businessId,
+      List<Map<String, dynamic>> rows,
+    ) saveCached,
+  }) async {
+    final businessId = _activeBusinessId ?? '';
+    Future<List<Map<String, dynamic>>> fromCache() async =>
+        (businessId.isEmpty ? null : await loadCached(businessId)) ??
+        const <Map<String, dynamic>>[];
+
+    if (!_connectivity.isConnected) return fromCache();
+    try {
+      final rows = await fetch().timeout(const Duration(seconds: 6));
+      if (businessId.isNotEmpty) unawaited(saveCached(businessId, rows));
+      return rows;
+    } catch (e) {
+      if (!OfflinePosService.isTransportError(e)) rethrow;
+      unawaited(_connectivity.forceReachabilityCheck());
+      return fromCache();
+    }
   }
 
   Future<void> replaceItemModifiers({
@@ -3340,6 +3455,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     final orderId = state.order?.id;
     if (orderId == null) return;
+
+    // Sin red (u orden local) el guardado del modal no tiene endpoint: se
+    // reparte en las mutaciones que SÍ saben encolar (cantidad, notas, para
+    // llevar). Antes salía "No se pudo guardar" y el cambio se perdía.
+    if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+      await _updateItemViaQueueableMutations(itemId, updatedItem);
+      return;
+    }
 
     // Los items optimistas usan ids `tmp_<microsegundos>` que no son UUID
     // validos en server. Si el modal se abrio con un item recien agregado
@@ -3390,8 +3513,52 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
       refreshOrder();
     } catch (e) {
+      if (OfflinePosService.isTransportError(e)) {
+        unawaited(_connectivity.forceReachabilityCheck());
+        await _updateItemViaQueueableMutations(resolvedId, updatedItem);
+        return;
+      }
       state = state.copyWith(error: 'Error al actualizar item: $e');
       rethrow;
+    }
+  }
+
+  /// Aplica lo que cambió en el modal de edición usando las mutaciones que
+  /// tienen camino offline (optimista + cola). El descuento por línea no lo
+  /// tiene: se avisa en vez de perderlo en silencio.
+  Future<void> _updateItemViaQueueableMutations(
+    String itemId,
+    OrderItem updatedItem,
+  ) async {
+    OrderItem? current;
+    for (final item in state.items) {
+      if (item.id == itemId) {
+        current = item;
+        break;
+      }
+    }
+    if (current == null) return;
+
+    final newNotes = updatedItem.notes?.trim() ?? '';
+    final oldNotes = current.notes?.trim() ?? '';
+    final discountChanged =
+        (updatedItem.discounts - current.discounts).abs() > 0.0001;
+
+    if ((updatedItem.quantity - current.quantity).abs() > 0.0001) {
+      await updateItemQuantity(itemId, updatedItem.quantity);
+    }
+    if (newNotes != oldNotes) {
+      await updateItemNotes(itemId, newNotes);
+    }
+    if (updatedItem.isTakeout != current.isTakeout) {
+      await toggleItemTakeout(itemId, updatedItem.isTakeout);
+    }
+    if (discountChanged) {
+      state = state.copyWith(
+        error:
+            'Sin conexión: el descuento de la línea no se guardó. '
+            'Aplícalo de nuevo cuando vuelva el internet.',
+      );
     }
   }
 
@@ -3924,7 +4091,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
 
-      if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+      // Camino local: imprime directo por la LAN y encola el envío para el
+      // replay. Es el de siempre sin red; ahora también el de la ventana en
+      // que la red ya murió pero el detector aún no lo admite.
+      Future<void> sendLocally() async {
         // sendLocalOrderToKitchen ya encola su propio 'confirm_local_order'
         // (con printed_areas para que el replay marque sin reimprimir). Antes
         // aquí se encolaba ADEMÁS un 'send_to_kitchen' → dos replays por
@@ -3964,6 +4134,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           error: 'Comanda impresa/localmente. Pendiente de sincronizar.',
         );
         await _persistCurrentState(localOnly: true);
+      }
+
+      if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+        await sendLocally();
         return null;
       }
 
@@ -3976,15 +4150,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .map((i) => i.id)
           .toSet();
 
-      final result = await ref
-          .read(printingServiceProvider)
-          .sendOrderToKitchen(
-            orderId: orderId,
-            businessId: businessId,
-            fallbackTableName: tableName,
-            fallbackWaiterName: waiterName ?? session.userName,
-            excludeItemIds: locallySentIds,
-          );
+      final KitchenSendResult result;
+      try {
+        result = await ref
+            .read(printingServiceProvider)
+            .sendOrderToKitchen(
+              orderId: orderId,
+              businessId: businessId,
+              fallbackTableName: tableName,
+              fallbackWaiterName: waiterName ?? session.userName,
+              excludeItemIds: locallySentIds,
+            );
+      } on KitchenSendNetworkException catch (e) {
+        // Sin papel impreso todavía: repetir por el camino local no duplica
+        // la comanda. Antes esto terminaba en un snackbar rojo y la comanda
+        // no salía ni se encolaba.
+        debugPrint('confirmOrder: sin red antes de imprimir, envío local ($e)');
+        unawaited(_connectivity.forceReachabilityCheck());
+        await sendLocally();
+        return null;
+      }
       refreshOrder();
       return result;
     } catch (e) {
@@ -4313,6 +4498,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         _queuedRefreshOrderId = null;
         _queuedClearIfPaid = false;
 
+        // La pantalla ya pasó a OTRA orden (típico: venta rápida cobrada →
+        // openQuick abrió la siguiente): recargar la vieja es trabajo muerto
+        // y, si la carga falla, su recovery vaciaba la orden NUEVA. Sin red
+        // pasaba siempre, porque la venta local nueva abre al instante.
+        final current = state.order?.id;
+        if (current != null && current != orderId) return;
+
         await _loadOrderDetail(orderId, caller: 'scheduledRefresh');
         if (clearIfPaid && (state.order?.isPaid ?? false)) {
           _hasManualFiscalTypeSelection = false;
@@ -4408,6 +4600,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String? sessionNote;
 
     var loadedByBundle = false;
+    // Si algo falló por RED (no porque la orden no exista), lo que hay en
+    // pantalla sigue siendo lo último bueno y NO se debe pisar. Ver abajo.
+    var failedByNetwork = false;
+    void noteFailure(Object e) {
+      if (OfflinePosService.isTransportError(e)) failedByNetwork = true;
+    }
 
     if (preloadedBundle != null) {
       // Fast path: usamos el bundle que ya vino del RPC consolidado
@@ -4420,10 +4618,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       loadedByBundle = order != null;
     } else {
       try {
-        final bundle = await repo.getOrderBundle(
-          orderId,
-          businessId: _activeBusinessId,
-        );
+        final bundle = await repo
+            .getOrderBundle(orderId, businessId: _activeBusinessId)
+            .timeout(const Duration(seconds: 12));
         order = bundle.order;
         items = bundle.items;
         checks = bundle.checks;
@@ -4433,11 +4630,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
         loadedByBundle = order != null;
       } catch (e) {
+        noteFailure(e);
         loadError = FriendlyError.from(e);
       }
     }
 
-    if (!loadedByBundle) {
+    // Si el bundle cayó por red, las 3 lecturas de respaldo van al mismo
+    // servidor caído: solo sumarían espera.
+    if (!loadedByBundle && !failedByNetwork) {
       final orderFuture = repo.getOrder(orderId, businessId: _activeBusinessId);
       final itemsFuture = repo.getOrderItems(
         orderId,
@@ -4469,12 +4669,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
         checks = await checksFuture;
       } catch (e) {
+        noteFailure(e);
         loadError ??= e.toString();
       }
 
       try {
         items = await itemsFuture;
       } catch (e) {
+        noteFailure(e);
         loadError ??= e.toString();
       }
 
@@ -4486,6 +4688,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           sessionNote = customer.note;
         } catch (_) {}
       }
+    }
+
+    // Recarga de la MISMA orden que falló por red (internet caído, o la
+    // ventana en que el detector todavía no lo admite): se conserva lo que hay
+    // en pantalla. Antes caía al recovery de abajo, que VACIABA la orden — la
+    // mesa se veía vacía, la precuenta y la factura salían sin productos y
+    // cada toque mostraba "Error… envíame una captura". También cubre la
+    // carga parcial (orden sí, ítems no), que pintaba la orden sin ítems.
+    if (failedByNetwork && state.order?.id == orderId) {
+      if (myGeneration != _loadGeneration) return;
+      debugPrint(
+        '[SalesViewModel] _loadOrderDetail($caller): sin red, se conserva la '
+        'orden en pantalla ($loadError)',
+      );
+      unawaited(_connectivity.forceReachabilityCheck());
+      if (state.loading) state = state.copyWith(loading: false);
+      return;
     }
 
     if (order == null && items.isEmpty) {
@@ -4521,7 +4740,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // el state para que un próximo openTable no arrastre la orden stale
       // entre sucursales. Sin esto, el viewmodel reintenta cargar el mismo
       // orderId out-of-scope cada vez que el usuario interactúa.
-      _tableCache.remove(tableId);
+      // Un fallo de red no dice nada sobre a qué orden apunta la mesa.
+      if (!failedByNetwork) _tableCache.remove(tableId);
       final baseMessage =
           loadError ??
           'Esta orden no está disponible en este negocio.\n'

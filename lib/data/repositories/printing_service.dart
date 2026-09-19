@@ -117,6 +117,21 @@ String? kitchenTicketIdempotencyKey({
   return 'kitchen-$orderId-$areaCode-$printerId$tail';
 }
 
+/// El envío a cocina online falló por RED antes de imprimir un solo ticket.
+///
+/// Garantiza que no salió papel, así que el llamador puede repetir el envío
+/// por el camino local (imprimir directo + encolar) sin duplicar la comanda.
+/// Si el `sendToKitchen` alcanzó a marcar los ítems en el servidor, el replay
+/// lo resuelve como "ya estaba enviada" (ver `_OfflineSyncSkip`).
+class KitchenSendNetworkException implements Exception {
+  final Object cause;
+
+  const KitchenSendNetworkException(this.cause);
+
+  @override
+  String toString() => 'KitchenSendNetworkException: $cause';
+}
+
 /// 🖨️ Servicio de Impresión con Agrupación por Departamento
 /// Maneja la lógica de envío de órdenes a diferentes áreas de impresión
 class NoAssignedKitchenPrinterException implements Exception {
@@ -211,6 +226,7 @@ class PrintingService {
     // seguidos y fusionaría rondas que en el salón fueron distintas.
     bool allowKitchenMerge = true,
   }) async {
+    var printingStarted = false;
     try {
       // 1. Obtener información de la orden
       final orderFuture = _salesRepo.getOrder(orderId);
@@ -310,6 +326,7 @@ class PrintingService {
       // significa que la cocina no deba recibir su comanda.
       final printerless = await PrinterlessMode.kitchenEnabled(businessId);
 
+      printingStarted = true;
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final areaItems = entry.value;
@@ -394,6 +411,9 @@ class PrintingService {
     } on UnknownPrintAreaCodeException {
       rethrow;
     } catch (e) {
+      if (!printingStarted && OfflinePosService.isTransportError(e)) {
+        throw KitchenSendNetworkException(e);
+      }
       throw Exception('Error al enviar orden a cocina: $e');
     }
   }

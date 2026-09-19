@@ -5,6 +5,7 @@ import '../../data/models/business_profile.dart';
 import '../../data/models/printing_models.dart';
 import '../../data/models/order_item_tax_line.dart';
 import '../../data/models/sales_models.dart';
+import '../../data/models/table_deposit_coverage.dart';
 import '../../data/models/payment_models.dart';
 import '../../core/utils/app_time.dart';
 import '../../core/utils/order_number_utils.dart';
@@ -646,6 +647,11 @@ class PrintTicketService {
     /// Ancho del papel de la impresora destino (58 u 80). Viene de
     /// `printers.paper_width`. Default 80 = comportamiento histórico.
     int paperWidth = 80,
+
+    /// Saldo abonado que tiene la mesa. Con esto la precuenta dice cuánto
+    /// cubre el abono y cuánto es la DIFERENCIA que paga el cliente. Null o 0
+    /// = la mesa no tiene abono y la precuenta sale como siempre.
+    double? tableDepositAvailable,
   }) {
     _currency = currency ?? BusinessCurrency.fallbackDop;
     final gen = EscPosGenerator(paperWidth: paperWidth);
@@ -1115,6 +1121,19 @@ class PrintTicketService {
       showRate: false,
       leadingGap: !modern,
     );
+
+    // ════════════════════════════════════════════
+    // ABONO DE LA MESA
+    // ════════════════════════════════════════════
+    // El cliente ve cuánto tiene abonado y paga solo la diferencia. El TOTAL
+    // de arriba no cambia: es lo que consumió y lo que se va a facturar.
+    final coverage = TableDepositCoverage.of(
+      total: printableGrandTotal,
+      available: tableDepositAvailable,
+    );
+    if (coverage != null) {
+      _renderTableDepositCoverage(gen, coverage, modern: modern);
+    }
 
     // ════════════════════════════════════════════
     // DATOS DE COMPROBANTE FISCAL
@@ -2393,6 +2412,54 @@ class PrintTicketService {
       return qty.toStringAsFixed(1);
     }
     return qty.toStringAsFixed(2);
+  }
+
+  /// Bloque del abono en la precuenta:
+  ///
+  ///   ABONO DISPONIBLE:       9,000.00
+  ///   DIFERENCIA A PAGAR:       500.00
+  ///
+  /// o, si el abono cubre toda la cuenta:
+  ///
+  ///   ABONO DISPONIBLE:      10,000.00
+  ///   A PAGAR:                    0.00
+  ///   SALDO QUE QUEDA:        9,000.00
+  static void _renderTableDepositCoverage(
+    EscPosGenerator gen,
+    TableDepositCoverage coverage, {
+    required bool modern,
+  }) {
+    final toPayLabel = coverage.coversAll ? 'A pagar' : 'Diferencia a pagar';
+    if (modern) {
+      ModernInvoiceLayout.amountRow(
+        gen,
+        'Abono disponible',
+        _formatMoney(coverage.available),
+      );
+      ModernInvoiceLayout.amountRow(
+        gen,
+        toPayLabel,
+        _formatMoney(coverage.toPay),
+        bold: true,
+      );
+      if (coverage.coversAll) {
+        ModernInvoiceLayout.amountRow(
+          gen,
+          'Saldo que queda',
+          _formatMoney(coverage.remaining),
+        );
+      }
+      return;
+    }
+
+    gen.lineFeed();
+    gen.textRow('ABONO DISPONIBLE:', _formatMoney(coverage.available));
+    gen.setBold(true);
+    gen.textRow('${toPayLabel.toUpperCase()}:', _formatMoney(coverage.toPay));
+    gen.setBold(false);
+    if (coverage.coversAll) {
+      gen.textRow('SALDO QUE QUEDA:', _formatMoney(coverage.remaining));
+    }
   }
 
   static String _getPaymentMethodName(Payment payment) {

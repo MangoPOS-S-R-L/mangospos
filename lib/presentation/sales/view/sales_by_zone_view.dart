@@ -36,17 +36,41 @@ import 'package:mangopos/core/utils/app_snackbar.dart';
 /// floor map apliquen el mismo criterio de "ocupada fantasma".
 bool _isEffectivelyEmpty(TableStatus ts) => isTableEffectivelyEmpty(ts);
 
-/// Saldos abonados del negocio activo, para el badge de las cards del salón.
+/// Cada cuánto se vuelve a pedir el saldo de las mesas mientras el salón está
+/// en pantalla.
+const Duration _kDepositBalancesRefresh = Duration(seconds: 15);
+
+/// Saldos abonados del negocio activo, para el badge de las mesas del salón
+/// (cuadrícula y plano).
 ///
-/// Envuelve [tableDepositBalancesProvider] resolviendo el negocio acá para que
-/// la card no tenga que saber de sesión. Sin negocio activo devuelve vacío.
+/// Lo ve todo el que opera el salón, cajera incluida: consultar cuánto le
+/// queda a una mesa es operación de caja. Cargar saldo es lo que está
+/// restringido a dueño/admin, y eso vive en el servidor.
+///
+/// Pide directo al repositorio y se refresca solo cada
+/// [_kDepositBalancesRefresh]: el abono lo carga el dueño desde OTRO
+/// dispositivo, y sin esto la caja seguía viendo el saldo viejo hasta
+/// reiniciar la app (el provider cacheado de antes no se invalidaba nunca).
+/// Es `autoDispose`, así que fuera del salón no hay polling. El refresh
+/// conserva el dato anterior mientras recarga: el badge no parpadea.
 final _zoneDepositBalancesProvider =
     FutureProvider.autoDispose<Map<String, TableDepositAccount>>((ref) async {
-      final businessId = ref.watch(
-        sessionProvider.select((s) => s.activeBusinessId),
-      );
+      // El MISMO negocio con el que el salón pintó las mesas (lo resuelve
+      // `load('auto')` con toda la cadena de respaldos del BusinessResolver).
+      // Leerlo aparte de la sesión dejaba abierta la puerta a que mesas y
+      // saldos salieran de negocios distintos — o a que el badge quedara
+      // vacío mientras las mesas sí se veían.
+      final businessId =
+          ref.watch(byZoneVmProvider.select((s) => s.businessId)) ??
+          ref.watch(sessionProvider.select((s) => s.activeBusinessId));
       if (businessId == null || businessId.isEmpty) return const {};
-      return ref.watch(tableDepositBalancesProvider(businessId).future);
+
+      final timer = Timer(_kDepositBalancesRefresh, ref.invalidateSelf);
+      ref.onDispose(timer.cancel);
+
+      return ref
+          .read(tableDepositRepositoryProvider)
+          .getBalancesByTable(businessId);
     });
 
 class SalesByZoneView extends ConsumerStatefulWidget {
@@ -1214,6 +1238,13 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
 
     final statusByTableId = {for (final ts in status) ts.tableId: ts};
 
+    // Mismo saldo que la cuadrícula. `.value` conserva el dato anterior
+    // mientras el provider se refresca, así el badge no parpadea.
+    final deposits = ref.watch(_zoneDepositBalancesProvider).value ?? const {};
+    final depositByTableId = {
+      for (final e in deposits.entries) e.key: e.value.balance,
+    };
+
     return Column(
       children: [
         if (!widget.canOpenTables)
@@ -1252,6 +1283,7 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
             onLongPressTable: (ts) =>
                 _handleMergeTable(context, ref, ts, widget.zoneId),
             onExpand: widget.allowExpand ? () => _openFullscreen() : null,
+            depositByTableId: depositByTableId,
           ),
         ),
       ],

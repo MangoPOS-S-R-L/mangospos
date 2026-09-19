@@ -66,6 +66,10 @@ class OfflineCachePruner {
     'offline_dashboard_inventory_alerts_',
     'printing_cached_printers_',
     'printing_cached_ready_printers_',
+    'offline_business_taxes_',
+    'offline_item_options_',
+    'offline_receipt_business_',
+    'offline_cash_reasons_',
   ];
 
   /// Prefijos que NUNCA se podan, ni aunque sean de otro negocio: pueden

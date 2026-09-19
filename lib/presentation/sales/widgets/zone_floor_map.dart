@@ -36,6 +36,11 @@ class ZoneFloorMap extends StatefulWidget {
   /// Si se provee, muestra un botón de "expandir" (pantalla completa).
   final VoidCallback? onExpand;
 
+  /// Saldo abonado por mesa (`table_id` → monto). Mismo dato que el badge de
+  /// la cuadrícula: el saldo vive en la mesa física, así que se pinta aunque
+  /// la mesa esté libre. Mesas ausentes o en 0 no pintan nada.
+  final Map<String, double> depositByTableId;
+
   const ZoneFloorMap({
     super.key,
     required this.tables,
@@ -45,6 +50,7 @@ class ZoneFloorMap extends StatefulWidget {
     this.onTapTable,
     this.onLongPressTable,
     this.onExpand,
+    this.depositByTableId = const {},
   });
 
   @override
@@ -253,6 +259,7 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
                       palette: palette,
                       isOpening: isOpening,
                       isCircle: t.shape == TableShape.circle,
+                      depositBalance: widget.depositByTableId[t.id],
                     ),
                   ),
                 ],
@@ -321,6 +328,7 @@ class _TableCard extends StatelessWidget {
   final TableStatusPalette palette;
   final bool isOpening;
   final bool isCircle;
+  final double? depositBalance;
 
   const _TableCard({
     required this.table,
@@ -328,6 +336,7 @@ class _TableCard extends StatelessWidget {
     required this.palette,
     required this.isOpening,
     required this.isCircle,
+    this.depositBalance,
   });
 
   Color get color => palette.accent;
@@ -403,6 +412,46 @@ class _TableCard extends StatelessWidget {
                   color: color, // el estado se lee en su propio color
                 ),
               ),
+              // Saldo abonado. Va pegado a la identidad y no con los datos de
+              // la sesión: una mesa LIBRE puede tener saldo de anoche.
+              if ((depositBalance ?? 0) > 0.005) ...[
+                const SizedBox(height: 4),
+                Consumer(
+                  builder: (context, ref, _) {
+                    final currency = currentBusinessCurrencyOrFallback(ref);
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.account_balance_wallet_outlined,
+                            size: 12,
+                            color: Color(0xFF15803D),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            'Abono ${_money(currency, depositBalance!)}',
+                            maxLines: 1,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF15803D),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
               if (time != null)
                 Text(
                   time,

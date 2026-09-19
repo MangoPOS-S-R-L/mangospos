@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../../data/models/table_deposit_coverage.dart';
+
 List<Map<String, dynamic>> _buildPrecheckItems(
   List<dynamic> rawItems,
   String receiptItemDisplayMode,
@@ -66,6 +68,13 @@ class PreCheckDialog extends StatelessWidget {
     final subtotal = data['subtotal'] ?? 0.0;
     final tax = data['tax'] ?? 0.0;
     final total = data['total'] ?? (subtotal + tax);
+
+    // Abono de la mesa: mismo cálculo que la precuenta impresa. Null = la mesa
+    // no tiene saldo (o es sub-cuenta) y el diálogo se ve como siempre.
+    final depositCoverage = TableDepositCoverage.of(
+      total: (total as num).toDouble(),
+      available: (data['tableDepositBalance'] as num?)?.toDouble(),
+    );
 
     // Bloque de totales ya reconciliado por `buildReceiptTotalsRows` (mismo
     // criterio que el ticket impreso): un renglón por impuesto + la línea de
@@ -303,6 +312,49 @@ class PreCheckDialog extends StatelessWidget {
                         ),
                       ],
                     ),
+
+                    // ABONO DE LA MESA: lo que tiene y la diferencia a pagar.
+                    if (depositCoverage != null) ...[
+                      const SizedBox(height: 12),
+                      _TotalRow(
+                        label: 'Abono disponible',
+                        value: currencyFormat.format(depositCoverage.available),
+                        highlight: true,
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            depositCoverage.coversAll
+                                ? 'A PAGAR'
+                                : 'DIFERENCIA A PAGAR',
+                            style: GoogleFonts.inter(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF111111),
+                            ),
+                          ),
+                          Text(
+                            currencyFormat.format(depositCoverage.toPay),
+                            style: GoogleFonts.inter(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                              color: const Color(0xFF111111),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (depositCoverage.coversAll) ...[
+                        const SizedBox(height: 6),
+                        _TotalRow(
+                          label: 'Saldo que queda',
+                          value: currencyFormat.format(
+                            depositCoverage.remaining,
+                          ),
+                        ),
+                      ],
+                    ],
 
                     const SizedBox(height: 24),
                     const Divider(color: Color(0xFFE5E5E5)),

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/core/utils/app_time.dart';
@@ -85,7 +88,17 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
       } catch (_) {}
     }
 
-    final transactions = await repository.getSessionTransactions(session.id);
+    // Sin red la lista del turno no se puede leer, pero eso no debe impedir
+    // registrar el gasto (el movimiento se encola). Antes la pantalla entera
+    // caía en error durante la caída.
+    List<CashTransaction> transactions = const [];
+    try {
+      transactions = await repository
+          .getSessionTransactions(session.id)
+          .timeout(const Duration(seconds: 8));
+    } catch (e) {
+      debugPrint('[Ingresos/Egresos] movimientos del turno sin red: $e');
+    }
     final manualTransactions = transactions
         .where(
           (tx) =>
@@ -95,9 +108,20 @@ class _IncomeExpenseViewState extends ConsumerState<IncomeExpenseView> {
         )
         .toList();
 
-    final reasons = businessId.isEmpty
-        ? const <Map<String, dynamic>>[]
-        : await repository.getCashTransactionReasons(businessId: businessId);
+    var reasons = const <Map<String, dynamic>>[];
+    if (businessId.isNotEmpty) {
+      try {
+        reasons = await repository
+            .getCashTransactionReasons(businessId: businessId)
+            .timeout(const Duration(seconds: 8));
+        unawaited(PosLookupOfflineCache().saveCashReasons(businessId, reasons));
+      } catch (e) {
+        debugPrint('[Ingresos/Egresos] razones sin red, uso caché: $e');
+        reasons =
+            await PosLookupOfflineCache().loadCashReasons(businessId) ??
+            const <Map<String, dynamic>>[];
+      }
+    }
 
     return _ManualCashData(
       session: session,

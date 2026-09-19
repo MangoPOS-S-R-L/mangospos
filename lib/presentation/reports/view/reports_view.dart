@@ -59,6 +59,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         context.go(AppRoutes.reportsOffers);
       case ReportCategory.delivery:
         context.go(AppRoutes.reportsDelivery);
+      case ReportCategory.deposits:
+        context.go(AppRoutes.reportsDeposits);
       case ReportCategory.finances:
         context.go(AppRoutes.reportsFinances);
       case ReportCategory.inventory:
@@ -294,6 +296,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         quickStat: '—',
         quickStatLabel: 'Fees cobrados',
         onTap: () => context.go(AppRoutes.reportsDelivery),
+      ),
+      _ReportHubCardData(
+        title: 'Abonos',
+        description:
+            'Saldo prepagado por mesa: a nombre de quién, referencia, '
+            'balance y movimientos. Imprimible.',
+        icon: Icons.account_balance_wallet_outlined,
+        color: const Color(0xFF0D9488),
+        quickStat: '—',
+        quickStatLabel: 'Saldos por mesa',
+        onTap: () => context.go(AppRoutes.reportsDeposits),
       ),
       _ReportHubCardData(
         title: 'Ventas por mesero',

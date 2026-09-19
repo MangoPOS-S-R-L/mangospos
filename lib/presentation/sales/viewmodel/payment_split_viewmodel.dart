@@ -880,13 +880,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // este `false` explícito el siguiente cobro saldría como nota aunque el
       // cajero haya elegido factura. Solo corre en negocios con la feature
       // prendida.
-      if (state.salesNoteAvailable) {
+      // Sin red se salta: la marca viaja en el payload de la cola, y esperar
+      // a que esta escritura muriera retrasaba cada cobro offline.
+      if (state.salesNoteAvailable && _connectivity.isConnected) {
         try {
-          await _salesRepo.markAsSalesNote(
-            orderId: _orderId,
-            checkId: _checkId,
-            value: state.salesNoteSelected,
-          );
+          await _salesRepo
+              .markAsSalesNote(
+                orderId: _orderId,
+                checkId: _checkId,
+                value: state.salesNoteSelected,
+              )
+              .timeout(const Duration(seconds: 8));
         } catch (e) {
           if (!OfflinePosService.isTransportError(e)) {
             _localProcessing = false;

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/network/connectivity_service.dart';
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -12,11 +13,14 @@ import 'package:mangopos/data/repositories/zones_repository.dart';
 import 'package:mangopos/services/fiscal/fiscal_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
+import 'package:mangopos/data/repositories/sales_repository.dart';
+
 import 'catalog_refresh_service.dart';
 import 'offline_cache_pruner.dart';
 import 'ncf_offline_allocator.dart' show kOfflineNcfEnabled;
 import 'ncf_range_service.dart';
 import 'offline_sync_coordinator.dart';
+import 'pos_lookup_offline_cache.dart';
 
 /// Resuelve el negocio activo en el momento de correr (no al construir).
 typedef BusinessIdResolver = String? Function();
@@ -48,6 +52,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshPrinters,
   Future<void> Function(String businessId)? refreshFiscalSequences,
   Future<void> Function(String businessId)? refreshNcfSeed,
+  Future<void> Function(String businessId)? refreshPosLookups,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
   // un refresher por defecto (en test se inyectan todos y no se toca).
@@ -98,6 +103,13 @@ List<Future<void> Function()> buildOfflineRefreshers({
         await FiscalService().getSequences(b);
       };
 
+  // Impuestos + modificadores de todos los productos: el POS los pide ANTES de
+  // dejar agregar un producto o cobrar. Sin copia en disco, la caída de red
+  // del 2026-09-19 dejó productos que no entraban y cobros bloqueados por
+  // "error de impuestos". Ver [PosLookupOfflineCache].
+  final posLookups =
+      refreshPosLookups ?? (String b) => _refreshPosLookups(resolveClient(), b);
+
   Future<void> Function() guard(Future<void> Function(String) fn) {
     return () async {
       final businessId = resolveBusinessId();
@@ -113,6 +125,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
     guard(config),
     guard(printers),
     guard(fiscalSequences),
+    guard(posLookups),
   ];
 
   // Semilla NCF (F4): cachea la serie central offline para que el Hub conozca
@@ -126,6 +139,36 @@ List<Future<void> Function()> buildOfflineRefreshers({
   }
 
   return refreshers;
+}
+
+Future<void> _refreshPosLookups(
+  SupabaseClient client,
+  String businessId,
+) async {
+  final cache = PosLookupOfflineCache();
+  // Mismas columnas que SalesViewModel._ensureBusinessTaxSettingsLoaded.
+  final taxRows = await client
+      .from('taxes')
+      .select(
+        'id,name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
+      )
+      .eq('business_id', businessId)
+      .eq('is_active', true);
+  await cache.saveBusinessTaxes(
+    businessId,
+    List<Map<String, dynamic>>.from(taxRows),
+  );
+
+  final byItem = await SalesRepository(
+    client,
+  ).getModifierGroupsByItemForBusiness(businessId);
+  await cache.replaceAllModifierGroups(businessId, byItem);
+
+  // Razones de gastos/ingresos: la pantalla las exige para registrar uno.
+  final reasons = await CashierRepository(
+    client,
+  ).getCashTransactionReasons(businessId: businessId);
+  await cache.saveCashReasons(businessId, reasons);
 }
 
 /// Refresca el inventario de la bodega principal (la primera que devuelve

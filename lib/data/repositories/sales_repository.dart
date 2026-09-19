@@ -1381,29 +1381,47 @@ class SalesRepository {
     }
   }
 
+  // `is_sold_out` (auto-86 del modificador, 20260907_0004) va aparte: si la
+  // migración no está aplicada PostgREST responde 42703 y se reintenta sin
+  // ella. Sin este respaldo, una migración pendiente dejaría al POS sin poder
+  // abrir modificadores.
+  static const _modifierColumns =
+      'id, group_id, name, price_delta, is_active, sort_order, default_selected';
+  static const _modifierGroupColumns =
+      'id, name, min_select, max_select, is_active, display_type, '
+      'selection_mode, is_required, free_qty, max_qty_per_option, sort_order';
+
+  static bool _isMissingColumn(PostgrestException e) =>
+      e.code == '42703' || e.code == 'PGRST204';
+
+  /// Ordena las opciones del grupo por sort_order ascendente; si empate, por
+  /// nombre.
+  static void _sortGroupModifiers(Object? group) {
+    if (group is! Map || group['modifiers'] is! List) return;
+    final modifiers = List<dynamic>.from(group['modifiers'] as List);
+    modifiers.sort((a, b) {
+      final ao = a is Map ? (a['sort_order'] as num?)?.toInt() ?? 0 : 0;
+      final bo = b is Map ? (b['sort_order'] as num?)?.toInt() ?? 0 : 0;
+      if (ao != bo) return ao.compareTo(bo);
+      final an = (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
+      final bn = (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
+      return an.compareTo(bn);
+    });
+    group['modifiers'] = modifiers;
+  }
+
   Future<List<Map<String, dynamic>>> getModifierGroupsForMenuItem(
     String menuItemId,
   ) async {
     try {
       // Orden personalizado por producto (menu_item_groups.position).
       // El cliente reordena los grupos desde el editor de producto.
-      //
-      // `is_sold_out` (auto-86 del modificador, 20260907_0004) va en un select
-      // aparte: si la migración no está aplicada PostgREST responde 42703 y
-      // reintentamos sin ella. Sin este respaldo, una migración pendiente
-      // dejaría al POS sin poder abrir modificadores.
-      const modifierColumns =
-          'id, group_id, name, price_delta, is_active, sort_order, default_selected';
-      const groupColumns =
-          'id, name, min_select, max_select, is_active, display_type, '
-          'selection_mode, is_required, free_qty, max_qty_per_option, sort_order';
-
       Future<List<dynamic>> fetch({required bool withSoldOut}) async {
         return await _client
             .from('menu_item_groups')
             .select(
-              'group_id, position, modifier_groups!inner($groupColumns, '
-              'modifiers($modifierColumns${withSoldOut ? ', is_sold_out' : ''}))',
+              'group_id, position, modifier_groups!inner($_modifierGroupColumns, '
+              'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''}))',
             )
             .eq('menu_item_id', menuItemId)
             .eq('modifier_groups.is_active', true)
@@ -1414,7 +1432,7 @@ class SalesRepository {
       try {
         data = await fetch(withSoldOut: true);
       } on PostgrestException catch (e) {
-        if (e.code != '42703' && e.code != 'PGRST204') rethrow;
+        if (!_isMissingColumn(e)) rethrow;
         data = await fetch(withSoldOut: false);
       }
 
@@ -1423,28 +1441,69 @@ class SalesRepository {
       ).map((row) => Map<String, dynamic>.from(row)).toList(growable: false);
 
       for (final row in rows) {
-        final group = row['modifier_groups'];
-        if (group is Map && group['modifiers'] is List) {
-          final modifiers = List<dynamic>.from(group['modifiers'] as List);
-          // Ordenar opciones por sort_order ascendente; si empate, por nombre.
-          modifiers.sort((a, b) {
-            final ao = a is Map ? (a['sort_order'] as num?)?.toInt() ?? 0 : 0;
-            final bo = b is Map ? (b['sort_order'] as num?)?.toInt() ?? 0 : 0;
-            if (ao != bo) return ao.compareTo(bo);
-            final an =
-                (a is Map ? a['name'] : '')?.toString().toLowerCase() ?? '';
-            final bn =
-                (b is Map ? b['name'] : '')?.toString().toLowerCase() ?? '';
-            return an.compareTo(bn);
-          });
-          group['modifiers'] = modifiers;
-        }
+        _sortGroupModifiers(row['modifier_groups']);
       }
 
       return rows;
     } catch (e) {
       throw Exception('Error al obtener modificadores del producto: $e');
     }
+  }
+
+  /// Los grupos de modificadores de TODOS los productos del negocio, con la
+  /// misma forma por producto que [getModifierGroupsForMenuItem]. Para la
+  /// bajada offline en background: dos consultas livianas (grupos una vez +
+  /// enlaces producto→grupo) en vez de una por producto.
+  Future<Map<String, List<Map<String, dynamic>>>>
+      getModifierGroupsByItemForBusiness(String businessId) async {
+    Future<List<dynamic>> fetchGroups({required bool withSoldOut}) async {
+      return await _client
+          .from('modifier_groups')
+          .select(
+            '$_modifierGroupColumns, '
+            'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''})',
+          )
+          .eq('business_id', businessId)
+          .eq('is_active', true) as List<dynamic>;
+    }
+
+    List<dynamic> groupRows;
+    try {
+      groupRows = await fetchGroups(withSoldOut: true);
+    } on PostgrestException catch (e) {
+      if (!_isMissingColumn(e)) rethrow;
+      groupRows = await fetchGroups(withSoldOut: false);
+    }
+
+    final groupsById = <String, Map<String, dynamic>>{};
+    for (final raw in groupRows.whereType<Map>()) {
+      final group = Map<String, dynamic>.from(raw);
+      final id = group['id']?.toString();
+      if (id == null || id.isEmpty) continue;
+      _sortGroupModifiers(group);
+      groupsById[id] = group;
+    }
+    if (groupsById.isEmpty) return const {};
+
+    final links = await _client
+        .from('menu_item_groups')
+        .select('menu_item_id, group_id, position, modifier_groups!inner(business_id)')
+        .eq('modifier_groups.business_id', businessId)
+        .order('position', ascending: true) as List<dynamic>;
+
+    final byItem = <String, List<Map<String, dynamic>>>{};
+    for (final raw in links.whereType<Map>()) {
+      final itemId = raw['menu_item_id']?.toString();
+      final groupId = raw['group_id']?.toString();
+      final group = groupsById[groupId];
+      if (itemId == null || group == null) continue;
+      byItem.putIfAbsent(itemId, () => []).add({
+        'group_id': groupId,
+        'position': raw['position'],
+        'modifier_groups': group,
+      });
+    }
+    return byItem;
   }
 
   Future<void> addOrderItemModifiers({

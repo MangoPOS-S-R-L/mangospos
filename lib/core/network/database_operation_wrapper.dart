@@ -1,6 +1,8 @@
 // lib/core/network/database_operation_wrapper.dart
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'connectivity_service.dart';
+import 'resilient_http_client.dart';
 import 'supabase_config.dart';
 
 /// 🔄 Wrapper para operaciones de base de datos con reintentos automáticos
@@ -55,8 +57,13 @@ class DatabaseOperationWrapper {
           print('  - Último intento: $isLastAttempt');
         }
 
+        // Sin internet confirmado reintentar solo suma esperas (el backoff
+        // llegaba a ~1 min antes de soltar el error al camino offline).
+        final knownOffline = error is OfflineShortCircuitException ||
+            ConnectivityService().isKnownOffline;
+
         // Si es el último intento o el error no es recuperable, lanzar error
-        if (isLastAttempt || !isRecoverable || !enableRetry) {
+        if (isLastAttempt || !isRecoverable || !enableRetry || knownOffline) {
           if (kDebugMode) {
             print('[$operationName] 🚫 Operación fallida definitivamente');
             print('Stack trace: $stackTrace');

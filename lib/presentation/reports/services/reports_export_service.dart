@@ -4,12 +4,15 @@ import 'dart:typed_data';
 
 import 'package:excel/excel.dart' as xlsx;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/fiscal/ncf_types.dart';
+import '../../../data/models/table_deposit_report.dart';
 import '../model/report_column.dart';
 import '../model/report_table_data.dart';
 import '../viewmodel/reports_viewmodel.dart';
@@ -58,11 +61,21 @@ class ReportsExportService {
           'Guardar JSON',
         );
       case ReportExportFormat.pdf:
-        await Printing.sharePdf(
-          bytes: await buildTablePdf(export),
-          filename: '${export.fileStem}.pdf',
-        );
+        await deliverPdf(await buildTablePdf(export), '${export.fileStem}.pdf');
     }
+  }
+
+  /// Entrega un PDF de reporte. En macOS se GUARDA con "Guardar como": ahí
+  /// `sharePdf` abre el menú Compartir del sistema pegado a la esquina de la
+  /// ventana, sin Guardar ni Imprimir, y parece que el botón no hizo nada. En
+  /// el resto se comparte como siempre (Windows lo abre en el visor de PDF;
+  /// Android/iOS, hoja de compartir con Imprimir y Guardar).
+  static Future<void> deliverPdf(Uint8List bytes, String filename) async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+      await _saveBytes(filename, bytes, 'Guardar PDF');
+      return;
+    }
+    await Printing.sharePdf(bytes: bytes, filename: filename);
   }
 
   static Future<void> _saveBytes(
@@ -536,6 +549,25 @@ class ReportsExportService {
     required ReportsState state,
     required ReportsViewModel viewModel,
   }) async {
+    final filename =
+        'reporte_${category.name}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    await deliverPdf(
+      await buildCurrentReportPdf(
+        category: category,
+        state: state,
+        viewModel: viewModel,
+      ),
+      filename,
+    );
+  }
+
+  /// Bytes del PDF por categoría, separado de la entrega para poder probar
+  /// que el documento se arma sin lanzar.
+  static Future<Uint8List> buildCurrentReportPdf({
+    required ReportCategory category,
+    required ReportsState state,
+    required ReportsViewModel viewModel,
+  }) async {
     final pdf = pw.Document();
     final dateFormat = DateFormat('dd/MM/yyyy');
     final from = dateFormat.format(state.salesFrom);
@@ -557,6 +589,7 @@ class ReportsExportService {
     // estándar.
     final useLandscape =
         category == ReportCategory.fiscal ||
+        category == ReportCategory.deposits ||
         (category == ReportCategory.sales &&
             state.salesSubReport == SalesSubReport.byReceipt);
     final pageFormat = useLandscape
@@ -580,10 +613,7 @@ class ReportsExportService {
         ],
       ),
     );
-
-    final filename =
-        'reporte_${category.name}_${DateTime.now().millisecondsSinceEpoch}.pdf';
-    await Printing.sharePdf(bytes: await pdf.save(), filename: filename);
+    return pdf.save();
   }
 
   static List<pw.Widget> _buildCategoryContent(
@@ -669,6 +699,10 @@ class ReportsExportService {
         ];
       case ReportCategory.delivery:
         return _deliveryDetailTable(viewModel);
+      case ReportCategory.deposits:
+        return _depositsTables(
+          state.depositsReport ?? TableDepositReport.empty,
+        );
       case ReportCategory.finances:
         return [
           _metricsTable(viewModel.getFinanceMetricCards()),
@@ -815,6 +849,114 @@ class ReportsExportService {
           ],
         ],
       ),
+    ];
+  }
+
+  /// Reporte de abonos: saldos vigentes por mesa + movimientos del rango.
+  /// Nombres, referencias y notas los escribe la gente: pasan por
+  /// [_pdfSafe] o un emoji tumba el PDF entero.
+  static List<pw.Widget> _depositsTables(TableDepositReport report) {
+    final money = NumberFormat('#,##0.00', 'en_US');
+    final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    final heading = pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold);
+
+    return [
+      pw.TableHelper.fromTextArray(
+        headers: const [
+          'Saldo vigente',
+          'Mesas con saldo',
+          'Abonado en el rango',
+          'Consumido en el rango',
+          'Devuelto en el rango',
+        ],
+        data: [
+          [
+            money.format(report.outstandingBalance),
+            '${report.accountsWithBalance}',
+            money.format(report.periodDeposited),
+            money.format(report.periodConsumed),
+            money.format(report.periodRefunded),
+          ],
+        ],
+      ),
+      pw.SizedBox(height: 16),
+      pw.Text('Saldos por mesa', style: heading),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'Balance al momento de exportar. Abonado y consumido son del abono '
+        'vigente de cada mesa.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      ),
+      pw.SizedBox(height: 6),
+      if (report.accounts.isEmpty)
+        pw.Text('No hay mesas con saldo ni movimientos en el rango.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const [
+            'Mesa',
+            'A nombre de',
+            'Referencia',
+            'Abonado',
+            'Consumido',
+            'Devuelto',
+            'Balance',
+          ],
+          data: [
+            for (final a in report.accounts)
+              [
+                text(a.tableLabel),
+                text(a.holderName ?? '-'),
+                text(a.references.isEmpty ? '-' : a.referenceLabel),
+                money.format(a.deposited),
+                money.format(a.consumed),
+                money.format(a.returned),
+                money.format(a.balance),
+              ],
+            [
+              'Total',
+              '',
+              '',
+              '',
+              '',
+              '',
+              money.format(report.outstandingBalance),
+            ],
+          ],
+        ),
+      pw.SizedBox(height: 16),
+      pw.Text('Movimientos del rango', style: heading),
+      pw.SizedBox(height: 6),
+      if (report.movements.isEmpty)
+        pw.Text('Sin movimientos en el rango.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const [
+            'Fecha',
+            'Mesa',
+            'A nombre de',
+            'Tipo',
+            'Referencia',
+            'Método',
+            'Monto',
+            'Balance',
+            'Registrado por',
+          ],
+          data: [
+            for (final m in report.movements)
+              [
+                dateFormat.format(m.createdAt),
+                text(m.tableLabel),
+                text(m.holderName ?? '-'),
+                text(m.typeLabel),
+                text(m.reference ?? m.note ?? '-'),
+                text(m.methodName ?? '-'),
+                money.format(m.amount),
+                money.format(m.balanceAfter),
+                text(m.createdByName ?? '-'),
+              ],
+          ],
+        ),
     ];
   }
 

@@ -78,7 +78,7 @@ class CashMovementPrinting {
 
       final printerless = await PrinterlessMode.isEnabled(businessId);
       if (!printerless) {
-        printer = await _resolvePrinter(ref, businessId: businessId);
+        printer = await resolveReceiptPrinter(ref, businessId: businessId);
         if (printer == null) {
           // Antes esto era un `return` mudo. Es la causa más común de
           // "registré el gasto y no salió nada".
@@ -154,8 +154,9 @@ class CashMovementPrinting {
   ///
   /// El último escalón es el que copia al cierre de caja: si el negocio
   /// tiene UNA sola impresora y nadie la asignó a un área, el volante
-  /// igual sale por ella en vez de no salir por ningún lado.
-  static Future<PrinterConfig?> _resolvePrinter(
+  /// igual sale por ella en vez de no salir por ningún lado. También la usa
+  /// el reporte de abonos.
+  static Future<PrinterConfig?> resolveReceiptPrinter(
     WidgetRef ref, {
     required String businessId,
   }) async {

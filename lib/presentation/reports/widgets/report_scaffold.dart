@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,7 @@ import 'package:mangopos/app/widgets/date_range_modal.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/reports/services/reports_csv_export_service.dart';
 import 'package:mangopos/presentation/reports/services/reports_export_service.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -192,6 +194,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
         return state.offersSummary == null;
       case ReportCategory.delivery:
         return state.deliverySummary == null;
+      case ReportCategory.deposits:
+        return state.depositsReport == null;
       case ReportCategory.finances:
         return state.cashSummary == null;
       case ReportCategory.purchases:
@@ -281,6 +285,28 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
 // Toolbar
 // ---------------------------------------------------------------------------
 
+/// Corre una exportación y avisa si falla. Antes el error se perdía en la
+/// consola: en macOS sin el permiso de escritura, "Excel / CSV" no hacía
+/// nada y nadie sabía por qué.
+Future<void> _export(
+  BuildContext context,
+  Future<void> Function() run,
+) async {
+  try {
+    await run();
+  } catch (e) {
+    debugPrint('Exportar reporte: $e');
+    if (!context.mounted) return;
+    final detail = e is PlatformException ? (e.message ?? e.code) : null;
+    AppToast.error(
+      context,
+      detail == null
+          ? 'No se pudo exportar el informe.'
+          : 'No se pudo exportar el informe: $detail',
+    );
+  }
+}
+
 class _ReportToolbar extends StatelessWidget {
   const _ReportToolbar({
     required this.state,
@@ -365,25 +391,27 @@ class _ReportToolbar extends StatelessWidget {
             icon: Icons.picture_as_pdf_outlined,
             label: 'PDF',
             color: const Color(0xFFDC2626),
-            onPressed: () async {
-              await ReportsExportService.exportCurrentReport(
+            onPressed: () => _export(
+              context,
+              () => ReportsExportService.exportCurrentReport(
                 category: category,
                 state: state,
                 viewModel: viewModel,
-              );
-            },
+              ),
+            ),
           ),
           _ExportButton(
             icon: Icons.table_chart_outlined,
             label: 'Excel / CSV',
             color: const Color(0xFF059669),
-            onPressed: () async {
-              await ReportsCsvExportService.exportCurrentReport(
+            onPressed: () => _export(
+              context,
+              () => ReportsCsvExportService.exportCurrentReport(
                 category: category,
                 state: state,
                 viewModel: viewModel,
-              );
-            },
+              ),
+            ),
           ),
         ],
         if (showRangeSummary)

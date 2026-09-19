@@ -17,6 +17,7 @@ import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
+import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
 import '../models/printing_models.dart';
@@ -2069,26 +2070,61 @@ class PrintingRepository {
     // 30s es generoso pero sigue acotado para no colgar la UI.
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    final row = await _client
-        .from('device_agents')
-        .select('agent_url, online, last_heartbeat_at, device_name')
-        .eq('id', hostDeviceId)
-        .maybeSingle();
-
-    if (row == null) {
-      throw Exception(
-        'Esta impresora no está disponible. El dispositivo asociado no está registrado.',
-      );
+    // La dirección del host se busca en la nube, pero el ticket viaja por la
+    // LAN. Sin internet se usa la última dirección conocida: antes estas
+    // impresoras (USB/BT colgadas de OTRA caja) no imprimían nada durante una
+    // caída de red aunque el host estuviera ahí mismo, en la red local.
+    Map<String, dynamic>? row;
+    var lookedUp = false;
+    if (ConnectivityService().isConnected) {
+      try {
+        row = await _client
+            .from('device_agents')
+            .select('agent_url, online, last_heartbeat_at, device_name')
+            .eq('id', hostDeviceId)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 5));
+        lookedUp = true;
+      } catch (e) {
+        final msg = e.toString().toLowerCase();
+        final isNetwork = e is TimeoutException ||
+            msg.contains('socketexception') ||
+            msg.contains('clientexception') ||
+            msg.contains('failed host lookup');
+        if (!isNetwork) rethrow;
+      }
     }
 
-    final online = row['online'] == true;
-    final agentUrl = (row['agent_url'] as String?)?.trim();
-    final hostName = (row['device_name'] as String?) ?? 'otro dispositivo';
+    String? agentUrl;
+    String hostName;
+    if (lookedUp) {
+      if (row == null) {
+        throw Exception(
+          'Esta impresora no está disponible. El dispositivo asociado no está registrado.',
+        );
+      }
+      final online = row['online'] == true;
+      agentUrl = (row['agent_url'] as String?)?.trim();
+      hostName = (row['device_name'] as String?) ?? 'otro dispositivo';
 
-    if (!online || agentUrl == null || agentUrl.isEmpty) {
-      throw Exception(
-        'No se puede imprimir: $hostName está fuera de línea.',
-      );
+      if (!online || agentUrl == null || agentUrl.isEmpty) {
+        throw Exception(
+          'No se puede imprimir: $hostName está fuera de línea.',
+        );
+      }
+      unawaited(_saveHostAgent(hostDeviceId, agentUrl, hostName));
+    } else {
+      // Sin internet el `online` del servidor no dice nada: el host tampoco
+      // puede reportarse a la nube. Si no responde en la LAN, el POST falla.
+      final cached = await _readHostAgent(hostDeviceId);
+      if (cached == null) {
+        throw Exception(
+          'Sin conexión: este equipo todavía no conoce la dirección del '
+          'dispositivo que tiene la impresora.',
+        );
+      }
+      agentUrl = cached.url;
+      hostName = cached.name;
     }
 
     // El agent local de Node.js expone POST /print con payload compatible.
@@ -2132,6 +2168,45 @@ class PrintingRepository {
         'No se pudo imprimir desde $hostName (código ${response.statusCode})'
         '${detail.isEmpty ? '' : ': $detail'}.',
       );
+    }
+  }
+
+  static String _hostAgentKey(String hostDeviceId) =>
+      'printing_host_agent_$hostDeviceId';
+
+  Future<void> _saveHostAgent(
+    String hostDeviceId,
+    String url,
+    String name,
+  ) async {
+    try {
+      final storage = await StorageService.getInstance();
+      await storage.write(
+        _hostAgentKey(hostDeviceId),
+        jsonEncode({'url': url, 'name': name}),
+      );
+    } catch (e) {
+      debugPrint('[print] no se pudo guardar la dirección del host: $e');
+    }
+  }
+
+  Future<({String url, String name})?> _readHostAgent(
+    String hostDeviceId,
+  ) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(_hostAgentKey(hostDeviceId));
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final url = decoded['url']?.toString().trim() ?? '';
+      if (url.isEmpty) return null;
+      return (
+        url: url,
+        name: decoded['name']?.toString() ?? 'otro dispositivo',
+      );
+    } catch (_) {
+      return null;
     }
   }
 

@@ -1341,17 +1341,26 @@ class CashierViewModel extends ChangeNotifier {
       return canSellWithOpenCash;
     }
 
+    // Con límite: corre en CADA toque de mesa, antes de todo lo demás. En la
+    // ventana en que la red ya murió pero `isConnected` sigue en true (hasta
+    // ~1 min), sin límite cada toque se quedaba esperando sin spinner y el
+    // mesero seguía tocando mesas.
     try {
       if (_currentRegisterId == null || _businessId == null) {
-        await init();
+        await init().timeout(const Duration(seconds: 10));
         return canSellWithOpenCash;
       }
 
-      await _refreshSessionState(_currentRegisterId!);
+      await _refreshSessionState(
+        _currentRegisterId!,
+      ).timeout(const Duration(seconds: 6));
       _lastCashOpenValidationAt = now;
       return canSellWithOpenCash;
     } catch (e) {
       debugPrint('Error validating cash session quickly: $e');
+      if (OfflinePosService.isTransportError(e)) {
+        unawaited(ConnectivityService().forceReachabilityCheck());
+      }
       // Fase 1.4a — offline: si no hay sesión en memoria pero hay una
       // cacheada del último login online, restaurarla para no bloquear al
       // cajero. El TTL del cache es implícito: si el cajero cierra caja en
@@ -1366,6 +1375,9 @@ class CashierViewModel extends ChangeNotifier {
       if (!_registerCashOpen) {
         _registerCashOpen = await _readCachedRegisterCashOpen();
       }
+      // Validado desde caché: los toques de los próximos segundos no vuelven
+      // a esperar a la red.
+      if (canSellWithOpenCash) _lastCashOpenValidationAt = now;
       return canSellWithOpenCash;
     }
   }

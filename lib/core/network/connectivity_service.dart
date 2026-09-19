@@ -66,6 +66,15 @@ class ConnectivityService {
 
   StreamSubscription<List<ConnectivityResult>>? _subscription;
   Timer? _reachabilityTimer;
+  Timer? _confirmProbeTimer;
+
+  /// Sondeo en curso, compartido: el timer, [forceReachabilityCheck] y
+  /// [reportTransportFailure] no lanzan sondeos en paralelo.
+  Future<void>? _inFlightProbe;
+
+  /// Último sondeo HTTP que FALLÓ de verdad (no el adaptador caído). Es la
+  /// evidencia que exige [isKnownOffline] para cortar peticiones sin intentarlas.
+  DateTime? _lastHttpProbeFailedAt;
 
   /// Cuántos fallos consecutivos toleramos antes de marcar como offline.
   /// Evita falsos positivos por blips de red transitorios.
@@ -84,6 +93,22 @@ class ConnectivityService {
   /// (Coolify/Cloudflare detras pueden agregar 1-3s en cold start) sin
   /// dejar al cajero esperando una eternidad.
   static const Duration _probeTimeout = Duration(seconds: 8);
+
+  /// Tras un sondeo fallido que todavía no llega al umbral, el segundo se
+  /// hace a los pocos segundos en vez de esperar la cadencia de 30s. Antes la
+  /// caja tardaba hasta minuto y medio en admitir que se fue el internet, y
+  /// todo lo que no tenía timeout propio se quedaba colgado ese rato.
+  static const Duration _confirmProbeDelay = Duration(seconds: 3);
+
+  /// Cuánto vale un sondeo fallido como evidencia para [isKnownOffline].
+  /// Sin red el timer sondea cada 5s, así que en la práctica se renueva solo;
+  /// si por lo que sea dejara de sondear, se vuelve a intentar la red.
+  static const Duration _knownOfflineEvidence = Duration(seconds: 45);
+
+  /// Mínimo entre dos confirmaciones disparadas por [reportTransportFailure]:
+  /// cuando se va la red fallan muchas peticiones a la vez.
+  static const Duration _transportReportThrottle = Duration(seconds: 3);
+  DateTime? _lastTransportReportAt;
 
   /// Endpoints a probar en orden. Aceptamos cualquier respuesta del
   /// server (incluso 401/404) como "alcanzable" — el solo hecho de
@@ -120,6 +145,38 @@ class ConnectivityService {
 
   /// Última lectura del healthcheck (sin contar el adapter).
   bool get isReachable => _reachable;
+
+  /// `true` solo si un sondeo HTTP reciente confirmó que el servidor no
+  /// responde. Más estricto que `!isConnected` a propósito: el adaptador caído
+  /// por sí solo no cuenta (connectivity_plus reporta "none" en falso en
+  /// algunos equipos), porque esto se usa para NO intentar la red.
+  bool get isKnownOffline {
+    if (_reachable) return false;
+    final failedAt = _lastHttpProbeFailedAt;
+    return failedAt != null &&
+        DateTime.now().difference(failedAt) < _knownOfflineEvidence;
+  }
+
+  /// Una petición real al servidor acaba de fallar por red. Sondea YA (y
+  /// confirma enseguida) en vez de esperar al siguiente tick de 30s.
+  void reportTransportFailure() {
+    if (!_initialized || !_adapterUp || !_reachable) return;
+    final now = DateTime.now();
+    final last = _lastTransportReportAt;
+    if (last != null && now.difference(last) < _transportReportThrottle) {
+      return;
+    }
+    _lastTransportReportAt = now;
+    unawaited(_confirmOutage());
+  }
+
+  Future<void> _confirmOutage() async {
+    await _probeOnce();
+    if (_reachable && _failedProbes > 0) {
+      await _probeOnce();
+    }
+    _rearmPollingIfStateChanged();
+  }
 
   /// Snapshot de diagnostico para la UI de troubleshooting.
   ConnectivityDiagnostics get diagnostics => ConnectivityDiagnostics(
@@ -184,7 +241,7 @@ class ConnectivityService {
     // Si el adapter acaba de subir, hacer un probe inmediato para no esperar
     // 30s al próximo poll.
     if (_adapterUp) {
-      unawaited(_probeReachability(emit: true));
+      unawaited(_probeOnce().then((_) => _rearmPollingIfStateChanged()));
     } else {
       // Adapter abajo → forzamos reachable=false al toque.
       _failedProbes = _failureThreshold;
@@ -261,9 +318,13 @@ class ConnectivityService {
       } on TimeoutException {
         lastStatus = null;
         lastReason = 'timeout en $path';
+        // Los tres paths son del mismo host: si no contestó uno, los otros
+        // tampoco. Probarlos igual triplicaba lo que tarda detectar la caída.
+        break;
       } catch (e) {
         lastStatus = null;
         lastReason = 'error en $path: $e';
+        if (_isHostUnreachable(e)) break;
       }
     }
     stopwatch.stop();
@@ -276,6 +337,7 @@ class ConnectivityService {
 
     if (reached) {
       _failedProbes = 0;
+      _lastHttpProbeFailedAt = null;
       if (!_reachable) {
         _reachable = true;
         debugPrint('Supabase reachable again');
@@ -289,8 +351,18 @@ class ConnectivityService {
     }
   }
 
+  /// Errores de sondeo que valen para el HOST entero, no para un path.
+  static bool _isHostUnreachable(Object e) {
+    final msg = e.toString().toLowerCase();
+    return msg.contains('failed host lookup') ||
+        msg.contains('network is unreachable') ||
+        msg.contains('no route to host') ||
+        msg.contains('connection timed out');
+  }
+
   void _markProbeFailure(String reason) {
     _failedProbes++;
+    _lastHttpProbeFailedAt = DateTime.now();
     if (_failedProbes >= _failureThreshold && _reachable) {
       _reachable = false;
       debugPrint('Supabase unreachable ($_failedProbes probes failed: $reason)');
@@ -311,22 +383,46 @@ class ConnectivityService {
     // recuperar al toque. Cuando estamos OK, cada 30s (el background load
     // es minimo). Si el estado cambia, _reschedulePolling() se re-arma.
     final interval = _reachable ? _probeInterval : _probeIntervalFast;
+    _pollingArmedReachable = _reachable;
     _reachabilityTimer = Timer.periodic(interval, (_) async {
       if (!_adapterUp) return;
-      final wasReachable = _reachable;
-      await _probeReachability(emit: true);
-      // Si el estado cambio, re-arrancamos el timer con la cadencia
-      // correcta (fast↔normal) sin esperar al siguiente tick.
-      if (wasReachable != _reachable) {
-        _startReachabilityPolling();
-      }
+      await _probeOnce();
+      // Primer fallo sin llegar al umbral: confirmar en segundos, no en 30s.
+      if (_reachable && _failedProbes > 0) _scheduleConfirmProbe();
+      _rearmPollingIfStateChanged();
     });
+  }
+
+  /// Con qué estado se armó el timer: si cambió, hay que re-armarlo con la
+  /// cadencia correcta (fast↔normal) sin esperar al siguiente tick.
+  bool _pollingArmedReachable = true;
+
+  void _rearmPollingIfStateChanged() {
+    if (_reachabilityTimer == null) return;
+    if (_pollingArmedReachable != _reachable) _startReachabilityPolling();
+  }
+
+  void _scheduleConfirmProbe() {
+    if (_confirmProbeTimer?.isActive ?? false) return;
+    _confirmProbeTimer = Timer(_confirmProbeDelay, () async {
+      if (!_adapterUp || !_reachable || _failedProbes == 0) return;
+      await _probeOnce();
+      _rearmPollingIfStateChanged();
+    });
+  }
+
+  /// Un solo sondeo a la vez: quien llegue mientras hay uno en curso espera
+  /// ese mismo resultado.
+  Future<void> _probeOnce() {
+    return _inFlightProbe ??= _probeReachability(emit: true)
+        .whenComplete(() => _inFlightProbe = null);
   }
 
   /// Forzar un check ad-hoc. Útil cuando un viewmodel acaba de fallar una
   /// llamada y quiere re-validar el estado sin esperar al próximo poll.
   Future<bool> forceReachabilityCheck() async {
-    await _probeReachability(emit: true);
+    await _probeOnce();
+    _rearmPollingIfStateChanged();
     return isConnected;
   }
 
@@ -351,6 +447,7 @@ class ConnectivityService {
   /// Limpiar recursos.
   void dispose() {
     _reachabilityTimer?.cancel();
+    _confirmProbeTimer?.cancel();
     _subscription?.cancel();
     _connectionController.close();
   }
