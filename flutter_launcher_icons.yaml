@@ -7,7 +7,10 @@ flutter_launcher_icons:
   background_color_ios: "#ffffff"
   macos:
     generate: true
-    image_path: "assets/images/logo.png"
+    # Ya trae el cuadrado blanco redondeado con margen y sombra (plantilla de
+    # íconos de macOS). El logo solo es transparente y en el Dock no tenía
+    # fondo.
+    image_path: "assets/images/app_icon_macos.png"
   web:
     generate: true
     image_path: "assets/images/logo.png"

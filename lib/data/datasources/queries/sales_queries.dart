@@ -145,6 +145,10 @@ class SalesQueries {
   /// Eliminar item
   static const String rpcDeleteItem = 'fn_delete_item';
 
+  /// Anotar motivo/operador de un producto quitado después de enviarse a
+  /// cocina (20260919_0002).
+  static const String rpcNoteItemRemoval = 'fn_note_order_item_removal';
+
   /// Mover item a otro check
   static const String rpcMoveItemToCheck = 'fn_move_item_to_check';
   static const String rpcMoveItemsToCheckBatch = 'fn_move_items_to_check_batch';

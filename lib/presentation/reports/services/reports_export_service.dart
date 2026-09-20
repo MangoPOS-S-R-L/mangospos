@@ -12,6 +12,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/fiscal/ncf_types.dart';
+import '../../../data/models/kitchen_comanda_report.dart';
+import '../../../data/models/kitchen_missing_report.dart';
 import '../../../data/models/table_deposit_report.dart';
 import '../model/report_column.dart';
 import '../model/report_table_data.dart';
@@ -703,6 +705,18 @@ class ReportsExportService {
         return _depositsTables(
           state.depositsReport ?? TableDepositReport.empty,
         );
+      case ReportCategory.comandas:
+        return _comandasTables(
+          viewModel.comandasView,
+          stationLabel: viewModel.comandasStationLabel,
+          openNow: state.comandasOpenReport == null
+              ? null
+              : viewModel.comandasOpenView,
+          withoutComanda: state.comandasWithoutComandaReport == null
+              ? null
+              : viewModel.comandasWithoutComandaView,
+          missing: viewModel.comandasMissingView,
+        );
       case ReportCategory.finances:
         return [
           _metricsTable(viewModel.getFinanceMetricCards()),
@@ -957,6 +971,386 @@ class ReportsExportService {
               ],
           ],
         ),
+    ];
+  }
+
+  /// Reporte de comandas: cada envío a cocina y, al final, cuánto salió de
+  /// cada producto (mismo orden que el resumen impreso).
+  static List<pw.Widget> _comandasTables(
+    KitchenComandaReport report, {
+    required String stationLabel,
+    KitchenComandaReport? openNow,
+    KitchenComandaReport? withoutComanda,
+    KitchenMissingReport? missing,
+  }) {
+    final qty = NumberFormat('#,##0.##', 'en_US');
+    final time = DateFormat('dd/MM HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    final heading = pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold);
+
+    String itemsText(KitchenComanda c) => [
+      for (final i in c.displayItems) ...[
+        '${qty.format(i.quantity)} x ${i.productName}',
+        for (final m in i.modifiers)
+          '   + ${m.name}${m.qty > 1 ? ' x${qty.format(m.qty)}' : ''}',
+        if (i.notes != null) '   Nota: ${i.notes}',
+      ],
+    ].join('\n');
+
+    final totals = report.productTotals;
+    return [
+      pw.TableHelper.fromTextArray(
+        headers: [
+          'Estación',
+          'Comandas',
+          'Órdenes',
+          'Productos',
+          // Sin el registro de lo quitado no se pone la columna: un 0 diría
+          // "no se borró nada", que sería falso.
+          if (missing != null) 'Eliminaciones',
+        ],
+        data: [
+          [
+            text(stationLabel),
+            '${report.comandasCount}',
+            '${report.ordersCount}',
+            qty.format(report.units),
+            if (missing != null) '${missing.removals.length}',
+          ],
+        ],
+      ),
+      pw.SizedBox(height: 16),
+      pw.Text('Comandas enviadas', style: heading),
+      pw.SizedBox(height: 6),
+      if (report.isEmpty)
+        pw.Text('No se enviaron comandas en el rango.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const ['Hora', 'Mesa', 'Orden', 'Mesero', 'Productos'],
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.2),
+            1: pw.FlexColumnWidth(1.4),
+            2: pw.FlexColumnWidth(1.1),
+            3: pw.FlexColumnWidth(1.6),
+            4: pw.FlexColumnWidth(4),
+          },
+          data: [
+            for (final c in report.comandas)
+              [
+                time.format(c.sentAt),
+                text(c.tableName),
+                '#${c.orderNumber}',
+                text(c.waiterName ?? '-'),
+                text(itemsText(c)),
+              ],
+          ],
+        ),
+      pw.SizedBox(height: 16),
+      pw.Text('Total por producto', style: heading),
+      pw.SizedBox(height: 6),
+      if (totals.isEmpty)
+        pw.Text('Sin productos en el rango.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const ['Producto', 'Cantidad', 'En comandas'],
+          data: [
+            for (final t in totals)
+              [text(t.productName), qty.format(t.quantity), '${t.comandas}'],
+            ['Total', qty.format(report.units), '${report.comandasCount}'],
+          ],
+        ),
+      ..._comandasComparisonTables(report.comparison, report: report),
+      if (missing != null) ..._comandasMissingTable(missing),
+      if (withoutComanda != null)
+        ..._comandasWithoutComandaTable(
+          withoutComanda,
+          chargedInComandas: report.comparison.charged,
+        ),
+      if (openNow != null) ..._comandasOpenNowTable(openNow),
+    ];
+  }
+
+  /// Comandas desaparecidas: lo que salió a cocina y hoy no está en ninguna
+  /// cuenta (borrado/reducido después de enviarse, o fuera de toda cuenta).
+  static List<pw.Widget> _comandasMissingTable(KitchenMissingReport missing) {
+    final qty = NumberFormat('#,##0.##', 'en_US');
+    final time = DateFormat('dd/MM HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    return [
+      pw.SizedBox(height: 16),
+      pw.Text(
+        'Comandas desaparecidas',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'Salieron a cocina y hoy no están en ninguna cuenta. Borrado o '
+        'reducido después de enviar: ${qty.format(missing.removedUnits)}. '
+        'Fuera de toda cuenta: ${qty.format(missing.outsideUnits)}.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      ),
+      pw.SizedBox(height: 6),
+      if (missing.isEmpty)
+        pw.Text('Ninguna comanda desaparecida en el rango.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const ['Enviada', 'Mesa', 'Orden', 'Mesero', 'Qué pasó',
+              'Productos', 'Detalle'],
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.1),
+            1: pw.FlexColumnWidth(1.2),
+            2: pw.FlexColumnWidth(1),
+            3: pw.FlexColumnWidth(1.3),
+            4: pw.FlexColumnWidth(1.5),
+            5: pw.FlexColumnWidth(2.4),
+            6: pw.FlexColumnWidth(3),
+          },
+          data: [
+            for (final removals in const [true, false])
+              for (final g in missing.groups(removals: removals))
+                [
+                  time.format(g.comanda.sentAt),
+                  text(g.comanda.tableName),
+                  '#${g.comanda.orderNumber}',
+                  text(g.comanda.waiterName ?? '-'),
+                  text(g.kind.label),
+                  text(
+                    [
+                      for (final e in g.entries)
+                        '${qty.format(e.quantity)} x ${e.item.productName}',
+                    ].join('\n'),
+                  ),
+                  text(
+                    {for (final e in g.entries) e.detail}.join('\n'),
+                  ),
+                ],
+          ],
+        ),
+    ];
+  }
+
+  /// Lo cobrado en el rango que nunca pasó por cocina, y el total cobrado
+  /// (comandas + sin comanda).
+  static List<pw.Widget> _comandasWithoutComandaTable(
+    KitchenComandaReport withoutComanda, {
+    required double chargedInComandas,
+  }) {
+    final qty = NumberFormat('#,##0.##', 'en_US');
+    final at = DateFormat('dd/MM HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    final accounts = withoutComanda.accounts;
+    final units = accounts.fold(0.0, (s, a) => s + a.units);
+    return [
+      pw.SizedBox(height: 16),
+      pw.Text(
+        'Cobrado sin comanda',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'Productos cobrados en el rango que nunca pasaron por cocina. Total '
+        'cobrado: ${qty.format(chargedInComandas)} en comandas + '
+        '${qty.format(units)} sin comanda = '
+        '${qty.format(chargedInComandas + units)}.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      ),
+      pw.SizedBox(height: 6),
+      if (accounts.isEmpty)
+        pw.Text('Todo lo cobrado pasó por cocina.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const ['Mesa', 'Cobrado', 'Orden', 'Productos', 'Cant.'],
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.4),
+            1: pw.FlexColumnWidth(1.2),
+            2: pw.FlexColumnWidth(1.1),
+            3: pw.FlexColumnWidth(4),
+            4: pw.FlexColumnWidth(0.8),
+          },
+          data: [
+            for (final a in accounts)
+              [
+                text(a.tableName),
+                at.format(a.since),
+                '#${a.orderNumber}',
+                text(
+                  [
+                    for (final i in a.displayItems)
+                      '${qty.format(i.quantity)} x ${i.productName}',
+                  ].join('\n'),
+                ),
+                qty.format(a.units),
+              ],
+          ],
+        ),
+    ];
+  }
+
+  /// Lo que salió a cocina y sigue sin cobrar AHORA, por cuenta.
+  static List<pw.Widget> _comandasOpenNowTable(KitchenComandaReport openNow) {
+    final qty = NumberFormat('#,##0.##', 'en_US');
+    final since = DateFormat('dd/MM HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    final accounts = openNow.openAccounts;
+    return [
+      pw.SizedBox(height: 16),
+      pw.Text(
+        'Aún sin cobrar (ahora mismo)',
+        style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+      ),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'Lo que salió a cocina y sigue sin cobrar al exportar, sin importar '
+        'el rango.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      ),
+      pw.SizedBox(height: 6),
+      if (accounts.isEmpty)
+        pw.Text('Nada enviado a cocina pendiente de cobrar.')
+      else
+        pw.TableHelper.fromTextArray(
+          headers: const ['Mesa', 'Estado', 'Desde', 'Orden', 'Mesero',
+              'Productos', 'Cant.'],
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.3),
+            1: pw.FlexColumnWidth(1.6),
+            2: pw.FlexColumnWidth(1.1),
+            3: pw.FlexColumnWidth(1.1),
+            4: pw.FlexColumnWidth(1.4),
+            5: pw.FlexColumnWidth(3.5),
+            6: pw.FlexColumnWidth(0.8),
+          },
+          data: [
+            for (final a in accounts)
+              [
+                text(a.tableName),
+                a.isOrphan ? 'Mesa cerrada, orden abierta' : 'Mesa abierta',
+                since.format(a.since),
+                '#${a.orderNumber}',
+                text(a.waiterName ?? '-'),
+                text(
+                  [
+                    for (final i in a.displayItems)
+                      '${qty.format(i.quantity)} x ${i.productName}',
+                  ].join('\n'),
+                ),
+                qty.format(a.units),
+              ],
+          ],
+        ),
+    ];
+  }
+
+  /// Comparador "enviado a cocina vs. cobrado" (por producto y el detalle
+  /// de lo que no se cobró normal).
+  static List<pw.Widget> _comandasComparisonTables(
+    KitchenChargeComparison c, {
+    required KitchenComandaReport report,
+  }) {
+    final qty = NumberFormat('#,##0.##', 'en_US');
+    final time = DateFormat('dd/MM HH:mm');
+    String text(String? value) => _pdfSafe(value ?? '');
+    String n(double v) => v.abs() < 0.005 ? '-' : qty.format(v);
+    final heading = pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold);
+    if (c.products.isEmpty) return const [];
+    return [
+      pw.SizedBox(height: 16),
+      pw.Text('Enviado a cocina vs. cobrado', style: heading),
+      pw.SizedBox(height: 2),
+      pw.Text(
+        'Cobrado incluye las cortesías y lo cobrado a 0 (precio 0 o gratis '
+        'por promoción): van en la factura en cero. '
+        'Diferencia = enviado - cobrado = pendiente + sin cobrar. Lo anulado '
+        'después de enviarse va aparte.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      ),
+      pw.SizedBox(height: 6),
+      pw.TableHelper.fromTextArray(
+        headers: const [
+          'Producto',
+          'Enviado',
+          'Cobrado',
+          'Cortesía',
+          'A 0',
+          'Pendiente',
+          'Sin cobrar',
+          'Diferencia',
+          'Anulado',
+        ],
+        data: [
+          for (final p in c.products)
+            [
+              text(p.productName),
+              qty.format(p.sent),
+              qty.format(p.charged),
+              n(p.courtesy),
+              n(p.zeroCharge),
+              n(p.pending),
+              n(p.unpaid),
+              n(p.difference),
+              n(p.voided),
+            ],
+          [
+            'Total',
+            qty.format(c.sent),
+            qty.format(c.charged),
+            n(c.courtesy),
+            n(c.zeroCharge),
+            n(c.pending),
+            n(c.unpaid),
+            n(c.difference),
+            n(c.voided),
+          ],
+        ],
+      ),
+      if (c.differences.isNotEmpty) ...[
+        pw.SizedBox(height: 12),
+        pw.Text('Comandas no cobradas', style: heading),
+        pw.SizedBox(height: 6),
+        pw.TableHelper.fromTextArray(
+          headers: const [
+            'Estado',
+            'Hora',
+            'Mesa',
+            'Orden',
+            'Mesero',
+            'Productos',
+            'Motivo / nota',
+          ],
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.1),
+            1: pw.FlexColumnWidth(1.1),
+            2: pw.FlexColumnWidth(1.2),
+            3: pw.FlexColumnWidth(1.1),
+            4: pw.FlexColumnWidth(1.4),
+            5: pw.FlexColumnWidth(3),
+            6: pw.FlexColumnWidth(2),
+          },
+          data: [
+            for (final g in c.byComanda)
+              [
+                text(g.state.label),
+                time.format(g.comanda.sentAt),
+                text(g.comanda.tableName),
+                '#${g.comanda.orderNumber}',
+                text(g.comanda.waiterName ?? '-'),
+                text(
+                  [
+                    for (final i in g.comanda.displayItems)
+                      '${qty.format(i.quantity)} x ${i.productName}',
+                  ].join('\n'),
+                ),
+                text(
+                  [
+                    if (g.reason != null) g.reason!,
+                    if (g.state == KitchenChargeState.voided)
+                      report.voidNoteLabel(g.comanda),
+                  ].join('\n'),
+                ),
+              ],
+          ],
+        ),
+      ],
     ];
   }
 

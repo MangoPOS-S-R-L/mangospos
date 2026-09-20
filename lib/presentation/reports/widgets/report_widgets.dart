@@ -34,6 +34,13 @@ EdgeInsets reportBodyPadding(BuildContext context) {
 String formatReportPeriod(ReportsState state) {
   final fmt = DateFormat('dd MMM yyyy');
   final from = state.salesFrom;
+  // Rango con horas (turno que cruza la medianoche, ver
+  // `setSalesRangeWithHours`): se muestran las horas y NO se resta un día —
+  // el límite superior no es medianoche.
+  if (_hasTimeOfDay(from) || _hasTimeOfDay(state.salesTo)) {
+    final withTime = DateFormat('dd MMM h:mm a');
+    return '${withTime.format(from)} – ${withTime.format(state.salesTo)}';
+  }
   // salesTo es exclusive (start of next day). Restamos 1 día para mostrar
   // al usuario el último día incluido (humano-legible).
   final inclusiveTo = state.salesTo.subtract(const Duration(days: 1));
@@ -43,6 +50,9 @@ String formatReportPeriod(ReportsState state) {
   if (sameDay) return fmt.format(from);
   return '${fmt.format(from)} – ${fmt.format(inclusiveTo)}';
 }
+
+bool _hasTimeOfDay(DateTime d) =>
+    d.hour != 0 || d.minute != 0 || d.second != 0;
 
 ButtonStyle reportOutlineButtonStyle() {
   return OutlinedButton.styleFrom(

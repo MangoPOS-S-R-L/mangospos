@@ -10,10 +10,11 @@ import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/utils/app_time.dart';
 import '../../../data/repositories/reports_repository.dart';
+import '../../../data/repositories/kitchen_comanda_report_repository.dart';
 import '../../../data/repositories/table_deposit_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 
-enum ReportCategory { sales, offers, delivery, deposits, purchases, finances, inventory, taxes, fiscal }
+enum ReportCategory { sales, offers, delivery, deposits, comandas, purchases, finances, inventory, taxes, fiscal }
 
 enum SalesReportRangePreset { today, yesterday, thisWeek, thisMonth, custom }
 
@@ -212,6 +213,26 @@ class ReportsState {
   /// Reporte de abonos de mesa. Los saldos son los de HOY; los movimientos,
   /// los del rango.
   final TableDepositReport? depositsReport;
+
+  /// Reporte de comandas (envíos a cocina del rango) y la estación elegida en
+  /// su filtro (null = todas).
+  final KitchenComandaReport? comandasReport;
+  final String? comandasArea;
+
+  /// Productos cobrados del período según el reporte de Ventas
+  /// (`items_sold`), para cuadrar el comparador contra ese mismo número.
+  final double? comandasSalesItemsSold;
+
+  /// Lo que salió a cocina y sigue sin cobrar AHORA (no depende del rango).
+  final KitchenComandaReport? comandasOpenReport;
+
+  /// Lo cobrado en el rango que nunca pasó por cocina.
+  final KitchenComandaReport? comandasWithoutComandaReport;
+
+  /// Comandas "desaparecidas": lo borrado o reducido después de enviarse y lo
+  /// enviado que ninguna cuenta viva muestra. Null = no se pudo cargar (p.
+  /// ej. falta la migración 20260919_0002).
+  final KitchenMissingReport? comandasMissingReport;
   final Map<String, dynamic>? cashSummary;
   final Map<String, dynamic>? purchasesSummary;
   final Map<String, dynamic>? inventorySummary;
@@ -253,6 +274,12 @@ class ReportsState {
     this.offersSummary,
     this.deliverySummary,
     this.depositsReport,
+    this.comandasReport,
+    this.comandasArea,
+    this.comandasSalesItemsSold,
+    this.comandasOpenReport,
+    this.comandasWithoutComandaReport,
+    this.comandasMissingReport,
     this.cashSummary,
     this.purchasesSummary,
     this.inventorySummary,
@@ -295,6 +322,16 @@ class ReportsState {
     Map<String, dynamic>? offersSummary,
     Map<String, dynamic>? deliverySummary,
     TableDepositReport? depositsReport,
+    KitchenComandaReport? comandasReport,
+    String? comandasArea,
+    bool clearComandasArea = false,
+    double? comandasSalesItemsSold,
+    KitchenComandaReport? comandasOpenReport,
+    bool clearComandasOpenReport = false,
+    KitchenComandaReport? comandasWithoutComandaReport,
+    bool clearComandasWithoutComandaReport = false,
+    KitchenMissingReport? comandasMissingReport,
+    bool clearComandasMissingReport = false,
     Map<String, dynamic>? cashSummary,
     Map<String, dynamic>? purchasesSummary,
     Map<String, dynamic>? inventorySummary,
@@ -332,6 +369,21 @@ class ReportsState {
       offersSummary: offersSummary ?? this.offersSummary,
       deliverySummary: deliverySummary ?? this.deliverySummary,
       depositsReport: depositsReport ?? this.depositsReport,
+      comandasReport: comandasReport ?? this.comandasReport,
+      comandasArea: clearComandasArea
+          ? null
+          : (comandasArea ?? this.comandasArea),
+      comandasSalesItemsSold:
+          comandasSalesItemsSold ?? this.comandasSalesItemsSold,
+      comandasOpenReport: clearComandasOpenReport
+          ? null
+          : (comandasOpenReport ?? this.comandasOpenReport),
+      comandasWithoutComandaReport: clearComandasWithoutComandaReport
+          ? null
+          : (comandasWithoutComandaReport ?? this.comandasWithoutComandaReport),
+      comandasMissingReport: clearComandasMissingReport
+          ? null
+          : (comandasMissingReport ?? this.comandasMissingReport),
       cashSummary: cashSummary ?? this.cashSummary,
       purchasesSummary: purchasesSummary ?? this.purchasesSummary,
       inventorySummary: inventorySummary ?? this.inventorySummary,
@@ -543,6 +595,60 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
               .getReport(businessId: businessId, from: from, to: to);
           if (myToken != _loadToken) return;
           state = state.copyWith(depositsReport: report);
+        case ReportCategory.comandas:
+          final report = await _ref
+              .read(kitchenComandaReportRepositoryProvider)
+              .getReport(businessId: businessId, from: from, to: to);
+          // Cuadre con Ventas: el mismo número que ese reporte muestra como
+          // productos cobrados. Best-effort: sin él el comparador sale igual.
+          double? itemsSold;
+          try {
+            final sales = await _repository.getSalesSummary(
+                businessId: businessId, from: from, to: to);
+            itemsSold = (sales['items_sold'] as num?)?.toDouble();
+          } catch (_) {}
+          // Lo que sigue sin cobrar ahora. Si falla (p. ej. RPC vieja sin
+          // `p_open_only`) queda SIN dato, no vacía: vacía diría "no hay nada
+          // pendiente", que sería falso.
+          KitchenComandaReport? openNow;
+          try {
+            openNow = await _ref
+                .read(kitchenComandaReportRepositoryProvider)
+                .getOpenUncharged(businessId: businessId);
+          } catch (_) {}
+          // Cobrado sin comanda: best-effort igual; sin dato, la sección no
+          // sale (vacía diría "todo pasó por cocina", que podría ser falso).
+          KitchenComandaReport? withoutComanda;
+          try {
+            withoutComanda = await _ref
+                .read(kitchenComandaReportRepositoryProvider)
+                .getChargedWithoutComanda(
+                  businessId: businessId,
+                  from: from,
+                  to: to,
+                );
+          } catch (_) {}
+          // Desaparecidas: best-effort igual; sin dato la pantalla avisa que
+          // falta la migración en vez de decir "no hay ninguna".
+          KitchenMissingReport? missing;
+          try {
+            missing = await _ref
+                .read(kitchenComandaReportRepositoryProvider)
+                .getMissing(businessId: businessId, from: from, to: to);
+          } catch (_) {}
+          if (myToken != _loadToken) return;
+          state = state.copyWith(
+            comandasReport: report,
+            // −1 = no disponible. Con null, copyWith dejaría el número del
+            // rango anterior pegado.
+            comandasSalesItemsSold: itemsSold ?? -1,
+            comandasOpenReport: openNow,
+            clearComandasOpenReport: openNow == null,
+            comandasWithoutComandaReport: withoutComanda,
+            clearComandasWithoutComandaReport: withoutComanda == null,
+            comandasMissingReport: missing,
+            clearComandasMissingReport: missing == null,
+          );
         case ReportCategory.finances:
           final summary = await _repository.getCashSummary(
             businessId: businessId, from: from, to: to);
@@ -691,6 +797,30 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     await load();
   }
 
+  /// Rango CON HORAS (el turno de un bar cruza la medianoche: "desde las
+  /// 6:00 p. m. de ayer hasta las 6:00 a. m. de hoy"). [toExclusive] es el
+  /// límite superior EXCLUSIVO, igual que `salesTo` en el resto de Reportes.
+  /// `setCustomSalesRange` no sirve para esto: descarta las horas.
+  Future<void> setSalesRangeWithHours(
+    DateTime from,
+    DateTime toExclusive,
+  ) async {
+    var start = from;
+    var end = toExclusive;
+    if (!end.isAfter(start)) {
+      // Invertidas o iguales: swap defensivo y, si coinciden, un día.
+      final tmp = start;
+      start = end.isBefore(tmp) ? end : tmp;
+      end = end.isBefore(tmp) ? tmp : start.add(const Duration(days: 1));
+    }
+    state = state.copyWith(
+      salesRangePreset: SalesReportRangePreset.custom,
+      salesFrom: start,
+      salesTo: end,
+    );
+    await load();
+  }
+
   void setSalesBreakdownFilter(SalesBreakdownFilter filter) {
     state = state.copyWith(salesBreakdownFilter: filter);
   }
@@ -833,6 +963,15 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
             title: 'Fees de delivery',
             description:
                 'Órdenes con delivery: ${numberFormat.format(deliveryCount)} | Total en fees: ${currency.format(deliveryFees)}',
+          ),
+        ];
+      case ReportCategory.comandas:
+        final report = comandasView;
+        return [
+          ReportItem(
+            title: 'Comandas enviadas',
+            description:
+                'Comandas: ${report.comandasCount} | Órdenes: ${report.ordersCount} | Productos: ${NumberFormat('#,##0.##', 'en_US').format(report.units)}',
           ),
         ];
       case ReportCategory.deposits:
@@ -1412,6 +1551,54 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
 
   int get deliveryOrdersCount =>
       (state.deliverySummary?['orders_count'] as num?)?.toInt() ?? 0;
+
+  /// Estación del filtro de comandas, o null si no aplica en el reporte
+  /// cargado (p. ej. se cambió el rango y esa estación ya no tiene envíos).
+  String? get effectiveComandasArea {
+    final area = state.comandasArea;
+    final report = state.comandasReport;
+    if (area == null || report == null) return null;
+    return report.areas.any((a) => a.code == area) ? area : null;
+  }
+
+  /// Lo que se ve, imprime y exporta: el reporte filtrado por estación.
+  KitchenComandaReport get comandasView =>
+      (state.comandasReport ?? KitchenComandaReport.empty).forArea(
+        effectiveComandasArea,
+      );
+
+  /// "Todas" o el nombre de la estación filtrada (encabezado de PDF, CSV y
+  /// ticket).
+  String get comandasStationLabel {
+    final code = effectiveComandasArea;
+    if (code == null) return 'Todas';
+    for (final a in state.comandasReport?.areas ?? const []) {
+      if (a.code == code) return a.name;
+    }
+    return code;
+  }
+
+  /// Lo que sigue sin cobrar ahora, con el mismo filtro de estación.
+  KitchenComandaReport get comandasOpenView =>
+      (state.comandasOpenReport ?? KitchenComandaReport.empty).forArea(
+        effectiveComandasArea,
+      );
+
+  /// Lo cobrado sin comanda, con el mismo filtro de estación.
+  KitchenComandaReport get comandasWithoutComandaView =>
+      (state.comandasWithoutComandaReport ?? KitchenComandaReport.empty)
+          .forArea(effectiveComandasArea);
+
+  /// Las comandas desaparecidas con el mismo filtro de estación. Null = no
+  /// se pudieron cargar.
+  KitchenMissingReport? get comandasMissingView =>
+      state.comandasMissingReport?.forArea(effectiveComandasArea);
+
+  void setComandasArea(String? code) {
+    state = code == null
+        ? state.copyWith(clearComandasArea: true)
+        : state.copyWith(comandasArea: code);
+  }
 
   double get deliveryTotalOrdersAmount =>
       (state.deliverySummary?['total_orders_amount'] as num?)?.toDouble() ?? 0;
@@ -2152,6 +2339,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return 'Reporte de delivery';
       case ReportCategory.deposits:
         return 'Reporte de abonos';
+      case ReportCategory.comandas:
+        return 'Reporte de comandas';
       case ReportCategory.purchases:
         return 'Informe de compras';
       case ReportCategory.finances:
@@ -2175,6 +2364,8 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         return Icons.delivery_dining;
       case ReportCategory.deposits:
         return Icons.account_balance_wallet;
+      case ReportCategory.comandas:
+        return Icons.soup_kitchen;
       case ReportCategory.purchases:
         return Icons.shopping_cart;
       case ReportCategory.finances:

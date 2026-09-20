@@ -61,6 +61,8 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         context.go(AppRoutes.reportsDelivery);
       case ReportCategory.deposits:
         context.go(AppRoutes.reportsDeposits);
+      case ReportCategory.comandas:
+        context.go(AppRoutes.reportsComandas);
       case ReportCategory.finances:
         context.go(AppRoutes.reportsFinances);
       case ReportCategory.inventory:
@@ -307,6 +309,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         quickStat: '—',
         quickStatLabel: 'Saldos por mesa',
         onTap: () => context.go(AppRoutes.reportsDeposits),
+      ),
+      _ReportHubCardData(
+        title: 'Comandas',
+        description:
+            'Comandas enviadas a cocina y bar, órdenes y cuánto salió de '
+            'cada producto. Imprimible como resumen.',
+        icon: Icons.soup_kitchen_outlined,
+        color: const Color(0xFFEA580C),
+        quickStat: '—',
+        quickStatLabel: 'Envíos a cocina',
+        onTap: () => context.go(AppRoutes.reportsComandas),
       ),
       _ReportHubCardData(
         title: 'Ventas por mesero',

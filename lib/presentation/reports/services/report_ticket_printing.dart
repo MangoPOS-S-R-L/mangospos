@@ -1,4 +1,4 @@
-// Impresión del reporte de abonos en la térmica del POS.
+// Impresión de reportes en la térmica del POS (Abonos, Comandas…).
 //
 // Misma salida que el resto de documentos de caja: la impresora de recibos
 // (registradora → áreas de recibo → primera activa, ver
@@ -8,29 +8,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/printing/print_error_humanizer.dart';
 import '../../../core/printing/printerless_mode.dart';
 import '../../../core/utils/app_toast.dart';
-import '../../../data/models/printing.dart' show PrinterConfig;
-import '../../../data/models/table_deposit_report.dart';
-import '../../../services/printing/table_deposit_report_ticket.dart';
+import '../../../data/models/printing.dart' show PrintTicket, PrinterConfig;
 import '../../../services/session/session_controller.dart';
 import '../../cashier/utils/cash_movement_printing.dart';
 import '../../printing/widgets/ticket_preview_dialog.dart';
 import '../../settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
-class TableDepositReportPrinting {
-  const TableDepositReportPrinting._();
+/// Arma el ticket para el ancho de papel de la impresora destino.
+typedef ReportTicketBuilder =
+    PrintTicket Function({
+      required String businessName,
+      required BusinessCurrency currency,
+      required int paperWidth,
+    });
 
-  /// Imprime el reporte. NO lanza: cualquier fallo se le dice al usuario.
-  /// Devuelve `true` si salió por la impresora o se mostró en pantalla.
+class ReportTicketPrinting {
+  const ReportTicketPrinting._();
+
+  /// Imprime el ticket de un reporte. NO lanza: cualquier fallo se le dice
+  /// al usuario. Devuelve `true` si salió por la impresora o se mostró en
+  /// pantalla.
   static Future<bool> print(
     BuildContext context,
     WidgetRef ref, {
-    required TableDepositReport report,
-    required DateTime from,
-    required DateTime to,
+    required ReportTicketBuilder build,
+    required String title,
+    required String fileNamePrefix,
+    required String kind,
   }) async {
     PrinterConfig? printer;
     try {
@@ -52,11 +61,8 @@ class TableDepositReportPrinting {
       }
 
       final businessName = (session.activeBusinessName ?? '').trim();
-      final ticket = TableDepositReportTicket.generate(
-        report: report,
+      final ticket = build(
         businessName: businessName.isEmpty ? 'MangoPOS' : businessName,
-        from: from,
-        to: to,
         currency: currentBusinessCurrencyOrFallback(ref),
         paperWidth: printer?.paperWidth ?? 80,
       );
@@ -75,8 +81,8 @@ class TableDepositReportPrinting {
         await showPrintTicketOnScreen(
           context,
           ticket: ticket,
-          title: 'Reporte de abonos',
-          fileNamePrefix: 'reporte_abonos',
+          title: title,
+          fileNamePrefix: fileNamePrefix,
         );
         return true;
       }
@@ -86,12 +92,12 @@ class TableDepositReportPrinting {
           .printEscPos(
             printer: printer,
             data: ticket.escPosCommands,
-            kind: 'table_deposit_report',
+            kind: kind,
             areaCode: 'cashier',
             // Cada impresión es un trabajo nuevo: con una clave fija la cola
             // descartaría la segunda copia por idempotente.
             idempotencyKey:
-                'deposits-report-$businessId-${DateTime.now().millisecondsSinceEpoch}',
+                '$kind-$businessId-${DateTime.now().millisecondsSinceEpoch}',
           );
       if (context.mounted) {
         AppToast.success(context, 'Reporte enviado a ${printer.name}.');

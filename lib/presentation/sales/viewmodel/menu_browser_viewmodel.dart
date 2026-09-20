@@ -186,6 +186,13 @@ class MenuBrowserState {
   // mapa — la UI no muestra badge.
   final Map<String, num> stockByProductId;
 
+  /// Ids de TODOS los productos activos del negocio, no sólo los de la
+  /// categoría/menú cargado en [products]. El catálogo se consulta con
+  /// `is_active = true`, así que un producto que ya está en una orden y no
+  /// aparece acá fue desactivado (o agotado con 86, que apaga `is_active`).
+  /// Vacío = índice sin cargar: la UI NO debe bloquear nada con él.
+  final Set<String> activeProductIds;
+
   /// Etiqueta de presentación filtrada en la categoría actual (sub-pestaña
   /// activa). null = "Todas". Se resetea al cambiar de categoría.
   final String? selectedPresentation;
@@ -204,6 +211,7 @@ class MenuBrowserState {
     this.search = '',
     this.selectedProduct,
     this.stockByProductId = const {},
+    this.activeProductIds = const {},
     this.selectedPresentation,
   });
 
@@ -235,6 +243,7 @@ class MenuBrowserState {
     String? search,
     MenuProduct? selectedProduct,
     Map<String, num>? stockByProductId,
+    Set<String>? activeProductIds,
     String? selectedPresentation,
     bool clearSelectedPresentation = false,
   }) {
@@ -256,6 +265,7 @@ class MenuBrowserState {
       search: search ?? this.search,
       selectedProduct: selectedProduct ?? this.selectedProduct,
       stockByProductId: stockByProductId ?? this.stockByProductId,
+      activeProductIds: activeProductIds ?? this.activeProductIds,
       selectedPresentation: clearSelectedPresentation
           ? null
           : (selectedPresentation ?? this.selectedPresentation),
@@ -605,6 +615,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
           categories: categories,
           menus: menus,
           products: updatedProducts,
+          activeProductIds: _activeProductIds(freshSnapshot),
         );
 
         debugPrint('Background catalog sync completed');
@@ -821,6 +832,18 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
     }
   }
 
+  /// Ids activos del catálogo completo, leídos del snapshot crudo. No usa
+  /// `_parseProducts` a propósito: acá sólo hace falta el id y esto recorre
+  /// TODOS los productos del negocio.
+  Set<String> _activeProductIds(OfflineCatalogSnapshot snapshot) {
+    final ids = <String>{};
+    for (final row in snapshot.products) {
+      final id = row['id']?.toString();
+      if (id != null && id.isNotEmpty) ids.add(id);
+    }
+    return ids;
+  }
+
   /// Applies a catalog snapshot to state without network calls.
   void _applyCatalogSnapshot(
     OfflineCatalogSnapshot snapshot, {
@@ -852,6 +875,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
       loadedCategoryId: selectedCategory,
       clearLoadedMenuId: true,
       selectedProduct: null,
+      activeProductIds: _activeProductIds(snapshot),
     );
   }
 
@@ -865,6 +889,7 @@ class MenuBrowserViewModel extends StateNotifier<MenuBrowserState> {
         loading: false,
         error: null,
         products: _parseProducts(snapshot.allProducts()),
+        activeProductIds: _activeProductIds(snapshot),
         productsMode: MenuProductsMode.all,
         clearLoadedCategoryId: true,
         clearLoadedMenuId: true,

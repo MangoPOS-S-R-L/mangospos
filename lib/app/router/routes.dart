@@ -37,6 +37,7 @@ class AppRoutes {
   static const reportsOffers = '$reports/offers';
   static const reportsDelivery = '$reports/delivery';
   static const reportsDeposits = '$reports/deposits';
+  static const reportsComandas = '$reports/comandas';
   static const reportsSalesByWaiter = '$reports/sales-by-waiter';
   static const reportsFinances = '$reports/finances';
   static const reportsInventory = '$reports/inventory';

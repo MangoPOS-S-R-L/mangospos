@@ -42,6 +42,14 @@ class SalesByWaiterView extends ConsumerStatefulWidget {
 class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
   late DateTime _from;
   late DateTime _to;
+
+  /// Franja horaria opcional. null en ambos = todo el día (la RPC recibe el
+  /// default 00:00/00:00 = día local completo). Se aplica a CADA día del
+  /// rango, y si el fin es <= el inicio cruza la medianoche — que es el caso
+  /// de un negocio nocturno (20:00 → 03:00 = la noche completa).
+  TimeOfDay? _startTime;
+  TimeOfDay? _endTime;
+
   Future<_WaiterReportData>? _future;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -89,6 +97,8 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
           from: _from,
           to: _to,
           productSearch: _search,
+          startTime: _startTimeParam,
+          endTime: _endTimeParam,
         );
         // El desglose es best-effort: si la RPC del desglose no existe
         // todavía (migración sin aplicar), mostramos solo el resumen en
@@ -99,6 +109,8 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
               from: _from,
               to: _to,
               productSearch: _search,
+              startTime: _startTimeParam,
+              endTime: _endTimeParam,
             )
             .catchError((_) => const <WaiterProductRow>[]);
         // Opciones del selector: todo lo vendido en el rango SIN filtro.
@@ -107,7 +119,13 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
         final options = _search.isEmpty
             ? products
             : repo
-                  .fetchProducts(businessId: businessId, from: _from, to: _to)
+                  .fetchProducts(
+                    businessId: businessId,
+                    from: _from,
+                    to: _to,
+                    startTime: _startTimeParam,
+                    endTime: _endTimeParam,
+                  )
                   .catchError((_) => const <WaiterProductRow>[]);
         final result = (await summary, await products);
         final names = (await options).map((p) => p.productName).toSet().toList()
@@ -171,6 +189,7 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
         to: _to,
         currency: currentBusinessCurrencyOrFallback(ref).formatter,
         productSearch: _search,
+        timeWindow: _startTime == null ? null : _timeRangeLabel,
       );
     } catch (e) {
       if (mounted) {
@@ -181,6 +200,52 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  /// 'HH:mm:ss' para la RPC, o null cuando no hay franja (todo el día).
+  String? get _startTimeParam =>
+      salesByWaiterTimeParams(_startTime, _endTime).$1;
+  String? get _endTimeParam => salesByWaiterTimeParams(_startTime, _endTime).$2;
+
+  String get _timeRangeLabel =>
+      salesByWaiterTimeLabel(_startTime, _endTime);
+
+  Future<void> _pickTimeRange() async {
+    final start = await showTimePicker(
+      context: context,
+      initialTime: _startTime ?? const TimeOfDay(hour: 20, minute: 0),
+      helpText: 'Hora de inicio',
+      builder: _timePickerTheme,
+    );
+    if (start == null || !mounted) return;
+    final end = await showTimePicker(
+      context: context,
+      initialTime: _endTime ?? const TimeOfDay(hour: 3, minute: 0),
+      helpText: 'Hora de fin',
+      builder: _timePickerTheme,
+    );
+    if (end == null || !mounted) return;
+    setState(() {
+      _startTime = start;
+      _endTime = end;
+    });
+    _reload();
+  }
+
+  Widget _timePickerTheme(BuildContext ctx, Widget? child) => Theme(
+    data: Theme.of(ctx).copyWith(
+      colorScheme: ColorScheme.fromSeed(seedColor: MangoColors.primaryOrange),
+    ),
+    child: child!,
+  );
+
+  void _clearTimeRange() {
+    if (_startTime == null && _endTime == null) return;
+    setState(() {
+      _startTime = null;
+      _endTime = null;
+    });
+    _reload();
   }
 
   Future<void> _pickDateRange() async {
@@ -433,6 +498,18 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
                       '${dateFormat.format(_from)} → ${dateFormat.format(_to)}',
                     ),
                   ),
+                  OutlinedButton.icon(
+                    onPressed: _pickTimeRange,
+                    icon: const Icon(Icons.schedule, size: 16),
+                    label: Text(_timeRangeLabel),
+                  ),
+                  if (_startTime != null)
+                    IconButton(
+                      onPressed: _clearTimeRange,
+                      tooltip: 'Quitar franja horaria',
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
                   SizedBox(
                     width: 260,
                     child: RawAutocomplete<String>(
@@ -977,4 +1054,41 @@ class _SalesByWaiterViewState extends ConsumerState<SalesByWaiterView> {
       ),
     );
   }
+}
+
+// ===========================================================================
+// Lógica de la franja horaria, pura y testeable (test/presentation/reports/
+// sales_by_waiter_time_window_test.dart). La franja se aplica a CADA día del
+// rango; cuando el fin es <= el inicio cruza la medianoche, que es lo mismo
+// que hace la RPC (mig 20260919_0004).
+// ===========================================================================
+
+String _two(int v) => v.toString().padLeft(2, '0');
+
+/// true si la franja cruza la medianoche (fin <= inicio). Incluye el caso
+/// inicio == fin, que la RPC trata como ventana de 24 h desde esa hora.
+@visibleForTesting
+bool salesByWaiterCrossesMidnight(TimeOfDay start, TimeOfDay end) =>
+    (end.hour * 60 + end.minute) <= (start.hour * 60 + start.minute);
+
+/// Par ('HH:mm:ss', 'HH:mm:ss') para la RPC. (null, null) = sin franja: la
+/// app no manda los parámetros y la RPC usa su default de día completo, así
+/// el reporte sigue funcionando contra la firma vieja de 4 args.
+@visibleForTesting
+(String?, String?) salesByWaiterTimeParams(TimeOfDay? start, TimeOfDay? end) {
+  if (start == null || end == null) return (null, null);
+  return (
+    '${_two(start.hour)}:${_two(start.minute)}:00',
+    '${_two(end.hour)}:${_two(end.minute)}:00',
+  );
+}
+
+/// Etiqueta del botón de franja. "(+1 día)" avisa del cruce de medianoche.
+@visibleForTesting
+String salesByWaiterTimeLabel(TimeOfDay? start, TimeOfDay? end) {
+  if (start == null || end == null) return 'Todo el día';
+  final label =
+      '${_two(start.hour)}:${_two(start.minute)} → '
+      '${_two(end.hour)}:${_two(end.minute)}';
+  return salesByWaiterCrossesMidnight(start, end) ? '$label (+1 día)' : label;
 }

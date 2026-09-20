@@ -1813,6 +1813,30 @@ class SalesRepository {
     }
   }
 
+  /// Anota el motivo y el operador (PIN) de un producto que se quitó de la
+  /// cuenta después de enviarse a cocina: el borrado lo registra un trigger
+  /// (`order_item_removals`, migración 20260919_0002) pero no sabe por qué
+  /// ni quién. El borrado ya pasó: esto solo completa el registro y nunca
+  /// lanza (sin la migración, simplemente no hace nada).
+  Future<void> noteItemRemoval({
+    required String itemId,
+    String? reason,
+    String? employeeId,
+  }) async {
+    try {
+      await _client.rpc(
+        SalesQueries.rpcNoteItemRemoval,
+        params: {
+          'p_item_id': itemId,
+          'p_reason': reason,
+          'p_employee_id': employeeId,
+        },
+      );
+    } catch (e) {
+      debugPrint('[removals] no se pudo anotar el motivo: $e');
+    }
+  }
+
   /// Toggle takeout de item
   Future<void> toggleItemTakeout({
     required String itemId,

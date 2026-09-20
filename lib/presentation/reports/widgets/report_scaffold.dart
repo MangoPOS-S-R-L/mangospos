@@ -196,6 +196,8 @@ class _ReportScaffoldState extends ConsumerState<ReportScaffold> {
         return state.deliverySummary == null;
       case ReportCategory.deposits:
         return state.depositsReport == null;
+      case ReportCategory.comandas:
+        return state.comandasReport == null;
       case ReportCategory.finances:
         return state.cashSummary == null;
       case ReportCategory.purchases:

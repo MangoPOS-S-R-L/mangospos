@@ -11,6 +11,7 @@ import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../../../core/theme/app_colors.dart';
+import 'waiter_products_sheet.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
 class SettingsWaitersView extends StatefulWidget {
@@ -72,6 +73,10 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
           .toList(growable: false);
 
       final pendingBySessionId = <String, double>{};
+      // Los items pendientes se guardan además de su total: el desglose
+      // por producto de la pestaña "Pendiente" sale de aquí, sin pedirle
+      // nada más a la base al tocar la fila.
+      final pendingItemsBySessionId = <String, List<OrderItem>>{};
       if (openSessionIds.isNotEmpty) {
         final openOrdersRaw = List<Map<String, dynamic>>.from(
           await sb
@@ -139,6 +144,9 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
           final pendingTotal = summarizeOrderPricing(order, pendingItems).total;
           pendingBySessionId[sessionId] =
               (pendingBySessionId[sessionId] ?? 0) + pendingTotal;
+          pendingItemsBySessionId
+              .putIfAbsent(sessionId, () => <OrderItem>[])
+              .addAll(pendingItems);
         }
       }
 
@@ -174,6 +182,9 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
       }
 
       final paidSalesByOwner = <String, double>{};
+      // Órdenes con pago de hoy por dueño: de ahí sale la lista de
+      // productos ya cobrados del mozo.
+      final paidOrderIdsByOwner = <String, Set<String>>{};
       for (final payment in List<Map<String, dynamic>>.from(paidOrdersRaw)) {
         final order = payment['orders'] as Map<String, dynamic>?;
         final tableSession = order?['table_sessions'] as Map<String, dynamic>?;
@@ -186,10 +197,18 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
         paidSalesByOwner[ownerKey] =
             (paidSalesByOwner[ownerKey] ?? 0) +
             netPaymentAmount(payment['amount'], payment['change_amount']);
+
+        final paidOrderId = payment['order_id']?.toString().trim();
+        if (paidOrderId != null && paidOrderId.isNotEmpty) {
+          paidOrderIdsByOwner
+              .putIfAbsent(ownerKey, () => <String>{})
+              .add(paidOrderId);
+        }
       }
 
       final openTablesByOwner = <String, int>{};
       final pendingByOwner = <String, double>{};
+      final pendingItemsByOwner = <String, List<OrderItem>>{};
 
       for (final session in sessions) {
         final ownerKey = ownerKeyOf(session);
@@ -200,6 +219,9 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
         openTablesByOwner[ownerKey] = (openTablesByOwner[ownerKey] ?? 0) + 1;
         pendingByOwner[ownerKey] =
             (pendingByOwner[ownerKey] ?? 0) + (pendingBySessionId[sessionId] ?? 0);
+        pendingItemsByOwner
+            .putIfAbsent(ownerKey, () => <OrderItem>[])
+            .addAll(pendingItemsBySessionId[sessionId] ?? const <OrderItem>[]);
       }
 
       // Cada sesión cae en UNO solo de los dos buckets (emp: o usr:), así
@@ -222,6 +244,32 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
         return byEmployee + byUser;
       }
 
+      // Mismo criterio que sumOwner pero juntando listas: cada sesión
+      // cayó en UN solo bucket, así que concatenar no duplica.
+      List<OrderItem> collectOwnerItems(
+        Map<String, List<OrderItem>> map,
+        Employee employee,
+      ) {
+        final out = <OrderItem>[...?map['emp:${employee.id}']];
+        final userId = employee.userId?.trim();
+        if (userId != null && userId.isNotEmpty) {
+          out.addAll(map['usr:$userId'] ?? const <OrderItem>[]);
+        }
+        return out;
+      }
+
+      List<String> collectOwnerIds(
+        Map<String, Set<String>> map,
+        Employee employee,
+      ) {
+        final out = <String>{...?map['emp:${employee.id}']};
+        final userId = employee.userId?.trim();
+        if (userId != null && userId.isNotEmpty) {
+          out.addAll(map['usr:$userId'] ?? const <String>{});
+        }
+        return out.toList(growable: false);
+      }
+
       final metrics = waiters
           .map(
             (employee) => _WaiterMetric(
@@ -229,6 +277,8 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
               openTables: sumOwnerInt(openTablesByOwner, employee),
               currentSales: sumOwner(paidSalesByOwner, employee),
               pendingSales: sumOwner(pendingByOwner, employee),
+              pendingItems: collectOwnerItems(pendingItemsByOwner, employee),
+              paidOrderIds: collectOwnerIds(paidOrderIdsByOwner, employee),
             ),
           )
           .toList()
@@ -304,7 +354,7 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
               style: TextStyle(fontWeight: FontWeight.w800),
             ),
             Text(
-              'Cobrado y pendiente por cobrar por mozo',
+              'Cobrado y pendiente por mozo · toca un mozo para ver sus productos',
               style: TextStyle(color: Colors.grey[600], fontSize: 12),
             ),
           ],
@@ -545,13 +595,33 @@ class _SettingsWaitersViewState extends State<SettingsWaitersView> {
                                 child: Text('No se encontraron mozos para los filtros actuales.'),
                               )
                             else
-                              ...filtered.map((waiter) => _WaiterRow(metric: waiter)),
+                              ...filtered.map(
+                                (waiter) => _WaiterRow(
+                                  metric: waiter,
+                                  onTap: () => _openProducts(waiter),
+                                ),
+                              ),
                           ],
                         ),
                       ),
                     ],
                   ),
                 ),
+    );
+  }
+
+  /// Desglose de productos del mozo. Se apoya en lo que la fila ya trae
+  /// (items pendientes y órdenes cobradas hoy) para que los totales del
+  /// detalle cuadren con las columnas de la tabla.
+  Future<void> _openProducts(_WaiterMetric metric) {
+    return WaiterProductsSheet.show(
+      context,
+      waiterName: metric.employee.fullName,
+      initials: metric.employee.initials,
+      paidOrderIds: metric.paidOrderIds,
+      pendingItems: metric.pendingItems,
+      paidTotal: metric.currentSales,
+      pendingTotal: metric.pendingSales,
     );
   }
 
@@ -575,11 +645,21 @@ class _WaiterMetric {
   final double currentSales;
   final double pendingSales;
 
+  /// Items por cobrar de sus mesas abiertas — ya cargados en `_load()`,
+  /// alimentan el desglose por producto sin otra consulta.
+  final List<OrderItem> pendingItems;
+
+  /// Órdenes suyas con pago completado hoy. Sus items se piden recién
+  /// cuando se abre el desglose.
+  final List<String> paidOrderIds;
+
   const _WaiterMetric({
     required this.employee,
     required this.openTables,
     required this.currentSales,
     required this.pendingSales,
+    this.pendingItems = const [],
+    this.paidOrderIds = const [],
   });
 
   String get shiftLabel {
@@ -719,9 +799,10 @@ class _HeaderLabel extends StatelessWidget {
 }
 
 class _WaiterRow extends StatelessWidget {
-  const _WaiterRow({required this.metric});
+  const _WaiterRow({required this.metric, this.onTap});
 
   final _WaiterMetric metric;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -733,7 +814,7 @@ class _WaiterRow extends StatelessWidget {
       decimalDigits: 0,
     );
 
-    return Padding(
+    final content = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         children: [
@@ -793,9 +874,25 @@ class _WaiterRow extends StatelessWidget {
           ),
           Expanded(
             flex: 2,
-            child: Text(
-              currency.format(metric.currentSales),
-              style: const TextStyle(fontWeight: FontWeight.w700),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    currency.format(metric.currentSales),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: onTap == null ? null : const Color(0xFFFF7F1F),
+                    ),
+                  ),
+                ),
+                if (onTap != null)
+                  const Icon(
+                    Icons.chevron_right,
+                    size: 16,
+                    color: Color(0xFFFF7F1F),
+                  ),
+              ],
             ),
           ),
           Expanded(
@@ -808,6 +905,9 @@ class _WaiterRow extends StatelessWidget {
         ],
       ),
     );
+
+    if (onTap == null) return content;
+    return InkWell(onTap: onTap, child: content);
   }
 }
 

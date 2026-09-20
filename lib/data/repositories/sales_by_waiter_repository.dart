@@ -85,18 +85,27 @@ class SalesByWaiterRepository {
   final SupabaseClient _client;
 
   /// Devuelve una fila por empleado dentro del rango [from, to] (inclusive).
-  /// Las fechas se interpretan en zona local del cliente — se pasan como
-  /// `date` (sin hora) y la RPC compara contra `oi.created_at::date`.
+  /// Las fechas son días LOCALES del negocio: la RPC resuelve la zona desde
+  /// `business_settings.timezone` (mig 20260919_0004). Antes comparaba contra
+  /// `oi.created_at::date`, que en PostgREST (UTC) cortaba el día a las 8 PM
+  /// hora RD y mandaba la venta nocturna al día siguiente.
   ///
-  /// [productSearch] filtra los items por nombre de producto o SKU (ilike);
-  /// solo se envía a la RPC cuando trae texto, así la llamada sigue
-  /// resolviendo contra la firma vieja si la migración 20260728_0001 aún
-  /// no está aplicada.
+  /// [productSearch] filtra los items por nombre de producto o SKU (ilike).
+  ///
+  /// [startTime]/[endTime] ('HH:mm:ss') acotan una franja horaria que se
+  /// aplica a CADA día del rango; si el fin es <= el inicio, la franja cruza
+  /// la medianoche (20:00→03:00 = la noche completa de cada día).
+  ///
+  /// Los tres son opcionales y solo se envían cuando traen valor, así la
+  /// llamada sigue resolviendo contra firmas viejas si las migraciones
+  /// 20260728_0001 / 20260919_0004 aún no están aplicadas.
   Future<List<WaiterSalesRow>> fetch({
     required String businessId,
     required DateTime from,
     required DateTime to,
     String? productSearch,
+    String? startTime,
+    String? endTime,
   }) async {
     final fromStr = _formatDate(from);
     final toStr = _formatDate(to);
@@ -109,6 +118,10 @@ class SalesByWaiterRepository {
         'p_from_date': fromStr,
         'p_to_date': toStr,
         if (search.isNotEmpty) 'p_search': search,
+        if (startTime != null && endTime != null) ...{
+          'p_start_time': startTime,
+          'p_end_time': endTime,
+        },
       },
     );
 
@@ -128,6 +141,8 @@ class SalesByWaiterRepository {
     required DateTime from,
     required DateTime to,
     String? productSearch,
+    String? startTime,
+    String? endTime,
   }) async {
     final search = productSearch?.trim() ?? '';
 
@@ -138,6 +153,10 @@ class SalesByWaiterRepository {
         'p_from_date': _formatDate(from),
         'p_to_date': _formatDate(to),
         if (search.isNotEmpty) 'p_search': search,
+        if (startTime != null && endTime != null) ...{
+          'p_start_time': startTime,
+          'p_end_time': endTime,
+        },
       },
     );
 

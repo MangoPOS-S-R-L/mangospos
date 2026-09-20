@@ -3234,6 +3234,58 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// Motivo por el que NO se le pueden sumar unidades a un producto que ya
+  /// está en la orden. `null` = se puede subir la cantidad.
+  ///
+  /// Sólo mira `is_active`: el caso real es el producto que se desactiva (o
+  /// se agota con 86, que apaga `is_active`) DESPUÉS de que ya salió uno a
+  /// cocina. La línea vieja se queda como está — ya se sirvió — pero el "+"
+  /// se apaga. Stock en cero NO bloquea acá: eso lo decide el catálogo con
+  /// `allow_negative_sale` al tomar el producto.
+  ///
+  /// Subir la cantidad de una línea ya enviada genera una línea draft nueva
+  /// que vuelve a cocina (ver [_addUnitsAsNewDraftLine]), así que es la misma
+  /// decisión que tomar el producto del catálogo — donde un inactivo ni
+  /// aparece. Acá cerramos la puerta de atrás.
+  ///
+  /// Falla ABIERTO: sin índice de catálogo cargado (primer arranque, snapshot
+  /// vacío) no bloquea nada — preferimos dejar vender a trancar la mesa.
+  String? _addMoreBlockedReason(WidgetRef ref, OrderItem item) {
+    final productId = item.productId;
+    if (productId == null) return null; // línea manual, sin producto de menú
+
+    final activeIds = ref.read(menuBrowserVmProvider).activeProductIds;
+    if (activeIds.isEmpty || activeIds.contains(productId)) return null;
+
+    return '${item.productName} ya no está activo en el menú. No se le '
+        'pueden agregar más unidades hasta que lo reactiven.';
+  }
+
+  /// Unidades que ya salieron impresas a cocina/bar dentro de [scopedItems].
+  /// Es el piso del "−" para quien no puede eliminar.
+  double _sentQuantity(List<OrderItem> items) => items
+      .where((i) => i.status != 'draft')
+      .fold<double>(0, (sum, i) => sum + i.quantity);
+
+  /// Cantidad por debajo de la cual quien opera NO puede bajar. `null` = sin
+  /// piso (baja hasta 1 y de ahí elimina).
+  ///
+  /// Mismo criterio que [_ensureCanDeleteOrderItem], adelantado al botón:
+  /// sacar de la cuenta algo que YA salió impreso es
+  /// `ventas.orden.eliminar_item` — permiso que los presets de mesero y
+  /// cajero NO traen. Antes el "−" se dejaba tocar y el PIN se pedía recién
+  /// al guardar.
+  ///
+  /// Es un PISO y no un botón muerto a propósito: si la mesera tiene 8
+  /// enviadas y toca "+" dos veces, esas 2 todavía no salieron a cocina y
+  /// tiene que poder devolverlas. Baja hasta 8 y ahí se apaga.
+  double? _reduceFloor(WidgetRef ref, List<OrderItem> scopedItems) {
+    if (operatorIsOwner(ref)) return null;
+    if (operatorHasPermission(ref, 'ventas.orden.eliminar_item')) return null;
+    final sent = _sentQuantity(scopedItems);
+    return sent <= 0 ? null : sent;
+  }
+
   /// True si la línea ya salió a cocina (no es draft/open ni terminal).
   bool _itemAlreadySentToKitchen(OrderItem item) {
     final s = item.status;
@@ -3278,11 +3330,25 @@ class _CartView extends ConsumerWidget {
     OrderItem item, {
     List<OrderItem>? groupedItems,
   }) {
+    // Producto desactivado después de enviarse a cocina: el modal deja el "+"
+    // apagado y muestra el motivo, en vez de dejar que el mesero mande otra
+    // unidad de algo que ya salió del menú.
+    final addMoreBlockedReason = _addMoreBlockedReason(ref, item);
+    final scopedItems = groupedItems?.isNotEmpty == true
+        ? groupedItems!
+        : [item];
+    final reduceFloor = _reduceFloor(ref, scopedItems);
+
     showDialog(
       context: context,
       builder: (context) => ProductDetailModal(
         item: item,
         groupedItems: groupedItems,
+        addMoreBlockedReason: addMoreBlockedReason,
+        reduceFloor: reduceFloor,
+        reduceBlockedReason:
+            'Solo un supervisor puede quitar un producto que ya salió a '
+            'cocina.',
         // Aplicar un descuento manual o cortesía NUEVO requiere el permiso
         // `ventas.orden.descuento_aplicar`; si no, PIN de Supervisor. El mesero
         // (sin el permiso) no puede descontar sin autorización. El descuento
@@ -3350,15 +3416,17 @@ class _CartView extends ConsumerWidget {
               ? 1.0
               : updatedItem.quantity;
           if (targetTotalQty < originalTotalQty) {
-            // Si TODOS los items consolidated estan en draft no requiere
-            // PIN — el operador esta reduciendo cantidades antes de
-            // enviar a cocina. Si alguno ya salio impreso, mantenemos la
-            // proteccion.
-            final allDraft = items.every((i) => i.status == 'draft');
+            // Sólo pedimos PIN cuando la rebaja se come unidades que YA
+            // salieron impresas. Quitar lo que todavía está en draft es
+            // corregir el carrito antes de enviar, y eso el operador lo
+            // hace solo — si no, la mesera que sube de 8 a 10 por error
+            // no podría volver a 8 sin llamar a un supervisor.
+            final sentQty = _sentQuantity(items);
+            final eatsSentUnits = targetTotalQty < sentQty - 0.0001;
             if (!await _ensureCanDeleteOrderItem(
               context,
               ref,
-              isDraft: allDraft,
+              isDraft: !eatsSentUnits,
             )) {
               return;
             }
@@ -3447,6 +3515,17 @@ class _CartView extends ConsumerWidget {
                 discounts: discountShare,
                 notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
               );
+              // Línea ya enviada a la que se le bajó la cantidad: el servidor
+              // la registra con el motivo de la etiqueta; falta quién fue.
+              if (nextQtyInt < currentQtyInt &&
+                  _itemAlreadySentToKitchen(current)) {
+                unawaited(
+                  orderNotifier.noteItemRemoval(
+                    current.id,
+                    reason: reductionReason,
+                  ),
+                );
+              }
             }
 
             remaining -= nextQtyInt;
@@ -3508,7 +3587,15 @@ class _CartView extends ConsumerWidget {
                   ),
                 );
               },
-        onReprint: (item.status != 'draft')
+        // Reimprimir comanda es permiso de KDS ('kds.reimprimir_comanda'):
+        // owner/admin/gerente/cajero/cocina lo tienen, el mesero NO. Sin
+        // permiso el botón ni se dibuja — antes salía y el viewmodel lo
+        // rebotaba con un error después de tocarlo.
+        // `operatorHasPermission` evalúa al mesero del PIN cuando lo hay: en
+        // una tablet compartida no vale el permiso del usuario logueado.
+        onReprint:
+            (item.status != 'draft' &&
+                operatorHasPermission(ref, 'kds.reimprimir_comanda'))
             ? () {
                 final order = ref.read(currentOrderProvider).order;
                 final itemsToReprint = groupedItems?.isNotEmpty == true

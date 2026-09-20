@@ -28,6 +28,20 @@ class ProductDetailModal extends StatefulWidget {
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
 
+  /// Motivo por el que no se le pueden sumar unidades a este ítem (el
+  /// producto quedó inactivo en el menú). Con valor, el "+" queda apagado y
+  /// el motivo va de tooltip. `null` = se puede subir la cantidad.
+  final String? addMoreBlockedReason;
+
+  /// Cantidad por debajo de la cual quien opera NO puede bajar: las unidades
+  /// que YA salieron a cocina, cuando no tiene `ventas.orden.eliminar_item`.
+  /// El "−" se apaga al tocar ese piso, pero deja deshacer lo que la propia
+  /// mesera acaba de sumar y todavía no envía. `null` = sin piso.
+  final double? reduceFloor;
+
+  /// Texto del tooltip del "−" cuando está apagado por [reduceFloor].
+  final String? reduceBlockedReason;
+
   /// Autoriza aplicar un descuento manual o cortesía NUEVO. Debe devolver true
   /// si el usuario tiene el permiso `ventas.orden.descuento_aplicar` o autoriza
   /// con PIN de supervisor; false si cancela. Si es null, no se exige
@@ -47,6 +61,9 @@ class ProductDetailModal extends StatefulWidget {
     this.onBeforeDelete,
     this.onMarkSoldOut,
     this.onReprint,
+    this.addMoreBlockedReason,
+    this.reduceFloor,
+    this.reduceBlockedReason,
     this.onAuthorizeDiscount,
   });
 
@@ -123,18 +140,28 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     return double.parse(value.toStringAsFixed(2));
   }
 
+  /// `true` si al producto todavía se le pueden pedir más unidades. Cuando
+  /// no, sólo se apaga el "+": bajar la cantidad, editar notas o eliminar
+  /// la línea sigue permitido.
+  bool get _canAddMore => widget.addMoreBlockedReason == null;
+
   void _incrementQty() {
+    if (!_canAddMore) return;
     setState(() {
       _quantity = _normalizeQty(_quantity + 1);
     });
   }
 
+  /// `true` si al ítem todavía se le pueden quitar unidades: por encima del
+  /// mínimo de 1 y del piso de lo ya enviado a cocina.
+  bool get _canReduce =>
+      _quantity > 1 && _quantity > (widget.reduceFloor ?? 0) + 0.0001;
+
   void _decrementQty() {
-    if (_quantity > 1) {
-      setState(() {
-        _quantity = _normalizeQty(_quantity - 1);
-      });
-    }
+    if (!_canReduce) return;
+    setState(() {
+      _quantity = _normalizeQty(_quantity - 1);
+    });
   }
 
   Future<void> _handleDelete() async {
@@ -580,9 +607,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              onPressed: _decrementQty,
+                              onPressed: _canReduce ? _decrementQty : null,
                               icon: const Icon(Icons.remove, size: 20),
                               color: kTextSecondary,
+                              disabledColor: kTextSecondary.withValues(
+                                alpha: 0.4,
+                              ),
+                              tooltip: _canReduce
+                                  ? null
+                                  : widget.reduceBlockedReason,
                             ),
                             Container(
                               color: Colors.white,
@@ -601,9 +634,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                               ),
                             ),
                             IconButton(
-                              onPressed: _incrementQty,
+                              onPressed: _canAddMore ? _incrementQty : null,
                               icon: const Icon(Icons.add, size: 20),
                               color: kPrimary,
+                              disabledColor: kTextSecondary.withValues(
+                                alpha: 0.4,
+                              ),
+                              tooltip: _canAddMore
+                                  ? null
+                                  : widget.addMoreBlockedReason,
                             ),
                           ],
                         ),

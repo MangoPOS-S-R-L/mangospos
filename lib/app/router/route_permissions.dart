@@ -47,6 +47,7 @@ const Map<String, String> routePermissions = <String, String>{
   '/reports/finances': 'reportes.caja',
   // El abono entra a la caja al registrarse: mismo permiso que los cierres.
   '/reports/deposits': 'reportes.caja',
+  '/reports/comandas': 'reportes.ventas',
   '/reports/inventory': 'inventario.acceso',
   '/reports/purchases': 'compras.acceso',
   '/reports/taxes': 'reportes.fiscales',

@@ -5,7 +5,8 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/data/models/table_deposit_report.dart';
-import 'package:mangopos/presentation/reports/services/table_deposit_report_printing.dart';
+import 'package:mangopos/services/printing/table_deposit_report_ticket.dart';
+import 'package:mangopos/presentation/reports/services/report_ticket_printing.dart';
 import 'package:mangopos/presentation/reports/viewmodel/reports_viewmodel.dart';
 import 'package:mangopos/presentation/reports/widgets/report_scaffold.dart';
 import 'package:mangopos/presentation/reports/widgets/report_widgets.dart';
@@ -47,12 +48,22 @@ class _DepositsReportBodyState extends ConsumerState<_DepositsReportBody> {
     if (_printing) return;
     setState(() => _printing = true);
     try {
-      await TableDepositReportPrinting.print(
+      await ReportTicketPrinting.print(
         context,
         ref,
-        report: report,
-        from: widget.state.salesFrom,
-        to: widget.state.salesTo,
+        title: 'Reporte de abonos',
+        fileNamePrefix: 'reporte_abonos',
+        kind: 'table_deposit_report',
+        build:
+            ({required businessName, required currency, required paperWidth}) =>
+                TableDepositReportTicket.generate(
+                  report: report,
+                  businessName: businessName,
+                  from: widget.state.salesFrom,
+                  to: widget.state.salesTo,
+                  currency: currency,
+                  paperWidth: paperWidth,
+                ),
       );
     } finally {
       if (mounted) setState(() => _printing = false);

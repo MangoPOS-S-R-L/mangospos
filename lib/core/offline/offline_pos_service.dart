@@ -2229,6 +2229,12 @@ class OfflinePosService {
             salesRepository: salesRepository,
           );
           await salesRepository.deleteItem(itemId: resolvedItemId);
+          // Motivo y operador del borrado (20260919_0002). Nunca lanza.
+          await salesRepository.noteItemRemoval(
+            itemId: resolvedItemId,
+            reason: action['reason']?.toString(),
+            employeeId: action['employee_id']?.toString(),
+          );
         } catch (e) {
           if (!_isItemMissingError(e)) rethrow;
         }

@@ -104,6 +104,7 @@ import '../../presentation/reports/view/sales_report_view.dart';
 import '../../presentation/reports/view/finance_report_view.dart';
 import '../../presentation/reports/view/delivery_report_view.dart';
 import '../../presentation/reports/view/table_deposits_report_view.dart';
+import '../../presentation/reports/view/kitchen_comandas_report_view.dart';
 import '../../presentation/reports/view/offers_report_view.dart';
 import '../../presentation/reports/view/inventory_report_view.dart';
 import '../../presentation/reports/view/purchases_report_view.dart';
@@ -615,6 +616,10 @@ class AppRouter {
             builder: (context, state) => const TableDepositsReportView(),
           ),
           GoRoute(
+            path: AppRoutes.reportsComandas,
+            builder: (context, state) => const KitchenComandasReportView(),
+          ),
+          GoRoute(
             path: AppRoutes.reportsSalesByWaiter,
             builder: (context, state) => const SalesByWaiterView(),
           ),
@@ -1104,6 +1109,8 @@ ReportCategory? _reportCategoryFromQuery(String? value) {
       return ReportCategory.delivery;
     case 'deposits':
       return ReportCategory.deposits;
+    case 'comandas':
+      return ReportCategory.comandas;
     case 'purchases':
       return ReportCategory.purchases;
     case 'finances':

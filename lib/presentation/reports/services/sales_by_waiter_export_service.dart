@@ -17,12 +17,14 @@ class SalesByWaiterExportService {
     required DateTime to,
     required NumberFormat currency,
     String? productSearch,
+    String? timeWindow,
   }) async {
     final pdf = pw.Document();
     final dateFormat = DateFormat('dd/MM/yyyy');
     final intFormat = NumberFormat('#,##0', 'en_US');
     final qtyFormat = NumberFormat('#,##0.##', 'en_US');
     final search = productSearch?.trim() ?? '';
+    final window = timeWindow?.trim() ?? '';
 
     final totalGross = rows.fold<double>(0, (s, r) => s + r.grossAmount);
     final totalDiscounts = rows.fold<double>(
@@ -58,6 +60,10 @@ class SalesByWaiterExportService {
           pw.Text(
             'Rango: ${dateFormat.format(from)} - ${dateFormat.format(to)}',
           ),
+          if (window.isNotEmpty) ...[
+            pw.SizedBox(height: 2),
+            pw.Text('Franja horaria: $window'),
+          ],
           if (search.isNotEmpty) ...[
             pw.SizedBox(height: 2),
             pw.Text('Filtro de producto: "$search"'),

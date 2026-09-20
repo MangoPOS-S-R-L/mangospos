@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../../data/models/kitchen_comanda_report.dart';
+import '../../../data/models/kitchen_missing_report.dart';
 import '../../../data/models/table_deposit_report.dart';
 import '../model/report_column.dart';
 import '../model/report_table_data.dart';
@@ -286,6 +288,243 @@ class ReportsCsvExportService {
           viewModel.deliveryTotalFees.toStringAsFixed(2),
         ]);
         rows.add([]);
+        break;
+      case ReportCategory.comandas:
+        final report = viewModel.comandasView;
+        final qty = NumberFormat('#,##0.##', 'en_US');
+        final missingForHeader = viewModel.comandasMissingView;
+        rows.add([
+          'Estación',
+          viewModel.comandasStationLabel,
+          'Comandas',
+          '${report.comandasCount}',
+          'Órdenes',
+          '${report.ordersCount}',
+          if (missingForHeader != null) ...[
+            'Eliminaciones',
+            '${missingForHeader.removals.length}',
+          ],
+        ]);
+        rows.add([]);
+        // Una fila por producto de cada comanda: así se puede filtrar y
+        // sumar en Excel.
+        rows.add(['Comandas enviadas']);
+        rows.add([
+          'Fecha',
+          'Mesa',
+          'Orden',
+          'Mesero',
+          'Estación',
+          'Producto',
+          'Cantidad',
+          'Modificadores',
+          'Nota',
+        ]);
+        final sentFormat = DateFormat('dd/MM/yyyy HH:mm:ss');
+        for (final c in report.comandas) {
+          for (final i in c.displayItems) {
+            rows.add([
+              sentFormat.format(c.sentAt),
+              c.tableName,
+              c.orderNumber,
+              c.waiterName ?? '',
+              i.areaNames.join(' / '),
+              i.productName,
+              qty.format(i.quantity),
+              i.modifiers
+                  .map((m) => m.qty > 1 ? '${m.name} x${qty.format(m.qty)}' : m.name)
+                  .join(', '),
+              i.notes ?? '',
+            ]);
+          }
+        }
+        rows.add([]);
+        rows.add(['Total por producto']);
+        rows.add(['Producto', 'Cantidad', 'En comandas']);
+        for (final t in report.productTotals) {
+          rows.add([t.productName, qty.format(t.quantity), '${t.comandas}']);
+        }
+        rows.add(['Total', qty.format(report.units), '${report.comandasCount}']);
+        rows.add([]);
+        // Comparador: enviado a cocina vs. cobrado.
+        final cmp = report.comparison;
+        rows.add(['Enviado a cocina vs. cobrado']);
+        rows.add([
+          'Producto',
+          'Enviado',
+          'Cobrado (incluye cortesía y a 0)',
+          'Cortesía',
+          'Cobrado a 0',
+          'Pendiente',
+          'Sin cobrar',
+          'Diferencia',
+          'Anulado (aparte)',
+        ]);
+        for (final p in cmp.products) {
+          rows.add([
+            p.productName,
+            qty.format(p.sent),
+            qty.format(p.charged),
+            qty.format(p.courtesy),
+            qty.format(p.zeroCharge),
+            qty.format(p.pending),
+            qty.format(p.unpaid),
+            qty.format(p.difference),
+            qty.format(p.voided),
+          ]);
+        }
+        rows.add([
+          'Total',
+          qty.format(cmp.sent),
+          qty.format(cmp.charged),
+          qty.format(cmp.courtesy),
+          qty.format(cmp.zeroCharge),
+          qty.format(cmp.pending),
+          qty.format(cmp.unpaid),
+          qty.format(cmp.difference),
+          qty.format(cmp.voided),
+        ]);
+        final sold = state.comandasSalesItemsSold;
+        if (viewModel.effectiveComandasArea == null &&
+            sold != null &&
+            sold >= 0) {
+          rows.add(['Cobrado según el reporte de Ventas', qty.format(sold)]);
+        }
+        rows.add([]);
+        // Una fila por producto de cada comanda no cobrada (se puede filtrar
+        // por orden en Excel para ver la comanda completa).
+        rows.add(['Comandas no cobradas']);
+        rows.add([
+          'Estado',
+          'Fecha',
+          'Mesa',
+          'Orden',
+          'Mesero',
+          'Producto',
+          'Cantidad',
+          'Motivo',
+          'Nota de anulación',
+          'Anulada el',
+        ]);
+        for (final g in cmp.byComanda) {
+          for (final i in g.comanda.displayItems) {
+            rows.add([
+              g.state.label,
+              sentFormat.format(g.comanda.sentAt),
+              g.comanda.tableName,
+              g.comanda.orderNumber,
+              g.comanda.waiterName ?? '',
+              i.productName,
+              qty.format(i.quantity),
+              g.reason ?? '',
+              g.state != KitchenChargeState.voided
+                  ? ''
+                  : report.hasVoidNotes
+                  ? (g.note ?? '')
+                  : 'No disponible (falta actualizar la migración)',
+              g.state == KitchenChargeState.voided && g.comanda.voidAt != null
+                  ? sentFormat.format(g.comanda.voidAt!)
+                  : '',
+            ]);
+          }
+        }
+        rows.add([]);
+        final missing = viewModel.comandasMissingView;
+        if (missing != null) {
+          // Una fila por producto: salió a cocina y hoy no está en ninguna
+          // cuenta.
+          rows.add(['Comandas desaparecidas']);
+          rows.add([
+            'Qué pasó',
+            'Fecha',
+            'Mesa',
+            'Orden',
+            'Mesero',
+            'Producto',
+            'Cantidad',
+            'Detalle',
+          ]);
+          for (final removals in const [true, false]) {
+            for (final g in missing.groups(removals: removals)) {
+              for (final KitchenMissingItem e in g.entries) {
+                rows.add([
+                  e.kind.label,
+                  sentFormat.format(e.item.sentAt),
+                  g.comanda.tableName,
+                  g.comanda.orderNumber,
+                  g.comanda.waiterName ?? '',
+                  e.item.productName,
+                  qty.format(e.quantity),
+                  e.detail,
+                ]);
+              }
+            }
+          }
+          rows.add([
+            'Total borrado o reducido después de enviar',
+            qty.format(missing.removedUnits),
+          ]);
+          rows.add([
+            'Total fuera de toda cuenta',
+            qty.format(missing.outsideUnits),
+          ]);
+          rows.add([]);
+        }
+        if (state.comandasWithoutComandaReport != null) {
+          final withoutComanda = viewModel.comandasWithoutComandaView;
+          final units = withoutComanda.accounts.fold(
+            0.0,
+            (s, a) => s + a.units,
+          );
+          rows.add(['Cobrado sin comanda']);
+          rows.add(['Mesa', 'Cobrado', 'Orden', 'Producto', 'Cantidad']);
+          for (final a in withoutComanda.accounts) {
+            for (final i in a.displayItems) {
+              rows.add([
+                a.tableName,
+                sentFormat.format(a.since),
+                a.orderNumber,
+                i.productName,
+                qty.format(i.quantity),
+              ]);
+            }
+          }
+          rows.add(['Total cobrado sin comanda', qty.format(units)]);
+          rows.add([
+            'Total cobrado (comandas + sin comanda)',
+            qty.format(cmp.charged + units),
+          ]);
+          rows.add([]);
+        }
+        if (state.comandasOpenReport != null) {
+          final openNow = viewModel.comandasOpenView;
+          rows.add(['Aún sin cobrar (ahora mismo)']);
+          rows.add([
+            'Mesa',
+            'Estado',
+            'Desde',
+            'Orden',
+            'Mesero',
+            'Producto',
+            'Cantidad',
+          ]);
+          for (final a in openNow.openAccounts) {
+            for (final i in a.displayItems) {
+              rows.add([
+                a.tableName,
+                a.isOrphan
+                    ? 'Mesa cerrada con la orden abierta'
+                    : 'Mesa abierta',
+                sentFormat.format(a.since),
+                a.orderNumber,
+                a.waiterName ?? '',
+                i.productName,
+                qty.format(i.quantity),
+              ]);
+            }
+          }
+          rows.add([]);
+        }
         break;
       case ReportCategory.deposits:
         final report = state.depositsReport ?? TableDepositReport.empty;

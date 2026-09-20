@@ -315,6 +315,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    return _resolveAuthEmployeeId();
+  }
+
+  /// El `employee_id` del usuario autenticado en Supabase para el negocio
+  /// activo (cajero/admin sin PIN), cacheado por sesión.
+  Future<String?> _resolveAuthEmployeeId() async {
     if (_cachedAuthEmployeeId != null) return _cachedAuthEmployeeId;
 
     final authUser = Supabase.instance.client.auth.currentUser;
@@ -335,6 +341,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } catch (e) {
       debugPrint('[audit] fn_current_employee_id falló: $e');
       return null;
+    }
+  }
+
+  /// Anota quién quitó un producto ya enviado a cocina y por qué (lo borró
+  /// o le bajó la cantidad): el servidor registra el cambio, pero no sabe el
+  /// motivo ni el operador con PIN. Quien lo hizo es el mesero con PIN activo
+  /// o el usuario de la tablet; NO quien abrió la mesa. Nunca lanza.
+  Future<void> noteItemRemoval(String itemId, {String? reason}) async {
+    try {
+      final employeeId =
+          _trustedActiveWaiter()?.employeeId ?? await _resolveAuthEmployeeId();
+      await ref
+          .read(salesRepositoryProvider)
+          .noteItemRemoval(
+            itemId: itemId,
+            reason: reason,
+            employeeId: employeeId,
+          );
+    } catch (e) {
+      debugPrint('[removals] noteItemRemoval: $e');
     }
   }
 
@@ -3013,6 +3039,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
 
+      // El borrado ya pasó: el motivo y el operador se anotan aparte, sin
+      // hacer esperar a la pantalla.
+      unawaited(noteItemRemoval(itemId, reason: reason));
+
       // Fase 1 Toast redesign: si el item borrado era el último de un
       // sub-check, cerrar ese check automáticamente. El principal (C1) y los
       // checks con items restantes se quedan como estaban.
@@ -3046,6 +3076,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'product_name': targetItem?.productName,
             'notes': targetItem?.notes,
             'is_takeout': targetItem?.isTakeout,
+            // Para anotar el motivo al sincronizar (sin red no se puede
+            // consultar el empleado: solo lo que ya está en el dispositivo).
+            'reason': reason,
+            'employee_id':
+                _trustedActiveWaiter()?.employeeId ?? _cachedAuthEmployeeId,
           },
         );
         await _persistCurrentState(localOnly: true);
