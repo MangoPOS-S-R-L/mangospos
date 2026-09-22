@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../../../../data/models/order_item_removal_reason.dart';
+import 'removal_reason_dialog.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
@@ -20,10 +23,10 @@ class ProductDetailModal extends StatefulWidget {
   final Future<void> Function(
     List<OrderItem> items,
     OrderItem updatedItem,
-    String? reductionReason,
+    OrderItemRemovalDecision? reduction,
   )?
   onSaveBatch;
-  final Future<void> Function(String reason) onDelete;
+  final Future<void> Function(OrderItemRemovalDecision decision) onDelete;
   final Future<bool> Function()? onBeforeDelete;
   final Future<void> Function()? onMarkSoldOut;
   final VoidCallback? onReprint;
@@ -171,142 +174,21 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       if (!mounted) return;
     }
 
-    final reasonController = TextEditingController();
-
-    final reason = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.delete_outline,
-                color: Colors.red,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 12),
-            const Text(
-              'Motivo de eliminación',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Por favor, indica la razón por la que estás eliminando este producto de la cuenta:',
-              style: TextStyle(fontSize: 14, color: Color(0xFF64748B)),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: reasonController,
-              maxLines: 3,
-              autofocus: false,
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: const Color(0xFFF8FAFC),
-                hintText:
-                    'Ej: Error de digitación, Cliente cambió de opinión...',
-                hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text(
-              'CANCELAR',
-              style: TextStyle(
-                color: Color(0xFF64748B),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          ElevatedButton(
-            onPressed: () {
-              if (reasonController.text.trim().isEmpty) return;
-              Navigator.of(context).pop(reasonController.text.trim());
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444),
-              foregroundColor: Colors.white,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text(
-              'ELIMINAR PRODUCTO',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
+    // Motivo de una lista + qué pasa con el inventario (merma o devolución),
+    // igual que Toast/Micros. Antes era un campo de texto libre que además
+    // se tiraba a la basura al borrar.
+    final total = _scopedItems.fold<double>(0, (sum, i) => sum + i.quantity);
+    final decision = await showRemovalReasonDialog(
+      context,
+      productName: widget.item.productName,
+      quantity: total <= 0 ? widget.item.quantity : total,
+      alreadySent: _scopedItems.any((i) => i.status != 'draft'),
     );
 
-    if (reason != null && reason.isNotEmpty) {
-      await widget.onDelete(reason);
+    if (decision != null) {
+      await widget.onDelete(decision);
       if (mounted) Navigator.of(context).pop();
     }
-  }
-
-  Future<String?> _promptReductionReason() async {
-    final controller = TextEditingController();
-    final reason = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Motivo de reducción'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Explica por qué se está reduciendo la cantidad...',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              if (value.isEmpty) return;
-              Navigator.of(context).pop(value);
-            },
-            child: const Text('Confirmar'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    return reason;
   }
 
   Future<void> _handleSave() async {
@@ -316,12 +198,18 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       0,
       (sum, item) => sum + item.quantity,
     );
-    String? reductionReason;
+    OrderItemRemovalDecision? reduction;
     if (_quantity < originalQuantity - 0.0001) {
-      reductionReason = await _promptReductionReason();
-      if (reductionReason == null || reductionReason.trim().isEmpty) {
-        return;
-      }
+      // Bajar la cantidad saca unidades de la cuenta igual que borrarlas:
+      // mismo motivo, misma pregunta de inventario, mismo comprobante.
+      reduction = await showRemovalReasonDialog(
+        context,
+        productName: widget.item.productName,
+        quantity: originalQuantity - _quantity,
+        alreadySent: _scopedItems.any((i) => i.status != 'draft'),
+      );
+      if (reduction == null) return;
+      if (!mounted) return;
     }
 
     final discount = _effectiveDiscount();
@@ -378,7 +266,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     });
     try {
       if (_isGroupedMode && widget.onSaveBatch != null) {
-        await widget.onSaveBatch!(_scopedItems, updated, reductionReason);
+        await widget.onSaveBatch!(_scopedItems, updated, reduction);
       } else {
         await widget.onSave(updated);
       }
@@ -541,9 +429,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
             vertical: 16,
           ),
           child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               // Header
               Row(
                 children: [
@@ -699,7 +587,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ],
                       ),
-                      Container(height: 1, width: isCompact ? 100 : 140, color: kBorder),
+                      Container(
+                        height: 1,
+                        width: isCompact ? 100 : 140,
+                        color: kBorder,
+                      ),
                     ],
                   );
                   if (isCompact) {
@@ -750,8 +642,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: const [
-                              Icon(Icons.local_offer,
-                                  size: 16, color: kPrimary),
+                              Icon(
+                                Icons.local_offer,
+                                size: 16,
+                                color: kPrimary,
+                              ),
                               SizedBox(width: 6),
                               Text(
                                 'Oferta aplicada',
@@ -771,9 +666,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                         maxLines: 2,
                         decoration: InputDecoration(
                           hintText: 'Por ej: Caliente, con ají, sin sal...',
-                          hintStyle: const TextStyle(
-                            color: Color(0xFF9CA3AF),
-                          ),
+                          hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(color: kBorder),
@@ -940,41 +833,43 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: chips.map((m) {
-                            final qtyPrefix = m.qty > 1.0001
-                                ? '${m.qty.toStringAsFixed(m.qty % 1 == 0 ? 0 : 1)}× '
-                                : '';
-                            final priceLabel = m.hasCost
-                                ? ' (+RD\$ ${m.cost.toStringAsFixed(2)})'
-                                : '';
-                            return Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: m.combo
-                                    ? const Color(0xFFFFF7ED)
-                                    : const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: m.combo
-                                      ? const Color(0xFFFED7AA)
-                                      : kBorder,
-                                ),
-                              ),
-                              child: Text(
-                                '$qtyPrefix${m.name}$priceLabel',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: m.combo
-                                      ? const Color(0xFF9A3412)
-                                      : const Color(0xFF475569),
-                                ),
-                              ),
-                            );
-                          }).toList(growable: false),
+                          children: chips
+                              .map((m) {
+                                final qtyPrefix = m.qty > 1.0001
+                                    ? '${m.qty.toStringAsFixed(m.qty % 1 == 0 ? 0 : 1)}× '
+                                    : '';
+                                final priceLabel = m.hasCost
+                                    ? ' (+RD\$ ${m.cost.toStringAsFixed(2)})'
+                                    : '';
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: m.combo
+                                        ? const Color(0xFFFFF7ED)
+                                        : const Color(0xFFF8FAFC),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: m.combo
+                                          ? const Color(0xFFFED7AA)
+                                          : kBorder,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '$qtyPrefix${m.name}$priceLabel',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: m.combo
+                                          ? const Color(0xFF9A3412)
+                                          : const Color(0xFF475569),
+                                    ),
+                                  ),
+                                );
+                              })
+                              .toList(growable: false),
                         ),
                         const SizedBox(height: 12),
                       ],
@@ -1225,7 +1120,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   _groupedModifierChips() {
     final order = <String>[];
     final byKey =
-        <String, ({String name, double qty, double cost, bool hasCost, bool combo})>{};
+        <
+          String,
+          ({String name, double qty, double cost, bool hasCost, bool combo})
+        >{};
     for (final item in _scopedItems) {
       final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
       for (final mod in item.modifiers) {
@@ -1345,9 +1243,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     return _enteredDiscount().clamp(0, _fullAmountForQuantity(_quantity));
   }
 
-  ({String notes, String? courtesyReason, String? dealMarker}) _splitStoredNotes(
-    String? rawNotes,
-  ) {
+  ({String notes, String? courtesyReason, String? dealMarker})
+  _splitStoredNotes(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) {
       return (notes: '', courtesyReason: null, dealMarker: null);
     }
@@ -1558,8 +1455,10 @@ class _MobileFooter extends StatelessWidget {
                   const PopupMenuItem(
                     value: 'soldout',
                     child: ListTile(
-                      leading: Icon(Icons.warning_amber_rounded,
-                          color: Color(0xFFEF4444)),
+                      leading: Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFEF4444),
+                      ),
                       title: Text('Agotar producto'),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -1568,8 +1467,10 @@ class _MobileFooter extends StatelessWidget {
                   const PopupMenuItem(
                     value: 'reprint',
                     child: ListTile(
-                      leading: Icon(Icons.print_outlined,
-                          color: Color(0xFF2563EB)),
+                      leading: Icon(
+                        Icons.print_outlined,
+                        color: Color(0xFF2563EB),
+                      ),
                       title: Text('Reimprimir comanda'),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -1578,10 +1479,14 @@ class _MobileFooter extends StatelessWidget {
                 const PopupMenuItem(
                   value: 'delete',
                   child: ListTile(
-                    leading: Icon(Icons.delete_outline,
-                        color: Color(0xFFEF4444)),
-                    title: Text('Eliminar pedido',
-                        style: TextStyle(color: Color(0xFFEF4444))),
+                    leading: Icon(
+                      Icons.delete_outline,
+                      color: Color(0xFFEF4444),
+                    ),
+                    title: Text(
+                      'Eliminar pedido',
+                      style: TextStyle(color: Color(0xFFEF4444)),
+                    ),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -1860,33 +1765,39 @@ class _ItemModifiersEditorDialogState
                                           onSelected: isSoldOut
                                               ? null
                                               : (_) {
-                                            setState(() {
-                                              final set = _selectedByGroup
-                                                  .putIfAbsent(
-                                                    groupId,
-                                                    () => <String>{},
-                                                  );
-                                              if (displayType == 'single') {
-                                                if (set.contains(modifierId)) {
-                                                  set.clear();
-                                                } else {
-                                                  set
-                                                    ..clear()
-                                                    ..add(modifierId);
-                                                }
-                                              } else {
-                                                if (set.contains(modifierId)) {
-                                                  set.remove(modifierId);
-                                                } else {
-                                                  if (maxSelect > 0 &&
-                                                      set.length >= maxSelect) {
-                                                    return;
-                                                  }
-                                                  set.add(modifierId);
-                                                }
-                                              }
-                                            });
-                                          },
+                                                  setState(() {
+                                                    final set = _selectedByGroup
+                                                        .putIfAbsent(
+                                                          groupId,
+                                                          () => <String>{},
+                                                        );
+                                                    if (displayType ==
+                                                        'single') {
+                                                      if (set.contains(
+                                                        modifierId,
+                                                      )) {
+                                                        set.clear();
+                                                      } else {
+                                                        set
+                                                          ..clear()
+                                                          ..add(modifierId);
+                                                      }
+                                                    } else {
+                                                      if (set.contains(
+                                                        modifierId,
+                                                      )) {
+                                                        set.remove(modifierId);
+                                                      } else {
+                                                        if (maxSelect > 0 &&
+                                                            set.length >=
+                                                                maxSelect) {
+                                                          return;
+                                                        }
+                                                        set.add(modifierId);
+                                                      }
+                                                    }
+                                                  });
+                                                },
                                         );
                                       })
                                       .toList(growable: false),

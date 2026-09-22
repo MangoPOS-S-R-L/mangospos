@@ -72,6 +72,9 @@ import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart
 import 'package:mangopos/data/models/table_status.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
+import 'package:mangopos/data/models/order_item_removal_reason.dart';
+import 'package:mangopos/presentation/sales/utils/removal_voucher_printing.dart';
 import 'package:mangopos/presentation/sales/view/widgets/product_detail_modal.dart';
 import 'package:mangopos/presentation/sales/view/table_selector_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/order_taxes_dialog.dart';
@@ -106,6 +109,63 @@ final _salesActionLocksProvider = StateProvider<Map<String, int>>(
 /// reintento. Si la acción legítimamente puede tomar más tiempo, hay que
 /// pasar `failsafeTimeout` mayor en `_runLockedAction`.
 const Duration _kLockMaxAge = Duration(seconds: 15);
+
+/// Lo que pasa DESPUÉS de sacar un producto de la cuenta, se haya borrado o
+/// se le haya bajado la cantidad: el comprobante en caja y el aviso a la
+/// estación. Es un solo sitio porque los dos caminos son el mismo hecho y,
+/// con dos copias, la segunda se queda atrás en el primer cambio.
+Future<void> _afterRemoval(
+  BuildContext context,
+  WidgetRef ref, {
+  required OrderItem item,
+  required double quantity,
+  required OrderItemRemovalDecision decision,
+  required bool alreadySent,
+  String? tableName,
+}) async {
+  final session = ref.read(sessionProvider);
+  final businessId = session.activeBusinessId ?? '';
+  final waiter = ref.read(activeWaiterProvider);
+  final operatorName = waiter == null
+      ? null
+      : '${waiter.firstName} ${waiter.lastName ?? ''}'.trim();
+  final orderId = ref.read(currentOrderProvider).order?.id ?? '';
+
+  // 1. El comprobante sale SIEMPRE: es el papel que queda del hecho.
+  await RemovalVoucherPrinting.print(
+    context,
+    ref,
+    businessId: businessId,
+    businessName: session.activeBusinessName ?? 'MangoPOS',
+    productName: item.productName,
+    quantity: quantity,
+    decision: decision,
+    tableName: tableName,
+    orderNumber: orderId.length >= 8
+        ? orderId.substring(0, 8).toUpperCase()
+        : null,
+    unitPrice: item.unitPrice,
+    operatorName: operatorName,
+  );
+
+  // 2. Aviso a la estación solo si la comanda YA salió: el bar tiene el papel
+  //    en la mano y borrarlo del sistema no se lo quita.
+  if (!alreadySent || businessId.isEmpty || orderId.isEmpty) return;
+  unawaited(
+    ref
+        .read(printingServiceProvider)
+        .printRemovalNotice(
+          orderId: orderId,
+          businessId: businessId,
+          item: item,
+          quantity: quantity,
+          reasonLabel: decision.reason.label,
+          note: decision.note,
+          isWaste: decision.isWaste,
+          operatorName: operatorName,
+        ),
+  );
+}
 
 Future<bool> _ensureCanDeleteOrderItem(
   BuildContext context,
@@ -215,7 +275,10 @@ Future<_BusinessReceiptProfile> _loadBusinessReceiptProfile(
             .timeout(const Duration(seconds: 6));
         if (business != null) {
           unawaited(
-            PosLookupOfflineCache().saveReceiptBusinessRow(businessId, business),
+            PosLookupOfflineCache().saveReceiptBusinessRow(
+              businessId,
+              business,
+            ),
           );
         }
       } catch (e) {
@@ -314,9 +377,7 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
         .timeout(const Duration(seconds: 4));
     final name = result?.toString().trim();
     if (name != null && name.isNotEmpty) {
-      return _waiterNameByOrder[orderId] = preferredDisplayName(
-        fullName: name,
-      );
+      return _waiterNameByOrder[orderId] = preferredDisplayName(fullName: name);
     }
   } catch (e) {
     debugPrint('[audit] fn_order_opener_name falló: $e');
@@ -370,10 +431,10 @@ Future<List<Map<String, dynamic>>> _buildPrecheckTotalsPayload(
     }
 
     return buildReceiptTotalsRows(
-      summary: summary,
-      taxBreakdown: taxBreakdown,
-      postDiscountMode: postDiscountMode,
-    )
+          summary: summary,
+          taxBreakdown: taxBreakdown,
+          postDiscountMode: postDiscountMode,
+        )
         .map(
           (row) => <String, dynamic>{
             'label': row.label,
@@ -771,9 +832,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }).toList();
     if (pendingItems.isEmpty) {
       ScaffoldMessenger.of(context).showAppSnackBar(
-        const SnackBar(
-          content: Text('No hay productos pendientes de cobrar.'),
-        ),
+        const SnackBar(content: Text('No hay productos pendientes de cobrar.')),
       );
       return;
     }
@@ -832,9 +891,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   Future<void> _handleMarkAllTakeout(BuildContext context) async {
     final orderState = ref.read(currentOrderProvider);
     if (orderState.order == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showAppSnackBar(const SnackBar(content: Text('No hay una orden activa.')));
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(content: Text('No hay una orden activa.')),
+      );
       return;
     }
     final openItems = orderState.items
@@ -914,7 +973,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // Cualquier otro rol debe escribir PIN de Supervisor/Administrador
     // como respaldo para anular o liberar la mesa.
     final isOwner = operatorIsOwner(ref);
-    final hasBypassPermission = bypassPermission != null &&
+    final hasBypassPermission =
+        bypassPermission != null &&
         operatorHasPermission(ref, bypassPermission);
     if (!isOwner && !hasBypassPermission) {
       final authorized = await showPinVerificationModal(
@@ -1034,8 +1094,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // "todos los ítems son takeout"), lo que contagiaba: al marcar 1-2 ítems
     // para llevar, los siguientes entraban para llevar solos. El cajero marca
     // cada ítem con el toggle por-ítem cuando aplique.
-    final orderTakeout =
-        ref.read(currentOrderProvider.notifier).defaultTakeoutForNewItem();
+    final orderTakeout = ref
+        .read(currentOrderProvider.notifier)
+        .defaultTakeoutForNewItem();
     // Multiplicador de cantidad: se arma tocando «N×» en la barra del
     // catálogo y se consume acá — vuelve a 1 para que no arrastre al
     // siguiente producto. Las ofertas no pasan por aquí: traen su propia
@@ -1176,9 +1237,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       final appliedLabel = result.mode == _DiscountMode.percent
           ? 'Descuento ${result.value.toStringAsFixed(0)}% aplicado.'
           : 'Descuento de ${currentBusinessCurrencyOrFallback(ref).formatAmount(result.value)} aplicado.';
-      ScaffoldMessenger.of(context).showAppSnackBar(
-        SnackBar(content: Text(appliedLabel)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showAppSnackBar(SnackBar(content: Text(appliedLabel)));
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showAppSnackBar(
@@ -2033,9 +2094,7 @@ class _VoidOrderDialogState extends ConsumerState<_VoidOrderDialog> {
                   Text(
                     'Cantidad abierta: ${widget.openItemsQty.toStringAsFixed(widget.openItemsQty % 1 == 0 ? 0 : 2)}',
                   ),
-                  Text(
-                    'Total abierto: ${currency.format(widget.totalAmount)}',
-                  ),
+                  Text('Total abierto: ${currency.format(widget.totalAmount)}'),
                 ],
               ),
             ),
@@ -2140,7 +2199,9 @@ class _DeliveryAddressBar extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    hasAddress ? address!.trim() : 'Agregar dirección (opcional)',
+                    hasAddress
+                        ? address!.trim()
+                        : 'Agregar dirección (opcional)',
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -2148,8 +2209,9 @@ class _DeliveryAddressBar extends StatelessWidget {
                       color: hasAddress
                           ? _salesTextPrimary
                           : _salesTextSecondary,
-                      fontWeight:
-                          hasAddress ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: hasAddress
+                          ? FontWeight.w600
+                          : FontWeight.w400,
                     ),
                   ),
                 ],
@@ -2227,8 +2289,9 @@ class _CartView extends ConsumerWidget {
     WidgetRef ref,
     CurrentOrderState orderState,
   ) async {
-    final controller =
-        TextEditingController(text: orderState.deliveryAddress ?? '');
+    final controller = TextEditingController(
+      text: orderState.deliveryAddress ?? '',
+    );
     final result = await showDialog<String?>(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -2527,9 +2590,7 @@ class _CartView extends ConsumerWidget {
         if (features.deliveryFeeRequired) {
           ScaffoldMessenger.of(context).showAppSnackBar(
             const SnackBar(
-              content: Text(
-                'Debes indicar el monto del delivery para cobrar.',
-              ),
+              content: Text('Debes indicar el monto del delivery para cobrar.'),
               backgroundColor: Colors.orange,
             ),
           );
@@ -2575,7 +2636,8 @@ class _CartView extends ConsumerWidget {
         }
       }
     }
-    final String finalFiscalType = (checkId != null && requestedCheckNcf != null)
+    final String finalFiscalType =
+        (checkId != null && requestedCheckNcf != null)
         ? requestedCheckNcf
         : currentOrderState.fiscalType;
 
@@ -2843,254 +2905,271 @@ class _CartView extends ConsumerWidget {
       List<Payment> payments, {
       String? offlineNcf,
     }) async {
-          if (!context.mounted) return;
+      if (!context.mounted) return;
 
-          final items = List<OrderItem>.from(prePaymentItems);
-          final printOrder = prePaymentOrder;
+      final items = List<OrderItem>.from(prePaymentItems);
+      final printOrder = prePaymentOrder;
 
-          // VENTA RÁPIDA: enviar la comanda a cocina al confirmarse el pago,
-          // desde el snapshot pre-pago (los ítems ya quedaron `paid`). Best-
-          // effort y fire-and-forget: no bloquea ni tumba la impresión de la
-          // factura. Solo si la cocina está activa y es venta rápida.
-          if (fireKitchenForQuick) {
-            unawaited(
-              ref
-                  .read(currentOrderProvider.notifier)
-                  .fireQuickSaleKitchenSnapshot(
-                    order: printOrder,
-                    items: items,
-                  ),
-            );
-          }
+      // VENTA RÁPIDA: enviar la comanda a cocina al confirmarse el pago,
+      // desde el snapshot pre-pago (los ítems ya quedaron `paid`). Best-
+      // effort y fire-and-forget: no bloquea ni tumba la impresión de la
+      // factura. Solo si la cocina está activa y es venta rápida.
+      if (fireKitchenForQuick) {
+        unawaited(
+          ref
+              .read(currentOrderProvider.notifier)
+              .fireQuickSaleKitchenSnapshot(order: printOrder, items: items),
+        );
+      }
 
-          // Si los pagos vienen con status='pending' significa que
-          // PaymentSplitViewModel cayó al fallback offline: no hay NCF
-          // todavía, no hay fiscal_document. Imprimimos PRECUENTA en
-          // lugar de factura — el cajero entrega un comprobante interno
-          // al cliente y, cuando el sync llegue al server, el NCF se
-          // emite con la fecha real (paid_at) y la factura puede
-          // re-imprimirse desde el historial.
-          final isOfflineQueued =
-              payments.isNotEmpty &&
-              payments.every((p) => p.status == 'pending');
+      // Si los pagos vienen con status='pending' significa que
+      // PaymentSplitViewModel cayó al fallback offline: no hay NCF
+      // todavía, no hay fiscal_document. Imprimimos PRECUENTA en
+      // lugar de factura — el cajero entrega un comprobante interno
+      // al cliente y, cuando el sync llegue al server, el NCF se
+      // emite con la fecha real (paid_at) y la factura puede
+      // re-imprimirse desde el historial.
+      final isOfflineQueued =
+          payments.isNotEmpty && payments.every((p) => p.status == 'pending');
 
-          // PERF: perfil, fiscal doc y mesero no dependen entre sí — los
-          // tres futures arrancan JUNTOS y se awaitean después (el tiempo
-          // pasa de la suma de 3 viajes de red al del más lento). Los tres
-          // helpers capturan sus errores adentro y devuelven fallback
-          // (nunca lanzan), así que awaitear futures ya arrancados no deja
-          // errores sin manejar.
-          final businessProfileFuture = _loadBusinessReceiptProfile(ref);
-          // Pasar el fd_id del payment recién cobrado para obtener EL fd
-          // correcto. Una orden con split bill o multi-method tiene N fds
-          // y getOrderFiscalDocument no puede elegir el correcto solo por
-          // order_id. Post migration 0007, el RPC retorna payment con
-          // fiscal_document_id seteado correctamente.
-          final fdIdFromPayment = payments.isNotEmpty
-              ? payments.last.fiscalDocumentId
-              : null;
-          final fiscalDocFuture = _loadFiscalDocument(
-            ref,
-            order.id,
-            fiscalDocumentId: fdIdFromPayment,
-          );
-          final waiterNameFuture = _loadWaiterName(ref, order.id);
-          // Nota de venta del mismo scope que se acaba de cobrar. Arranca en
-          // paralelo con el resto; si el cobro fue fiscal devuelve null y
-          // nada cambia.
-          final salesNoteFuture = _loadSalesNote(
-            ref,
-            order.id,
-            checkId: checkId,
-          );
-          final businessProfile = await businessProfileFuture;
-          final fiscalDoc = await fiscalDocFuture;
-          final salesNote = await salesNoteFuture;
-          final waiterName =
-              await waiterNameFuture ?? ref.read(sessionProvider).userName;
-          final issuedAt =
-              fiscalDoc?.issuedAt ??
-              (payments.isNotEmpty
-                  ? payments
-                        .map((payment) => payment.createdAt)
-                        .reduce((a, b) => a.isAfter(b) ? a : b)
-                  : order.createdAt);
+      // PERF: perfil, fiscal doc y mesero no dependen entre sí — los
+      // tres futures arrancan JUNTOS y se awaitean después (el tiempo
+      // pasa de la suma de 3 viajes de red al del más lento). Los tres
+      // helpers capturan sus errores adentro y devuelven fallback
+      // (nunca lanzan), así que awaitear futures ya arrancados no deja
+      // errores sin manejar.
+      final businessProfileFuture = _loadBusinessReceiptProfile(ref);
+      // Pasar el fd_id del payment recién cobrado para obtener EL fd
+      // correcto. Una orden con split bill o multi-method tiene N fds
+      // y getOrderFiscalDocument no puede elegir el correcto solo por
+      // order_id. Post migration 0007, el RPC retorna payment con
+      // fiscal_document_id seteado correctamente.
+      final fdIdFromPayment = payments.isNotEmpty
+          ? payments.last.fiscalDocumentId
+          : null;
+      final fiscalDocFuture = _loadFiscalDocument(
+        ref,
+        order.id,
+        fiscalDocumentId: fdIdFromPayment,
+      );
+      final waiterNameFuture = _loadWaiterName(ref, order.id);
+      // Nota de venta del mismo scope que se acaba de cobrar. Arranca en
+      // paralelo con el resto; si el cobro fue fiscal devuelve null y
+      // nada cambia.
+      final salesNoteFuture = _loadSalesNote(ref, order.id, checkId: checkId);
+      final businessProfile = await businessProfileFuture;
+      final fiscalDoc = await fiscalDocFuture;
+      final salesNote = await salesNoteFuture;
+      final waiterName =
+          await waiterNameFuture ?? ref.read(sessionProvider).userName;
+      final issuedAt =
+          fiscalDoc?.issuedAt ??
+          (payments.isNotEmpty
+              ? payments
+                    .map((payment) => payment.createdAt)
+                    .reduce((a, b) => a.isAfter(b) ? a : b)
+              : order.createdAt);
 
-          final ncfFromPayment = payments.isNotEmpty
-              ? payments.last.reference
-              : null;
-          final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
+      final ncfFromPayment = payments.isNotEmpty
+          ? payments.last.reference
+          : null;
+      final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
 
-          if (!context.mounted) return;
+      if (!context.mounted) return;
 
-          final invoicePrintLockKey = _printActionKey(
-            'invoice',
-            orderId: printOrder.id,
-            checkId: checkId,
-          );
-          // Nota de venta: el papel se llama distinto y NO lleva datos
-          // fiscales. Dejar el NCF aquí imprimiría un comprobante que esta
-          // venta nunca emitió.
-          final isSalesNoteInvoice = salesNote != null;
-          final invoiceData = {
-            'title': isSalesNoteInvoice
-                ? '*** NOTA DE VENTA ***'
-                : '*** FACTURA ***',
-            'restaurantName': businessProfile.name,
-            'legalName': businessProfile.legalName,
-            'rnc': businessProfile.rnc,
-            'phone': businessProfile.phone,
-            'address': businessProfile.address,
-            'salesNote': salesNote?.noteNumber,
-            'ncf': isSalesNoteInvoice
-                ? null
-                : (ncfFromPayment ?? fiscalDoc?.ncfNumber),
-            'fiscalType': isSalesNoteInvoice ? null : printedFiscalType,
-            'customerName': finalCustomerName,
-            'customerLegalName': finalCustomerLegalName,
-            'customerTaxId': finalCustomerTaxId,
-            'deliveryAddress': ref.read(currentOrderProvider).deliveryAddress,
-            'issuedAt': issuedAt.toIso8601String(),
-            'tableName': tableName,
-            'waiterName': waiterName,
-            'items': items
-                .map(
-                  (i) => {
-                    'quantity': i.quantity,
-                    'name': i.productName,
-                    'price': itemDisplayTotal(printOrder, i),
-                  },
-                )
-                .toList(),
-            'subtotal': printOrder.subtotal,
-            'tax': printOrder.tax,
-            'serviceFee': printOrder.serviceFee,
-            'total': printOrder.total,
-          };
+      final invoicePrintLockKey = _printActionKey(
+        'invoice',
+        orderId: printOrder.id,
+        checkId: checkId,
+      );
+      // Nota de venta: el papel se llama distinto y NO lleva datos
+      // fiscales. Dejar el NCF aquí imprimiría un comprobante que esta
+      // venta nunca emitió.
+      final isSalesNoteInvoice = salesNote != null;
+      final invoiceData = {
+        'title': isSalesNoteInvoice
+            ? '*** NOTA DE VENTA ***'
+            : '*** FACTURA ***',
+        'restaurantName': businessProfile.name,
+        'legalName': businessProfile.legalName,
+        'rnc': businessProfile.rnc,
+        'phone': businessProfile.phone,
+        'address': businessProfile.address,
+        'salesNote': salesNote?.noteNumber,
+        'ncf': isSalesNoteInvoice
+            ? null
+            : (ncfFromPayment ?? fiscalDoc?.ncfNumber),
+        'fiscalType': isSalesNoteInvoice ? null : printedFiscalType,
+        'customerName': finalCustomerName,
+        'customerLegalName': finalCustomerLegalName,
+        'customerTaxId': finalCustomerTaxId,
+        'deliveryAddress': ref.read(currentOrderProvider).deliveryAddress,
+        'issuedAt': issuedAt.toIso8601String(),
+        'tableName': tableName,
+        'waiterName': waiterName,
+        'items': items
+            .map(
+              (i) => {
+                'quantity': i.quantity,
+                'name': i.productName,
+                'price': itemDisplayTotal(printOrder, i),
+              },
+            )
+            .toList(),
+        'subtotal': printOrder.subtotal,
+        'tax': printOrder.tax,
+        'serviceFee': printOrder.serviceFee,
+        'total': printOrder.total,
+      };
 
-          // Cobro offline: imprimimos precuenta (sin NCF) en lugar de
-          // la factura. Reusamos el destination picker de precuenta para
-          // que respete la impresora fijada del device.
-          if (isOfflineQueued) {
-            // F4: si el Hub asignó un NCF de papel, imprimimos el COMPROBANTE
-            // con ese número en el acto (no la precuenta). _handlePrintFlow es
-            // offline-seguro: el fetch del fd remoto da null (no hay QR en
-            // papel) y el NCF sale de data['ncf'].
-            if (offlineNcf != null) {
-              final fiscalInvoiceData = Map<String, dynamic>.from(invoiceData);
-              fiscalInvoiceData['ncf'] = offlineNcf;
-              try {
-                await _runLockedAction(ref, invoicePrintLockKey, () async {
-                  await _handlePrintFlow(
-                    context,
-                    ref,
-                    'invoice',
-                    fiscalInvoiceData,
-                    orderObj: printOrder,
-                    orderItems: items,
-                    payments: payments,
-                    tableName: tableName,
-                    waiterName: waiterName,
-                    showSnackBar: false,
-                    preloadedFiscalDoc: fiscalDoc,
-                  );
-                });
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showAppSnackBar(
-                    SnackBar(
-                      backgroundColor: const Color(0xFF10B981),
-                      behavior: SnackBarBehavior.floating,
-                      content: Text(
-                        'Comprobante emitido offline · NCF $offlineNcf. '
-                        'Pendiente de sincronizar.',
-                      ),
-                    ),
-                  );
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showAppSnackBar(
-                    SnackBar(
-                      backgroundColor: const Color(0xFFEF4444),
-                      content: Text('No se pudo imprimir el comprobante: $e'),
-                    ),
-                  );
-                }
-              }
-              return;
-            }
-
-            final offlinePrecheckTotals = await _buildPrecheckTotalsPayload(
-              ref,
-              printOrder,
-              items,
-            );
-            final preCheckData = <String, dynamic>{
-              'restaurantName': businessProfile.name,
-              'businessName': businessProfile.businessName,
-              'legalName': businessProfile.legalName,
-              'rnc': businessProfile.rnc,
-              'phone': businessProfile.phone,
-              'address': businessProfile.address,
-              'tableName': tableName,
-              'waiterName': waiterName,
-              'customerName': finalCustomerName,
-              'items': items
-                  .map(
-                    (i) => {
-                      'quantity': i.quantity,
-                      'name': i.productName,
-                      'price': itemDisplayTotal(printOrder, i),
-                    },
-                  )
-                  .toList(),
-              'subtotal': printOrder.subtotal,
-              'tax': printOrder.tax,
-              'serviceFee': printOrder.serviceFee,
-              'total': printOrder.total,
-              'totals': offlinePrecheckTotals,
-            };
-            if (!context.mounted) return;
-            try {
-              await _runPrecheckWithDestinationPicker(
-                context,
-                ref,
-                preCheckData: preCheckData,
-                orderObj: printOrder,
-                orderItems: items,
-                forcePicker: false,
-              );
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showAppSnackBar(
-                  const SnackBar(
-                    backgroundColor: Color(0xFFF59E0B),
-                    behavior: SnackBarBehavior.floating,
-                    content: Text(
-                      'Pago guardado offline. Precuenta impresa. El comprobante fiscal se emitirá al sincronizar.',
-                    ),
-                  ),
-                );
-              }
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showAppSnackBar(
-                  SnackBar(
-                    backgroundColor: const Color(0xFFEF4444),
-                    content: Text('No se pudo imprimir la precuenta: $e'),
-                  ),
-                );
-              }
-            }
-            return;
-          }
-
+      // Cobro offline: imprimimos precuenta (sin NCF) en lugar de
+      // la factura. Reusamos el destination picker de precuenta para
+      // que respete la impresora fijada del device.
+      if (isOfflineQueued) {
+        // F4: si el Hub asignó un NCF de papel, imprimimos el COMPROBANTE
+        // con ese número en el acto (no la precuenta). _handlePrintFlow es
+        // offline-seguro: el fetch del fd remoto da null (no hay QR en
+        // papel) y el NCF sale de data['ncf'].
+        if (offlineNcf != null) {
+          final fiscalInvoiceData = Map<String, dynamic>.from(invoiceData);
+          fiscalInvoiceData['ncf'] = offlineNcf;
           try {
             await _runLockedAction(ref, invoicePrintLockKey, () async {
               await _handlePrintFlow(
                 context,
                 ref,
                 'invoice',
-                invoiceData,
+                fiscalInvoiceData,
+                orderObj: printOrder,
+                orderItems: items,
+                payments: payments,
+                tableName: tableName,
+                waiterName: waiterName,
+                showSnackBar: false,
+                preloadedFiscalDoc: fiscalDoc,
+              );
+            });
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showAppSnackBar(
+                SnackBar(
+                  backgroundColor: const Color(0xFF10B981),
+                  behavior: SnackBarBehavior.floating,
+                  content: Text(
+                    'Comprobante emitido offline · NCF $offlineNcf. '
+                    'Pendiente de sincronizar.',
+                  ),
+                ),
+              );
+            }
+          } catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showAppSnackBar(
+                SnackBar(
+                  backgroundColor: const Color(0xFFEF4444),
+                  content: Text('No se pudo imprimir el comprobante: $e'),
+                ),
+              );
+            }
+          }
+          return;
+        }
+
+        final offlinePrecheckTotals = await _buildPrecheckTotalsPayload(
+          ref,
+          printOrder,
+          items,
+        );
+        final preCheckData = <String, dynamic>{
+          'restaurantName': businessProfile.name,
+          'businessName': businessProfile.businessName,
+          'legalName': businessProfile.legalName,
+          'rnc': businessProfile.rnc,
+          'phone': businessProfile.phone,
+          'address': businessProfile.address,
+          'tableName': tableName,
+          'waiterName': waiterName,
+          'customerName': finalCustomerName,
+          'items': items
+              .map(
+                (i) => {
+                  'quantity': i.quantity,
+                  'name': i.productName,
+                  'price': itemDisplayTotal(printOrder, i),
+                },
+              )
+              .toList(),
+          'subtotal': printOrder.subtotal,
+          'tax': printOrder.tax,
+          'serviceFee': printOrder.serviceFee,
+          'total': printOrder.total,
+          'totals': offlinePrecheckTotals,
+        };
+        if (!context.mounted) return;
+        try {
+          await _runPrecheckWithDestinationPicker(
+            context,
+            ref,
+            preCheckData: preCheckData,
+            orderObj: printOrder,
+            orderItems: items,
+            forcePicker: false,
+          );
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showAppSnackBar(
+              const SnackBar(
+                backgroundColor: Color(0xFFF59E0B),
+                behavior: SnackBarBehavior.floating,
+                content: Text(
+                  'Pago guardado offline. Precuenta impresa. El comprobante fiscal se emitirá al sincronizar.',
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showAppSnackBar(
+              SnackBar(
+                backgroundColor: const Color(0xFFEF4444),
+                content: Text('No se pudo imprimir la precuenta: $e'),
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      try {
+        await _runLockedAction(ref, invoicePrintLockKey, () async {
+          await _handlePrintFlow(
+            context,
+            ref,
+            'invoice',
+            invoiceData,
+            orderObj: printOrder,
+            orderItems: items,
+            payments: payments,
+            tableName: tableName,
+            waiterName: waiterName,
+            showSnackBar: true,
+            preloadedFiscalDoc: fiscalDoc,
+          );
+        });
+        if (context.mounted) {
+          await showPaymentSuccessDialog(
+            context: context,
+            onReprint: () async {
+              // Marcamos el ticket como "COPIA" para que se
+              // distinga del original y no se confunda con una
+              // segunda venta.
+              final copyData = Map<String, dynamic>.from(invoiceData);
+              copyData['title'] = isSalesNoteInvoice
+                  ? '*** COPIA - NOTA DE VENTA ***'
+                  : '*** COPIA - FACTURA ***';
+              await _handlePrintFlow(
+                context,
+                ref,
+                'invoice',
+                copyData,
                 orderObj: printOrder,
                 orderItems: items,
                 payments: payments,
@@ -3099,57 +3178,32 @@ class _CartView extends ConsumerWidget {
                 showSnackBar: true,
                 preloadedFiscalDoc: fiscalDoc,
               );
-            });
-            if (context.mounted) {
-              await showPaymentSuccessDialog(
-                context: context,
-                onReprint: () async {
-                  // Marcamos el ticket como "COPIA" para que se
-                  // distinga del original y no se confunda con una
-                  // segunda venta.
-                  final copyData = Map<String, dynamic>.from(invoiceData);
-                  copyData['title'] = isSalesNoteInvoice
-                      ? '*** COPIA - NOTA DE VENTA ***'
-                      : '*** COPIA - FACTURA ***';
-                  await _handlePrintFlow(
-                    context,
-                    ref,
-                    'invoice',
-                    copyData,
-                    orderObj: printOrder,
-                    orderItems: items,
-                    payments: payments,
-                    tableName: tableName,
-                    waiterName: waiterName,
-                    showSnackBar: true,
-                    preloadedFiscalDoc: fiscalDoc,
-                  );
-                },
-              );
-            }
-          } catch (e) {
-            if (context.mounted) {
-              // AWAIT explicito: este Future no resuelve hasta que el
-              // cajero o bien reimprime con exito, o bien elige
-              // "Continuar sin imprimir". Esto mantiene el modal de
-              // pago abierto mientras tanto — el cajero NO puede salir
-              // por accidente sin haber visto el ticket.
-              await _showReimpresionDialog(
-                context: context,
-                ref: ref,
-                type: 'invoice',
-                data: invoiceData,
-                orderObj: order,
-                orderItems: items,
-                payments: payments,
-                tableName: tableName,
-                waiterName: waiterName,
-                errorMsg: e.toString(),
-                // onFinish ya corre desde el .then() del modal de pago,
-                // así que no lo pasamos aquí — evita doble navegación.
-              );
-            }
-          }
+            },
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          // AWAIT explicito: este Future no resuelve hasta que el
+          // cajero o bien reimprime con exito, o bien elige
+          // "Continuar sin imprimir". Esto mantiene el modal de
+          // pago abierto mientras tanto — el cajero NO puede salir
+          // por accidente sin haber visto el ticket.
+          await _showReimpresionDialog(
+            context: context,
+            ref: ref,
+            type: 'invoice',
+            data: invoiceData,
+            orderObj: order,
+            orderItems: items,
+            payments: payments,
+            tableName: tableName,
+            waiterName: waiterName,
+            errorMsg: e.toString(),
+            // onFinish ya corre desde el .then() del modal de pago,
+            // así que no lo pasamos aquí — evita doble navegación.
+          );
+        }
+      }
     }
 
     if (creditMode) {
@@ -3315,7 +3369,9 @@ class _CartView extends ConsumerWidget {
         }
       }
     }
-    await ref.read(salesRepositoryProvider).addItemFromMenu(
+    await ref
+        .read(salesRepositoryProvider)
+        .addItemFromMenu(
           orderId: orderId,
           menuItemId: source.productId!,
           quantity: qty,
@@ -3401,7 +3457,7 @@ class _CartView extends ConsumerWidget {
             await notifier.updateItem(item.id, updatedItem);
           }
         },
-        onSaveBatch: (items, updatedItem, reductionReason) async {
+        onSaveBatch: (items, updatedItem, reduction) async {
           final salesRepo = ref.read(salesRepositoryProvider);
           final orderNotifier = ref.read(currentOrderProvider.notifier);
           final totalBase = items.fold<double>(
@@ -3469,8 +3525,8 @@ class _CartView extends ConsumerWidget {
             if (trimmedNotes != null && trimmedNotes.isNotEmpty) {
               mergedNotes.add(trimmedNotes);
             }
-            if (reductionReason != null && reductionReason.trim().isNotEmpty) {
-              mergedNotes.add('[REDUCCION:${reductionReason.trim()}]');
+            if (reduction != null) {
+              mergedNotes.add('[REDUCCION:${reduction.text}]');
             }
 
             // Subir cantidad sobre una línea YA enviada a cocina: no inflarla;
@@ -3504,7 +3560,9 @@ class _CartView extends ConsumerWidget {
             if (nextQty <= 0.0001) {
               await orderNotifier.deleteItem(
                 current.id,
-                reason: reductionReason ?? 'Reducción de cantidad',
+                reason: reduction?.text ?? 'Reducción de cantidad',
+                reasonCode: reduction?.reason.code,
+                isWaste: reduction?.isWaste,
               );
             } else {
               await salesRepo.updateItemDetails(
@@ -3515,14 +3573,17 @@ class _CartView extends ConsumerWidget {
                 discounts: discountShare,
                 notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
               );
-              // Línea ya enviada a la que se le bajó la cantidad: el servidor
-              // la registra con el motivo de la etiqueta; falta quién fue.
+              // Línea ya enviada a la que se le bajó la cantidad: el
+              // servidor la registra con el motivo de la etiqueta; acá va
+              // quién fue y qué pasa con el inventario (merma o devolución).
               if (nextQtyInt < currentQtyInt &&
                   _itemAlreadySentToKitchen(current)) {
                 unawaited(
                   orderNotifier.noteItemRemoval(
                     current.id,
-                    reason: reductionReason,
+                    reason: reduction?.text,
+                    reasonCode: reduction?.reason.code,
+                    isWaste: reduction?.isWaste,
                   ),
                 );
               }
@@ -3533,8 +3594,22 @@ class _CartView extends ConsumerWidget {
           }
 
           await ref.read(currentOrderProvider.notifier).refreshOrder();
+
+          // Bajar la cantidad saca unidades de la cuenta igual que borrarlas:
+          // mismo comprobante y mismo aviso al bar.
+          if (reduction != null && context.mounted) {
+            await _afterRemoval(
+              context,
+              ref,
+              item: item,
+              quantity: originalTotalQty - targetTotalQty,
+              decision: reduction,
+              alreadySent: items.any(_itemAlreadySentToKitchen),
+              tableName: tableCode.isEmpty ? null : tableCode,
+            );
+          }
         },
-        onDelete: (reason) async {
+        onDelete: (decision) async {
           // Fase 1 Toast redesign: si el modal se abrió desde TODAS (varias
           // filas del mismo producto agrupadas porque están en distintos
           // checks), borrar todo el grupo. Si se abrió desde una sub-cuenta
@@ -3543,13 +3618,26 @@ class _CartView extends ConsumerWidget {
           // fantasmas en los otros checks.
           final orderNotifier = ref.read(currentOrderProvider.notifier);
           final group = groupedItems;
-          if (group != null && group.length > 1) {
-            for (final row in group) {
-              await orderNotifier.deleteItem(row.id, reason: reason);
-            }
-          } else {
-            await orderNotifier.deleteItem(item.id, reason: reason);
+          final rows = group != null && group.length > 1 ? group : [item];
+          for (final row in rows) {
+            await orderNotifier.deleteItem(
+              row.id,
+              reason: decision.text,
+              reasonCode: decision.reason.code,
+              isWaste: decision.isWaste,
+            );
           }
+          if (!context.mounted) return;
+          final quitado = rows.fold<double>(0, (sum, r) => sum + r.quantity);
+          await _afterRemoval(
+            context,
+            ref,
+            item: item,
+            quantity: quitado <= 0 ? item.quantity : quitado,
+            decision: decision,
+            alreadySent: rows.any(_itemAlreadySentToKitchen),
+            tableName: tableCode.isEmpty ? null : tableCode,
+          );
         },
         onBeforeDelete: () => _ensureCanDeleteOrderItem(
           context,
@@ -3754,7 +3842,8 @@ class _CartView extends ConsumerWidget {
     if (resolvedMode != null && discountBiz.isNotEmpty) {
       _stickyDiscountModeByBiz[discountBiz] = resolvedMode;
     }
-    final discountMode = resolvedMode ??
+    final discountMode =
+        resolvedMode ??
         _stickyDiscountModeByBiz[discountBiz] ??
         PosSettingsRepository.discountPreDiscount;
     final isPostDiscountMode =
@@ -4962,7 +5051,9 @@ class _CartView extends ConsumerWidget {
                                     );
                                   } catch (e) {
                                     if (!context.mounted) return;
-                                    ScaffoldMessenger.of(context).showAppSnackBar(
+                                    ScaffoldMessenger.of(
+                                      context,
+                                    ).showAppSnackBar(
                                       SnackBar(
                                         content: Text(
                                           'Error al enviar el pedido: ${e.toString()}',
@@ -5122,8 +5213,7 @@ class _CartView extends ConsumerWidget {
                         const SizedBox(width: 12),
                         Expanded(
                           child: _ActionButton(
-                            label:
-                                'Pagar ${currency.format(displayTotal)}',
+                            label: 'Pagar ${currency.format(displayTotal)}',
                             background: _salesPayButton,
                             onPressed:
                                 !canCharge ||
@@ -5181,219 +5271,206 @@ class _CartView extends ConsumerWidget {
                             Future<void> runPrecheck({
                               required bool forcePicker,
                             }) async {
-                              await _runLockedAction(
-                                ref,
-                                precheckLockKey,
-                                () async {
-                                  if (orderState.order == null) return;
-                                  // FRESH: recargar la orden del server antes
-                                  // de imprimir, para no sacar una precuenta
-                                  // con ítems stale (Realtime pudo perder
-                                  // eventos / otra caja agregó ítems). No-op
-                                  // offline o en orden local.
-                                  await ref
-                                      .read(currentOrderProvider.notifier)
-                                      .reloadOrderNow();
-                                  if (!context.mounted) return;
-                                  var freshState =
-                                      ref.read(currentOrderProvider);
-                                  var freshOrder = freshState.order;
-                                  if (freshOrder == null) return;
-                                  // ── Gate de FEE DE DELIVERY PROPIO ──
-                                  // Mismo prompt que al cobrar: en delivery
-                                  // propio la precuenta debe salir ya con la
-                                  // línea DELIVERY y el total final. Si el
-                                  // fee es obligatorio y el cajero cancela,
-                                  // no se imprime la precuenta.
-                                  if (freshState.origin == 'delivery' &&
-                                      freshState.deliveryType == 'own') {
-                                    final features =
-                                        ref
-                                            .read(businessFeaturesProvider)
-                                            .value ??
-                                        BusinessFeatures.defaults;
-                                    final oldFee = freshOrder.deliveryFee;
-                                    final feeCurrency =
-                                        currentBusinessCurrencyOrFallback(ref);
-                                    final chosenFee = await _promptDeliveryFee(
-                                      context,
-                                      presets: features.deliveryFeePresets,
-                                      min: features.deliveryFeeMin,
-                                      required: features.deliveryFeeRequired,
-                                      currentFee: oldFee,
-                                      formatAmount:
-                                          feeCurrency.formatter.format,
-                                    );
-                                    if (!context.mounted) return;
-                                    if (chosenFee == null) {
-                                      if (features.deliveryFeeRequired) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showAppSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'Debes indicar el monto del delivery para imprimir la precuenta.',
-                                            ),
-                                            backgroundColor: Colors.orange,
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                    } else if (chosenFee != oldFee) {
-                                      try {
-                                        await ref
-                                            .read(currentOrderProvider.notifier)
-                                            .setDeliveryFee(chosenFee);
-                                      } catch (e) {
-                                        if (!context.mounted) return;
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showAppSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              'No se pudo fijar el fee de delivery: $e',
-                                            ),
-                                            backgroundColor: Colors.red,
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                      if (!context.mounted) return;
-                                      // Re-leer el estado con el fee aplicado
-                                      // para que items/totales de la precuenta
-                                      // ya lo incluyan.
-                                      freshState =
-                                          ref.read(currentOrderProvider);
-                                      freshOrder =
-                                          freshState.order ?? freshOrder;
-                                    }
-                                  }
-                                  // Recomputamos items/totales desde el estado
-                                  // recién recargado (mismo filtro que la vista
-                                  // del carrito).
-                                  final freshOpen = freshState.items
-                                      .where(_isOpenItem)
-                                      .toList();
-                                  final freshItems = selectedCheckId != null
-                                      ? freshOpen
-                                            .where(
-                                              (i) =>
-                                                  i.checkId == selectedCheckId,
-                                            )
-                                            .toList()
-                                      : freshOpen.where((i) {
-                                          return !freshState.checks.any(
-                                            (c) =>
-                                                c.id == i.checkId && c.isClosed,
-                                          );
-                                        }).toList();
-                                  final freshSummary = summarizeOrderPricing(
-                                    freshOrder,
-                                    freshItems,
-                                    forcedOrigin: freshState.origin,
+                              await _runLockedAction(ref, precheckLockKey, () async {
+                                if (orderState.order == null) return;
+                                // FRESH: recargar la orden del server antes
+                                // de imprimir, para no sacar una precuenta
+                                // con ítems stale (Realtime pudo perder
+                                // eventos / otra caja agregó ítems). No-op
+                                // offline o en orden local.
+                                await ref
+                                    .read(currentOrderProvider.notifier)
+                                    .reloadOrderNow();
+                                if (!context.mounted) return;
+                                var freshState = ref.read(currentOrderProvider);
+                                var freshOrder = freshState.order;
+                                if (freshOrder == null) return;
+                                // ── Gate de FEE DE DELIVERY PROPIO ──
+                                // Mismo prompt que al cobrar: en delivery
+                                // propio la precuenta debe salir ya con la
+                                // línea DELIVERY y el total final. Si el
+                                // fee es obligatorio y el cajero cancela,
+                                // no se imprime la precuenta.
+                                if (freshState.origin == 'delivery' &&
+                                    freshState.deliveryType == 'own') {
+                                  final features =
+                                      ref
+                                          .read(businessFeaturesProvider)
+                                          .value ??
+                                      BusinessFeatures.defaults;
+                                  final oldFee = freshOrder.deliveryFee;
+                                  final feeCurrency =
+                                      currentBusinessCurrencyOrFallback(ref);
+                                  final chosenFee = await _promptDeliveryFee(
+                                    context,
+                                    presets: features.deliveryFeePresets,
+                                    min: features.deliveryFeeMin,
+                                    required: features.deliveryFeeRequired,
+                                    currentFee: oldFee,
+                                    formatAmount: feeCurrency.formatter.format,
                                   );
-                                  final businessProfile =
-                                      await _loadBusinessReceiptProfile(ref);
-                                  final waiterName =
-                                      await _loadWaiterName(
-                                        ref,
-                                        freshOrder.id,
-                                      ) ??
-                                      ref.read(sessionProvider).userName;
-                                  final precheckTotals =
-                                      await _buildPrecheckTotalsPayload(
-                                        ref,
-                                        freshOrder,
-                                        freshItems,
-                                        forcedOrigin: freshState.origin,
-                                      );
-                                  // Abono de la mesa: la precuenta dice cuánto
-                                  // tiene y cuánto es la diferencia a pagar.
-                                  // Solo en la cuenta COMPLETA: en una
-                                  // sub-cuenta, cada precuenta mostraría el
-                                  // saldo entero como si fuera suyo, y dos
-                                  // sub-cuentas de 6,000 sobre un abono de
-                                  // 9,000 dirían las dos "a pagar 0".
-                                  // Misma consulta que el cobro. Fail-soft:
-                                  // sin saldo o sin red, sale como siempre.
-                                  double? tableDepositBalance;
-                                  if (origin == OrderOrigin.table &&
-                                      selectedCheckId == null) {
-                                    final account = await ref
-                                        .read(tableDepositRepositoryProvider)
-                                        .getBalanceForOrder(freshOrder.id);
-                                    if (account.hasBalance) {
-                                      tableDepositBalance = account.balance;
-                                    }
-                                  }
                                   if (!context.mounted) return;
-                                  final preCheckData = {
-                                    'restaurantName': businessProfile.name,
-                                    'businessName':
-                                        businessProfile.businessName,
-                                    'legalName': businessProfile.legalName,
-                                    'rnc': businessProfile.rnc,
-                                    'phone': businessProfile.phone,
-                                    'address': businessProfile.address,
-                                    'tableName':
-                                        '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
-                                    'waiterName': waiterName,
-                                    'customerName': freshState.customerName,
-                                    'items': freshItems
-                                        .map(
-                                          (i) => {
-                                            'quantity': i.quantity,
-                                            'name': i.productName,
-                                            'price': itemDisplayTotal(
-                                              freshOrder,
-                                              i,
-                                            ),
-                                          },
-                                        )
-                                        .toList(),
-                                    'subtotal': freshSummary.subtotal,
-                                    'tax':
-                                        freshSummary.tax +
-                                        freshSummary.serviceFee,
-                                    'total': freshSummary.total,
-                                    'totals': precheckTotals,
-                                    'tableDepositBalance': ?tableDepositBalance,
-                                  };
-
-                                  try {
-                                    await _runPrecheckWithDestinationPicker(
-                                      context,
-                                      ref,
-                                      preCheckData: preCheckData,
-                                      orderObj: freshOrder,
-                                      orderItems: freshItems,
-                                      forcePicker: forcePicker,
-                                    );
-                                  } catch (e) {
-                                    if (context.mounted) {
-                                      // Precuenta: no bloquea otra
-                                      // operacion, fire-and-forget.
-                                      unawaited(
-                                        _showReimpresionDialog(
-                                          context: context,
-                                          ref: ref,
-                                          type: 'precheck',
-                                          data: preCheckData,
-                                          orderObj: freshOrder,
-                                          orderItems: freshItems,
-                                          tableName:
-                                              preCheckData['tableName']
-                                                  as String?,
-                                          waiterName:
-                                              preCheckData['waiterName']
-                                                  as String?,
-                                          errorMsg: e.toString(),
+                                  if (chosenFee == null) {
+                                    if (features.deliveryFeeRequired) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showAppSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Debes indicar el monto del delivery para imprimir la precuenta.',
+                                          ),
+                                          backgroundColor: Colors.orange,
                                         ),
                                       );
+                                      return;
                                     }
+                                  } else if (chosenFee != oldFee) {
+                                    try {
+                                      await ref
+                                          .read(currentOrderProvider.notifier)
+                                          .setDeliveryFee(chosenFee);
+                                    } catch (e) {
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showAppSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'No se pudo fijar el fee de delivery: $e',
+                                          ),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    if (!context.mounted) return;
+                                    // Re-leer el estado con el fee aplicado
+                                    // para que items/totales de la precuenta
+                                    // ya lo incluyan.
+                                    freshState = ref.read(currentOrderProvider);
+                                    freshOrder = freshState.order ?? freshOrder;
                                   }
-                                },
-                              );
+                                }
+                                // Recomputamos items/totales desde el estado
+                                // recién recargado (mismo filtro que la vista
+                                // del carrito).
+                                final freshOpen = freshState.items
+                                    .where(_isOpenItem)
+                                    .toList();
+                                final freshItems = selectedCheckId != null
+                                    ? freshOpen
+                                          .where(
+                                            (i) => i.checkId == selectedCheckId,
+                                          )
+                                          .toList()
+                                    : freshOpen.where((i) {
+                                        return !freshState.checks.any(
+                                          (c) =>
+                                              c.id == i.checkId && c.isClosed,
+                                        );
+                                      }).toList();
+                                final freshSummary = summarizeOrderPricing(
+                                  freshOrder,
+                                  freshItems,
+                                  forcedOrigin: freshState.origin,
+                                );
+                                final businessProfile =
+                                    await _loadBusinessReceiptProfile(ref);
+                                final waiterName =
+                                    await _loadWaiterName(ref, freshOrder.id) ??
+                                    ref.read(sessionProvider).userName;
+                                final precheckTotals =
+                                    await _buildPrecheckTotalsPayload(
+                                      ref,
+                                      freshOrder,
+                                      freshItems,
+                                      forcedOrigin: freshState.origin,
+                                    );
+                                // Abono de la mesa: la precuenta dice cuánto
+                                // tiene y cuánto es la diferencia a pagar.
+                                // Solo en la cuenta COMPLETA: en una
+                                // sub-cuenta, cada precuenta mostraría el
+                                // saldo entero como si fuera suyo, y dos
+                                // sub-cuentas de 6,000 sobre un abono de
+                                // 9,000 dirían las dos "a pagar 0".
+                                // Misma consulta que el cobro. Fail-soft:
+                                // sin saldo o sin red, sale como siempre.
+                                double? tableDepositBalance;
+                                if (origin == OrderOrigin.table &&
+                                    selectedCheckId == null) {
+                                  final account = await ref
+                                      .read(tableDepositRepositoryProvider)
+                                      .getBalanceForOrder(freshOrder.id);
+                                  if (account.hasBalance) {
+                                    tableDepositBalance = account.balance;
+                                  }
+                                }
+                                if (!context.mounted) return;
+                                final preCheckData = {
+                                  'restaurantName': businessProfile.name,
+                                  'businessName': businessProfile.businessName,
+                                  'legalName': businessProfile.legalName,
+                                  'rnc': businessProfile.rnc,
+                                  'phone': businessProfile.phone,
+                                  'address': businessProfile.address,
+                                  'tableName':
+                                      '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
+                                  'waiterName': waiterName,
+                                  'customerName': freshState.customerName,
+                                  'items': freshItems
+                                      .map(
+                                        (i) => {
+                                          'quantity': i.quantity,
+                                          'name': i.productName,
+                                          'price': itemDisplayTotal(
+                                            freshOrder,
+                                            i,
+                                          ),
+                                        },
+                                      )
+                                      .toList(),
+                                  'subtotal': freshSummary.subtotal,
+                                  'tax':
+                                      freshSummary.tax +
+                                      freshSummary.serviceFee,
+                                  'total': freshSummary.total,
+                                  'totals': precheckTotals,
+                                  'tableDepositBalance': ?tableDepositBalance,
+                                };
+
+                                try {
+                                  await _runPrecheckWithDestinationPicker(
+                                    context,
+                                    ref,
+                                    preCheckData: preCheckData,
+                                    orderObj: freshOrder,
+                                    orderItems: freshItems,
+                                    forcePicker: forcePicker,
+                                  );
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    // Precuenta: no bloquea otra
+                                    // operacion, fire-and-forget.
+                                    unawaited(
+                                      _showReimpresionDialog(
+                                        context: context,
+                                        ref: ref,
+                                        type: 'precheck',
+                                        data: preCheckData,
+                                        orderObj: freshOrder,
+                                        orderItems: freshItems,
+                                        tableName:
+                                            preCheckData['tableName']
+                                                as String?,
+                                        waiterName:
+                                            preCheckData['waiterName']
+                                                as String?,
+                                        errorMsg: e.toString(),
+                                      ),
+                                    );
+                                  }
+                                }
+                              });
                             }
 
                             return _SecondaryActionButton(
@@ -5999,7 +6076,7 @@ class _CartView extends ConsumerWidget {
         // sale sin branding (nombre/RNC/dirección vienen de invoiceData
         // igual) en vez de tumbar el cobro por el logo.
         final Future<({BusinessProfile? profile, List<int>? logoEscPosBytes})>
-            profileForPrintFuture = () async {
+        profileForPrintFuture = () async {
           try {
             return await businessProfileRepo.prepareForInvoicePrinting(
               businessId,
@@ -6040,8 +6117,7 @@ class _CartView extends ConsumerWidget {
         // devuelve mapa vacío sin pegar la red. Fail-soft: si falla, el
         // ticket sale sin bloque banco en vez de abortar el cobro.
         final bankAccountsRepo = BankAccountsRepository();
-        final Future<Map<String, BankAccount>> bankAccountsFuture =
-            () async {
+        final Future<Map<String, BankAccount>> bankAccountsFuture = () async {
           try {
             return await bankAccountsRepo.fetchByPaymentIds(
               payments ?? const [],
@@ -6092,7 +6168,8 @@ class _CartView extends ConsumerWidget {
                 : null;
             // PERF: si el caller ya trae el fd cargado (handleConfirmed lo
             // buscó para invoiceData), no lo re-consultamos al server.
-            final fiscalDoc = preloadedFiscalDoc ??
+            final fiscalDoc =
+                preloadedFiscalDoc ??
                 (fdIdFromPayments != null
                     ? await ref
                           .read(salesRepositoryProvider)
@@ -6136,10 +6213,10 @@ class _CartView extends ConsumerWidget {
                     : (fiscalDoc.buildDgiiVerifyUrl(
                             emitterRnc: emitterRnc,
                             // Ambiente real del negocio: con `true` fijo el QR
-                    // de respaldo apuntaba a las pruebas de la DGII.
-                    sandbox: await ref
-                        .read(ecfDocumentsRepositoryProvider)
-                        .isSandbox(businessId),
+                            // de respaldo apuntaba a las pruebas de la DGII.
+                            sandbox: await ref
+                                .read(ecfDocumentsRepositoryProvider)
+                                .isSandbox(businessId),
                           ) ??
                           '');
                 if (qrUrl.isNotEmpty) {
@@ -6236,8 +6313,8 @@ class _CartView extends ConsumerWidget {
                 discountDisplayMode: discountDisplayMode,
                 template: invoiceTpl,
                 paperWidth: assignedPrinter?.paperWidth ?? 80,
-                tableDepositAvailable:
-                    (data['tableDepositBalance'] as num?)?.toDouble(),
+                tableDepositAvailable: (data['tableDepositBalance'] as num?)
+                    ?.toDouble(),
               );
       }
 
@@ -7120,7 +7197,7 @@ class _SalesToolsRail extends StatelessWidget {
               children: [
                 const SizedBox(height: 16),
                 _RailButton(
-                    compact: compact,
+                  compact: compact,
                   icon: Icons.arrow_back_ios_new_rounded,
                   label: 'Regresar',
                   isPrimary: true,
@@ -7141,14 +7218,14 @@ class _SalesToolsRail extends StatelessWidget {
                   const SizedBox(height: 8),
                   if (onTransferSession != null)
                     _RailButton(
-                    compact: compact,
+                      compact: compact,
                       icon: Icons.swap_horiz_rounded,
                       label: 'Transferir\ncuenta',
                       onTap: onTransferSession!,
                     ),
                   if (onReleaseTable != null)
                     _RailButton(
-                    compact: compact,
+                      compact: compact,
                       icon: Icons.logout_rounded,
                       label: 'Liberar\nmesa',
                       onTap: onReleaseTable!,
@@ -7179,7 +7256,7 @@ class _SalesToolsRail extends StatelessWidget {
                   ),
                   if (onChargeCredit != null)
                     _RailButton(
-                    compact: compact,
+                      compact: compact,
                       icon: Icons.request_quote_outlined,
                       label: 'Cobrar a\ncrédito',
                       onTap: onChargeCredit!,
@@ -7266,10 +7343,7 @@ class _RailButton extends StatelessWidget {
     // Sin etiqueta visible, el nombre tiene que seguir siendo alcanzable:
     // tooltip en escritorio y pulsación larga en la tablet.
     return compact
-        ? Tooltip(
-            message: label.replaceAll('\n', ' '),
-            child: button,
-          )
+        ? Tooltip(message: label.replaceAll('\n', ' '), child: button)
         : button;
   }
 }
@@ -7690,10 +7764,7 @@ class _CartLineItem extends ConsumerWidget {
     final name = item.productName;
     final qty = item.quantity.toStringAsFixed(1);
     final currentOrder = ref.watch(currentOrderProvider.select((s) => s.order));
-    final totalItem = _uiItemDisplayAmount(
-      currentOrder,
-      item,
-    );
+    final totalItem = _uiItemDisplayAmount(currentOrder, item);
 
     return Tooltip(
       // Tooltip de auditoría: solo hover de mouse (~1s). triggerMode manual
@@ -7820,7 +7891,9 @@ class _CartLineItem extends ConsumerWidget {
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            item.modifiers.map(_formatModifierLabel).join(' · '),
+                            item.modifiers
+                                .map(_formatModifierLabel)
+                                .join(' · '),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -7837,8 +7910,9 @@ class _CartLineItem extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
-                    currentBusinessCurrencyOrFallback(ref)
-                        .formatAmount(totalItem),
+                    currentBusinessCurrencyOrFallback(
+                      ref,
+                    ).formatAmount(totalItem),
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -8488,127 +8562,131 @@ class _CatalogAreaState extends ConsumerState<_CatalogArea>
     return SalesSurfaceScope(
       metrics: widget.surface,
       child: Column(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(hPad, isCompact ? 12 : 24, hPad, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: _SearchField(
-                  controller: _searchController,
-                  onChanged: (value) {
-                    final menuState = ref.read(menuBrowserVmProvider);
-                    final notifier = ref.read(menuBrowserVmProvider.notifier);
-                    if (value.trim().isEmpty) {
-                      if (_mainTabController.index == 3) {
-                        if (menuState.productsMode !=
-                                MenuProductsMode.favorites ||
-                            menuState.products.isEmpty) {
-                          notifier.loadFavoriteProducts();
-                        }
-                      } else if (_mainTabController.index == 2) {
-                        if (menuState.productsMode !=
-                                MenuProductsMode.offers ||
-                            menuState.products.isEmpty) {
-                          notifier.loadOffers();
-                        }
-                      } else if (_mainTabController.index == 0) {
-                        if (menuState.categories.isEmpty) {
-                          notifier.loadAll();
-                        }
-                      } else {
-                        final selectedCategoryId = menuState.selectedCategoryId;
-                        if (selectedCategoryId != null &&
-                            selectedCategoryId.isNotEmpty) {
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(hPad, isCompact ? 12 : 24, hPad, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _SearchField(
+                    controller: _searchController,
+                    onChanged: (value) {
+                      final menuState = ref.read(menuBrowserVmProvider);
+                      final notifier = ref.read(menuBrowserVmProvider.notifier);
+                      if (value.trim().isEmpty) {
+                        if (_mainTabController.index == 3) {
                           if (menuState.productsMode !=
-                                  MenuProductsMode.category ||
-                              menuState.loadedCategoryId !=
-                                  selectedCategoryId ||
+                                  MenuProductsMode.favorites ||
                               menuState.products.isEmpty) {
-                            notifier.loadProductsByCategory(selectedCategoryId);
+                            notifier.loadFavoriteProducts();
+                          }
+                        } else if (_mainTabController.index == 2) {
+                          if (menuState.productsMode !=
+                                  MenuProductsMode.offers ||
+                              menuState.products.isEmpty) {
+                            notifier.loadOffers();
+                          }
+                        } else if (_mainTabController.index == 0) {
+                          if (menuState.categories.isEmpty) {
+                            notifier.loadAll();
                           }
                         } else {
-                          if (menuState.productsMode != MenuProductsMode.all ||
-                              menuState.products.isEmpty) {
-                            notifier.loadAllProducts();
+                          final selectedCategoryId =
+                              menuState.selectedCategoryId;
+                          if (selectedCategoryId != null &&
+                              selectedCategoryId.isNotEmpty) {
+                            if (menuState.productsMode !=
+                                    MenuProductsMode.category ||
+                                menuState.loadedCategoryId !=
+                                    selectedCategoryId ||
+                                menuState.products.isEmpty) {
+                              notifier.loadProductsByCategory(
+                                selectedCategoryId,
+                              );
+                            }
+                          } else {
+                            if (menuState.productsMode !=
+                                    MenuProductsMode.all ||
+                                menuState.products.isEmpty) {
+                              notifier.loadAllProducts();
+                            }
                           }
                         }
+                        return;
                       }
-                      return;
-                    }
 
-                    final q = value.trim();
-                    if (menuState.productsMode != MenuProductsMode.search ||
-                        menuState.search != q) {
-                      notifier.searchProducts(q);
-                    }
-                    if (_mainTabController.index != 1) {
-                      _mainTabController.animateTo(1);
-                    }
-                  },
+                      final q = value.trim();
+                      if (menuState.productsMode != MenuProductsMode.search ||
+                          menuState.search != q) {
+                        notifier.searchProducts(q);
+                      }
+                      if (_mainTabController.index != 1) {
+                        _mainTabController.animateTo(1);
+                      }
+                    },
+                  ),
                 ),
-              ),
-              // Controles de captura rápida. Van pegados a la búsqueda porque
-              // el multiplicador se toca JUSTO antes del producto y el pulgar
-              // ya está arriba; mandarlos al menú de opciones los mataría.
-              SizedBox(width: isCompact ? 4 : 8),
-              CatalogViewToggle(compact: isCompact),
-              QuantityMultiplierButton(compact: isCompact),
-              if (!isCompact) ...[
-                const SizedBox(width: 12),
-                const SalesZoomControl(),
-              ],
-            ],
-          ),
-        ),
-        SizedBox(height: isCompact ? 8 : 12),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: hPad),
-          child: _SegmentedTabs(
-            controller: _mainTabController,
-            labels: const ['Categorias', 'Menu', 'Ofertas', 'Favoritos'],
-          ),
-        ),
-        SizedBox(height: isCompact ? 10 : 16),
-        Expanded(
-          child: Container(
-            color: _salesSurface,
-            child: TabBarView(
-              controller: _mainTabController,
-              children: [
-                // 1. Grid Categorias
-                _CategoriesPane(
-                  activeCategoryId: _activeCategoryId,
-                  onCategoryTap: (catId) {
-                    setState(() => _activeCategoryId = catId);
-                    ref
-                        .read(menuBrowserVmProvider.notifier)
-                        .loadProductsByCategory(catId);
-                  },
-                  onBackToCategories: () {
-                    setState(() => _activeCategoryId = null);
-                  },
-                  onProductTap: widget.onProductTap,
-                ),
-                // 2. Grid Productos
-                _ProductsGrid(onProductTap: widget.onProductTap),
-                // 3. Ofertas vendibles
-                _ProductsGrid(
-                  onProductTap: widget.onProductTap,
-                  emptyText:
-                      'No tienes ofertas activas para vender.\n'
-                      'Crea una en Ajustes → Ofertas y Combos (auto-aplicar).',
-                ),
-                // 4. Favoritos
-                _ProductsGrid(
-                  onProductTap: widget.onProductTap,
-                  emptyText: 'Todavía no hay productos frecuentes',
-                ),
+                // Controles de captura rápida. Van pegados a la búsqueda porque
+                // el multiplicador se toca JUSTO antes del producto y el pulgar
+                // ya está arriba; mandarlos al menú de opciones los mataría.
+                SizedBox(width: isCompact ? 4 : 8),
+                CatalogViewToggle(compact: isCompact),
+                QuantityMultiplierButton(compact: isCompact),
+                if (!isCompact) ...[
+                  const SizedBox(width: 12),
+                  const SalesZoomControl(),
+                ],
               ],
             ),
           ),
-        ),
-      ],
+          SizedBox(height: isCompact ? 8 : 12),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: hPad),
+            child: _SegmentedTabs(
+              controller: _mainTabController,
+              labels: const ['Categorias', 'Menu', 'Ofertas', 'Favoritos'],
+            ),
+          ),
+          SizedBox(height: isCompact ? 10 : 16),
+          Expanded(
+            child: Container(
+              color: _salesSurface,
+              child: TabBarView(
+                controller: _mainTabController,
+                children: [
+                  // 1. Grid Categorias
+                  _CategoriesPane(
+                    activeCategoryId: _activeCategoryId,
+                    onCategoryTap: (catId) {
+                      setState(() => _activeCategoryId = catId);
+                      ref
+                          .read(menuBrowserVmProvider.notifier)
+                          .loadProductsByCategory(catId);
+                    },
+                    onBackToCategories: () {
+                      setState(() => _activeCategoryId = null);
+                    },
+                    onProductTap: widget.onProductTap,
+                  ),
+                  // 2. Grid Productos
+                  _ProductsGrid(onProductTap: widget.onProductTap),
+                  // 3. Ofertas vendibles
+                  _ProductsGrid(
+                    onProductTap: widget.onProductTap,
+                    emptyText:
+                        'No tienes ofertas activas para vender.\n'
+                        'Crea una en Ajustes → Ofertas y Combos (auto-aplicar).',
+                  ),
+                  // 4. Favoritos
+                  _ProductsGrid(
+                    onProductTap: widget.onProductTap,
+                    emptyText: 'Todavía no hay productos frecuentes',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -8797,29 +8875,31 @@ class _AssignCustomerDialogState extends ConsumerState<_AssignCustomerDialog> {
                             // en la pantalla de Clientes. Sin él, el mesero
                             // solo puede buscar y asignar uno existente.
                             if (operatorHasPermission(
-                                ref, 'clientes.crear_editar'))
-                            Tooltip(
-                              message: 'Crear cliente',
-                              child: SizedBox(
-                                width: 54,
-                                height: 54,
-                                child: FilledButton(
-                                  onPressed: _openCreateCustomerFlow,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: _salesTotalColor,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
+                              ref,
+                              'clientes.crear_editar',
+                            ))
+                              Tooltip(
+                                message: 'Crear cliente',
+                                child: SizedBox(
+                                  width: 54,
+                                  height: 54,
+                                  child: FilledButton(
+                                    onPressed: _openCreateCustomerFlow,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: _salesTotalColor,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(18),
+                                      ),
+                                      padding: EdgeInsets.zero,
                                     ),
-                                    padding: EdgeInsets.zero,
-                                  ),
-                                  child: const Icon(
-                                    Icons.add_rounded,
-                                    size: 28,
+                                    child: const Icon(
+                                      Icons.add_rounded,
+                                      size: 28,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
                           ],
                         ),
                       ),
@@ -10056,8 +10136,8 @@ class _CategoriesGrid extends ConsumerWidget {
                     // dejan el ancho útil en 568 dp en las dos
                     // orientaciones del equipo de referencia, que es
                     // de donde sale el mosaico de 182 dp del criterio 1.
-                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding
-                        ?? AppBreakpoints.padTwo),
+                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding ??
+                          AppBreakpoints.padTwo),
               ),
               gridDelegate: isCompact
                   ? SliverGridDelegateWithFixedCrossAxisCount(
@@ -10324,8 +10404,8 @@ class _ProductsGrid extends ConsumerWidget {
                     // dejan el ancho útil en 568 dp en las dos
                     // orientaciones del equipo de referencia, que es
                     // de donde sale el mosaico de 182 dp del criterio 1.
-                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding
-                        ?? AppBreakpoints.padTwo),
+                    : (SalesSurfaceScope.maybeOf(context)?.catalogPadding ??
+                          AppBreakpoints.padTwo),
               ),
               gridDelegate: isCompact
                   ? SliverGridDelegateWithFixedCrossAxisCount(
@@ -10416,8 +10496,9 @@ class _ProductsGrid extends ConsumerWidget {
                                 ),
                                 SizedBox(height: isCompact ? 2 : 6),
                                 Text(
-                                  currentBusinessCurrencyOrFallback(ref)
-                                      .formatAmount(product.price),
+                                  currentBusinessCurrencyOrFallback(
+                                    ref,
+                                  ).formatAmount(product.price),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: _salesTotalColor,

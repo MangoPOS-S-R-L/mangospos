@@ -2234,6 +2234,8 @@ class OfflinePosService {
             itemId: resolvedItemId,
             reason: action['reason']?.toString(),
             employeeId: action['employee_id']?.toString(),
+            reasonCode: action['reason_code']?.toString(),
+            isWaste: action['is_waste'] as bool?,
           );
         } catch (e) {
           if (!_isItemMissingError(e)) rethrow;

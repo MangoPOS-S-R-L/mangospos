@@ -10,9 +10,11 @@ import '../../../core/fiscal/payment_stage.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/utils/device_utils.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/sales_models.dart';
 
+import '../../../data/repositories/cashier_repository.dart';
 import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../data/repositories/sales_repository_improved.dart';
 import '../../../data/repositories/table_deposit_repository.dart';
@@ -352,23 +354,122 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     return raw;
   }
 
-  Future<String?> _resolveCashierSessionId() async {
-    if (_cashierSessionId != null && _cashierSessionId.isNotEmpty) {
-      return _cashierSessionId;
+  /// Id de [session] solo si sigue abierta. Una sesión cerrada nunca sirve
+  /// para cobrar: el RPC la rechaza con `CASH_SESSION_NOT_OPEN`.
+  @visibleForTesting
+  static String? openSessionIdOf(Map<String, dynamic>? session) {
+    if (session == null) return null;
+    if (session['status']?.toString() != 'open') return null;
+    if (session['closed_at'] != null) return null;
+    final id = session['id']?.toString();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// La caja contra la que cobra este equipo, de entre las abiertas de su
+  /// registradora: la mía, la abierta desde este equipo y, si no hay, la más
+  /// reciente (el mesero cobra contra la caja del cajero).
+  @visibleForTesting
+  static String? pickRegisterSessionForCharge(
+    List<Map<String, dynamic>> openSessions, {
+    String? userId,
+    String? deviceId,
+  }) {
+    if (openSessions.isEmpty) return null;
+    final picked =
+        CashierRepository.pickOwnOpenSession(
+          openSessions,
+          userId: userId,
+          deviceId: deviceId,
+        ) ??
+        openSessions.first;
+    return openSessionIdOf(picked);
+  }
+
+  @visibleForTesting
+  static bool isCashSessionNotOpenError(Object error) =>
+      error.toString().contains('CASH_SESSION_NOT_OPEN');
+
+  /// Caja contra la que se cobra, resuelta AL CONFIRMAR.
+  ///
+  /// Antes se usaba el id que tenía la pantalla de Caja cuando se CREÓ este
+  /// viewmodel, sin mirar si estaba abierta. El provider es una familia sin
+  /// autoDispose (vive mientras la app esté abierta, por orden + monto), así
+  /// que ese id quedaba congelado: si el modal de una mesa se abrió antes de
+  /// abrir la caja, o antes de un cierre y reapertura, cada reintento mandaba
+  /// la sesión vieja y el servidor contestaba "Debes abrir una caja" a la
+  /// misma cajera que la acababa de abrir en ese mismo equipo.
+  ///
+  /// Orden: mi caja según la pantalla de Caja (leída ahora y solo si está
+  /// abierta) → consulta al servidor. Con [skipLocal] va directo al servidor:
+  /// es el reintento cuando el servidor dijo que la caja local ya se cerró.
+  Future<String?> _resolveCashierSessionId({bool skipLocal = false}) async {
+    final cashier = _ref.read(cashierViewModelProvider);
+
+    if (!skipLocal) {
+      final live = openSessionIdOf(cashier.lastSession);
+      if (live != null) return live;
     }
 
-    final userId = Supabase.instance.client.auth.currentUser?.id;
-    if (userId == null) return null;
+    // Sin red no hay a quién preguntar: se conserva el comportamiento de
+    // siempre para que el cobro offline no cambie. En el reintento no: esa
+    // caja ya la rechazó el servidor.
+    final offlineFallback =
+        (!skipLocal && _cashierSessionId != null && _cashierSessionId.isNotEmpty)
+        ? _cashierSessionId
+        : null;
+    if (!_connectivity.isConnected) return offlineFallback;
 
-    final data = await Supabase.instance.client
-        .from('cash_register_sessions')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('status', 'open')
-        .isFilter('closed_at', null)
-        .maybeSingle();
+    try {
+      return await _resolveOpenSessionFromServer(
+        cashier,
+      ).timeout(const Duration(seconds: 8));
+    } catch (e) {
+      if (OfflinePosService.isTransportError(e)) return offlineFallback;
+      rethrow;
+    }
+  }
 
-    return data?['id'] as String?;
+  Future<String?> _resolveOpenSessionFromServer(
+    CashierViewModel cashier,
+  ) async {
+    final repo = _ref.read(cashierRepositoryProvider);
+    final businessId =
+        _ref.read(sessionProvider).activeBusinessId ?? cashier.businessId;
+
+    // 1. Mi caja en este negocio (un dueño puede tener una por sucursal).
+    final own = (businessId != null && businessId.isNotEmpty)
+        ? await repo.getCurrentUserActiveSessionForBusiness(
+            businessId: businessId,
+          )
+        : await repo.getCurrentUserActiveSession();
+    if (own != null) return own.id;
+
+    String? deviceId;
+    try {
+      deviceId = await DeviceUtils.getDeviceId();
+    } catch (_) {}
+
+    // 2. La registradora de este equipo: con dos cajas, el cobro no debe
+    //    caer en el turno de la otra.
+    final registerId = cashier.currentRegisterId;
+    if (registerId != null && registerId.isNotEmpty) {
+      final fromRegister = pickRegisterSessionForCharge(
+        await repo.getOpenSessionsForRegister(registerId),
+        userId: Supabase.instance.client.auth.currentUser?.id,
+        deviceId: deviceId,
+      );
+      if (fromRegister != null) return fromRegister;
+    }
+
+    // 3. Cualquier caja abierta del negocio (primero la de este equipo).
+    if (businessId != null && businessId.isNotEmpty) {
+      final any = await repo.getActiveSessionForBusiness(
+        businessId,
+        deviceId: deviceId,
+      );
+      if (any != null) return any.id;
+    }
+    return null;
   }
 
   Future<void> _loadOrderForReceipt() async {
@@ -860,8 +961,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     final List<Payment> createdPayments = [];
 
     try {
-      final cashierSessionId = await _resolveCashierSessionId();
-      if (cashierSessionId == null || cashierSessionId.isEmpty) {
+      final resolvedSessionId = await _resolveCashierSessionId();
+      if (resolvedSessionId == null || resolvedSessionId.isEmpty) {
         state = state.copyWith(
           isProcessing: false,
           stage: PaymentStage.idle,
@@ -869,6 +970,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         );
         return null;
       }
+      var cashierSessionId = resolvedSessionId;
+      // Un solo reintento por cobro si el servidor dice que la caja que
+      // teníamos en memoria ya no está abierta.
+      var staleSessionRetried = false;
 
       // NOTA DE VENTA: la marca va ANTES del primer cobro. El documento lo
       // emite el trigger de cierre dentro del RPC de pago, así que ponerla
@@ -971,70 +1076,99 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           'Processing Tx $i: method=$methodId, amount=${tx.amount}, checkId=$_checkId',
         );
 
+        Future<Payment> payWith(String sessionId) => _salesRepo.processPayment(
+          orderId: _orderId,
+          checkId: _checkId,
+          paymentMethodId: methodId,
+          amount: tx.amount,
+          // El saldo de mesa nunca da vuelto (el trigger lo rechaza): el
+          // vuelto sale del efectivo, no del prepago.
+          changeAmount: isLast && tx.method != PaymentMethodType.tableDeposit
+              ? state.change
+              : 0,
+          closeOrder: isLast && _checkId == null,
+          // Para split methods dentro de un check: solo cerrar el
+          // check en la última transacción. Las intermedias dejan el
+          // check abierto para que las siguientes puedan insertarse
+          // sin chocar contra "CHECK_ALREADY_CLOSED".
+          closeCheck: isLast && _checkId != null,
+          customerId: _customerId,
+          // RNC resuelto por sub-cuenta (o de la orden) desde el call site.
+          // Solo aplica en la última transacción (la que emite el NCF).
+          customerRnc: isLast ? _customerRnc : null,
+          // Con nota de venta no hay tipo de comprobante que pedir: dejarlo
+          // guardaría en el pago un NCF que nunca se emitió.
+          fiscalType: state.salesNoteSelected ? null : _fiscalType,
+          cashierSessionId: sessionId,
+          reference: null,
+          splitSequence: i,
+        );
+
         Payment payment;
         try {
-          payment = await _salesRepo.processPayment(
-            orderId: _orderId,
-            checkId: _checkId,
-            paymentMethodId: methodId,
-            amount: tx.amount,
-            // El saldo de mesa nunca da vuelto (el trigger lo rechaza): el
-            // vuelto sale del efectivo, no del prepago.
-            changeAmount:
-                isLast && tx.method != PaymentMethodType.tableDeposit
-                ? state.change
-                : 0,
-            closeOrder: isLast && _checkId == null,
-            // Para split methods dentro de un check: solo cerrar el
-            // check en la última transacción. Las intermedias dejan el
-            // check abierto para que las siguientes puedan insertarse
-            // sin chocar contra "CHECK_ALREADY_CLOSED".
-            closeCheck: isLast && _checkId != null,
-            customerId: _customerId,
-            // RNC resuelto por sub-cuenta (o de la orden) desde el call site.
-            // Solo aplica en la última transacción (la que emite el NCF).
-            customerRnc: isLast ? _customerRnc : null,
-            // Con nota de venta no hay tipo de comprobante que pedir: dejarlo
-            // guardaría en el pago un NCF que nunca se emitió.
-            fiscalType: state.salesNoteSelected ? null : _fiscalType,
-            cashierSessionId: cashierSessionId,
-            reference: null,
-            splitSequence: i,
-          );
+          payment = await payWith(cashierSessionId);
         } catch (e) {
           debugPrint('❌ Error in processPayment: $e');
-          // Fallback offline solo si la PRIMERA tx falla por red. Si ya
-          // pasamos transacciones a server (i>0), una mezcla online/
-          // offline sobre la misma orden genera estados inconsistentes
-          // (pagos parciales aplicados, otros encolados) que el RPC no
-          // sabe reconciliar — preferimos fallar limpio y que el cajero
-          // reintente cuando vuelva la red.
-          // Amplía Socket/Timeout a todo error de transporte (ClientException,
-          // handshake, connection reset/closed) — común en redes malas. Solo
-          // dispara el fallback offline en la PRIMERA tx (i==0), sin mezclar
-          // online/offline sobre la misma orden.
-          final isConnectivityError = OfflinePosService.isTransportError(e);
-          if (i == 0 && isConnectivityError) {
-            debugPrint(
-              '[split-offline] tx#0 falló por red, fallback offline',
-            );
-            final offlineResult = await _confirmPaymentOffline(
-              cashierSessionId: cashierSessionId,
-            );
-            if (offlineResult != null) {
-              createdPayments
-                ..clear()
-                ..addAll(offlineResult);
-              state = state.copyWith(
-                isProcessing: false,
-                stage: PaymentStage.imprimiendo,
-                isPrinting: true,
-                offlineQueued: true,
+
+          // La caja que teníamos en memoria ya no está abierta (se cerró en
+          // otro equipo, o quedó vieja de antes de una reapertura). El RPC
+          // valida la caja antes de grabar nada, así que reintentar con la
+          // caja que está abierta AHORA no duplica el cobro.
+          String? freshSessionId;
+          if (!staleSessionRetried && isCashSessionNotOpenError(e)) {
+            staleSessionRetried = true;
+            try {
+              freshSessionId = await _resolveCashierSessionId(skipLocal: true);
+            } catch (resolveError) {
+              debugPrint(
+                '[split] no se pudo re-resolver la caja: $resolveError',
               );
-              return createdPayments;
             }
           }
-          rethrow;
+
+          if (freshSessionId != null && freshSessionId != cashierSessionId) {
+            debugPrint(
+              '[split] caja $cashierSessionId cerrada; reintento con '
+              '$freshSessionId',
+            );
+            cashierSessionId = freshSessionId;
+            // La pantalla de Caja también tenía la caja vieja.
+            unawaited(_ref.read(cashierViewModelProvider).refreshSilently());
+            payment = await payWith(freshSessionId);
+          } else {
+            // Fallback offline solo si la PRIMERA tx falla por red. Si ya
+            // pasamos transacciones a server (i>0), una mezcla online/
+            // offline sobre la misma orden genera estados inconsistentes
+            // (pagos parciales aplicados, otros encolados) que el RPC no
+            // sabe reconciliar — preferimos fallar limpio y que el cajero
+            // reintente cuando vuelva la red.
+            // Amplía Socket/Timeout a todo error de transporte (ClientException,
+            // handshake, connection reset/closed) — común en redes malas. Solo
+            // dispara el fallback offline en la PRIMERA tx (i==0), sin mezclar
+            // online/offline sobre la misma orden.
+            final isConnectivityError = OfflinePosService.isTransportError(e);
+            if (i == 0 && isConnectivityError) {
+              debugPrint(
+                '[split-offline] tx#0 falló por red, fallback offline',
+              );
+              final offlineResult = await _confirmPaymentOffline(
+                cashierSessionId: cashierSessionId,
+              );
+              if (offlineResult != null) {
+                createdPayments
+                  ..clear()
+                  ..addAll(offlineResult);
+                state = state.copyWith(
+                  isProcessing: false,
+                  stage: PaymentStage.imprimiendo,
+                  isPrinting: true,
+                  offlineQueued: true,
+                );
+                return createdPayments;
+              }
+            }
+            rethrow;
+          }
         }
 
         debugPrint('✅ Payment Processed: ${payment.id}');

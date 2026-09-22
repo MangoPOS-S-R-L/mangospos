@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/sales_queries.dart';
 import '../models/credit_note_result.dart';
+import '../models/order_item_removal_reason.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../models/sales_note.dart';
@@ -1818,10 +1819,16 @@ class SalesRepository {
   /// (`order_item_removals`, migración 20260919_0002) pero no sabe por qué
   /// ni quién. El borrado ya pasó: esto solo completa el registro y nunca
   /// lanza (sin la migración, simplemente no hace nada).
+  ///
+  /// [isWaste] true = MERMA: el servidor mete el movimiento que cancela la
+  /// devolución de stock, así el inventario refleja que el producto salió
+  /// (20260920_0002).
   Future<void> noteItemRemoval({
     required String itemId,
     String? reason,
     String? employeeId,
+    String? reasonCode,
+    bool? isWaste,
   }) async {
     try {
       await _client.rpc(
@@ -1830,11 +1837,37 @@ class SalesRepository {
           'p_item_id': itemId,
           'p_reason': reason,
           'p_employee_id': employeeId,
+          'p_reason_code': reasonCode,
+          'p_is_waste': isWaste,
         },
       );
     } catch (e) {
       debugPrint('[removals] no se pudo anotar el motivo: $e');
     }
+  }
+
+  /// Los motivos configurados para quitar un producto de la cuenta. Si el
+  /// servidor todavía no tiene el catálogo (migración 20260920_0002), se
+  /// devuelven los de fábrica: sin esto el cajero no podría borrar nada.
+  Future<List<OrderItemRemovalReason>> getRemovalReasons(
+    String businessId,
+  ) async {
+    try {
+      final rows = await _client
+          .from('order_item_removal_reasons')
+          .select('code, label, is_waste')
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .order('position');
+      final parsed = [
+        for (final row in List<Map<String, dynamic>>.from(rows))
+          ?OrderItemRemovalReason.fromRow(row),
+      ];
+      if (parsed.isNotEmpty) return parsed;
+    } catch (e) {
+      debugPrint('[removals] catálogo de motivos no disponible: $e');
+    }
+    return OrderItemRemovalReason.defaults;
   }
 
   /// Toggle takeout de item

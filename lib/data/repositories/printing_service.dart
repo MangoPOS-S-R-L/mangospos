@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart'
         visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/printing_models.dart';
+import '../models/order_item_removal_reason.dart';
 import '../models/sales_models.dart';
 import '../../core/network/connectivity_service.dart';
 import '../../core/offline/offline_catalog_service.dart';
@@ -18,6 +19,7 @@ import '../../core/printing/ble_printer_connection_manager.dart';
 import '../../core/printing/printerless_mode.dart';
 import '../../core/printing/star/print_speed.dart';
 import '../../services/printing/print_ticket_service.dart';
+import '../../services/printing/removal_voucher_ticket.dart';
 import '../../presentation/sales/state/sales_state.dart';
 import 'pos_settings_repository.dart';
 import 'printing_repository.dart';
@@ -1390,6 +1392,90 @@ class PrintingService {
     } catch (e) {
       throw Exception('Error al reimprimir items: $e');
     }
+  }
+
+  /// Avisa a la estación (bar o cocina) que un producto se quitó de la
+  /// cuenta: imprime el mismo comprobante en versión "CANCELAR ESTE
+  /// PRODUCTO", en las impresoras del área a la que salió ese producto.
+  ///
+  /// POR QUÉ EXISTE: la comanda ya está en la mano del bar. Borrar el
+  /// producto lo saca de la pantalla del KDS, pero el papel sigue ahí y
+  /// nadie les avisa: siguen preparando algo que ya no está en la cuenta.
+  /// Es lo que hacen Toast y Micros al anular un ítem ya enviado.
+  ///
+  /// NO lanza: el producto YA se quitó. Devuelve las áreas donde salió.
+  Future<List<String>> printRemovalNotice({
+    required String orderId,
+    required String businessId,
+    required OrderItem item,
+    required double quantity,
+    required String reasonLabel,
+    String? note,
+    required bool isWaste,
+    String? operatorName,
+  }) async {
+    final avisadas = <String>[];
+    try {
+      final businessName = await _getBusinessName(businessId);
+      final orderData = await _getOrderDisplayData(orderId);
+      final itemsByArea = await _groupItemsByPrintArea(
+        [item],
+        businessId: businessId,
+      );
+      // Sello propio: con la clave de la comanda original, las colas de
+      // reintento lo descartarían por duplicado y el bar nunca se entera.
+      final tag = 'removal-${DateTime.now().microsecondsSinceEpoch}';
+
+      for (final entry in itemsByArea.entries) {
+        final areaCode = entry.key;
+        final area = await _ensureAreaForCode(businessId, areaCode);
+        final printers = await _getOrderPrintersWithOfflineFallback(
+          businessId: businessId,
+          areaId: area.id,
+          areaCode: areaCode,
+        );
+        if (printers.isEmpty) continue;
+
+        List<int> buildBytes(PrinterConfig printer) =>
+            RemovalVoucherTicket.generate(
+              businessName: businessName ?? 'MangoPOS',
+              productName: item.productName,
+              quantity: quantity,
+              decision: OrderItemRemovalDecision(
+                reason: OrderItemRemovalReason(
+                  code: 'notice',
+                  label: reasonLabel,
+                  isWaste: isWaste,
+                ),
+                isWaste: isWaste,
+                note: note,
+              ),
+              tableName: orderData['tableName']?.toString(),
+              orderNumber: orderData['orderNumber']?.toString(),
+              operatorName: operatorName,
+              paperWidth: printer.paperWidth,
+              forStation: true,
+            ).escPosCommands;
+
+        await _dispatchKitchenTicket(
+          printers: printers,
+          buildBytes: buildBytes,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'CANCELAR ${item.productName}',
+            'body': 'Orden ${orderData['orderNumber'] ?? ''}',
+          },
+          businessId: businessId,
+          orderId: orderId,
+          idempotencySuffix: tag,
+        );
+        avisadas.add(areaCode);
+      }
+    } catch (e) {
+      // El producto ya se quitó: un fallo acá no puede tumbar nada.
+      debugPrint('[removals] no se pudo avisar a la estación: $e');
+    }
+    return avisadas;
   }
 
   Future<String> reprintOrderInArea({

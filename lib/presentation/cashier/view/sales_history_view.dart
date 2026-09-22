@@ -239,7 +239,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                 });
               },
               decoration: InputDecoration(
-                hintText: 'Buscar comprobante o cliente',
+                hintText: 'Buscar comprobante, cliente o mesa',
                 hintStyle: const TextStyle(fontSize: 13),
                 prefixIcon: const Icon(Icons.search, size: 20),
                 suffixIcon: _searchController.text.isNotEmpty
@@ -331,7 +331,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
                       });
                     },
                     decoration: InputDecoration(
-                      hintText: 'Buscar por comprobante o cliente',
+                      hintText: 'Buscar por comprobante, cliente o mesa',
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: _searchController.text.isNotEmpty
                           ? IconButton(
@@ -478,7 +478,7 @@ class _SalesHistoryViewState extends ConsumerState<SalesHistoryView> {
           Expanded(flex: 2, child: _HeaderText('Comprobante')),
           Expanded(flex: 2, child: _HeaderText('Mesero')),
           Expanded(flex: 2, child: _HeaderText('Cliente')),
-          Expanded(flex: 2, child: _HeaderText('N° de documento')),
+          Expanded(flex: 2, child: _HeaderText('Mesa')),
           Expanded(flex: 2, child: _HeaderText('Total')),
           Expanded(flex: 2, child: _HeaderText('Forma de pago')),
           SizedBox(
@@ -623,6 +623,7 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
     final ncf = payment['ncf_number']?.toString() ?? 'Ticket';
     final ncfType = payment['ncf_type_name']?.toString() ?? 'Boleta';
     final taxId = payment['customer_tax_id']?.toString() ?? '';
+    final tableLabel = payment['table_label']?.toString() ?? '—';
     final waiterName = payment['waiter_name']?.toString() ?? 'Servicio';
     final paymentId = payment['id']?.toString() ?? '';
     final orderId = payment['order_id']?.toString() ?? '';
@@ -691,14 +692,38 @@ class _PaymentTableRow extends ConsumerWidget with _PaymentActionsMixin {
           ),
           Expanded(
             flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  customerName,
+                  style: TextStyle(
+                    decoration: isVoided ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+                // El RNC/cédula vivía en su propia columna; ahora esa
+                // columna es la mesa y el documento queda debajo del nombre.
+                if (taxId.isNotEmpty)
+                  Text(
+                    taxId,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
             child: Text(
-              customerName,
+              tableLabel,
               style: TextStyle(
+                fontWeight: FontWeight.w700,
                 decoration: isVoided ? TextDecoration.lineThrough : null,
               ),
             ),
           ),
-          Expanded(flex: 2, child: Text(taxId.isEmpty ? '-' : taxId)),
           Expanded(
             flex: 2,
             child: Text(
@@ -2281,6 +2306,12 @@ class _PaymentMobileCard extends ConsumerWidget with _PaymentActionsMixin {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      _InfoRow(
+                        icon: Icons.table_restaurant_outlined,
+                        text: payment['table_label']?.toString() ?? '—',
+                        isVoided: isVoided,
+                      ),
+                      const SizedBox(height: 4),
                       _InfoRow(icon: Icons.person_outline, text: customerName, isVoided: isVoided),
                       const SizedBox(height: 4),
                       _InfoRow(icon: Icons.support_agent_outlined, text: waiterName, isVoided: isVoided),

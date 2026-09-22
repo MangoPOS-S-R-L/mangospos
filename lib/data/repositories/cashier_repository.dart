@@ -4,6 +4,7 @@ import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import '../models/payment_models.dart';
 import '../utils/payment_amount_utils.dart';
+import '../utils/sales_history_table_label.dart';
 
 class CashRegisterException implements Exception {
   final String errorCode;
@@ -1204,8 +1205,11 @@ class CashierRepository {
     // venta). Un servidor sin la migración 20260910_0001 no la tiene, así que
     // se cae a `fiscal_documents` — mismo comportamiento que antes, sin notas.
     Future<({List<Map<String, dynamic>> rows, int totalCount})> fetchDocs(
-      String source,
-    ) async {
+      String source, {
+      // `table_label` existe en la vista desde 20260921_0001: con él se
+      // puede buscar por el nombre de la mesa sin traer las órdenes aparte.
+      bool withTable = false,
+    }) async {
       final withDocKind = source == 'sales_documents';
       var query = _client
           .from(source)
@@ -1214,7 +1218,8 @@ class CashierRepository {
             'ncf_type, customer_name, customer_rnc, '
             'subtotal, taxable_amount, itbis_amount, service_fee, total, '
             'status, ecf_status, is_electronic, created_at'
-            '${withDocKind ? ', doc_kind' : ''}',
+            '${withDocKind ? ', doc_kind' : ''}'
+            '${withTable ? ', table_label' : ''}',
           )
           .eq('business_id', businessId);
 
@@ -1255,6 +1260,8 @@ class CashierRepository {
           'ncf_number.ilike.%$term%',
           'customer_name.ilike.%$term%',
           'customer_rnc.ilike.%$term%',
+          // Buscar por la mesa ("MUEBLE12").
+          if (withTable) 'table_label.ilike.%$term%',
         ];
         if (idsByRef.isNotEmpty) {
           clauses.add('id.in.(${idsByRef.join(',')})');
@@ -1275,11 +1282,17 @@ class CashierRepository {
 
     ({List<Map<String, dynamic>> rows, int totalCount}) result;
     try {
-      result = await fetchDocs('sales_documents');
+      result = await fetchDocs('sales_documents', withTable: true);
     } on PostgrestException catch (_) {
-      // Vista ausente (o columna `sales_note_id` sin migrar): el historial
-      // fiscal sigue funcionando exactamente igual que antes.
-      result = await fetchDocs('fiscal_documents');
+      try {
+        // Vista sin `table_label` (falta 20260921_0001): todo igual, menos
+        // buscar por mesa. La columna Mesa se llena igual más abajo.
+        result = await fetchDocs('sales_documents');
+      } on PostgrestException catch (_) {
+        // Vista ausente (o columna `sales_note_id` sin migrar): el historial
+        // fiscal sigue funcionando exactamente igual que antes.
+        result = await fetchDocs('fiscal_documents');
+      }
     }
 
     final fdRows = result.rows;
@@ -1307,7 +1320,7 @@ class CashierRepository {
             .from('orders')
             .select(
               'id, session_id, table_sessions!inner('
-              'id, customer_name, table_id, business_id, opened_by, '
+              'id, customer_name, table_id, business_id, opened_by, origin, '
               'waiter:profiles!opened_by(full_name))',
             )
             .inFilter('id', orderIds);
@@ -1327,7 +1340,7 @@ class CashierRepository {
         ? []
         : await _client
             .from('dining_tables')
-            .select('id, code')
+            .select('id, code, label')
             .inFilter('id', tableIds);
     final tablesById = {for (final t in tablesRaw) t['id'].toString(): t};
 
@@ -1396,9 +1409,10 @@ class CashierRepository {
       final tableSession = orderId == null
           ? null
           : tableSessionsByOrderId[orderId] as Map?;
-      final tableCode = tableSession == null
+      final table = tableSession == null
           ? null
-          : tablesById[tableSession['table_id']?.toString()]?['code'];
+          : tablesById[tableSession['table_id']?.toString()];
+      final tableCode = table?['code'];
       final waiter = (tableSession?['waiter'] as Map?)?['full_name']
           ?.toString();
 
@@ -1481,6 +1495,13 @@ class CashierRepository {
         'ecf_status': fd['ecf_status'],
         'is_electronic': fd['is_electronic'],
         'table_code': tableCode,
+        // Lo que muestra la columna "Mesa" (y lo que se busca).
+        'table_label': salesHistoryTableLabel(
+          viewLabel: fd['table_label']?.toString(),
+          tableLabel: table?['label']?.toString(),
+          tableCode: tableCode?.toString(),
+          origin: tableSession?['origin']?.toString(),
+        ),
         'waiter_name': waiter ?? 'Servicio',
         'payment_method_summary': methodSummary,
       };
