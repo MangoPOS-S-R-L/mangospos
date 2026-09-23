@@ -23,6 +23,7 @@ import '../inventory/viewmodel/low_stock_badge_provider.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
+import 'offline_preparation_banner.dart';
 import '../../core/theme/app_colors.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
@@ -121,6 +122,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
         children: [
           // Banner de actualización (solo web, solo si hay deploy nuevo).
           const UpdateAvailableBanner(),
+            const OfflinePreparationBanner(),
           Expanded(child: widget.navigationShell),
         ],
       ),

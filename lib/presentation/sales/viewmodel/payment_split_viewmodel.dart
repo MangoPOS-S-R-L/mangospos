@@ -874,11 +874,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             'cashier_session_id': cashierSessionId,
             'change_amount': isLast ? state.change : 0,
             'split_sequence': i,
+            'close_order': isLast && _checkId == null,
+            'close_check': isLast && _checkId != null,
             'paid_at': paidAtIso,
             // F4: el NCF asignado offline viaja SOLO en la primera transacción
             // (un comprobante por cobro). El server lo usa al sincronizar.
             if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
-            if (i == 0 && offlineNcf != null) 'requested_ncf_type': ncfType,
+            'requested_ncf_type': state.salesNoteSelected ? null : ncfType,
             // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
             // el replay la ponga antes de reproducir el cobro. Si llega
             // después, el cierre ya emitió NCF. Viaja el valor elegido

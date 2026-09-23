@@ -351,6 +351,17 @@ class _ReportsViewState extends ConsumerState<ReportsView> {
         onTap: () => context.go(AppRoutes.reportsPurchases),
       ),
       _ReportHubCardData(
+        title: 'Precios por proveedor',
+        description:
+            'Quién te vende más barato cada producto, según el costo real de '
+            'lo que recibiste, y cuánto se paga de más.',
+        icon: Icons.compare_arrows_rounded,
+        color: const Color(0xFF9333EA),
+        quickStat: '—',
+        quickStatLabel: 'Comparador de compras',
+        onTap: () => context.go(AppRoutes.reportsSupplierPrices),
+      ),
+      _ReportHubCardData(
         title: 'Inventario',
         description: 'Existencias, alertas y movimientos recientes.',
         icon: Icons.inventory_2_outlined,

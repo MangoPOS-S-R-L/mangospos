@@ -2265,20 +2265,23 @@ class _CartView extends ConsumerWidget {
   /// Nombre a mostrar en el chip de cliente del header. Si hay una
   /// sub-cuenta seleccionada, muestra el cliente PROPIO de ese check
   /// (order_checks.customer_name); si no, el cliente general de la mesa.
-  String _resolveHeaderCustomerName(CurrentOrderState orderState) {
+  String _resolveHeaderCustomerName(
+    CurrentOrderState orderState, {
+    String fallback = 'Cliente',
+  }) {
     final selectedCheckId = orderState.selectedCheckId;
     if (selectedCheckId != null) {
       for (final check in orderState.checks) {
         if (check.id == selectedCheckId) {
           final name = check.customerName?.trim();
-          return (name != null && name.isNotEmpty) ? name : 'Cliente';
+          return (name != null && name.isNotEmpty) ? name : fallback;
         }
       }
     }
     final generalName = orderState.customerName?.trim();
     return (generalName != null && generalName.isNotEmpty)
         ? generalName
-        : 'Cliente';
+        : fallback;
   }
 
   /// Abre un diálogo para capturar/editar la dirección de entrega del
@@ -4529,6 +4532,65 @@ class _CartView extends ConsumerWidget {
                   ),
                 ],
               ],
+            ),
+          ),
+
+        // CLIENTE EN MODO APILADO (teléfono / tablet angosta).
+        // El encabezado con el botón "Cliente" solo se dibuja cuando NO
+        // está apilado, así que en la hoja del ticket no había forma de
+        // asignar a quién se le factura: el mesero tenía que buscar una
+        // pantalla ancha. Misma acción (onAssignClient) y mismo nombre
+        // efectivo (sub-cuenta seleccionada > cliente de la orden).
+        if (isStacked)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 2, 12, 10),
+            child: SizedBox(
+              height: 44,
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: onAssignClient,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _salesTotalColor,
+                  side: const BorderSide(color: _salesDivider),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_salesRadiusButton),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.person_outline, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _resolveHeaderCustomerName(
+                          orderState,
+                          fallback: 'Asignar cliente',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (selectedCheckId != null) ...[
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Subcuenta',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFF97316),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 6),
+                    const Icon(Icons.edit_outlined, size: 16),
+                  ],
+                ),
+              ),
             ),
           ),
 

@@ -50,6 +50,7 @@ const Map<String, String> routePermissions = <String, String>{
   '/reports/comandas': 'reportes.ventas',
   '/reports/inventory': 'inventario.acceso',
   '/reports/purchases': 'compras.acceso',
+  '/reports/supplier-prices': 'compras.acceso',
   '/reports/taxes': 'reportes.fiscales',
   '/reports/fiscal': 'reportes.fiscales',
   '/reports': 'reportes.ventas',

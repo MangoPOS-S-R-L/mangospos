@@ -2817,6 +2817,7 @@ class SalesRepository {
     String? cashierSessionId,
     double changeAmount = 0,
     bool closeOrder = true,
+    bool closeCheck = true,
     int splitSequence = 0,
     DateTime? paidAt,
     // F4: NCF asignado offline (Hub/allocator). Solo se envía al sincronizar
@@ -2839,6 +2840,7 @@ class SalesRepository {
           'p_requested_ncf_type': fiscalType,
           'p_cashier_session_id': cashierSessionId,
           'p_close_order': closeOrder,
+          'p_close_check': closeCheck,
           'p_split_sequence': splitSequence,
           if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
           if (offlineNcf != null && offlineNcf.isNotEmpty)

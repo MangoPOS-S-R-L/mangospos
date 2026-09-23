@@ -27,6 +27,7 @@ import 'package:mangopos/core/printing/lan_mac_recovery.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/core/printing/star/print_speed.dart';
+import 'package:mangopos/core/printing/star/raster_ink.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 
@@ -340,6 +341,9 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     bool clearFallback = false,
     /// Null = no tocar la velocidad guardada.
     PrintSpeed? printSpeed,
+
+    /// Null = no tocar la nitidez guardada.
+    RasterInk? rasterInk,
   }) async {
     final trimmedName = name.trim();
     if (trimmedName.isEmpty) {
@@ -371,6 +375,12 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         await _repo.setPrintSpeed(
           printerId: printerId,
           speed: printSpeed.wireValue,
+        );
+      }
+      if (rasterInk != null) {
+        await _repo.setRasterInk(
+          printerId: printerId,
+          ink: rasterInk.wireValue,
         );
       }
       await load(businessId: b, force: true);

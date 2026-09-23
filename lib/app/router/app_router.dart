@@ -108,6 +108,7 @@ import '../../presentation/reports/view/kitchen_comandas_report_view.dart';
 import '../../presentation/reports/view/offers_report_view.dart';
 import '../../presentation/reports/view/inventory_report_view.dart';
 import '../../presentation/reports/view/purchases_report_view.dart';
+import '../../presentation/reports/view/supplier_prices_report_view.dart';
 import '../../presentation/reports/view/tax_report_view.dart';
 import '../../presentation/reports/view/fiscal_report_view.dart';
 import '../../presentation/reports/viewmodel/reports_viewmodel.dart';
@@ -634,6 +635,10 @@ class AppRouter {
           GoRoute(
             path: AppRoutes.reportsPurchases,
             builder: (context, state) => const PurchasesReportView(),
+          ),
+          GoRoute(
+            path: AppRoutes.reportsSupplierPrices,
+            builder: (context, state) => const SupplierPricesReportView(),
           ),
           GoRoute(
             path: AppRoutes.reportsTaxes,

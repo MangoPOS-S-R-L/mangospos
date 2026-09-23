@@ -3,7 +3,9 @@
 -- business_id = 35c5076a-bd85-4a1b-8d1c-ce719c4f9ae6
 --
 -- Fuente: "Recetario Estandar de Cocina", edicion Agosto 2026, Eddy Almonte.
--- 130 fichas, 597 lineas de ingrediente, transcritas del PDF.
+-- 143 fichas, 663 lineas de ingrediente, transcritas de los DOS PDF:
+--   130 del "Recetario Estandar de Cocina"
+--    13 de "Fichas Tecnicas 13 Recetas Penda Express"
 --
 -- ESTO NO CREA RECETAS TODAVIA. Crea una tabla de trabajo y la cruza contra
 -- menu_items e inventory_items para ver que empareja y que no. El mapeo es el
@@ -630,9 +632,229 @@ values
   ('PE-JYF-130','JUGOS Y FROZEN','PITANOLA',2,'Agua',100,'ml','REVISAR:IDENTICA a PITAHAYA FROZEN'),
   ('PE-JYF-130','JUGOS Y FROZEN','PITANOLA',3,'Hielo',220,'g','REVISAR:IDENTICA a PITAHAYA FROZEN'),
   ('PE-JYF-130','JUGOS Y FROZEN','PITANOLA',4,'Syrup simple',20,'ml','REVISAR:IDENTICA a PITAHAYA FROZEN'),
-  ('PE-JYF-130','JUGOS Y FROZEN','PITANOLA',5,'Zumo de limon',10,'ml','REVISAR:IDENTICA a PITAHAYA FROZEN');
+  ('PE-JYF-130','JUGOS Y FROZEN','PITANOLA',5,'Zumo de limon',10,'ml','REVISAR:IDENTICA a PITAHAYA FROZEN'),
+
+  -- ---------------------------------------------------------------------
+  -- Las 13 fichas del PDF aparte, "Fichas Tecnicas 13 Recetas". Vienen en
+  -- onzas con su equivalente metrico al lado ("8 oz / 227 g"); se carga el
+  -- lado METRICO para que las 143 queden en la misma unidad. El comentario
+  -- al final de cada linea es lo que dice el papel, sin tocar.
+  -- ---------------------------------------------------------------------
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',1,'Pechuga de pollo',227,'g',''),  -- 8 oz / 227 g
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',2,'Harina',28,'g',''),  -- 1 oz / 28 g
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',3,'Huevo',1,'ud',''),  -- 1 ud
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',4,'Pan rallado',57,'g',''),  -- 2 oz / 57 g
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',5,'Salsa pomodoro',89,'ml',''),  -- 3 oz / 89 ml
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',6,'Queso mozzarella',57,'g',''),  -- 2 oz / 57 g
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',7,'Queso parmesano',14,'g',''),  -- 1/2 oz / 14 g
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',8,'Aceite',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-COC-131','PLATOS FUERTES','PECHUGA A LA PARMESANA',9,'Sal y pimienta',null,'c/n',''),  -- c/n
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',1,'Mezcla seca para waffle',85,'g',''),  -- 3 oz / 85 g
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',2,'Leche',60,'ml',''),  -- 2 oz / 60 ml
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',3,'Huevo batido',0.5,'ud',''),  -- 1/2 ud
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',4,'Mantequilla',14,'g',''),  -- 1/2 oz / 14 g
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',5,'Bacon',57,'g',''),  -- 2 oz / 57 g (aprox. 3 tiras)
+  ('PE-DES-131','DESAYUNOS','WAFFLE CON BACON',6,'Sirope para pancakes',44,'ml',''),  -- 1 1/2 oz / 44 ml
+  ('PE-DES-132','DESAYUNOS','BAGEL DE JAMÓN Y QUESO',1,'Bagel',1,'ud',''),  -- 1 ud
+  ('PE-DES-132','DESAYUNOS','BAGEL DE JAMÓN Y QUESO',2,'Jamón',57,'g',''),  -- 2 oz / 57 g
+  ('PE-DES-132','DESAYUNOS','BAGEL DE JAMÓN Y QUESO',3,'Queso',43,'g',''),  -- 1 1/2 oz / 43 g
+  ('PE-DES-132','DESAYUNOS','BAGEL DE JAMÓN Y QUESO',4,'Cream cheese o mantequilla',14,'g','REVISAR:el papel da dos opciones, la cocina elige una'),  -- 1/2 oz / 14 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',1,'Pan de molde',2,'rebanada',''),  -- 2 rebanadas
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',2,'Jamón',57,'g',''),  -- 2 oz / 57 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',3,'Queso',43,'g',''),  -- 1 1/2 oz / 43 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',4,'Bacon',28,'g',''),  -- 1 oz / 28 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',5,'Huevo',1,'ud',''),  -- 1 ud
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',6,'Mayonesa',15,'g',''),  -- 1/2 oz / 15 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',7,'Tomate',28,'g',''),  -- 1 oz / 28 g
+  ('PE-DES-133','DESAYUNOS','SÁNDWICH COMPLETO',8,'Lechuga',14,'g',''),  -- 1/2 oz / 14 g
+  ('PE-BEB-131','JUGOS Y FROZEN','JUGO DE CEREZA',1,'Cereza o pulpa de cereza',113,'g','REVISAR:el papel da dos opciones, la cocina elige una'),  -- 4 oz / 113 g
+  ('PE-BEB-131','JUGOS Y FROZEN','JUGO DE CEREZA',2,'Agua',177,'ml',''),  -- 6 oz / 177 ml
+  ('PE-BEB-131','JUGOS Y FROZEN','JUGO DE CEREZA',3,'Sirope simple',22,'ml',''),  -- 3/4 oz / 22 ml
+  ('PE-BEB-131','JUGOS Y FROZEN','JUGO DE CEREZA',4,'Hielo',113,'g',''),  -- 4 oz / 113 g
+  ('PE-BEB-132','JUGOS Y FROZEN','JUGO DE TAMARINDO',1,'Pulpa de tamarindo',85,'g',''),  -- 3 oz / 85 g
+  ('PE-BEB-132','JUGOS Y FROZEN','JUGO DE TAMARINDO',2,'Agua',207,'ml',''),  -- 7 oz / 207 ml
+  ('PE-BEB-132','JUGOS Y FROZEN','JUGO DE TAMARINDO',3,'Sirope simple',30,'ml',''),  -- 1 oz / 30 ml
+  ('PE-BEB-132','JUGOS Y FROZEN','JUGO DE TAMARINDO',4,'Hielo',113,'g',''),  -- 4 oz / 113 g
+  ('PE-BEB-133','JUGOS Y FROZEN','LICUADO DE FRESA CON LECHOSA',1,'Fresa',85,'g',''),  -- 3 oz / 85 g
+  ('PE-BEB-133','JUGOS Y FROZEN','LICUADO DE FRESA CON LECHOSA',2,'Lechosa',85,'g',''),  -- 3 oz / 85 g
+  ('PE-BEB-133','JUGOS Y FROZEN','LICUADO DE FRESA CON LECHOSA',3,'Leche',118,'ml',''),  -- 4 oz / 118 ml
+  ('PE-BEB-133','JUGOS Y FROZEN','LICUADO DE FRESA CON LECHOSA',4,'Sirope simple',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-BEB-133','JUGOS Y FROZEN','LICUADO DE FRESA CON LECHOSA',5,'Hielo',113,'g',''),  -- 4 oz / 113 g
+  ('PE-CAF-131','CAFES','COLD COFFEE',1,'Espresso doble',60,'ml',''),  -- 2 oz / 60 ml
+  ('PE-CAF-131','CAFES','COLD COFFEE',2,'Leche fría',118,'ml',''),  -- 4 oz / 118 ml
+  ('PE-CAF-131','CAFES','COLD COFFEE',3,'Sirope simple',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-CAF-131','CAFES','COLD COFFEE',4,'Hielo',142,'g',''),  -- 5 oz / 142 g
+  ('PE-CAF-132','CAFES','TÉ DE CHINOLA',1,'Bolsa de té',1,'ud',''),  -- 1 ud
+  ('PE-CAF-132','CAFES','TÉ DE CHINOLA',2,'Agua caliente',177,'ml',''),  -- 6 oz / 177 ml
+  ('PE-CAF-132','CAFES','TÉ DE CHINOLA',3,'Pulpa de chinola',59,'ml',''),  -- 2 oz / 59 ml
+  ('PE-CAF-132','CAFES','TÉ DE CHINOLA',4,'Sirope simple',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',1,'Espresso',60,'ml',''),  -- 2 oz / 60 ml
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',2,'Leche',118,'ml',''),  -- 4 oz / 118 ml
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',3,'Salsa de chocolate',30,'ml',''),  -- 1 oz / 30 ml
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',4,'Sirope simple',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',5,'Hielo',170,'g',''),  -- 6 oz / 170 g
+  ('PE-CAF-133','CAFES','FRAPPUCCINO MOCHA',6,'Crema batida',28,'g',''),  -- 1 oz / 28 g
+  ('PE-BAR-131','COCTELERIA','SHOT DE LIMÓN',1,'Destilado base',44,'ml','PLACEHOLDER'),  -- 1 1/2 oz / 44 ml
+  ('PE-BAR-131','COCTELERIA','SHOT DE LIMÓN',2,'Zumo de limón fresco',15,'ml',''),  -- 1/2 oz / 15 ml
+  ('PE-BAR-131','COCTELERIA','SHOT DE LIMÓN',3,'Sirope simple',7,'ml',''),  -- 1/4 oz / 7 ml
+  ('PE-BAR-131','COCTELERIA','SHOT DE LIMÓN',4,'Hielo para agitar',null,'c/n',''),  -- c/n
+  ('PE-BAR-132','COCTELERIA','NEGRONI',1,'Gibson Gin',30,'ml',''),  -- 1 oz / 30 ml
+  ('PE-BAR-132','COCTELERIA','NEGRONI',2,'Vermut rosso',30,'ml',''),  -- 1 oz / 30 ml
+  ('PE-BAR-132','COCTELERIA','NEGRONI',3,'Bitter italiano',30,'ml',''),  -- 1 oz / 30 ml
+  ('PE-BAR-132','COCTELERIA','NEGRONI',4,'Hielo',null,'c/n',''),  -- c/n
+  ('PE-BAR-133','COCTELERIA','CUBA LIBRE',1,'Ron Siboney',60,'ml',''),  -- 2 oz / 60 ml
+  ('PE-BAR-133','COCTELERIA','CUBA LIBRE',2,'Zumo de limón/lima fresco',15,'ml','REVISAR:el papel da dos opciones, la cocina elige una'),  -- 1/2 oz / 15 ml
+  ('PE-BAR-133','COCTELERIA','CUBA LIBRE',3,'Coca-Cola',118,'ml',''),  -- 4 oz / 118 ml
+  ('PE-BAR-133','COCTELERIA','CUBA LIBRE',4,'Hielo',null,'c/n','');  -- c/n
 
 
+-- ═══ _norm · la usa el reporte (OP 4) y el PASO 7 ═══════════════════════════
+--   Normaliza nombres: mayusculas, sin tildes, sin dobles espacios.
+create or replace function public._norm(t text) returns text
+language sql immutable as $fn$
+  select regexp_replace(
+           upper(translate(coalesce(t,''),
+                 'áéíóúÁÉÍÓÚñÑüÜ', 'aeiouAEIOUnNuU')),
+           '\s+', ' ', 'g')
+$fn$;
+
+
+
+-- ═══ conversion de unidades · las usan OP 4 y el PASO 7 ═════════════════════
+--   El motor de consumo IGNORA `recipe_ingredients.unit` y descuenta en la
+--   unidad base del insumo. Estas funciones son el espejo SQL de
+--   `lib/core/inventory/unit_conversion.dart`. Si no pueden convertir
+--   devuelven NULL, y eso BLOQUEA la ficha: nunca "asumen base".
+
+create or replace function public._penda_unidad(u text)
+returns text language sql immutable as $fn$
+  -- devuelve 'peso' | 'volumen' | 'conteo' | 'oz' (ambigua) | null
+  select case lower(btrim(coalesce(u,'')))
+    when 'g' then 'peso' when 'gr' then 'peso' when 'gramo' then 'peso'
+    when 'gramos' then 'peso' when 'mg' then 'peso' when 'kg' then 'peso'
+    when 'kilo' then 'peso' when 'kilos' then 'peso' when 'kilogramo' then 'peso'
+    when 'lb' then 'peso' when 'lbs' then 'peso'
+    when 'libra' then 'peso' when 'libras' then 'peso'
+    when 'ml' then 'volumen' when 'cc' then 'volumen' when 'cl' then 'volumen'
+    -- el «shot» del recetario es volumen: el propio papel da la equivalencia,
+    -- PE-CAF-105 EXPRESO pide 36 ml por espresso y PE-CAF-107 pide «1 shot».
+    when 'shot' then 'volumen' when 'shots' then 'volumen'
+    when 'l' then 'volumen' when 'lt' then 'volumen' when 'litro' then 'volumen'
+    when 'litros' then 'volumen' when 'gal' then 'volumen' when 'galon' then 'volumen'
+    when 'ud' then 'conteo' when 'u' then 'conteo' when 'und' then 'conteo'
+    when 'unidad' then 'conteo' when 'unidades' then 'conteo'
+    -- la onza es AMBIGUA a proposito: el bar la escribe en volumen y la
+    -- cocina en peso. Se resuelve contra la contraparte (R3, 2026-09-03).
+    when 'oz' then 'oz' when 'onz' then 'oz'
+    when 'onza' then 'oz' when 'onzas' then 'oz'
+    else null end;
+$fn$;
+
+create or replace function public._penda_factor(u text, familia text)
+returns numeric language sql immutable as $fn$
+  -- cuanto de la unidad base de la familia hay en 1 [u].
+  -- bases: peso = g, volumen = ml, conteo = ud.
+  select case
+    when familia = 'peso' then case lower(btrim(u))
+      when 'g' then 1 when 'gr' then 1 when 'gramo' then 1 when 'gramos' then 1
+      when 'mg' then 0.001
+      when 'kg' then 1000 when 'kilo' then 1000 when 'kilos' then 1000
+      when 'kilogramo' then 1000
+      when 'lb' then 453.59237 when 'lbs' then 453.59237
+      when 'libra' then 453.59237 when 'libras' then 453.59237
+      when 'oz' then 28.349523125 when 'onz' then 28.349523125
+      when 'onza' then 28.349523125 when 'onzas' then 28.349523125
+      else null end
+    when familia = 'volumen' then case lower(btrim(u))
+      when 'ml' then 1 when 'cc' then 1 when 'cl' then 10
+      when 'l' then 1000 when 'lt' then 1000
+      when 'litro' then 1000 when 'litros' then 1000
+      when 'gal' then 3785.41 when 'galon' then 3785.41
+      when 'shot' then 36 when 'shots' then 36
+      when 'oz' then 29.5735 when 'onz' then 29.5735
+      when 'onza' then 29.5735 when 'onzas' then 29.5735
+      else null end
+    when familia = 'conteo' then 1
+    else null end;
+$fn$;
+
+create or replace function public._penda_a_base(
+  _cantidad numeric, _unidad_receta text, _item_id uuid)
+returns numeric language plpgsql stable as $fn$
+declare
+  v_base text; v_cu text; v_cf numeric;
+  f_rec text; f_base text; f_cu text;
+  v_tiene_equiv boolean;
+begin
+  if _cantidad is null or _item_id is null then return null; end if;
+
+  v_tiene_equiv := exists (
+    select 1 from information_schema.columns
+     where table_schema='public' and table_name='inventory_items'
+       and column_name='conversion_factor');
+
+  if v_tiene_equiv then
+    execute 'select unit, conversion_unit, conversion_factor
+               from public.inventory_items where id = $1'
+       into v_base, v_cu, v_cf using _item_id;
+  else
+    execute 'select unit, null::text, null::numeric
+               from public.inventory_items where id = $1'
+       into v_base, v_cu, v_cf using _item_id;
+  end if;
+  if v_base is null then return null; end if;
+
+  -- MISMA UNIDAD, sin vueltas: si la receta pide en la unidad base del insumo
+  -- el numero ya esta bien. Hace falta para las unidades que el conversor no
+  -- conoce (rebanada, lonja, manojo, bolsa): coinciden y no hay nada que
+  -- convertir, pero sin esto caerian en NULL y bloquearian la ficha.
+  if lower(btrim(_unidad_receta)) = lower(btrim(v_base)) then
+    return round(_cantidad, 6);
+  end if;
+
+  f_rec  := public._penda_unidad(_unidad_receta);
+  f_base := public._penda_unidad(v_base);
+  if f_rec is null or f_base is null then return null; end if;
+
+  -- la onza toma la familia de su contraparte; sola, es volumen
+  if f_rec = 'oz' then
+    f_rec := case when f_base in ('peso','volumen') then f_base else 'volumen' end;
+  end if;
+  if f_base = 'oz' then
+    f_base := case when f_rec in ('peso','volumen') then f_rec else 'volumen' end;
+  end if;
+
+  -- (1) misma familia: regla de tres y ya
+  if f_rec = f_base then
+    return round(_cantidad
+           * public._penda_factor(_unidad_receta, f_rec)
+           / nullif(public._penda_factor(v_base, f_base), 0), 6);
+  end if;
+
+  -- (2) familias distintas: solo la salva la equivalencia propia del insumo,
+  --     1 [unit] = conversion_factor [conversion_unit]
+  if v_cf is null or v_cf <= 0 or v_cu is null then return null; end if;
+  f_cu := public._penda_unidad(v_cu);
+  if f_cu = 'oz' then f_cu := f_rec; end if;
+  if f_cu is null or f_cu <> f_rec then return null; end if;
+
+  return round(_cantidad
+         * public._penda_factor(_unidad_receta, f_rec)
+         / nullif(public._penda_factor(v_cu, f_cu), 0)
+         / v_cf, 6);
+end;
+$fn$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- HASTA AQUI EL CARGADOR. No devuelve resultados: solo deja la tabla.
+--
+-- El reporte de mapeo vive en `PENDA_OP_4_mapeo.sql`, en UNA sola consulta,
+-- porque el SQL Editor de Supabase solo muestra el ULTIMO resultado y las
+-- seis consultas exploratorias que habia aqui (A..F) se pisaban entre si.
+-- Quedan abajo comentadas por si hace falta mirar una en particular.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+/*  ——— consultas exploratorias A..F (correr de a una, a mano) ———
 -- ═══ A · RESUMEN: qué se puede cargar y qué no ═══════════════════════════════
 select
   count(distinct codigo)                                                as fichas,
@@ -755,3 +977,5 @@ order by f.ingrediente, parecido desc;
 -- ═══ LIMPIEZA (cuando el mapeo esté resuelto) ════════════════════════════════
 -- drop table public._recetario_penda;
 -- drop function public._norm(text);
+
+*/

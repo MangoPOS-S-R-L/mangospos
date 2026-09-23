@@ -14,22 +14,34 @@ import 'package:flutter/foundation.dart';
 /// Cada "refresher" es un `fetch + cachear` best-effort: si uno falla, no
 /// frena a los demás. Diseñado con refreshers inyectados → testeable sin
 /// red/BD; la composición real los arma desde los servicios de cada módulo.
-class OfflineSyncCoordinator {
+class OfflineSyncCoordinator extends ChangeNotifier {
   OfflineSyncCoordinator({
     required Stream<bool> connectionStream,
     required List<Future<void> Function()> refreshers,
     Duration periodic = const Duration(minutes: 15),
     bool Function()? isConnectedNow,
     Duration startupDelay = const Duration(seconds: 5),
-  })  : _connectionStream = connectionStream,
-        _refreshers = refreshers,
-        _periodic = periodic,
-        _isConnectedNow = isConnectedNow,
-        _startupDelay = startupDelay;
+    this.refreshTimeout = const Duration(seconds: 45),
+  }) : _connectionStream = connectionStream,
+       _refreshers = refreshers,
+       _periodic = periodic,
+       _isConnectedNow = isConnectedNow,
+       _startupDelay = startupDelay;
 
   final Stream<bool> _connectionStream;
   final List<Future<void> Function()> _refreshers;
   final Duration _periodic;
+  final Duration refreshTimeout;
+  bool get isRefreshing => _inFlight;
+  bool get isOnline => _isOnline;
+  int? currentStep;
+  int finishedSteps = 0;
+  final Set<int> failedSteps = {};
+  DateTime? lastFinishedAt;
+
+  void _emit() {
+    if (!_disposed) notifyListeners();
+  }
 
   /// Lectura EN VIVO de la conectividad. Sin esto el coordinador solo conoce
   /// el estado que le haya llegado por [_connectionStream] — y ese stream es
@@ -70,6 +82,7 @@ class OfflineSyncCoordinator {
     _sub = _connectionStream.listen((connected) {
       final wasConnected = _connected;
       _connected = connected;
+      _emit();
       // Solo al pasar offline→online refrescamos (no en cada tick del probe).
       if (connected && !wasConnected) {
         unawaited(refreshAll(motivo: 'reconexión'));
@@ -106,6 +119,9 @@ class OfflineSyncCoordinator {
   Future<void> refreshAll({String motivo = 'manual'}) async {
     if (_inFlight || _disposed) return;
     _inFlight = true;
+    finishedSteps = 0;
+    failedSteps.clear();
+    _emit();
     // Sin esta traza no había forma de saber DESDE LA APP si la bajada
     // proactiva corrió: los refreshers solo escribían al log cuando fallaban,
     // así que "no pasó nada" y "funcionó" se veían igual. Y el bug que esto
@@ -114,17 +130,32 @@ class OfflineSyncCoordinator {
     var ok = 0;
     var fallaron = 0;
     try {
-      for (final refresh in _refreshers) {
+      for (var i = 0; i < _refreshers.length; i++) {
+        if (_disposed) break;
+        if (_isConnectedNow != null && !_isOnline) {
+          failedSteps.addAll(
+            Iterable<int>.generate(_refreshers.length - i, (n) => i + n),
+          );
+          break;
+        }
+        currentStep = i;
+        _emit();
         try {
-          await refresh();
+          await _refreshers[i]().timeout(refreshTimeout);
           ok++;
         } catch (e) {
           fallaron++;
+          failedSteps.add(i);
           debugPrint('[OfflineSyncCoordinator] refresher falló: $e');
         }
+        finishedSteps++;
+        _emit();
       }
     } finally {
       _inFlight = false;
+      currentStep = null;
+      lastFinishedAt = DateTime.now();
+      _emit();
       final ms = DateTime.now().difference(t0).inMilliseconds;
       debugPrint(
         '[OfflineSyncCoordinator] bajada ($motivo): $ok ok, $fallaron con '
@@ -133,6 +164,7 @@ class OfflineSyncCoordinator {
     }
   }
 
+  @override
   void dispose() {
     _disposed = true;
     _sub?.cancel();
@@ -141,5 +173,6 @@ class OfflineSyncCoordinator {
     _timer = null;
     _startupTimer?.cancel();
     _startupTimer = null;
+    super.dispose();
   }
 }

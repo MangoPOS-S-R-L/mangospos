@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import 'package:mangopos/core/auth/offline_auth_service.dart';
+import 'package:mangopos/core/offline/offline_readiness_provider.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
@@ -16,14 +18,16 @@ import 'package:mangopos/core/utils/friendly_error.dart';
 /// Una vez vinculado, el cliente puede sincronizar el roster de usuarios
 /// y validar PINs sin conexión a internet.
 class DeviceBindingView extends ConsumerStatefulWidget {
-  const DeviceBindingView({super.key});
+  const DeviceBindingView({super.key, this.service});
+
+  final OfflineAuthService? service;
 
   @override
   ConsumerState<DeviceBindingView> createState() => _DeviceBindingViewState();
 }
 
 class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
-  final _service = OfflineAuthService();
+  OfflineAuthService get _service => widget.service ?? OfflineAuthService();
   final _deviceNameCtrl = TextEditingController();
 
   bool _loading = true;
@@ -78,6 +82,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
         _rosterCount = rosterCount;
         _loading = false;
       });
+      ref.invalidate(offlineReadinessProvider);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -122,13 +127,12 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       } catch (e) {
         if (mounted) {
           setState(() {
-            _statusMessage =
-                'Dispositivo vinculado, pero la sincronización inicial falló: $e';
+            _errorMessage = _syncFailureMessage(e);
           });
         }
       }
       await _refresh();
-      if (mounted && _statusMessage == null) {
+      if (mounted && _errorMessage == null) {
         setState(() {
           _statusMessage =
               'Dispositivo vinculado y roster sincronizado correctamente.';
@@ -160,11 +164,22 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = FriendlyError.humanize('Error sincronizando: $e'));
+        setState(() => _errorMessage = _syncFailureMessage(e));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _syncFailureMessage(Object error) {
+    debugPrint('DeviceBindingView: descarga de usuarios falló: $error');
+    if (error is PostgrestException && error.code == '42883' &&
+        error.message.toLowerCase().contains('crypt')) {
+      return 'El equipo está vinculado, pero falta una actualización del servidor '
+          'para descargar los usuarios. El acceso con PIN sin internet aún no está listo. '
+          'No necesitas vincularlo de nuevo.';
+    }
+    return 'No se pudieron descargar los usuarios. ${FriendlyError.from(error)}';
   }
 
   Future<void> _unbind() async {
@@ -265,9 +280,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
             ),
             SizedBox(height: 8),
             Text(
-              'Permite que este terminal valide PINs de empleados y opere '
-              'completamente sin conexión a internet. El roster de usuarios '
-              'autorizados se guarda encriptado localmente y se sincroniza '
+              'Permite iniciar sesión con PIN de empleados sin internet. '
+              'La lista de usuarios autorizados se guarda cifrada en este equipo y se actualiza '
               'cuando hay red. Solo el propietario o administradores del '
               'negocio pueden vincular o desvincular terminales.',
             ),
@@ -352,11 +366,12 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
               valueColor: stale ? const Color(0xFFB91C1C) : null,
             ),
             if (stale)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 4),
                 child: Text(
-                  'El roster está vencido. Algunos flujos críticos pueden '
-                  'bloquearse hasta sincronizar.',
+                  _lastSyncAt == null
+                      ? 'Aún no se han descargado los usuarios. Sincroniza para preparar el acceso con PIN sin internet.'
+                      : 'Los permisos guardados vencieron. Sincroniza para poder entrar con PIN sin internet.',
                   style: TextStyle(
                     color: Color(0xFFB91C1C),
                     fontSize: 12,

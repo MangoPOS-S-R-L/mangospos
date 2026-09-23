@@ -218,6 +218,29 @@ class OfflinePosService {
   final HubOpLog _hubOpLog = HubOpLog();
   final HubLeaseService _hubLease = HubLeaseService();
   final Map<String, Future<OfflineQueueSyncResult>> _hubUplinkInFlight = {};
+  final Map<String, Future<OfflineQueueSyncResult>> _queueSyncInFlight = {};
+  final Map<String, Future<void>> _queueMutations = {};
+
+  // Solo serializa escrituras locales breves. Nunca mantener este candado
+  // durante un RPC: el cajero debe poder seguir agregando mientras hay sync.
+  Future<T> _withQueueMutation<T>(String businessId, Future<T> Function() fn) {
+    final previous = _queueMutations[businessId] ?? Future<void>.value();
+    final run = previous.then((_) => fn());
+    final settled = run.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    _queueMutations[businessId] = settled;
+    unawaited(
+      settled.then((_) {
+        if (identical(_queueMutations[businessId], settled)) {
+          _queueMutations.remove(businessId);
+        }
+      }),
+    );
+    return run;
+  }
+
   DateTime? _lastBackupAckAt;
   static const Duration _backupAckEvery = Duration(seconds: 60);
 
@@ -473,7 +496,11 @@ class OfflinePosService {
     String key,
     Map<String, dynamic> payload,
   ) async {
-    await storage.write(key, await _cipher.seal(jsonEncode(payload)));
+    final saved = await storage.write(
+      key,
+      await _cipher.sealDurable(jsonEncode(payload)),
+    );
+    if (!saved) throw StateError('No se pudo guardar la orden en este equipo.');
   }
 
   /// Lee y descifra un snapshot. Devuelve null si no existe o si el
@@ -787,10 +814,11 @@ class OfflinePosService {
       }
     }
 
-    final current = await _readQueue(businessId);
-    current.add(normalized);
-    final compacted = _compactQueue(current);
-    await _writeQueue(businessId, compacted);
+    await _withQueueMutation(businessId, () async {
+      final current = await _readQueue(businessId);
+      current.add(normalized);
+      await _writeQueue(businessId, _compactQueue(current));
+    });
   }
 
   Future<void> enqueuePrintJob({
@@ -1135,6 +1163,31 @@ class OfflinePosService {
     required InventoryRepository inventoryRepository,
     required CashierRepository cashierRepository,
     bool force = false,
+  }) {
+    final active = _queueSyncInFlight[businessId];
+    if (active != null) return active;
+    final run =
+        _syncPendingActionsOnce(
+          businessId: businessId,
+          salesRepository: salesRepository,
+          printingService: printingService,
+          inventoryRepository: inventoryRepository,
+          cashierRepository: cashierRepository,
+          force: force,
+        ).whenComplete(() {
+          _queueSyncInFlight.remove(businessId);
+        });
+    _queueSyncInFlight[businessId] = run;
+    return run;
+  }
+
+  Future<OfflineQueueSyncResult> _syncPendingActionsOnce({
+    required String businessId,
+    required SalesRepository salesRepository,
+    required PrintingService printingService,
+    required InventoryRepository inventoryRepository,
+    required CashierRepository cashierRepository,
+    required bool force,
   }) async {
     final queue = await _readQueue(businessId);
     if (queue.isEmpty) {
@@ -1167,10 +1220,12 @@ class OfflinePosService {
       if (_isCompleted(action)) continue;
       if (!force && _isDead(action)) continue;
       if ((actionId != null && completedOps.contains(actionId)) ||
-          (fingerprint != null && completedFingerprints.contains(fingerprint))) {
+          (_fingerprintWasCompleted(fingerprint, completedFingerprints))) {
         queue[i] = Map<String, dynamic>.from(action)
           ..['status'] = _statusCompleted
-          ..['completed_at'] = action['completed_at'] ?? DateTime.now().toIso8601String();
+          ..['completed_at'] =
+              action['completed_at'] ?? DateTime.now().toIso8601String();
+        await _upsertAction(businessId, queue[i]);
         continue;
       }
       if (!force && !_isReadyToRetry(action)) {
@@ -1178,14 +1233,23 @@ class OfflinePosService {
         continue;
       }
 
+      final processing = await _withQueueMutation(businessId, () async {
+        // La compactación pudo cambiar o cancelar esta acción mientras el
+        // RPC anterior estaba en vuelo. Reclamar la versión vigente.
+        final current = await _readQueue(businessId);
+        final index = current.indexWhere((a) => a['id'] == actionId);
+        if (index < 0 || _isCompleted(current[index])) return null;
+        final claimed = Map<String, dynamic>.from(current[index])
+          ..['status'] = _statusProcessing
+          ..['processing_started_at'] = DateTime.now().toIso8601String();
+        await _upsertActionUnlocked(businessId, claimed);
+        return claimed;
+      });
+      if (processing == null) continue;
       processed++;
-      final processing = Map<String, dynamic>.from(action)
-        ..['status'] = _statusProcessing
-        ..['processing_started_at'] = DateTime.now().toIso8601String();
       queue[i] = processing;
       // UPSERT puntual de la action que cambió de estado, en lugar de
       // reescribir la lista completa (O(n²) con N actions y N pasos).
-      await _upsertAction(businessId, processing);
 
       bool breakLoop = false;
       try {
@@ -1294,10 +1358,11 @@ class OfflinePosService {
       if (breakLoop) break;
     }
 
-    await _pruneQueue(businessId, queue);
-    await _drainStalePrintQueue(businessId, queue);
-    final pending = queue.where((item) => !_isSettled(item)).length;
-    final dead = queue.where(_isDead).length;
+    await _pruneQueue(businessId);
+    final remaining = await _readQueue(businessId);
+    await _drainStalePrintQueue(businessId, remaining);
+    final pending = remaining.where((item) => !_isSettled(item)).length;
+    final dead = remaining.where(_isDead).length;
     return OfflineQueueSyncResult(
       processed: processed,
       completed: completed,
@@ -1341,13 +1406,16 @@ class OfflinePosService {
     // primero.
     final running = _hubUplinkInFlight[businessId];
     if (running != null) return running;
-    final run = _syncHubOpLogOnce(
-      businessId: businessId,
-      salesRepository: salesRepository,
-      printingService: printingService,
-      inventoryRepository: inventoryRepository,
-      cashierRepository: cashierRepository,
-    ).whenComplete(() => _hubUplinkInFlight.remove(businessId));
+    final run =
+        _syncHubOpLogOnce(
+          businessId: businessId,
+          salesRepository: salesRepository,
+          printingService: printingService,
+          inventoryRepository: inventoryRepository,
+          cashierRepository: cashierRepository,
+        ).whenComplete(() {
+          _hubUplinkInFlight.remove(businessId);
+        });
     _hubUplinkInFlight[businessId] = run;
     return run;
   }
@@ -1423,7 +1491,7 @@ class OfflinePosService {
       }
       // Ya aplicada (re-run o subió antes) → idempotente, saltar.
       if ((opId != null && completedOps.contains(opId)) ||
-          (fingerprint != null && completedFingerprints.contains(fingerprint))) {
+          (_fingerprintWasCompleted(fingerprint, completedFingerprints))) {
         completed++;
         continue;
       }
@@ -1562,7 +1630,8 @@ class OfflinePosService {
   ) async {
     if (kIsWeb) {
       final storage = await _storage;
-      await storage.writeList(_queueKey(businessId), queue);
+      final saved = await storage.writeList(_queueKey(businessId), queue);
+      if (!saved) throw StateError('No se pudo guardar la operación offline.');
       return;
     }
     await _queueDao!.writeQueue(businessId, queue);
@@ -1618,7 +1687,7 @@ class OfflinePosService {
     final id = _hubOpId(op);
     if (id != null && doneOps.contains(id)) return true;
     final fp = op['fingerprint']?.toString();
-    return fp != null && doneFingerprints.contains(fp);
+    return _fingerprintWasCompleted(fp, doneFingerprints);
   }
 
   /// H7: marca como completadas ops que el Hub primario ya subió (llegan por
@@ -1749,7 +1818,13 @@ class OfflinePosService {
     return _queueDao!.readCompletedFingerprints(businessId);
   }
 
-  Future<void> _upsertAction(
+  Future<void> _upsertAction(String businessId, Map<String, dynamic> action) =>
+      _withQueueMutation(
+        businessId,
+        () => _upsertActionUnlocked(businessId, action),
+      );
+
+  Future<void> _upsertActionUnlocked(
     String businessId,
     Map<String, dynamic> action,
   ) async {
@@ -1812,30 +1887,18 @@ class OfflinePosService {
     return normalized;
   }
 
-  String _buildActionFingerprint(Map<String, dynamic> action) {
-    final type = action['type']?.toString() ?? 'unknown';
-    final orderId = action['order_id']?.toString() ?? '';
-    final itemId = action['item_id']?.toString() ?? '';
-    final menuItemId = action['menu_item_id']?.toString() ?? '';
-    final checkPos = action['check_pos']?.toString() ?? '';
-    final qty = action['quantity']?.toString() ?? action['qty']?.toString() ?? '';
-    final notes = action['notes']?.toString() ?? '';
-    final takeout = (action['takeout'] == true || action['is_takeout'] == true)
-        ? '1'
-        : '0';
-    final productId = action['product_id']?.toString() ?? '';
-    return [
-      type,
-      orderId,
-      itemId,
-      menuItemId,
-      productId,
-      checkPos,
-      qty,
-      takeout,
-      notes,
-    ].join('|');
-  }
+  // Dos rondas idénticas de cocina (o dos cobros por el mismo importe)
+  // son intenciones distintas. Solo el ID estable identifica un reintento.
+  String _buildActionFingerprint(Map<String, dynamic> action) =>
+      'op:${action['op_id'] ?? action['id']}';
+
+  static bool _fingerprintWasCompleted(
+    String? fingerprint,
+    Set<String> completed,
+  ) =>
+      fingerprint != null &&
+      fingerprint.startsWith('op:') &&
+      completed.contains(fingerprint);
 
   List<Map<String, dynamic>> _compactQueue(List<Map<String, dynamic>> queue) {
     final result = <Map<String, dynamic>>[];
@@ -1859,6 +1922,7 @@ class OfflinePosService {
         final addIndex = result.lastIndexWhere(
           (entry) =>
               !_isSettled(entry) &&
+              entry['status'] != _statusProcessing &&
               entry['type'] == 'add_item' &&
               entry['item_id']?.toString() == itemId,
         );
@@ -1897,6 +1961,7 @@ class OfflinePosService {
         existingIndex = result.lastIndexWhere(
           (entry) =>
               !_isSettled(entry) &&
+              entry['status'] != _statusProcessing &&
               entry['type'] == 'mark_order_takeout' &&
               entry['order_id']?.toString() == orderId,
         );
@@ -1909,15 +1974,9 @@ class OfflinePosService {
         existingIndex = result.lastIndexWhere(
           (entry) =>
               !_isSettled(entry) &&
+              entry['status'] != _statusProcessing &&
               entry['type'] == type &&
               entry['item_id']?.toString() == itemId,
-        );
-      } else if ({'send_to_kitchen', 'confirm_local_order'}.contains(type) && orderId != null && orderId.isNotEmpty) {
-        existingIndex = result.lastIndexWhere(
-          (entry) =>
-              !_isSettled(entry) &&
-              (entry['type'] == 'send_to_kitchen' || entry['type'] == 'confirm_local_order') &&
-              entry['order_id']?.toString() == orderId,
         );
       }
 
@@ -2079,6 +2138,7 @@ class OfflinePosService {
         // ingresó (LWW) y emite el movement con su created_at real al
         // sync. El cache local ya fue actualizado optimísticamente.
         await inventoryRepository.adjustInventory(
+          queueOnNetworkFailure: false,
           businessId: businessId,
           warehouseId: action['warehouse_id']?.toString() ?? '',
           itemId: action['item_id']?.toString() ?? '',
@@ -2093,6 +2153,7 @@ class OfflinePosService {
         return null;
       case 'inventory_movement':
         await inventoryRepository.recordMovement(
+          queueOnNetworkFailure: false,
           businessId: businessId,
           warehouseId: action['warehouse_id']?.toString() ?? '',
           itemId: action['item_id']?.toString() ?? '',
@@ -2562,6 +2623,9 @@ class OfflinePosService {
           checkId: action['check_id']?.toString(),
           paymentMethodId: action['payment_method_id']?.toString() ?? '',
           amount: ((action['amount'] ?? 0) as num).toDouble(),
+          splitSequence: (action['split_sequence'] as num?)?.toInt() ?? 0,
+          closeOrder: action['close_order'] != false,
+          closeCheck: action['close_check'] != false,
           reference: action['reference']?.toString(),
           customerId: action['customer_id']?.toString(),
           customerRnc: action['customer_rnc']?.toString(),
@@ -2845,17 +2909,21 @@ class OfflinePosService {
     return reconciled;
   }
 
-  Future<void> _pruneQueue(
-    String businessId,
-    List<Map<String, dynamic>> queue,
-  ) async {
-    final pending = queue.where((item) => !_isCompleted(item)).toList(growable: false);
-    final completed = queue.where(_isCompleted).toList(growable: false);
-    final keepCompleted = completed.length > 20
-        ? completed.sublist(completed.length - 20)
-        : completed;
-    final compacted = [...pending, ...keepCompleted];
-    await _writeQueue(businessId, compacted);
+  Future<void> _pruneQueue(String businessId) async {
+    await _withQueueMutation(businessId, () async {
+      // Nunca podar desde la foto anterior al sync: borraría las ventas que
+      // entraron mientras la red estaba ocupada.
+      final queue = await _readQueue(businessId);
+      final pending = queue
+          .where((item) => !_isCompleted(item))
+          .toList(growable: false);
+      final completed = queue.where(_isCompleted).toList(growable: false);
+      final keepCompleted = completed.length > 20
+          ? completed.sublist(completed.length - 20)
+          : completed;
+      final compacted = [...pending, ...keepCompleted];
+      await _writeQueue(businessId, compacted);
+    });
     // Cap del histórico de completed_ops/fingerprints en sqlite: borramos
     // entradas más viejas de 30 días. Antes el cap era 500 entries en
     // memoria; el cap por tiempo es más robusto y predecible.

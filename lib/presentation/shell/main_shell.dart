@@ -37,6 +37,7 @@ import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
+import 'offline_preparation_banner.dart';
 import '../../core/theme/app_colors.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 
@@ -260,6 +261,7 @@ class _MainShellState extends ConsumerState<MainShell> {
 
             // ======= BANNER ACTUALIZACIÓN (solo web, solo si hay deploy nuevo)
             const UpdateAvailableBanner(),
+            const OfflinePreparationBanner(),
 
             // ======= CONTENIDO =======
             Expanded(child: child),

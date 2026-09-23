@@ -18,6 +18,7 @@ import 'dart:ui' as ui;
 
 import 'escpos_parser.dart';
 import 'mono_bitmap.dart';
+import 'raster_ink.dart';
 
 class TicketRasterizer {
   /// Ancho de celda en puntos para la fuente A. 576/48 y 384/32 dan 12 en
@@ -38,10 +39,14 @@ class TicketRasterizer {
   /// Idem para la celda de 18 puntos de la fuente B.
   static const double _fontSizeB = 14;
 
-  /// Sobre 0.5 de gris ya cuenta como punto negro. El texto se dibuja en
-  /// negro puro sobre blanco, así que el umbral solo decide los bordes
-  /// antialiaseados.
-  static const int _threshold = 128;
+  /// Umbral del camino de CELDAS FIJAS (comandas, cierres, Star TSP100):
+  /// sobre 0.5 de gris ya cuenta como punto negro.
+  ///
+  /// Se queda en la mitad exacta a propósito. Ahí cada carácter se dibuja
+  /// dentro de una celda de 12 puntos y la `W` ya roza el borde; engordar el
+  /// trazo la haría tocar a su vecina. El camino proporcional no tiene ese
+  /// techo y su tinta la decide la impresora — ver [RasterInk].
+  static const int _gridThreshold = 128;
 
   // ── Modo proporcional (calidad tipo Square) ──────────────────────────
   //
@@ -104,7 +109,18 @@ class TicketRasterizer {
 
 
   /// Grosor de las reglas finas que sustituyen a las filas de guiones.
-  static const int _ruleThickness = 2;
+  ///
+  /// 3 y no 2 porque una térmica NO quema igual una línea fina que un bloque:
+  /// cada elemento del cabezal se enciende el tiempo de una fila de puntos, y
+  /// con dos filas el trazo sale gris. Medido sobre la foto de una precuenta
+  /// impresa en una ELO: de las cinco reglas del ticket, la detección de
+  /// tinta solo encontró UNA — la sólida de encima del TOTAL. Las punteadas
+  /// no se distinguían del papel.
+  ///
+  /// A 203 dpi son 0.37mm: sigue siendo un filete, no un subrayado. Y el
+  /// renglón de la regla es [_ruleLineHeight] = trazo + aire, así que el
+  /// grosor NO se come la separación: el ticket crece 1 punto por regla.
+  static const int _ruleThickness = 3;
 
   /// Fuente MONOESPACIADA del ticket, empaquetada en `pubspec.yaml`.
   ///
@@ -133,10 +149,21 @@ class TicketRasterizer {
   /// es lo que más acerca el ticket al de una POS moderna.
   static const String _ruleChars = '-=_.*~';
 
-  /// Trazo y paso del separador punteado, en puntos. 3 de tinta cada 8 deja
-  /// un punteado que se lee a 203 dpi sin parecer una línea gris.
-  static const double _dottedDash = 3;
-  static const double _dottedPeriod = 8;
+  /// Trazo y paso del separador punteado, en puntos: 5 de tinta cada 9.
+  ///
+  /// Antes eran 3 cada 8 y ESA era la línea que no salía. Una marca corta y
+  /// aislada es lo que peor imprime una térmica: el elemento del cabezal
+  /// apenas se calienta y se vuelve a apagar. Un trazo más largo aprovecha el
+  /// calor del punto anterior, así que 5 puntos seguidos salen negros donde 3
+  /// salían grises — y eso pesa más que el grosor.
+  ///
+  /// El hueco se mantiene en 4 puntos (0.5mm) a propósito: la regla tiene que
+  /// seguir LEYÉNDOSE como punteada. Es lo que separa bloques sin cortar el
+  /// ticket en cajas, que es lo que distingue este modelo del estándar con
+  /// sus filas de `=====`. Si el trazo pasara del 60% del paso, a un brazo de
+  /// distancia se lee como una línea sólida gris y se pierde esa diferencia.
+  static const double _dottedDash = 5;
+  static const double _dottedPeriod = 9;
 
   /// Aire arriba y abajo de cada imagen (logo, QR) en el flujo proporcional.
   ///
@@ -160,12 +187,17 @@ class TicketRasterizer {
   /// [proportional] activa la tipografía real (ver arriba). Por defecto va en
   /// false: las Star TSP100 llevan años saliendo con celdas fijas y no se
   /// cambia su salida sin que alguien lo pida.
+  ///
+  /// [ink] es cuánto trazo pone el binarizado, que depende del CABEZAL: la
+  /// misma imagen sale negra en una térmica y gris en otra (ver
+  /// [RasterInk]). Solo aplica al camino proporcional.
   static Future<MonoBitmap> render(
     ParsedTicket ticket,
     int dots, {
     bool proportional = false,
+    RasterInk ink = RasterInk.normal,
   }) async {
-    if (proportional) return _renderProportional(ticket, dots);
+    if (proportional) return _renderProportional(ticket, dots, ink);
     final layout = _layout(ticket.ops, dots);
     final bitmap = MonoBitmap(dots);
 
@@ -275,7 +307,7 @@ class TicketRasterizer {
       // Luminancia rápida: si el punto es oscuro, es tinta.
       final lum =
           (bytes[o] * 30 + bytes[o + 1] * 59 + bytes[o + 2] * 11) ~/ 100;
-      out[i] = lum < _threshold;
+      out[i] = lum < _gridThreshold;
     }
     return out;
   }
@@ -353,6 +385,7 @@ class TicketRasterizer {
   static Future<MonoBitmap> _renderProportional(
     ParsedTicket ticket,
     int dots,
+    RasterInk ink,
   ) async {
     final lines = <_ProportionalLine>[];
     final images = <_PlacedImage>[];
@@ -388,7 +421,7 @@ class TicketRasterizer {
 
     final bitmap = MonoBitmap(dots);
     if (y > 0) {
-      final pixels = await _paintProportional(lines, dots, y);
+      final pixels = await _paintProportional(lines, dots, y, ink);
       bitmap.ensureHeight(y);
       for (var py = 0; py < y; py++) {
         for (var px = 0; px < dots; px++) {
@@ -415,6 +448,7 @@ class TicketRasterizer {
     List<_ProportionalLine> lines,
     int dots,
     int height,
+    RasterInk ink,
   ) async {
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(
@@ -444,9 +478,34 @@ class TicketRasterizer {
       if (o + 2 >= bytes.length) break;
       final lum =
           (bytes[o] * 30 + bytes[o + 1] * 59 + bytes[o + 2] * 11) ~/ 100;
-      out[i] = lum < _threshold;
+      out[i] = lum < ink.threshold;
     }
+    _thicken(out, dots, height, ink.dilate);
     return out;
+  }
+
+  /// Engorda el trazo ya binarizado [puntos] puntos hacia la DERECHA.
+  ///
+  /// Es lo mismo que hace el "enfatizado" de una térmica por firmware
+  /// (`ESC E`), y por el mismo motivo: dos elementos del cabezal vecinos
+  /// encendidos se ayudan a quemar y el punto sale negro, mientras que uno
+  /// solo sale gris.
+  ///
+  /// Solo a lo ancho: crecer también hacia abajo cerraría los huecos de las
+  /// letras — y no hace falta, porque los trazos horizontales de la Roboto ya
+  /// caen en 2 puntos de alto.
+  static void _thicken(List<bool> mask, int dots, int height, int puntos) {
+    if (puntos <= 0) return;
+    for (var y = 0; y < height; y++) {
+      final base = y * dots;
+      for (var n = 0; n < puntos; n++) {
+        // De derecha a izquierda: si no, el punto recién encendido vuelve a
+        // encender al siguiente y el engorde se propaga por toda la fila.
+        for (var x = dots - 1; x > 0; x--) {
+          if (mask[base + x - 1]) mask[base + x] = true;
+        }
+      }
+    }
   }
 
   static void _paintProportionalLine(

@@ -861,8 +861,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
             // F4: el NCF asignado offline (y su tipo) viajan para que el
             // server registre el fiscal_document con ESE número al sincronizar.
             if (offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
-            if (offlineNcf != null)
-              'requested_ncf_type': state.selectedNcfType,
+            'requested_ncf_type': state.salesNoteSelected
+                ? null
+                : state.selectedNcfType,
             // La marca de nota de venta viaja para que el replay la ponga
             // ANTES de reproducir el cobro: si llega después, el cierre ya
             // habrá emitido NCF. Viaja el valor elegido (incluido `false`)

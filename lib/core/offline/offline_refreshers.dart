@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart' show ChangeNotifierProvider;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/network/connectivity_service.dart';
@@ -16,6 +17,8 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 
 import 'catalog_refresh_service.dart';
+import 'offline_catalog_service.dart';
+import '../auth/offline_auth_service.dart';
 import 'offline_cache_pruner.dart';
 import 'ncf_offline_allocator.dart' show kOfflineNcfEnabled;
 import 'ncf_range_service.dart';
@@ -53,6 +56,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshFiscalSequences,
   Future<void> Function(String businessId)? refreshNcfSeed,
   Future<void> Function(String businessId)? refreshPosLookups,
+  Future<void> Function(String businessId)? refreshAuth,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
   // un refresher por defecto (en test se inyectan todos y no se toca).
@@ -68,14 +72,17 @@ List<Future<void> Function()> buildOfflineRefreshers({
       refreshZones ??
       (String b) async {
         final repo = ZonesRepository(resolveClient());
-        final list = await repo.fetchZones(b);
+        final list = await repo.fetchZones(b, includeVirtualSalesZones: true);
+        var failed = false;
         for (final zone in list) {
           try {
             await repo.fetchTablesByZone(zone.id);
           } catch (e) {
+            failed = true;
             debugPrint('[offline] mesas de la zona ${zone.id} no bajaron: $e');
           }
         }
+        if (failed) throw StateError('No se descargaron todas las mesas.');
       };
   final inventory =
       refreshInventory ??
@@ -92,7 +99,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
       (String b) async {
         await PrintingService(
           resolveClient(),
-        ).prewarmPrinterCache(businessId: b);
+        ).prewarmPrinterCache(businessId: b, failOnError: true);
       };
   // Secuencias NCF: getSequences cachea en disco como efecto secundario;
   // sin esto el modal de cobro offline decía "no hay secuencias fiscales
@@ -126,6 +133,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
     guard(printers),
     guard(fiscalSequences),
     guard(posLookups),
+    if (refreshAuth != null) guard(refreshAuth),
   ];
 
   // Semilla NCF (F4): cachea la serie central offline para que el Hub conozca
@@ -162,7 +170,22 @@ Future<void> _refreshPosLookups(
   final byItem = await SalesRepository(
     client,
   ).getModifierGroupsByItemForBusiness(businessId);
-  await cache.replaceAllModifierGroups(businessId, byItem);
+  final catalog = await OfflineCatalogService().loadSnapshot(businessId);
+  if (catalog == null) throw StateError('Falta el catálogo local.');
+  final products = catalog.products;
+  await cache.replaceAllModifierGroups(
+    businessId,
+    byItem,
+    itemsWithoutGroups: products
+        .map((p) => p['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty && !byItem.containsKey(id)),
+  );
+  final sales = SalesRepository(client);
+  for (final product in products.where((p) => p['item_type'] == 'combo')) {
+    final id = product['id'].toString();
+    final groups = await sales.getComboGroupsForMenuItem(id);
+    await cache.saveComboGroups(businessId, id, groups);
+  }
 
   // Razones de gastos/ingresos: la pantalla las exige para registrar uno.
   final reasons = await CashierRepository(
@@ -188,30 +211,63 @@ Future<void> _refreshInventoryMainWarehouse(
 /// Coordinador de bajada vivo durante la sesión de la app. Refresca los caches
 /// de lectura al reconectar (offline→online) y periódicamente. Se mantiene vivo
 /// leyéndolo desde el shell (igual que `hubModeProvider`). Provider
-/// no-autoDispose: se crea una vez y se limpia al cerrar el container.
-final offlineSyncCoordinatorProvider = Provider<OfflineSyncCoordinator>((ref) {
-  // Poda de arranque: borra los caches de LECTURA de negocios que este equipo
-  // ya no usa. Medido en campo, eran el 86% de un plist de 34 MB que
-  // SharedPreferences carga entero en memoria en cada arranque. Una sola vez,
-  // best-effort y fuera del camino crítico; nunca toca borradores, cola,
-  // mapas, op-log ni roster. Ver [OfflineCachePruner].
-  Future.delayed(const Duration(seconds: 12), () {
-    final businessId = ref.read(sessionProvider).activeBusinessId;
-    if (businessId == null || businessId.isEmpty) return;
-    unawaited(OfflineCachePruner().pruneOtherBusinesses(businessId));
-  });
+/// Se recrea al cambiar de negocio y se limpia al cerrar el container.
+const offlineDownloadLabels = [
+  'Productos y precios',
+  'Zonas y mesas',
+  'Inventario',
+  'Configuración',
+  'Impresoras',
+  'Secuencias fiscales',
+  'Impuestos y opciones',
+  'Acceso con PIN',
+  'Reserva fiscal',
+];
 
-  final connectivity = ConnectivityService();
-  final coordinator = OfflineSyncCoordinator(
-    connectionStream: connectivity.connectionStream,
-    // Lectura en vivo: el stream solo emite en los CAMBIOS, así que un equipo
-    // que nace online y no pierde la red nunca recibía nada por él y no
-    // sembraba un solo cache. Ver la nota en OfflineSyncCoordinator.
-    isConnectedNow: () => connectivity.isConnected,
-    refreshers: buildOfflineRefreshers(
-      resolveBusinessId: () => ref.read(sessionProvider).activeBusinessId,
-    ),
-  )..start();
-  ref.onDispose(coordinator.dispose);
-  return coordinator;
-});
+final offlineSyncCoordinatorProvider = ChangeNotifierProvider<OfflineSyncCoordinator>(
+  (ref) {
+    // Un ciclo pertenece a un solo negocio, incluso si la sesión cambia
+    // mientras una consulta está en vuelo.
+    final businessId = ref.watch(
+      sessionProvider.select((s) => s.activeBusinessId),
+    );
+    // Poda de arranque: borra los caches de LECTURA de negocios que este equipo
+    // ya no usa. Medido en campo, eran el 86% de un plist de 34 MB que
+    // SharedPreferences carga entero en memoria en cada arranque. Una sola vez,
+    // best-effort y fuera del camino crítico; nunca toca borradores, cola,
+    // mapas, op-log ni roster. Ver [OfflineCachePruner].
+    final pruneTimer = Timer(const Duration(seconds: 12), () {
+      if (businessId == null ||
+          businessId.isEmpty ||
+          ref.read(sessionProvider).activeBusinessId != businessId) {
+        return;
+      }
+      unawaited(OfflineCachePruner().pruneOtherBusinesses(businessId));
+    });
+
+    ref.onDispose(pruneTimer.cancel);
+
+    final connectivity = ConnectivityService();
+    final coordinator = OfflineSyncCoordinator(
+      connectionStream: connectivity.connectionStream,
+      // Lectura en vivo: el stream solo emite en los CAMBIOS, así que un equipo
+      // que nace online y no pierde la red nunca recibía nada por él y no
+      // sembraba un solo cache. Ver la nota en OfflineSyncCoordinator.
+      isConnectedNow: () => connectivity.isConnected,
+      refreshers: buildOfflineRefreshers(
+        resolveBusinessId: () => businessId,
+        refreshAuth: (bid) async {
+          final auth = OfflineAuthService();
+          if (!await auth.isDeviceBound() ||
+              await auth.currentBoundBusinessId() != bid) {
+            // Es configuración pendiente, no un fallo de descarga. El
+            // inspector muestra la vinculación y su acción correspondiente.
+            return;
+          }
+          await auth.syncRoster();
+        },
+      ),
+    )..start();
+    return coordinator;
+  },
+);

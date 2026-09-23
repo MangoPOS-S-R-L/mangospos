@@ -12,6 +12,7 @@ import '../models/order_item_removal_reason.dart';
 import '../models/sales_models.dart';
 import '../../core/network/connectivity_service.dart';
 import '../../core/offline/offline_catalog_service.dart';
+import '../../core/offline/business_settings_offline_cache.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
@@ -32,9 +33,18 @@ import 'sales_repository.dart';
 ///   - `escalatedToCloud`: todas las impresoras del área fallaron en
 ///     directo y el job se encoló en Supabase. El worker lo procesará
 ///     con retry/failover.
-enum KitchenPrintOutcome {
-  directSuccess,
-  escalatedToCloud,
+enum KitchenPrintOutcome { directSuccess, escalatedToCloud }
+
+/// Guardar la comanda y entregar papel son resultados distintos: sin LAN o
+/// sin una impresora preparada, conservamos la orden y mostramos lo pendiente.
+class LocalKitchenSendResult {
+  const LocalKitchenSendResult({
+    required this.dispatchIds,
+    required this.pendingAreas,
+  });
+
+  final Map<String, String> dispatchIds;
+  final List<String> pendingAreas;
 }
 
 /// Resultado consolidado de enviar una orden completa a cocina. La UI
@@ -197,8 +207,8 @@ class PrintingService {
   late final SalesRepository _salesRepo;
   final OfflinePosService _offlinePos = OfflinePosService();
 
-  PrintingService(this._client) {
-    _printingRepo = PrintingRepository(_client);
+  PrintingService(this._client, {PrintingRepository? printingRepository}) {
+    _printingRepo = printingRepository ?? PrintingRepository(_client);
     _salesRepo = SalesRepository(_client);
   }
 
@@ -248,13 +258,24 @@ class PrintingService {
       final kitchenBannersFuture = PosSettingsRepository(
         _client,
       ).getKitchenBanners(businessId);
-      final order = await orderFuture;
+      // Observar TODOS los errores desde el inicio. Si cae WAN, esperar
+      // primero orderFuture dejaba fallar items/settings sin un listener y
+      // generaba errores asíncronos fuera del fallback local.
+      final initial = await Future.wait<Object?>([
+        orderFuture,
+        itemsFuture,
+        orderDataFuture,
+        businessNameFuture,
+        receiptItemDisplayModeFuture,
+        kitchenBannersFuture,
+      ]);
+      final order = initial[0] as Order?;
       if (order == null) {
         throw Exception('Orden no encontrada');
       }
 
       // 2. Obtener items de la orden
-      final items = await itemsFuture;
+      final items = initial[1] as List<OrderItem>;
 
       final draftItems = items
           .where((item) => item.status == 'draft' || item.status == 'open')
@@ -270,10 +291,10 @@ class PrintingService {
       }
 
       // 3. Obtener información adicional para el ticket
-      final orderData = await orderDataFuture;
-      final businessName = await businessNameFuture;
-      final receiptItemDisplayMode = await receiptItemDisplayModeFuture;
-      final kitchenBanners = await kitchenBannersFuture;
+      final orderData = initial[2] as Map<String, dynamic>;
+      final businessName = initial[3] as String?;
+      final receiptItemDisplayMode = initial[4] as String;
+      final kitchenBanners = initial[5] as ({bool dineIn, bool takeout});
 
       // 4. Agrupar items por área de impresión
       final itemsByArea = await _groupItemsByPrintArea(
@@ -440,6 +461,7 @@ class PrintingService {
     // reusan la clave de la comanda original y la cola los descarta en
     // silencio. Null = comanda original (clave legacy, byte-idéntica).
     String? idempotencySuffix,
+    bool localOnly = false,
   }) async {
     final errors = <String>[];
     String? firstDirectPrinterId;
@@ -455,6 +477,7 @@ class PrintingService {
           businessId: businessId,
           orderId: orderId,
           idempotencySuffix: idempotencySuffix,
+          localOnly: localOnly,
         );
         if (outcome == KitchenPrintOutcome.directSuccess) {
           firstDirectPrinterId ??= printer.id;
@@ -503,6 +526,7 @@ class PrintingService {
     String? businessId,
     String? orderId,
     String? idempotencySuffix,
+    bool localOnly = false,
   }) async {
     // Velocidad elegida para esta impresora. Las comandas no pasan por
     // `StarPrintAdapter` (salen directo por TCP/agente/BT), así que se aplica
@@ -549,11 +573,13 @@ class PrintingService {
           // la sonda puede fallar por puerto ocupado por otra tablet y
           // el escaneo LAN metería segundos de latencia — los retries
           // con jitter de abajo ya cubren ese caso.
-          final targetIp = await _printingRepo.resolveReachableNetworkIp(
-            printer: printer,
-            cachedIp: ip,
-            includeMacRecovery: false,
-          );
+          final targetIp = localOnly
+              ? ip
+              : await _printingRepo.resolveReachableNetworkIp(
+                  printer: printer,
+                  cachedIp: ip,
+                  includeMacRecovery: false,
+                );
           try {
             // attempts:4 (vs 2 por defecto) — en un setup multi-tablet a una
             // impresora de cocina COMPARTIDA, el puerto 9100 puede estar
@@ -574,11 +600,13 @@ class PrintingService {
             // "Probar impresión" de Settings) y el auto-update por MAC era
             // código muerto justo en las impresoras que más lo necesitan.
             // Usa targetIp, no ip: es la que de verdad respondió.
-            _printingRepo.captureMacForPrinterIfMissing(
-              printerId: printer.id,
-              ipAddress: targetIp,
-              existingMac: printer.effectiveMac,
-            );
+            if (!localOnly) {
+              _printingRepo.captureMacForPrinterIfMissing(
+                printerId: printer.id,
+                ipAddress: targetIp,
+                existingMac: printer.effectiveMac,
+              );
+            }
           } on PrintLikelyDeliveredException catch (e) {
             // Los bytes se enviaron (RST post-flush, normal en térmicas): la
             // comanda muy probablemente ya imprimió. NO usar el agente como
@@ -589,11 +617,13 @@ class PrintingService {
             );
             // La impresora respondió (aceptó conexión y bytes), así que la
             // IP es buena para capturar MAC aunque cerrara al final.
-            _printingRepo.captureMacForPrinterIfMissing(
-              printerId: printer.id,
-              ipAddress: targetIp,
-              existingMac: printer.effectiveMac,
-            );
+            if (!localOnly) {
+              _printingRepo.captureMacForPrinterIfMissing(
+                printerId: printer.id,
+                ipAddress: targetIp,
+                existingMac: printer.effectiveMac,
+              );
+            }
           } catch (e) {
             debugPrint(
               '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
@@ -605,6 +635,7 @@ class PrintingService {
                 data: bytes,
               );
             } catch (agentError) {
+              if (localOnly) rethrow;
               // Último recurso antes del cloud queue: la impresora pudo
               // haber cambiado de IP por DHCP. A esta altura ya fallaron
               // los 4 intentos directos Y el agente, así que NO es
@@ -726,7 +757,7 @@ class PrintingService {
       // FALLBACK FINAL: si tenemos businessId, escalamos al cloud queue.
       // El agent retomará con retry/backoff. Si no, propagamos error
       // legacy.
-      if (businessId == null || businessId.isEmpty) {
+      if (localOnly || businessId == null || businessId.isEmpty) {
         rethrow;
       }
       try {
@@ -777,6 +808,7 @@ class PrintingService {
   Future<Map<String, List<OrderItem>>> _groupItemsByPrintArea(
     List<OrderItem> items, {
     String? businessId,
+    bool localOnly = false,
   }) async {
     final productIds = items
         .map((i) => i.productId)
@@ -790,7 +822,9 @@ class PrintingService {
     // salta directo (colgaría sin timeout); el fallback al catálogo local
     // de abajo cubre el ruteo.
     final nmCodesByMenuItemId = <String, List<String>>{};
-    if (productIds.isNotEmpty && ConnectivityService().isConnected) {
+    if (!localOnly &&
+        productIds.isNotEmpty &&
+        ConnectivityService().isConnected) {
       try {
         final rows = await _client
             .from('menu_item_print_areas')
@@ -817,6 +851,17 @@ class PrintingService {
 
     final itemsByArea = <String, List<OrderItem>>{};
     final unresolved = <OrderItem>[];
+
+    // Una ruta N:M cacheada tiene prioridad sobre el área legacy también
+    // offline: un producto puede necesitar ticket en cocina Y en bar.
+    if (localOnly || !ConnectivityService().isConnected) {
+      nmCodesByMenuItemId.addAll(
+        await _printAreaCodesFromCatalog(
+          businessId: businessId,
+          productIds: productIds.toSet(),
+        ),
+      );
+    }
 
     for (final item in items) {
       List<String> codesForItem;
@@ -1109,7 +1154,7 @@ class PrintingService {
     throw UnknownPrintAreaCodeException(areaCode);
   }
 
-  Future<Map<String, String>> sendLocalOrderToKitchen({
+  Future<LocalKitchenSendResult> sendLocalOrderToKitchen({
     required String businessId,
     required CurrentOrderState localState,
     String tableName = 'LOCAL',
@@ -1117,10 +1162,7 @@ class PrintingService {
     String? businessName,
   }) async {
     final order = localState.order;
-    if (order == null) {
-      throw Exception('No hay orden local para imprimir');
-    }
-
+    if (order == null) throw Exception('No hay orden local para imprimir');
     final draftItems = localState.items
         .where((item) => item.status == 'draft' || item.status == 'open')
         .toList(growable: false);
@@ -1128,31 +1170,26 @@ class PrintingService {
       throw Exception('No hay items locales pendientes de imprimir');
     }
 
+    // Este camino NO consulta Supabase, incluso si el detector todavía cree
+    // que hay internet. También sirve a una orden local creada antes del corte.
     final itemsByArea = await _groupItemsByPrintArea(
       draftItems,
       businessId: businessId,
+      localOnly: true,
     );
+    final settings = await BusinessSettingsOfflineCache().loadRow(businessId);
+    final storage = await StorageService.getInstance();
     final resolvedBusinessName =
-        await _getBusinessName(businessId) ?? businessName;
-    final receiptItemDisplayMode = await PosSettingsRepository(
-      _client,
-    ).getReceiptItemDisplayMode(businessId);
-    final kitchenBanners = await PosSettingsRepository(
-      _client,
-    ).getKitchenBanners(businessId);
+        businessName ??
+        await storage.read('printing_business_name_$businessId');
+    final receiptMode =
+        settings?['receipt_item_display_mode'] ==
+            PosSettingsRepository.receiptItemsSeparate
+        ? PosSettingsRepository.receiptItemsSeparate
+        : PosSettingsRepository.receiptItemsGrouped;
+    final printerless = settings?['printerless_kitchen'] == true;
     final createdJobs = <String, String>{};
-
-    // Recolectamos áreas sin cache para reportarlas todas juntas al
-    // final, en vez de fallar en la primera. Las que sí tienen cache se
-    // imprimen normalmente. Los items de áreas sin impresora se encolan
-    // como print jobs offline para que el worker los despache al sync.
-    final areasSinImpresora = <String>[];
-
-    // Modo sin impresora: ninguna área necesita impresora cacheada. Se
-    // marcan todas como despachadas para que el replay online solo marque
-    // los ítems en el server y no intente reimprimir. Igual que en el
-    // camino online, decide el flag de COCINA del negocio.
-    final printerless = await PrinterlessMode.kitchenEnabled(businessId);
+    final pendingAreas = <String>[];
 
     for (final entry in itemsByArea.entries) {
       final areaCode = entry.key;
@@ -1160,144 +1197,54 @@ class PrintingService {
         createdJobs[areaCode] = _createLocalDispatchId(areaCode);
         continue;
       }
-      final printers = await _readCachedOrderPrinters(
-        businessId: businessId,
-        areaCode: areaCode,
-      );
-      if (printers.isEmpty) {
-        await _offlinePos.enqueuePrintJob(
+      try {
+        final printers = await _readCachedOrderPrinters(
           businessId: businessId,
-          job: {
-            'order_id': order.id,
-            'area_code': areaCode,
-            'reason': 'missing_cached_printer',
-            'items': entry.value.map((item) => item.productName).toList(),
-          },
+          areaCode: areaCode,
         );
-        areasSinImpresora.add(areaCode);
-        continue;
-      }
-
-      // Un ticket POR impresora (80mm vs 58mm), igual que en el camino
-      // online.
-      List<int> buildKitchenBytes(PrinterConfig printer) =>
-          PrintTicketService.generateKitchenTicket(
+        if (printers.isEmpty) {
+          pendingAreas.add(areaCode);
+          continue;
+        }
+        await _dispatchKitchenTicket(
+          printers: printers,
+          buildBytes: (printer) => PrintTicketService.generateKitchenTicket(
             order: order,
             items: entry.value,
             tableName: tableName,
             waiterName: waiterName,
             cashierName: _resolveCashierName(),
-            // Modo offline / pre-confirmación: el customer viene del state
-            // local que el cajero capturó al abrir la mesa.
             customerName: localState.customerName,
             businessName: resolvedBusinessName,
             areaCode: areaCode,
-            receiptItemDisplayMode: receiptItemDisplayMode,
-            showDineInBanner: kitchenBanners.dineIn,
-            showTakeoutBanner: kitchenBanners.takeout,
+            receiptItemDisplayMode: receiptMode,
+            showDineInBanner: settings?['kitchen_banner_dine_in'] != false,
+            showTakeoutBanner: settings?['kitchen_banner_takeout'] != false,
             paperWidth: printer.paperWidth,
-          ).escPosCommands;
-
-      final dispatchId = _createLocalDispatchId(areaCode);
-      createdJobs[areaCode] = dispatchId;
-
-      await _dispatchKitchenTicket(
-        printers: printers,
-        buildBytes: buildKitchenBytes,
-        areaCode: areaCode,
-        fallbackData: {
-          'title': 'COMANDA $tableName',
-          'body':
-              'Orden local ${order.id}\n'
-              'Mesa: $tableName\n'
-              'Mesero: ${waiterName ?? 'N/A'}',
-        },
-        businessId: businessId,
-        orderId: order.id,
-      );
-    }
-
-    // Si quedaron áreas sin impresora cacheada (caso típico: prewarm
-    // del login todavía no cubrió esta área, o el cajero está en un
-    // device nuevo), intentamos resolver ONLINE inline antes de fallar.
-    // Si funciona, imprimimos ahora; si no, encolamos y devolvemos un
-    // error específico con los códigos de área faltantes.
-    if (areasSinImpresora.isNotEmpty) {
-      final stillMissing = <String>[];
-      for (final areaCode in areasSinImpresora) {
-        try {
-          final area = await _ensureAreaForCode(businessId, areaCode);
-          final printers = await _getOrderPrintersWithOfflineFallback(
-            businessId: businessId,
-            areaId: area.id,
-            areaCode: areaCode,
-          );
-          if (printers.isEmpty) {
-            stillMissing.add(areaCode);
-            continue;
-          }
-          final itemsForArea = itemsByArea[areaCode] ?? const <OrderItem>[];
-          List<int> buildKitchenBytes(PrinterConfig printer) =>
-              PrintTicketService.generateKitchenTicket(
-                order: order,
-                items: itemsForArea,
-                tableName: tableName,
-                waiterName: waiterName,
-                cashierName: _resolveCashierName(),
-                customerName: localState.customerName,
-                businessName: resolvedBusinessName,
-                areaCode: areaCode,
-                receiptItemDisplayMode: receiptItemDisplayMode,
-                showDineInBanner: kitchenBanners.dineIn,
-                showTakeoutBanner: kitchenBanners.takeout,
-                paperWidth: printer.paperWidth,
-              ).escPosCommands;
-          final dispatchId = _createLocalDispatchId(areaCode);
-          createdJobs[areaCode] = dispatchId;
-          await _dispatchKitchenTicket(
-            printers: printers,
-            buildBytes: buildKitchenBytes,
-            areaCode: areaCode,
-            fallbackData: {
-              'title': 'COMANDA $tableName',
-              'body':
-                  'Orden local ${order.id}\n'
-                  'Mesa: $tableName\n'
-                  'Mesero: ${waiterName ?? 'N/A'}',
-            },
-            businessId: businessId,
-            orderId: order.id,
-          );
-        } catch (e) {
-          debugPrint(
-            '[kitchen-local] fallback online falló para $areaCode: $e',
-          );
-          stillMissing.add(areaCode);
-        }
-      }
-
-      if (stillMissing.isNotEmpty) {
-        await _offlinePos.enqueueAction(
-          businessId: businessId,
-          action: {
-            'type': 'confirm_local_order',
-            'order_id': order.id,
-            'origin': localState.origin,
-            'item_count': draftItems.length,
-            // El replay reimprime SOLO las áreas que quedaron sin impresora;
-            // las ya impresas localmente solo se marcan (sin duplicar papel).
-            'printed_areas': createdJobs.keys.toList(growable: false),
-            'missing_areas': stillMissing,
+          ).escPosCommands,
+          areaCode: areaCode,
+          fallbackData: {
+            'title': 'COMANDA $tableName',
+            'body': 'Orden local ${order.id}',
           },
+          businessId: businessId,
+          orderId: order.id,
+          // Las rondas de una mesa son trabajos distintos. Un reintento de
+          // estos mismos ítems conserva la clave; la siguiente ronda no.
+          idempotencySuffix:
+              'local-${(entry.value.map((i) => i.id).toList()..sort()).join(",")}',
+          localOnly: true,
         );
-        throw Exception(
-          'No hay impresora asignada para: ${stillMissing.join(", ")}. '
-          'Ve a Ajustes > Impresión y asigna una mientras estás online, '
-          'luego vuelve a tocar "Enviar Pedido".',
-        );
+        // Solo registrar entrega después del éxito, nunca antes del await.
+        createdJobs[areaCode] = _createLocalDispatchId(areaCode);
+      } catch (e) {
+        debugPrint('[kitchen-local] $areaCode pendiente: $e');
+        pendingAreas.add(areaCode);
       }
     }
 
+    // El fallo de una impresora no descarta la comanda ni las áreas que sí
+    // salieron. El replay conserva las pendientes y excluye las ya entregadas.
     await _offlinePos.enqueueAction(
       businessId: businessId,
       action: {
@@ -1305,14 +1252,14 @@ class PrintingService {
         'order_id': order.id,
         'origin': localState.origin,
         'item_count': draftItems.length,
-        // Todo salió impreso local: el replay solo debe MARCAR los items en
-        // server (sin reimprimir la comanda — antes re-despachaba todas las
-        // áreas = comanda duplicada al sincronizar).
         'printed_areas': createdJobs.keys.toList(growable: false),
+        'missing_areas': pendingAreas,
       },
     );
-
-    return createdJobs;
+    return LocalKitchenSendResult(
+      dispatchIds: createdJobs,
+      pendingAreas: pendingAreas,
+    );
   }
 
   /// Reimprimir orden en un área específica
@@ -1760,10 +1707,13 @@ class PrintingService {
   /// procesadas quedan cacheadas y las restantes se intentarán en el
   /// próximo prewarm. No lanza — devuelve la lista de areaCodes que
   /// quedaron cacheados con éxito para que el caller pueda log/notify.
+  /// Con [failOnError], la preparación explícita recibe el fallo agregado.
   Future<List<String>> prewarmPrinterCache({
     required String businessId,
+    bool failOnError = false,
   }) async {
     final cached = <String>[];
+    var failed = false;
     try {
       final areas = await _printingRepo.getPrintAreas(businessId);
       for (final area in areas) {
@@ -1786,13 +1736,18 @@ class PrintingService {
           );
           cached.add(area.code);
         } catch (e) {
+          failed = true;
           debugPrint(
             '⚠️ prewarmPrinterCache: falló para área ${area.code}: $e',
           );
         }
       }
     } catch (e) {
+      failed = true;
       debugPrint('⚠️ prewarmPrinterCache: no se pudo listar áreas: $e');
+    }
+    if (failOnError && failed) {
+      throw StateError('No se descargaron todas las impresoras.');
     }
     return cached;
   }

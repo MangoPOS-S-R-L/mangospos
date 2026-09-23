@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/theme/app_colors.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
@@ -129,6 +131,46 @@ class _PurchasesReportBody extends StatelessWidget {
               ],
             );
           },
+        ),
+        const SizedBox(height: AppSpacing.itemGap),
+        // Puente al comparador: el precio por proveedor no depende del rango
+        // de este reporte (se mira por ventana de 30/90/180 días), así que
+        // vive en su propia pantalla.
+        ReportSurfaceCard(
+          child: Row(
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '¿Quién te vende más barato?',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Compara el costo real de lo que recibiste, producto '
+                      'por producto y proveedor por proveedor.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.mutedForeground,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.itemGap),
+              OutlinedButton.icon(
+                onPressed: () =>
+                    context.go(AppRoutes.reportsSupplierPrices),
+                icon: const Icon(Icons.compare_arrows_rounded, size: 18),
+                label: const Text('Ver comparador'),
+              ),
+            ],
+          ),
         ),
       ],
     );

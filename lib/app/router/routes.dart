@@ -42,6 +42,8 @@ class AppRoutes {
   static const reportsFinances = '$reports/finances';
   static const reportsInventory = '$reports/inventory';
   static const reportsPurchases = '$reports/purchases';
+  /// Comparador de precios de compra por proveedor (Compras F4).
+  static const reportsSupplierPrices = '$reports/supplier-prices';
   static const reportsTaxes = '$reports/taxes';
   static const reportsFiscal = '$reports/fiscal';
   static const settings = '/settings';

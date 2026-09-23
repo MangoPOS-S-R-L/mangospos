@@ -167,17 +167,18 @@ class SecureBlobCipher {
   /// [open] lee sin problema (passthrough de legacy).
   ///
   /// Es un downgrade consciente de cifrado-en-reposo, acotado al caso en que
-  /// el Keychain no está disponible, y solo para la cola: preferimos exponer
+  /// el Keychain no está disponible, para la cola y snapshots de órdenes:
+  /// preferimos exponer
   /// datos en un equipo que el propio operador controla antes que perderle
-  /// una venta. El roster y los snapshots siguen usando [seal] — su pérdida
-  /// se recupera sincronizando.
+  /// una venta. El roster sigue usando [seal]. Los snapshots de órdenes
+  /// offline usan este método porque tampoco se recuperan desde la nube.
   Future<String> sealDurable(String plaintext) async {
     final resolved = await _key();
     if (resolved.ephemeral) {
       if (_warnedKids.add('ephemeral-seal')) {
         debugPrint(
           '[SecureBlobCipher] clave sin persistir (Keychain no disponible): '
-          'la cola offline se guarda SIN cifrar para no perder operaciones '
+          'los datos offline durables se guardan SIN cifrar para no perder operaciones '
           'al reiniciar.',
         );
       }

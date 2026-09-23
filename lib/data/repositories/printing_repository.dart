@@ -14,6 +14,7 @@ import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
+import 'package:mangopos/core/printing/star/raster_ink.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
 import 'package:mangopos/core/services/local_print_service.dart';
@@ -263,6 +264,37 @@ class PrintingRepository {
   ///
   /// Lee y MEZCLA el jsonb: ahí también viven `emulation`, `render` y los
   /// datos del transporte, que no se pueden pisar.
+  /// Nitidez del raster para ESTA impresora (ver
+  /// `core/printing/star/raster_ink.dart`). [ink] null borra la clave y la
+  /// deja en el default.
+  Future<void> setRasterInk({
+    required String printerId,
+    required String? ink,
+  }) async {
+    try {
+      final row = await _client
+          .from('printers')
+          .select('connection_config')
+          .eq('id', printerId)
+          .maybeSingle();
+      final config = Map<String, dynamic>.from(
+        (row?['connection_config'] as Map?) ?? const {},
+      );
+      if (ink == null) {
+        config.remove(kRasterInkConfigKey);
+      } else {
+        config[kRasterInkConfigKey] = ink;
+      }
+      await _client
+          .from('printers')
+          .update({'connection_config': config})
+          .eq('id', printerId);
+      _clearLookupCaches();
+    } catch (e) {
+      throw Exception('Error al guardar la nitidez de impresión: $e');
+    }
+  }
+
   Future<void> setPrintSpeed({
     required String printerId,
     required String? speed,

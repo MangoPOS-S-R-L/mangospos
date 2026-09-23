@@ -37,10 +37,10 @@ class ZonesRepository {
     // Persistir el conjunto crudo (sin filtros de virtuales / activos) en el
     // cache offline. El wrapper [fetchZonesWithCache] lo usa como fallback
     // cuando Supabase es inalcanzable.
-    unawaited(ZonesOfflineCache().saveZonesSnapshot(
+    await ZonesOfflineCache().saveZonesSnapshot(
       businessId: businessId,
       zonesRaw: rowsList,
-    ));
+    );
 
     final zones = rowsList.map(Zone.fromMap).toList();
 
@@ -259,17 +259,17 @@ class ZonesRepository {
     // [fetchZones]. Solo cuando NO se filtró por activas, para no cachear una
     // vista parcial que después se devuelva como si fuera el conjunto completo.
     if (includeInactive) {
-      unawaited(ZonesOfflineCache().saveZoneTablesSnapshot(
+      await ZonesOfflineCache().saveZoneTablesSnapshot(
         zoneId: zoneId,
         rowsRaw: rowsList,
-      ));
+      );
     } else {
-      unawaited(ZonesOfflineCache().saveZoneTablesSnapshot(
+      await ZonesOfflineCache().saveZoneTablesSnapshot(
         zoneId: zoneId,
         rowsRaw: rowsList
             .where((m) => (m['is_active'] ?? true) == true)
             .toList(growable: false),
-      ));
+      );
     }
 
     return rowsList.map(DiningTable.fromMap).toList();

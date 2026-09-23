@@ -526,7 +526,10 @@ class PosSettingsRepository {
   /// F6-3: refresher proactivo para el OfflineSyncCoordinator — baja y cachea
   /// la config del negocio al reconectar/periódicamente. Best-effort.
   Future<void> refreshBusinessSettings(String businessId) async {
-    await _fetchAndCacheRow(businessId);
+    final row = await _fetchAndCacheRow(businessId);
+    if (row == null) throw StateError('No se descargó la configuración.');
+    // El botón de preparación debe esperar a que termine la escritura.
+    await _settingsCache.saveRow(businessId: businessId, row: row);
   }
 
   Future<String> getCashCloseMode(String businessId) async {

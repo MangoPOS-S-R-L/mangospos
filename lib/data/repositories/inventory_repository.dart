@@ -1919,6 +1919,7 @@ class InventoryRepository {
     double? costPerUnit,
     String? notes,
     String? referenceType,
+    bool queueOnNetworkFailure = true,
   }) async {
     try {
       await _client.rpc(
@@ -1935,6 +1936,7 @@ class InventoryRepository {
         },
       );
     } catch (e) {
+      if (!queueOnNetworkFailure) rethrow;
       if (!_connectivity.isConnected || _isConnectivityError(e)) {
         await _enqueueMovementOffline(
           businessId: businessId,
@@ -2026,6 +2028,7 @@ class InventoryRepository {
     required String reasonCode,
     String? notes,
     double? costPerUnit,
+    bool queueOnNetworkFailure = true,
   }) async {
     try {
       await _client.rpc(
@@ -2041,6 +2044,7 @@ class InventoryRepository {
         },
       );
     } catch (e) {
+      if (!queueOnNetworkFailure) rethrow;
       if (!_connectivity.isConnected || _isConnectivityError(e)) {
         await _offlinePos.enqueueAction(
           businessId: businessId,

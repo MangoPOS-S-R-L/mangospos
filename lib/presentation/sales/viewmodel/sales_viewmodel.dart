@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:mangopos/core/network/resilient_http_client.dart';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -7,6 +9,7 @@ import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/offline/hub/hub_mode.dart' show kHubModeEnabled;
@@ -25,6 +28,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'retail_carts_provider.dart';
+import 'menu_browser_viewmodel.dart' show MenuProduct;
 import 'sales_by_zone_viewmodel.dart' show byZoneVmProvider;
 import '../state/sales_state.dart';
 import '../../../data/models/sales_models.dart';
@@ -686,6 +690,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         await _restoreTaxesWithoutNetwork(businessId)) {
       return;
     }
+    if (!_connectivity.isConnected || inNetworkBackoff) {
+      _setTaxConfigError(
+        'Este equipo no tiene una copia de los impuestos del negocio. '
+        'Conecta una vez para prepararlo antes de cobrar.',
+      );
+      return;
+    }
 
     try {
       // PRD 2 §G2: la tabla `taxes` es la única fuente de verdad para
@@ -760,6 +771,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// hora: el loader corre en cada ítem y cada apertura de mesa, y mientras el
   /// detector aún no admite la caída cada intento esperaba su timeout.
   DateTime? _taxNetworkRetryNotBefore;
+
+  // Una lectura real ya falló por red: no encadenar otro timeout para cada
+  // producto mientras el healthcheck todavía está confirmando el corte.
+  bool get _preferLocalOperations =>
+      !_connectivity.isConnected ||
+      (_taxNetworkRetryNotBefore != null &&
+          DateTime.now().isBefore(_taxNetworkRetryNotBefore!));
+
+  void _recordTransportFailure() {
+    _taxNetworkRetryNotBefore = DateTime.now().add(const Duration(seconds: 20));
+    unawaited(_connectivity.forceReachabilityCheck());
+  }
 
   /// Impuestos sin tocar la red: los de memoria si son de este negocio, o la
   /// última copia en disco. `false` si no hay ninguna (primer uso sin red).
@@ -1696,7 +1719,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (!_connectivity.isConnected) return true;
     if (orderId != null && orderId.startsWith('local-order-')) return true;
     if (OfflinePosService.isTransportError(error)) {
-      unawaited(_connectivity.forceReachabilityCheck());
+      _recordTransportFailure();
       return true;
     }
     return false;
@@ -2427,6 +2450,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previousItems = state.items;
     final previousOrder = state.order;
 
+    // Escáner y algunos accesos rápidos solo pasan el ID. Para construir el
+    // ítem sin servidor necesitamos el precio y nombre ya preparados en disco.
+    if (productName == null || productPrice == null) {
+      final businessId = _activeBusinessId;
+      if (businessId != null) {
+        final catalog = await OfflineCatalogService().loadSnapshot(businessId);
+        for (final row in catalog?.products ?? <Map<String, dynamic>>[]) {
+          if (row['id']?.toString() != menuItemId) continue;
+          final product = MenuProduct.fromMap(row);
+          productName ??= product.name;
+          productPrice ??= product.price;
+          productTaxMode = product.taxMode;
+          productTaxRate ??= product.calculateTaxRate(state.origin ?? 'table');
+          productFullTaxRate ??= product.calculateFullTaxRate();
+          break;
+        }
+      }
+    }
+
     await _ensureBusinessTaxSettingsLoaded();
 
     // PRD 2: el motor backend asigna `tax_rate` ya consolidado (incluye
@@ -2570,6 +2612,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     try {
+      // La orden local se guarda antes de intentar un proxy o RPC remoto.
+      if (_preferLocalOperations || orderId.startsWith('local-order-')) {
+        throw OfflineShortCircuitException('add_item');
+      }
       if (_isHubMode) {
         // Orden LOCAL (el Hub estaba offline al abrir) → op-log; el proxy no
         // aplica porque la orden aún no existe en el server.
@@ -3499,14 +3545,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         (businessId.isEmpty ? null : await loadCached(businessId)) ??
         const <Map<String, dynamic>>[];
 
-    if (!_connectivity.isConnected) return fromCache();
+    if (_preferLocalOperations) return fromCache();
     try {
       final rows = await fetch().timeout(const Duration(seconds: 6));
       if (businessId.isNotEmpty) unawaited(saveCached(businessId, rows));
       return rows;
     } catch (e) {
       if (!OfflinePosService.isTransportError(e)) rethrow;
-      unawaited(_connectivity.forceReachabilityCheck());
+      _recordTransportFailure();
       return fromCache();
     }
   }
@@ -4186,7 +4232,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // aquí se encolaba ADEMÁS un 'send_to_kitchen' → dos replays por
         // envío: el primero reimprimía la comanda entera online y el segundo
         // moría con "No hay items nuevos" (op veneno, caso 2026-07-25).
-        await ref
+        final localResult = await ref
             .read(printingServiceProvider)
             .sendLocalOrderToKitchen(
               businessId: businessId,
@@ -4219,12 +4265,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state = state.copyWith(
           items: updatedItems,
           loading: false,
-          error: 'Comanda impresa/localmente. Pendiente de sincronizar.',
+          error: localResult.pendingAreas.isEmpty
+              ? 'Comanda enviada localmente. Pendiente de sincronizar.'
+              : 'Comanda guardada. Pendiente de imprimir en: '
+                    '${localResult.pendingAreas.join(", ")}. '
+                    'Comprueba la impresora y la conexión local.',
         );
         await _persistCurrentState(localOnly: true);
       }
 
-      if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
+      // Si hay ítems temporales, el servidor aún NO tiene la ronda completa.
+      // Enviar por nube aquí omitía los productos agregados durante el corte
+      // (o decía "no hay items"), incluso tras recuperar la conexión.
+      if (_preferLocalOperations ||
+          orderId.startsWith('local-order-') ||
+          state.items.any((item) => item.id.startsWith('tmp_'))) {
         await sendLocally();
         return null;
       }
@@ -4254,7 +4309,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // la comanda. Antes esto terminaba en un snackbar rojo y la comanda
         // no salía ni se encolaba.
         debugPrint('confirmOrder: sin red antes de imprimir, envío local ($e)');
-        unawaited(_connectivity.forceReachabilityCheck());
+        _recordTransportFailure();
         await sendLocally();
         return null;
       }

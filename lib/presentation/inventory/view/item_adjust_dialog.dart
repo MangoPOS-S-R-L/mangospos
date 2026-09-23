@@ -19,6 +19,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../services/session/session_controller.dart';
 import '../state/adjust_reasons.dart';
+import '../utils/waste_exit_printing.dart';
 import '../state/inventory_state.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 
@@ -199,6 +200,10 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
       _error = null;
     });
     final navigator = Navigator.of(context);
+    // Se leen ANTES de la RPC: son los dos numeros que el conduce tiene que
+    // decir, y despues del ajuste `_systemStock` ya no es el stock de antes.
+    final antes = _systemStock;
+    final salio = antes - (_countedBase ?? antes);
     try {
       await ref
           .read(inventoryRepositoryProvider)
@@ -213,6 +218,33 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
                 : _notesCtrl.text.trim(),
             costPerUnit: _item.cost,
           );
+
+      // EL CONDUCE. Va DESPUES de que el ajuste se guardo, y nunca antes: si
+      // fallara la impresora no puede impedir que la salida quede registrada.
+      // Y solo para las SALIDAS (rotura, vencido, limpieza, faltante,
+      // donacion): un conteo fisico o una correccion no son mercancia que se
+      // fue, no hay nada que firmar. `WasteExitPrinting` no lanza.
+      if (_reason!.isExit && salio > 0 && mounted) {
+        final session = ref.read(sessionProvider);
+        final negocio = (session.activeBusinessName ?? '').trim();
+        await WasteExitPrinting.print(
+          context,
+          ref,
+          businessId: widget.businessId,
+          businessName: negocio.isEmpty ? 'MangoPOS' : negocio,
+          itemName: _item.name,
+          quantity: salio,
+          unit: _item.unit,
+          reasonLabel: _reason!.label,
+          warehouseName: _warehouseName,
+          notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+          operatorName: session.userName,
+          stockBefore: antes,
+          stockAfter: _countedBase!,
+          costPerUnit: _item.cost,
+        );
+      }
+
       if (!mounted) return;
       navigator.pop(true);
     } catch (e) {

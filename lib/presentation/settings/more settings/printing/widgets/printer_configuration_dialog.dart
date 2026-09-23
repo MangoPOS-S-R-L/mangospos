@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/printing/star/print_speed.dart';
+import 'package:mangopos/core/printing/star/raster_ink.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -45,6 +46,8 @@ class _PrinterConfigurationDialogState
   late int _paperWidth;
   late final PrintSpeed _initialPrintSpeed;
   late PrintSpeed _printSpeed;
+  late final RasterInk _initialRasterInk;
+  late RasterInk _rasterInk;
   late bool _isActive;
   /// Sprint 3 — id de la impresora de respaldo elegida en el dropdown.
   /// null = "Sin respaldo" → al guardar mandamos `clearFallback: true`.
@@ -66,6 +69,10 @@ class _PrinterConfigurationDialogState
       printer.connectionConfig[kPrintSpeedConfigKey],
     );
     _printSpeed = _initialPrintSpeed;
+    _initialRasterInk = RasterInk.fromWire(
+      printer.connectionConfig[kRasterInkConfigKey],
+    );
+    _rasterInk = _initialRasterInk;
     _isActive = printer.online;
     _fallbackPrinterId = printer.fallbackPrinterId;
   }
@@ -121,6 +128,7 @@ class _PrinterConfigurationDialogState
       clearFallback: _fallbackPrinterId == null,
       // Solo si cambió: evita reescribir connection_config en cada guardado.
       printSpeed: _printSpeed == _initialPrintSpeed ? null : _printSpeed,
+      rasterInk: _rasterInk == _initialRasterInk ? null : _rasterInk,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -430,6 +438,8 @@ class _PrinterConfigurationDialogState
         const SizedBox(height: 22),
         _buildPrintSpeedSection(),
         const SizedBox(height: 22),
+        _buildRasterInkSection(),
+        const SizedBox(height: 22),
         _buildFallbackSection(),
         const SizedBox(height: 22),
         const Text(
@@ -540,6 +550,93 @@ class _PrinterConfigurationDialogState
           'Funciona en Epson y compatibles y en Star. Si tu modelo no lo '
           'soporta, el ticket sale igual que antes. Guarda y haz una '
           'impresión de prueba para comparar.',
+          style: TextStyle(
+            fontSize: 11,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Nitidez del trazo en el modo calidad (raster). Solo se nota en los
+  /// documentos que salen dibujados con tipografía real — hoy la factura y la
+  /// pre-cuenta del modelo "Moderna". Ver `core/printing/star/raster_ink.dart`.
+  Widget _buildRasterInkSection() {
+    const options = <(RasterInk, IconData, String, String)>[
+      (
+        RasterInk.fina,
+        Icons.remove_outlined,
+        'Fina',
+        'Trazo más delgado',
+      ),
+      (
+        RasterInk.normal,
+        Icons.text_fields_outlined,
+        'Normal',
+        'Recomendada',
+      ),
+      (
+        RasterInk.reforzada,
+        Icons.format_bold_outlined,
+        'Reforzada',
+        'Si sale gris',
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Nitidez del texto',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Cuánto trazo pone la letra en el modelo de factura "Moderna", que '
+          'sale dibujado como imagen. Sube a Reforzada si el texto se ve '
+          'claro en el papel de ESTA impresora.',
+          style: TextStyle(
+            fontSize: 12,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const spacing = 10.0;
+            final itemWidth = (constraints.maxWidth - spacing) / 2;
+            return Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final (ink, icon, label, hint) in options)
+                  SizedBox(
+                    width: itemWidth,
+                    child: _PrintSpeedOption(
+                      icon: icon,
+                      label: label,
+                      hint: hint,
+                      selected: _rasterInk == ink,
+                      onTap: _saving
+                          ? null
+                          : () => setState(() => _rasterInk = ink),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Antes de subirla, prueba la velocidad Lenta: una térmica quema '
+          'mejor cada punto cuanto más despacio avanza.',
           style: TextStyle(
             fontSize: 11,
             color: MangoColors.muted,

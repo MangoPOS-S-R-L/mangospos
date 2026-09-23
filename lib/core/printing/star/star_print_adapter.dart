@@ -18,6 +18,7 @@ import 'esc_pos_raster_encoder.dart';
 import 'escpos_parser.dart';
 import 'print_speed.dart';
 import 'printer_emulation.dart';
+import 'raster_ink.dart';
 import 'star_raster_encoder.dart';
 import 'ticket_rasterizer.dart';
 
@@ -85,6 +86,10 @@ class StarPrintAdapter {
         // y una proporcional las descuadra. El acabado tipográfico es para el
         // documento que ve el cliente.
         proportional: proportional,
+        // Cuánto trazo pone el binarizado. Va por impresora porque el
+        // resultado depende del CABEZAL: la misma imagen sale negra en una
+        // térmica y gris en otra (ver `raster_ink.dart`).
+        ink: resolveRasterInk(printer),
       );
       if (bitmap.height == 0) return escPosData;
       final bytes = isStar

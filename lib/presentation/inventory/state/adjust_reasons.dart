@@ -15,7 +15,21 @@ class AdjustReason {
   final String description;
   final IconData icon;
 
-  const AdjustReason(this.code, this.label, this.description, this.icon);
+  /// `true` cuando el ajuste es una SALIDA de mercancía y no un cuadre.
+  ///
+  /// Decide si al guardar sale el conduce firmable ([WasteExitTicket]): una
+  /// rotura, un vencido, lo que se bota al limpiar, un faltante o una donación
+  /// son mercancía que se fue y alguien tiene que firmar por ella. Un conteo
+  /// físico o una corrección de tecleo no son salidas: no hay nada que firmar.
+  final bool isExit;
+
+  const AdjustReason(
+    this.code,
+    this.label,
+    this.description,
+    this.icon, {
+    this.isExit = false,
+  });
 }
 
 const List<AdjustReason> kAdjustReasons = [
@@ -30,24 +44,35 @@ const List<AdjustReason> kAdjustReasons = [
     'Rotura / dañado',
     'Producto roto o no apto para venta',
     Icons.broken_image_rounded,
+    isExit: true,
   ),
   AdjustReason(
     'expiration',
     'Vencido',
     'Producto vencido o caducado',
     Icons.event_busy_rounded,
+    isExit: true,
+  ),
+  AdjustReason(
+    'cleaning',
+    'Limpieza',
+    'Se botó al limpiar la nevera o la línea',
+    Icons.cleaning_services_rounded,
+    isExit: true,
   ),
   AdjustReason(
     'theft',
     'Faltante / robo',
     'Faltante sospechoso o pérdida',
     Icons.no_accounts_rounded,
+    isExit: true,
   ),
   AdjustReason(
     'donation',
     'Donación / cortesía',
     'Regalo, donación o cortesía',
     Icons.volunteer_activism_rounded,
+    isExit: true,
   ),
   AdjustReason(
     'correction',

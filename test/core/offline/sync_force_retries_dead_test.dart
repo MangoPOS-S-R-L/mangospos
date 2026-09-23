@@ -33,6 +33,7 @@ class _FakeInventoryRepo extends InventoryRepository {
     required String reasonCode,
     String? notes,
     double? costPerUnit,
+    bool queueOnNetworkFailure = true,
   }) async {
     calls++;
     if (!succeed) {
