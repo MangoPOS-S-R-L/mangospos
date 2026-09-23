@@ -638,6 +638,16 @@ const accessPermissions = <AccessPermission>[
     description: 'Permite recibir compras y subir stock.',
   ),
   AccessPermission(
+    code: 'compras.ordenes.editar',
+    label: 'Editar ordenes de compra registradas',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description: 'Permite corregir una compra ya registrada: proveedor, '
+        'factura, NCF, productos, cantidades y costos. Si la mercancía ya '
+        'entró, el ajuste del inventario lo hace el servidor con movimientos '
+        'de corrección y queda bitácora de quién editó y qué cambió.',
+  ),
+  AccessPermission(
     code: 'compras.ordenes.anular',
     label: 'Anular ordenes de compra',
     categoryId: 'inventory',
@@ -911,6 +921,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'compras.proveedores.crear_editar',
       'compras.ordenes.crear',
       'compras.ordenes.recibir',
+      'compras.ordenes.editar',
       'compras.ordenes.anular',
       'produccion.acceso',
       'produccion.crear',

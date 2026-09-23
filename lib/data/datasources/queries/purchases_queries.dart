@@ -14,4 +14,9 @@ class PurchasesQueries {
   /// numerado en `purchase_receptions` y es idempotente por clave.
   /// Migración 20260828_0001 (sobre 20260812_0001).
   static const rpcReceivePurchaseOrderV2 = 'fn_receive_purchase_order_v2';
+
+  /// Corrección de una compra YA registrada: cabecera + líneas en una sola
+  /// transacción, con ajuste del inventario cuando la mercancía ya entró.
+  /// Migración 20260923_0002.
+  static const rpcPurchaseOrderUpdate = 'fn_purchase_order_update';
 }

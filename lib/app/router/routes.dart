@@ -56,6 +56,12 @@ class AppRoutes {
   static const purchasesOrderDetail = '$purchasesList/order/:orderId';
   static String purchasesOrderDetailPath(String orderId) =>
       '$purchasesList/order/$orderId';
+  /// Corrección de una compra ya registrada. Lleva su propio permiso
+  /// (`compras.ordenes.editar`): consultar una factura y poder rehacerla no
+  /// son la misma facultad.
+  static const purchasesOrderEdit = '$purchasesList/order/:orderId/edit';
+  static String purchasesOrderEditPath(String orderId) =>
+      '$purchasesList/order/$orderId/edit';
   static const promosCenter = '$settings/promos';
   static const settingsUsers = '$settings/users';
   static const settingsWaiters = '$settings/waiters';

@@ -77,6 +77,11 @@ const Map<String, String> routePermissions = <String, String>{
   // de registro pide `compras.ordenes.crear`, el mismo permiso que decide si
   // el listado ofrece el botón "Nueva orden".
   '/settings/purchases/register': 'compras.ordenes.crear',
+  // OJO: la corrección de una compra (/settings/purchases/order/<id>/edit) NO
+  // se puede gatear acá. El match es por PREFIJO, y el permiso vive después
+  // del id de la orden: cualquier entrada con `:orderId` sería decorativa.
+  // `compras.ordenes.editar` se aplica en la pantalla (que no dibuja el
+  // formulario sin él) y en el servidor (PURCHASE_ORDER_EDIT_DENIED).
 
   // --- Créditos (CxC / CxP) ---
   '/credits': 'creditos.acceso',

@@ -169,22 +169,28 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
 
     final searchField = _buildSearchField(viewModel);
     final categoryDropdown = _buildDropdownButton(
-      label: 'Todas',
+      name: 'Categoría',
+      allLabel: 'Todas',
       items: viewModel.categories,
       value: viewModel.selectedCategoryFilterId,
       onChanged: viewModel.setCategoryFilter,
+      compact: compact,
     );
     final menuDropdown = _buildDropdownButton(
-      label: 'Todos',
+      name: 'Menú',
+      allLabel: 'Todos',
       items: viewModel.menus,
       value: viewModel.selectedMenuFilterId,
       onChanged: viewModel.setMenuFilter,
+      compact: compact,
     );
     final printAreaDropdown = _buildDropdownButton(
-      label: 'Todas',
+      name: 'Área prod.',
+      allLabel: 'Todas',
       items: viewModel.availablePrintAreas,
       value: viewModel.selectedPrintAreaFilterId,
       onChanged: viewModel.setPrintAreaFilter,
+      compact: compact,
     );
     final clearButton = TextButton.icon(
       onPressed: () => _clearFilters(viewModel),
@@ -307,13 +313,41 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     viewModel.clearAllFilters();
   }
 
+  /// Dropdown de filtro que SIEMPRE muestra por cuál campo se está filtrando.
+  /// Antes los tres se veían como "-- Todas --" / "-- Todos --" y no había
+  /// forma de saber cuál era cuál sin abrir el menú. Ahora en desktop el
+  /// nombre va como prefijo dentro del control ("Categoría: Todas") y en
+  /// móvil como caption encima, donde no hay ancho para el prefijo.
   Widget _buildDropdownButton({
-    required String label,
+    required String name,
+    required String allLabel,
     required List<Map<String, dynamic>> items,
     required String? value,
     required ValueChanged<String?> onChanged,
+    required bool compact,
   }) {
-    return Container(
+    // Texto que se ve en el botón cerrado. En desktop lleva el nombre del
+    // filtro adelante; en móvil solo el valor (el nombre va en el caption).
+    Widget closedLabel(String text, {required bool isPlaceholder}) {
+      return Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Text(
+          compact ? text : '$name: $text',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
+          style: TextStyle(
+            fontSize: 14,
+            color: isPlaceholder
+                ? AppColors.mutedForeground
+                : AppColors.foreground,
+            fontWeight: isPlaceholder ? FontWeight.w400 : FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    final field = Container(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       decoration: BoxDecoration(
         border: Border.all(color: AppColors.border),
@@ -322,13 +356,28 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value,
-          hint: Text(
-            '-- $label --',
-            style: TextStyle(color: AppColors.mutedForeground, fontSize: 14),
-          ),
+          // En móvil los dropdowns van dentro de Expanded (ancho acotado),
+          // así que pueden expandirse y elipsar. En desktop la fila les da
+          // ancho infinito, donde isExpanded reventaría el layout.
+          isExpanded: compact,
+          hint: closedLabel(allLabel, isPlaceholder: true),
+          // El menú abierto muestra solo el nombre de cada opción; el botón
+          // cerrado es el que lleva el prefijo del filtro.
+          selectedItemBuilder: (context) => [
+            closedLabel(allLabel, isPlaceholder: true),
+            ...items.map(
+              (item) => closedLabel(
+                (item['name'] ?? '') as String,
+                isPlaceholder: false,
+              ),
+            ),
+          ],
           icon: Icon(Icons.arrow_drop_down, color: AppColors.mutedForeground),
           items: [
-            DropdownMenuItem<String>(value: null, child: Text('-- $label --')),
+            DropdownMenuItem<String>(
+              value: null,
+              child: Text('-- $allLabel --'),
+            ),
             ...items.map((item) {
               return DropdownMenuItem<String>(
                 value: item['id'].toString(),
@@ -339,6 +388,28 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
           onChanged: onChanged,
         ),
       ),
+    );
+
+    if (!compact) return field;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          name.toUpperCase(),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.4,
+            color: AppColors.mutedForeground,
+          ),
+        ),
+        const SizedBox(height: 2),
+        field,
+      ],
     );
   }
 

@@ -234,10 +234,13 @@ class _PurchaseOrderDetailViewState
     final order = detail?.order;
     final sessionCtrl = ref.watch(sessionProvider.notifier);
     final canReceive = sessionCtrl.hasPermission('compras.ordenes.recibir');
+    final canEdit = sessionCtrl.hasPermission('compras.ordenes.editar');
     final receivable =
         order != null &&
         order.status != 'received' &&
         order.status != 'cancelled';
+    // Una compra cancelada ya no se corrige: no hay nada vivo que arreglar.
+    final editable = order != null && order.status != 'cancelled';
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -290,6 +293,14 @@ class _PurchaseOrderDetailViewState
                   onPressed: () => _openOrderDocument(detail),
                   icon: const Icon(Icons.print_outlined, size: 18),
                   label: const Text('Imprimir orden'),
+                ),
+              if (canEdit && editable)
+                OutlinedButton.icon(
+                  onPressed: () => context.go(
+                    AppRoutes.purchasesOrderEditPath(order.id),
+                  ),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Editar compra'),
                 ),
               if (canReceive && receivable)
                 FilledButton.icon(

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/utils/friendly_error.dart';
 import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/repositories/purchases_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
@@ -260,6 +261,54 @@ class PurchasesViewModel extends ChangeNotifier {
       _state = _state.copyWith(
         saving: false,
         error: 'Error registrando compra: $e',
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// Corrige una compra ya registrada. Devuelve lo que hizo el servidor
+  /// (estado final, total y cuántos movimientos de inventario hizo falta
+  /// postear) para que la pantalla lo pueda decir en el aviso.
+  Future<PurchaseOrderUpdateResult> updatePurchaseOrder({
+    required String orderId,
+    required String supplierId,
+    required String warehouseId,
+    required DateTime expectedDate,
+    required List<PurchaseDraftItem> items,
+    required String idempotencyKey,
+    String? notes,
+    String? invoiceNumber,
+    String? ncf,
+    double discount = 0,
+    String? reason,
+  }) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      final result = await _repository.updatePurchaseOrder(
+        orderId: orderId,
+        supplierId: supplierId,
+        warehouseId: warehouseId,
+        expectedDate: expectedDate,
+        items: items,
+        idempotencyKey: idempotencyKey,
+        notes: notes,
+        invoiceNumber: invoiceNumber,
+        ncf: ncf,
+        discount: discount,
+        reason: reason,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return result;
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        // El repositorio ya devuelve el motivo en español: no se le antepone
+        // otro prefijo que lo convierta en "Error: Error: ...".
+        error: FriendlyError.humanize('$e'),
       );
       notifyListeners();
       rethrow;

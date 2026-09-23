@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
+import 'package:uuid/uuid.dart';
 
 import '../../../app/router/routes.dart';
 import '../../../app/theme/mango_styles.dart';
@@ -18,11 +19,13 @@ import '../utils/discount_input.dart';
 import '../utils/goods_receipt_printing.dart';
 import '../utils/ncf_format.dart';
 import '../utils/payment_terms.dart';
+import '../utils/purchase_status.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../widgets/create_supplier_dialog.dart';
 import 'goods_receipt_dialog.dart';
 import '../../../core/theme/app_colors.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 
 /// Cómo trae el ITBIS cada línea de la factura del proveedor.
 /// - [included]: el costo digitado YA trae el ITBIS → se desglosa con el %
@@ -47,7 +50,15 @@ extension _TaxModeLabel on _TaxMode {
 }
 
 class PurchasesRegisterView extends ConsumerStatefulWidget {
-  const PurchasesRegisterView({super.key});
+  /// Id de la compra que se está CORRIGIENDO. `null` = alta normal.
+  ///
+  /// La corrección reusa esta pantalla a propósito: editar una compra con una
+  /// pantalla distinta a la que la registró garantiza que las dos se
+  /// desincronicen (el ITBIS por línea, el empaque, el descuento global). Lo
+  /// que cambia es de dónde salen los datos y a qué RPC se guarda.
+  final String? editOrderId;
+
+  const PurchasesRegisterView({super.key, this.editOrderId});
 
   @override
   ConsumerState<PurchasesRegisterView> createState() =>
@@ -155,6 +166,31 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   double get _entryTaxPct =>
       double.tryParse(_entryTaxPctCtrl.text.trim()) ?? 18;
 
+  // ── Modo corrección ────────────────────────────────────────────────────
+  /// La compra que se está corrigiendo, tal como estaba al abrir. Se guarda
+  /// para saber qué mercancía YA había entrado: es lo que decide si guardar
+  /// mueve el almacén o solo cambia papeles.
+  PurchaseOrderDetail? _editing;
+  bool _loadingEdit = false;
+  String? _editLoadError;
+
+  /// Motivo de la corrección, que va a la bitácora. Editar una compra
+  /// registrada sin dejar dicho por qué es justo lo que hace imposible
+  /// auditarla después.
+  final _reasonCtrl = TextEditingController();
+
+  /// Misma llave en cada reintento: un doble toque no postea dos veces las
+  /// correcciones de stock.
+  final String _editKey = const Uuid().v4();
+
+  bool get _isEditing => widget.editOrderId != null;
+
+  /// Unidades que la compra YA metió al almacén. Con esto > 0, guardar va a
+  /// mover inventario y la pantalla lo dice antes de que se toque el botón.
+  double get _receivedUnits =>
+      _editing?.lines.fold<double>(0, (sum, l) => sum + l.quantityReceived) ??
+      0;
+
   @override
   void initState() {
     super.initState();
@@ -162,6 +198,12 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       final vm = ref.read(purchasesViewModelProvider);
       await vm.init();
       if (!mounted) return;
+
+      if (_isEditing) {
+        await _loadOrderForEdit();
+        return;
+      }
+
       final state = vm.state;
       if (_supplierId == null && state.suppliers.isNotEmpty) {
         _supplierId = state.suppliers.first.id;
@@ -186,8 +228,65 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     });
   }
 
+  /// Trae la compra a corregir y la vuelve a poner en los mismos campos con
+  /// los que se registró.
+  ///
+  /// La reconstrucción usa el modo de ITBIS «Aparte» con la tasa guardada de
+  /// cada línea: la base guardada es NETA y el impuesto sale de esa tasa, así
+  /// que reabrirla en ese modo devuelve exactamente los mismos números. El
+  /// campo de descuento de línea se deja VACÍO a propósito — el costo
+  /// guardado ya viene descontado, y repetir el descuento lo aplicaría dos
+  /// veces.
+  Future<void> _loadOrderForEdit() async {
+    final orderId = widget.editOrderId;
+    if (orderId == null) return;
+    setState(() {
+      _loadingEdit = true;
+      _editLoadError = null;
+    });
+    try {
+      final detail = await ref
+          .read(purchasesViewModelProvider)
+          .loadOrderDetail(orderId);
+      if (!mounted) return;
+      final order = detail.order;
+
+      for (final line in _lines) {
+        line.dispose();
+      }
+      _lines
+        ..clear()
+        ..addAll(detail.lines.map(_DraftItemControllers.fromOrderLine));
+
+      setState(() {
+        _editing = detail;
+        _loadingEdit = false;
+        _supplierId = order.supplierId.isEmpty ? null : order.supplierId;
+        _warehouseId = order.warehouseId.isEmpty ? null : order.warehouseId;
+        _status = order.status;
+        _orderNumberCtrl.text = order.orderNumber;
+        _invoiceNumberCtrl.text = order.invoiceNumber;
+        _ncfCtrl.text = order.ncf;
+        _notesCtrl.text = order.notes;
+        _expectedDate = order.expectedDate ?? order.createdAt;
+        // El descuento global se reabre como monto: se guardó en RD\$, y
+        // reabrirlo como «%» lo recalcularía sobre un total que ya cambió.
+        _orderDiscountCtrl.text =
+            detail.discount > 0 ? detail.discount.toStringAsFixed(2) : '';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingEdit = false;
+        _editLoadError =
+            FriendlyError.humanize('No se pudo abrir la compra: \$e');
+      });
+    }
+  }
+
   @override
   void dispose() {
+    _reasonCtrl.dispose();
     _notesCtrl.dispose();
     _orderNumberCtrl.dispose();
     _invoiceNumberCtrl.dispose();
@@ -269,13 +368,26 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     final scannerEnabled =
         barcodeEnabled && TickerMode.valuesOf(context).enabled;
 
+    // El permiso se aplica ACÁ porque el gate del router hace match por
+    // prefijo y no puede ver el `/edit` que va después del id de la orden.
+    // El servidor lo vuelve a exigir: esto es la puerta, no la cerradura.
+    if (_isEditing &&
+        !ref.watch(sessionProvider.notifier).hasPermission(
+              'compras.ordenes.editar',
+            )) {
+      return _noEditPermissionScreen();
+    }
+
     return BarcodeScanListener(
       enabled: scannerEnabled,
       onScan: _handleScan,
       child: Scaffold(
         backgroundColor: AppColors.background,
         body:
-            state.loading && state.suppliers.isEmpty && state.warehouses.isEmpty
+            _loadingEdit ||
+                (state.loading &&
+                    state.suppliers.isEmpty &&
+                    state.warehouses.isEmpty)
             ? const Center(child: CircularProgressIndicator())
             : SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
@@ -289,22 +401,26 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                           icon: const Icon(Icons.arrow_back),
                         ),
                         const SizedBox(width: 8),
-                        const Expanded(
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Registro de compra',
-                                style: TextStyle(
+                                _isEditing
+                                    ? 'Editar compra'
+                                    : 'Registro de compra',
+                                style: const TextStyle(
                                   fontSize: 28,
                                   fontWeight: FontWeight.w800,
                                   color: Color(0xFF0F172A),
                                 ),
                               ),
-                              SizedBox(height: 6),
+                              const SizedBox(height: 6),
                               Text(
-                                'Registra la factura del proveedor y agrega sus productos',
-                                style: TextStyle(
+                                _isEditing
+                                    ? _editSubtitle()
+                                    : 'Registra la factura del proveedor y agrega sus productos',
+                                style: const TextStyle(
                                   fontSize: 14,
                                   color: Color(0xFF64748B),
                                 ),
@@ -316,6 +432,26 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                       ],
                     ),
                     const SizedBox(height: 20),
+                    if (_isEditing && _editLoadError != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFECACA)),
+                        ),
+                        child: Text(
+                          _editLoadError!,
+                          style: const TextStyle(color: Color(0xFF991B1B)),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    if (_isEditing && _receivedUnits > 0) ...[
+                      _stockWarningBanner(),
+                      const SizedBox(height: 16),
+                    ],
                     if (state.error != null) ...[
                       Container(
                         width: double.infinity,
@@ -340,6 +476,99 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               ),
       ),
     );
+  }
+
+  Widget _noEditPermissionScreen() {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_outline, size: 40, color: Color(0xFF94A3B8)),
+              const SizedBox(height: 14),
+              const Text(
+                'No tienes permiso para editar compras registradas',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Pídele a un administrador el permiso «Editar ordenes de '
+                'compra registradas».',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+              ),
+              const SizedBox(height: 18),
+              FilledButton(
+                onPressed: () => context.go(AppRoutes.purchasesList),
+                child: const Text('Volver a Compras'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _editSubtitle() {
+    final order = _editing?.order;
+    if (order == null) return 'Corrigiendo la compra';
+    final parts = <String>[
+      order.orderNumber,
+      if (order.invoiceNumber.isNotEmpty) 'Factura ${order.invoiceNumber}',
+      purchaseStatusLabel(order.status),
+    ];
+    return parts.join(' · ');
+  }
+
+  /// Lo que va a pasar con el almacén, dicho ANTES de tocar nada. Una compra
+  /// recibida ya movió stock: corregir una cantidad o un costo vuelve a
+  /// moverlo, y quien edita tiene que saberlo de entrada, no descubrirlo
+  /// después en el kardex.
+  Widget _stockWarningBanner() {
+    final warehouseName = _editing?.order.warehouseName ?? 'el almacén';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.inventory_2_outlined,
+            size: 18,
+            color: Color(0xFFB45309),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Esta compra ya metió ${_trimNum(_receivedUnits)} unidades a '
+              '$warehouseName. Si cambias cantidades, costos o el almacén, el '
+              'inventario se corrige solo y queda registrado quién lo hizo.',
+              style: const TextStyle(
+                fontSize: 12.5,
+                color: Color(0xFF92400E),
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Piso del selector de fecha de entrega: 90 días atrás, o la fecha que ya
+  /// tiene la compra si es más vieja todavía.
+  DateTime _datePickerFloor() {
+    final standard = DateTime.now().subtract(const Duration(days: 90));
+    return _expectedDate.isBefore(standard) ? _expectedDate : standard;
   }
 
   Widget _card({required Widget child}) {
@@ -372,7 +601,13 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               child: TextField(
                 controller: _orderNumberCtrl,
                 focusNode: _orderNumberFocus,
-                decoration: const InputDecoration(labelText: 'Número de orden'),
+                // El número identifica la compra en el archivo del contable y
+                // en la CxP: corregir la factura no puede renumerarla.
+                readOnly: _isEditing,
+                decoration: InputDecoration(
+                  labelText: 'Número de orden',
+                  helperText: _isEditing ? 'No cambia al corregir' : null,
+                ),
               ),
             ),
             const SizedBox(width: 12),
@@ -409,6 +644,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
               ),
             ),
             const SizedBox(width: 12),
+            // Al corregir NO se ofrece el estado: lo recalcula el servidor
+            // con lo que quedó pendiente tras la edición. Un selector que
+            // promete un estado que la RPC va a recalcular miente.
+            if (!_isEditing)
             Expanded(
               child: DropdownButtonFormField<String>(
                 initialValue: _status,
@@ -519,7 +758,11 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
                     final picked = await showDatePicker(
                       context: context,
                       initialDate: _expectedDate,
-                      firstDate: DateTime.now().subtract(const Duration(days: 90)),
+                      // El piso tiene que caber la fecha que ya trae la
+                      // compra: al corregir una factura vieja, `initialDate`
+                      // queda fuera del rango por defecto y el selector
+                      // revienta en vez de abrir.
+                      firstDate: _datePickerFloor(),
                       lastDate: DateTime.now().add(const Duration(days: 365)),
                     );
                     if (picked == null) return;
@@ -743,6 +986,10 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       if (_isCredit && canBuyOnCredit) 'CxP en Créditos',
     ];
 
+    if (_isEditing) {
+      return _buildEditSaveSection(state, total, currency);
+    }
+
     return [
       if (canBuyOnCredit) ...[
         const Divider(height: 24),
@@ -904,6 +1151,60 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         const SizedBox(height: 6),
         Text(
           consequences.join(' · '),
+          style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+        ),
+      ],
+    ];
+  }
+
+  /// Pie de la corrección: el motivo (que va a la bitácora), el botón y, si la
+  /// mercancía ya había entrado, lo que va a pasar con el almacén.
+  ///
+  /// La condición de pago NO se ofrece acá: la cuenta por pagar de esta
+  /// compra ya existe (o no), y lo que corresponde al corregir es reajustar
+  /// su monto, no crear una segunda. De eso se encarga el servidor.
+  List<Widget> _buildEditSaveSection(
+    PurchasesState state,
+    double total,
+    NumberFormat currency,
+  ) {
+    final before = _editing;
+    final delta = before == null ? 0.0 : total - before.order.total;
+    final warehouseChanged =
+        before != null && _warehouseId != before.order.warehouseId;
+
+    return [
+      const Divider(height: 24),
+      TextField(
+        controller: _reasonCtrl,
+        decoration: const InputDecoration(
+          labelText: 'Motivo de la corrección',
+          hintText: 'Ej. se digitó 12 y llegaron 10',
+          helperText: 'Queda en la bitácora de la compra',
+        ),
+      ),
+      const SizedBox(height: 14),
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          onPressed: state.saving || _editing == null ? null : _submitEdit,
+          icon: const Icon(Icons.save_outlined, size: 18),
+          label: Text(
+            _receivedUnits > 0
+                ? 'Guardar y ajustar inventario'
+                : 'Guardar cambios',
+          ),
+        ),
+      ),
+      if (before != null) ...[
+        const SizedBox(height: 6),
+        Text(
+          [
+            if (delta.abs() >= 0.01)
+              'Total ${currency.format(before.order.total)} → '
+                  '${currency.format(total)}',
+            if (warehouseChanged) 'cambia de almacén',
+          ].join(' · '),
           style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
         ),
       ],
@@ -1845,6 +2146,120 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       )
       .toList(growable: false);
 
+  /// Guarda la corrección de una compra ya registrada.
+  ///
+  /// Se pide confirmación SOLO cuando la corrección va a mover el almacén:
+  /// arreglar un NCF no debería costar un diálogo, y corregir una cantidad ya
+  /// recibida no debería pasar sin uno.
+  Future<void> _submitEdit() async {
+    final orderId = widget.editOrderId;
+    final before = _editing;
+    if (orderId == null || before == null) return;
+
+    if (_supplierId == null || _warehouseId == null) {
+      _snack('Selecciona proveedor y almacén.');
+      return;
+    }
+    final items = _draftItems;
+    if (items.isEmpty) {
+      _snack('La compra no puede quedar sin productos.');
+      return;
+    }
+    // Una línea en cero se cae del borrador sin decir nada, y al corregir eso
+    // significa devolver al almacén lo que había entrado. Se avisa en vez de
+    // borrarla a escondidas: para quitarla está su botón.
+    if (items.length != _lines.length) {
+      _snack(
+        'Hay ${_lines.length - items.length} línea(s) sin cantidad o sin '
+        'producto. Complétalas o quítalas con el botón de eliminar.',
+      );
+      return;
+    }
+
+    final invoiceNumber = _invoiceNumberCtrl.text.trim();
+    if (invoiceNumber.isEmpty) {
+      _snack('Escribe el número de factura del proveedor.');
+      _invoiceNumberFocus.requestFocus();
+      return;
+    }
+
+    final ncfError = NcfFormat.validate(_ncfCtrl.text);
+    if (ncfError != null) {
+      _snack(ncfError);
+      _ncfFocus.requestFocus();
+      return;
+    }
+    final ncf = NcfFormat.normalize(_ncfCtrl.text);
+
+    final grossTotal = items.fold<double>(
+      0,
+      (sum, item) => sum + item.total + item.taxValue,
+    );
+    final orderDiscount =
+        DiscountInput.parse(_orderDiscountCtrl.text).amountOn(grossTotal);
+
+    if (_receivedUnits > 0 && !await _confirmStockEdit(before)) return;
+    if (!mounted) return;
+
+    final PurchaseOrderUpdateResult result;
+    try {
+      result = await ref
+          .read(purchasesViewModelProvider)
+          .updatePurchaseOrder(
+            orderId: orderId,
+            supplierId: _supplierId!,
+            warehouseId: _warehouseId!,
+            expectedDate: _expectedDate,
+            items: items,
+            idempotencyKey: _editKey,
+            notes: _notesCtrl.text.trim(),
+            invoiceNumber: invoiceNumber,
+            ncf: ncf.isEmpty ? null : ncf,
+            discount: orderDiscount,
+            reason: _reasonCtrl.text.trim(),
+          );
+    } catch (_) {
+      // El motivo ya quedó en state.error, que la pantalla pinta arriba.
+      return;
+    }
+
+    if (!mounted) return;
+    _snack(
+      result.movementsCreated > 0
+          ? 'Compra corregida. Se ajustó el inventario'
+              '${result.payableAdjusted ? ' y la cuenta por pagar' : ''}.'
+          : 'Compra corregida.',
+    );
+    context.go(AppRoutes.purchasesOrderDetailPath(orderId));
+  }
+
+  /// El diálogo dice lo que va a pasar, no pregunta «¿estás seguro?».
+  Future<bool> _confirmStockEdit(PurchaseOrderDetail before) async {
+    final warehouseName = before.order.warehouseName;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Esta corrección mueve inventario'),
+        content: Text(
+          'Se va a devolver a $warehouseName lo que esta compra había metido '
+          'y a volver a entrar lo corregido, con los costos que dejes. El '
+          'movimiento queda en el kardex a tu nombre.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Corregir'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _submit() async {
     if (_supplierId == null || _warehouseId == null) {
       _snack('Selecciona proveedor y almacén.');
@@ -2705,7 +3120,13 @@ class _DraftItemControllers {
   double packSize;
   String baseUnit;
 
+  /// Id de la línea GUARDADA que esta fila representa, cuando se corrige una
+  /// compra registrada. Sin él, el servidor trataría la línea como nueva:
+  /// devolvería al almacén todo lo que había entrado y lo volvería a meter.
+  final String? lineId;
+
   _DraftItemControllers({
+    this.lineId,
     String description = '',
     double quantity = 1,
     double unitCost = 0,
@@ -2751,6 +3172,39 @@ class _DraftItemControllers {
       purchaseUnit: hasPack ? item.purchaseUnit : '',
       packSize: hasPack ? item.packSize : 1,
       baseUnit: item.unit,
+    );
+  }
+
+  /// Reconstruye la fila de captura desde una línea YA guardada.
+  ///
+  /// Lo guardado está en unidad BASE con costo NETO; acá se devuelve a la
+  /// unidad de COMPRA (que es como se contó contra el papel) usando la foto
+  /// de empaque que la propia línea trae. El modo de ITBIS es «Aparte» con la
+  /// tasa guardada porque la base guardada es neta: así el total reabierto es
+  /// idéntico al que se guardó.
+  factory _DraftItemControllers.fromOrderLine(PurchaseOrderLine line) {
+    final hasPack =
+        line.packSize > 1 && line.purchaseUnit.trim().isNotEmpty;
+    final qty = hasPack
+        ? baseToPack(line.quantityOrdered, line.packSize)
+        : line.quantityOrdered;
+    final cost = hasPack ? line.unitCost * line.packSize : line.unitCost;
+    return _DraftItemControllers(
+      lineId: line.id,
+      description: line.description.trim().isNotEmpty
+          ? line.description
+          : line.itemName,
+      quantity: qty,
+      unitCost: cost,
+      paid: 0,
+      taxPct: line.taxRate,
+      // Vacío a propósito: el costo de arriba ya viene descontado.
+      discountText: '',
+      inventoryItemId: line.inventoryItemId,
+      taxMode: line.taxRate > 0 ? _TaxMode.separate : _TaxMode.exempt,
+      purchaseUnit: hasPack ? line.purchaseUnit : '',
+      packSize: hasPack ? line.packSize : 1,
+      baseUnit: line.unit,
     );
   }
 
@@ -2856,6 +3310,7 @@ class _DraftItemControllers {
     final base = baseSubtotal;
     final tax = taxAmount;
     return PurchaseDraftItem(
+      id: lineId,
       inventoryItemId: inventoryItemId,
       description: description.text.trim(),
       quantity: qtyBase,

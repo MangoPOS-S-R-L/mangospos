@@ -584,6 +584,142 @@ class PurchasesRepository {
     return created;
   }
 
+  /// Corrige una compra YA registrada: cabecera y líneas en una sola
+  /// transacción del servidor (`fn_purchase_order_update`, 20260923_0002).
+  ///
+  /// El AJUSTE DEL INVENTARIO NO SE HACE AQUÍ a propósito. Cuando una línea
+  /// ya había recibido mercancía, el servidor revierte lo que entró (al costo
+  /// viejo, en el almacén viejo) y vuelve a entrar lo corregido (al costo
+  /// nuevo, en el almacén nuevo), todo dentro de la misma transacción que la
+  /// edición. Hacerlo desde la app dejaría la puerta abierta a una compra
+  /// corregida con el stock a medio ajustar si se cae la red a mitad.
+  ///
+  /// [items] debe traer el `id` de cada línea que ya existía; las líneas sin
+  /// `id` se agregan y las que ya no vengan en la lista se quitan (devolviendo
+  /// al almacén lo que hubieran recibido).
+  ///
+  /// [idempotencyKey] la genera la pantalla y la reusa en cada reintento: un
+  /// doble toque no postea dos veces las correcciones de stock.
+  Future<PurchaseOrderUpdateResult> updatePurchaseOrder({
+    required String orderId,
+    required String supplierId,
+    required String warehouseId,
+    required DateTime expectedDate,
+    required List<PurchaseDraftItem> items,
+    required String idempotencyKey,
+    String? notes,
+    String? invoiceNumber,
+    String? ncf,
+    double discount = 0,
+    String? reason,
+  }) async {
+    if (items.isEmpty) {
+      throw Exception('La compra no puede quedar sin productos.');
+    }
+
+    final subtotal = items.fold<double>(0, (sum, item) => sum + item.total);
+    final tax = items.fold<double>(0, (sum, item) => sum + item.taxValue);
+    final orderDiscount = discount.clamp(0, subtotal + tax).toDouble();
+    final total = subtotal + tax - orderDiscount;
+
+    try {
+      final result = await _client.rpc(
+        PurchasesQueries.rpcPurchaseOrderUpdate,
+        params: {
+          'p_order_id': orderId,
+          'p_lines': [
+            for (final item in items)
+              {
+                if (item.id != null) 'id': item.id,
+                'inventory_item_id': item.inventoryItemId,
+                'description': item.description,
+                // En unidad BASE, igual que al crear.
+                'quantity_ordered': item.quantity,
+                'unit_cost': item.unitCost,
+                'tax_rate': item.taxRate,
+                'total': item.total,
+                'discount': item.discountAmount,
+                'purchase_unit': item.purchaseUnit.trim().isEmpty
+                    ? null
+                    : item.purchaseUnit.trim(),
+                'pack_size': item.packSize,
+              },
+          ],
+          'p_header': {
+            'supplier_id': supplierId,
+            'warehouse_id': warehouseId,
+            'expected_date': expectedDate.toIso8601String().split('T').first,
+            'subtotal': subtotal,
+            'tax': tax,
+            'discount': orderDiscount,
+            'total': total,
+            'notes': notes,
+            'invoice_number': invoiceNumber,
+            'ncf': ncf,
+          },
+          'p_reason': reason,
+          'p_idempotency_key': idempotencyKey,
+        },
+      );
+      return PurchaseOrderUpdateResult.fromMap(
+        Map<String, dynamic>.from(result as Map),
+      );
+    } on PostgrestException catch (e) {
+      throw Exception(_updateErrorMessage(e));
+    }
+  }
+
+  /// Traduce el contrato de errores de `fn_purchase_order_update` a español.
+  /// Sin esto el usuario vería `PURCHASE_ORDER_PAYABLE_HAS_PAYMENTS` en un
+  /// toast, que no le dice qué hacer.
+  String _updateErrorMessage(PostgrestException e) {
+    final raw = '${e.message} ${e.details ?? ''}';
+
+    // PGRST202/42883: la migración 20260923_0002 no está aplicada. No hay
+    // camino viejo al que caer: corregir el stock a mano desde la app es
+    // justo lo que esta función evita.
+    if (e.code == 'PGRST202' || e.code == '42883') {
+      return 'Este servidor todavía no tiene habilitada la edición de '
+          'compras. Aplica la migración 20260923_0002_purchase_order_edit.sql '
+          'y vuelve a intentar.';
+    }
+
+    if (raw.contains('PURCHASE_ORDER_PAYABLE_HAS_PAYMENTS')) {
+      return 'Esta compra fue a crédito y su cuenta por pagar ya tiene '
+          'abonos, así que no se puede cambiar el total. Resuelve la cuenta '
+          'en Créditos → Cuentas por Pagar y vuelve a intentar.';
+    }
+    if (raw.contains('PURCHASE_ORDER_EDIT_DENIED')) {
+      return 'No tienes permiso para editar compras registradas.';
+    }
+    if (raw.contains('PURCHASE_ORDER_CANCELLED')) {
+      return 'Esta compra está cancelada y ya no se puede editar.';
+    }
+    if (raw.contains('PURCHASE_ORDER_NOT_FOUND')) {
+      return 'Esta compra ya no existe.';
+    }
+    if (raw.contains('PURCHASE_ORDER_EMPTY')) {
+      return 'La compra no puede quedar sin productos.';
+    }
+    if (raw.contains('PURCHASE_ORDER_TOTAL_INVALID')) {
+      return 'Una compra a crédito no puede quedar en cero.';
+    }
+    if (raw.contains('PURCHASE_ORDER_LINE_INVALID')) {
+      return 'Hay una línea con cantidad o costo inválido. Revisa que todas '
+          'tengan cantidad mayor que cero.';
+    }
+    if (raw.contains('PURCHASE_ORDER_ITEM_INVALID') ||
+        raw.contains('PURCHASE_ORDER_INVALID')) {
+      return 'Un producto, el proveedor o el almacén no pertenecen a este '
+          'negocio. Vuelve a seleccionarlos.';
+    }
+    if (raw.contains('LINE_NOT_IN_ORDER')) {
+      return 'La compra cambió mientras la editabas. Ciérrala, ábrela de '
+          'nuevo y repite el cambio.';
+    }
+    return 'No se pudo guardar la corrección: ${e.message}';
+  }
+
   /// §6.4 — La compra se guardó a crédito pero la CxP no llegó a nacer.
   ///
   /// Mientras orden y CxP no sean una sola operación atómica, ese estado

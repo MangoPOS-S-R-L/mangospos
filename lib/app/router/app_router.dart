@@ -912,6 +912,12 @@ class AppRouter {
               orderId: state.pathParameters['orderId'] ?? '',
             ),
           ),
+          GoRoute(
+            path: AppRoutes.purchasesOrderEdit,
+            builder: (context, state) => PurchasesRegisterView(
+              editOrderId: state.pathParameters['orderId'] ?? '',
+            ),
+          ),
           ]),
 
           // ── Rama 11: Promociones ──

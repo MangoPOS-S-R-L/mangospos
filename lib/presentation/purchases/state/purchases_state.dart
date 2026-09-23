@@ -385,6 +385,12 @@ class PurchaseOrderDetail {
 }
 
 class PurchaseDraftItem {
+  /// Id de la línea EXISTENTE que este borrador reemplaza, cuando se está
+  /// corrigiendo una compra ya registrada. `null` en el alta y en las líneas
+  /// que la corrección agrega. Sin esto el servidor no podría saber qué
+  /// línea ya había recibido mercancía y borraría el stock para volver a
+  /// meterlo: se conserva la identidad de la línea.
+  final String? id;
   final String? inventoryItemId;
   final String description;
   /// Cantidad y costo YA en unidad BASE (la vista convirtió desde la unidad
@@ -407,6 +413,7 @@ class PurchaseDraftItem {
   final double packSize;
 
   const PurchaseDraftItem({
+    this.id,
     this.inventoryItemId,
     required this.description,
     required this.quantity,
@@ -423,6 +430,52 @@ class PurchaseDraftItem {
 
   /// ITBIS de la línea: absoluto si viene dado, si no derivado del porcentaje.
   double get taxValue => taxAmount ?? (total * taxRate / 100);
+}
+
+/// Lo que respondió el servidor al corregir una compra registrada.
+///
+/// `movementsCreated` es la cuenta de movimientos de inventario que hizo
+/// falta postear: 0 significa que la corrección no tocó el almacén (se
+/// cambió el NCF, la factura o una nota). La pantalla lo dice en el aviso
+/// para que quien edita sepa si movió mercancía o solo papeles.
+class PurchaseOrderUpdateResult {
+  final String orderId;
+  final String status;
+  final double total;
+  final int movementsCreated;
+
+  /// La cuenta por pagar vinculada se reajustó al nuevo total.
+  final bool payableAdjusted;
+
+  /// El servidor reconoció la llave de idempotencia y NO volvió a aplicar
+  /// nada: fue un reenvío (doble toque, reintento sin red).
+  final bool replayed;
+
+  const PurchaseOrderUpdateResult({
+    required this.orderId,
+    required this.status,
+    required this.total,
+    required this.movementsCreated,
+    required this.payableAdjusted,
+    required this.replayed,
+  });
+
+  factory PurchaseOrderUpdateResult.fromMap(Map<String, dynamic> map) {
+    double toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      return double.tryParse(v?.toString() ?? '') ?? 0;
+    }
+
+    return PurchaseOrderUpdateResult(
+      orderId: map['id']?.toString() ?? '',
+      status: map['status']?.toString() ?? '',
+      total: toDouble(map['total']),
+      movementsCreated:
+          int.tryParse(map['movements_created']?.toString() ?? '') ?? 0,
+      payableAdjusted: map['payable_adjusted'] == true,
+      replayed: map['replayed'] == true,
+    );
+  }
 }
 
 class PurchasesState {
