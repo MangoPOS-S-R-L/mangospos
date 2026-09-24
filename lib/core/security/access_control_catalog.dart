@@ -137,6 +137,17 @@ const accessPermissions = <AccessPermission>[
         'Productos.',
   ),
   AccessPermission(
+    code: 'ventas.ordenes.ver',
+    label: 'Pedidos de canales externos',
+    categoryId: 'operations',
+    categoryLabel: 'Gestion Operativa',
+    description:
+        'Recibe el aviso (sonido y tarjeta) de los pedidos que entran por '
+        'Pincer u otro canal externo, y da acceso a la seccion Ordenes. Lo '
+        'atiende quien cobra, no quien sirve las mesas: por eso NO va en el '
+        'preset de Mesero.',
+  ),
+  AccessPermission(
     code: 'ventas.orden.enviar_cocina',
     label: 'Enviar Pedido',
     categoryId: 'kds',
@@ -486,7 +497,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Editar productos',
     categoryId: 'products',
     categoryLabel: 'Gestion de Productos',
-    description: 'Permite modificar precio, datos y disponibilidad de productos.',
+    description:
+        'Permite modificar precio, datos y disponibilidad de productos.',
   ),
   AccessPermission(
     code: 'productos.eliminar',
@@ -549,21 +561,24 @@ const accessPermissions = <AccessPermission>[
     label: 'Crear transferencias de stock',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Permite enviar stock desde el almacén principal hacia otras bodegas.',
+    description:
+        'Permite enviar stock desde el almacén principal hacia otras bodegas.',
   ),
   AccessPermission(
     code: 'inventario.transferencias.recibir',
     label: 'Recibir transferencias de stock',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Permite confirmar la recepción de transferencias en la bodega destino.',
+    description:
+        'Permite confirmar la recepción de transferencias en la bodega destino.',
   ),
   AccessPermission(
     code: 'inventario.transferencias.aprobar',
     label: 'Aprobar transferencias de stock',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Permite aprobar transferencias pendientes cuando el '
+    description:
+        'Permite aprobar transferencias pendientes cuando el '
         'negocio tiene el flujo de aprobación activo. Antes de aprobar, el '
         'stock no se mueve.',
   ),
@@ -579,7 +594,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Crear sesiones de conteo físico',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Inicia nuevas sesiones de conteo, congela el snapshot y '
+    description:
+        'Inicia nuevas sesiones de conteo, congela el snapshot y '
         'registra cantidades contadas.',
   ),
   AccessPermission(
@@ -587,7 +603,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Completar conteo físico',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Aplica los ajustes resultantes del conteo. Genera '
+    description:
+        'Aplica los ajustes resultantes del conteo. Genera '
         'movimientos en el kardex y modifica el stock — acción sensible.',
   ),
   AccessPermission(
@@ -595,7 +612,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Anular conteo físico',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Cancela una sesión de conteo en draft o in_progress sin '
+    description:
+        'Cancela una sesión de conteo en draft o in_progress sin '
         'aplicar ajustes.',
   ),
   AccessPermission(
@@ -603,7 +621,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Acceso a compras',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Abre el módulo de compras y permite consultar órdenes y proveedores.',
+    description:
+        'Abre el módulo de compras y permite consultar órdenes y proveedores.',
   ),
   AccessPermission(
     code: 'compras.proveedores.crear_editar',
@@ -624,7 +643,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Comprar a credito',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Permite registrar una compra a crédito, que genera una '
+    description:
+        'Permite registrar una compra a crédito, que genera una '
         'cuenta por pagar. Comprometer dinero futuro no es la misma facultad '
         'que registrar una compra ya pagada: sin este permiso la pantalla no '
         'dibuja el selector y toda compra se registra al contado. No viene '
@@ -642,7 +662,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Editar ordenes de compra registradas',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Permite corregir una compra ya registrada: proveedor, '
+    description:
+        'Permite corregir una compra ya registrada: proveedor, '
         'factura, NCF, productos, cantidades y costos. Si la mercancía ya '
         'entró, el ajuste del inventario lo hace el servidor con movimientos '
         'de corrección y queda bitácora de quién editó y qué cambió.',
@@ -666,7 +687,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Crear órdenes de producción',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Crea nuevas órdenes para transformar materias primas en '
+    description:
+        'Crea nuevas órdenes para transformar materias primas en '
         'productos terminados.',
   ),
   AccessPermission(
@@ -674,7 +696,8 @@ const accessPermissions = <AccessPermission>[
     label: 'Completar órdenes de producción',
     categoryId: 'inventory',
     categoryLabel: 'Inventario y Compras',
-    description: 'Marca una orden como completada. Genera movimientos en el '
+    description:
+        'Marca una orden como completada. Genera movimientos en el '
         'kardex y recalcula el costo del producto terminado.',
   ),
   AccessPermission(
@@ -849,6 +872,7 @@ final rolePresets = <String, RolePresetDefinition>{
     description:
         'Coordina operacion diaria con acceso amplio, sin control total del sistema.',
     permissionCodes: {
+      'ventas.ordenes.ver', // aviso de pedidos de canal externo
       'dashboard.acceso',
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',
@@ -954,6 +978,7 @@ final rolePresets = <String, RolePresetDefinition>{
         'Cobra, opera caja, gestiona ventas en mesa y rápidas, registra '
         'movimientos. Cierre a ciegas sin ver totales.',
     permissionCodes: {
+      'ventas.ordenes.ver', // aviso de pedidos de canal externo
       // Mesas
       'ventas.mesas.acceso',
       'ventas.mesas.ver_estado',

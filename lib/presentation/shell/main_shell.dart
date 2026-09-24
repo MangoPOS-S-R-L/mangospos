@@ -1,3 +1,4 @@
+import 'package:mangopos/presentation/shell/external_order_alert_overlay.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,17 +102,17 @@ class _MainShellState extends ConsumerState<MainShell> {
     // Rutas exentas (registro, onboarding, login, billing) las maneja
     // cada guard internamente.
     final child = PendingApprovalGuard(
-      child: AccessGuard(
-        child: BillingGuard(child: widget.navigationShell),
-      ),
+      child: AccessGuard(child: BillingGuard(child: widget.navigationShell)),
     );
 
     // Escuchamos el resultado del último sync para notificar al cajero
     // qué se sincronizó. El controller es singleton; usamos referencia
     // por identidad de OfflineQueueSyncResult para evitar duplicar la
     // notificación entre rebuilds de otras pantallas.
-    ref.listen<OfflineQueueStatus>(offlineQueueStatusProvider,
-        (previous, next) {
+    ref.listen<OfflineQueueStatus>(offlineQueueStatusProvider, (
+      previous,
+      next,
+    ) {
       final result = next.lastResult;
       if (result == null) return;
       if (identical(result, _lastNotifiedResult)) return;
@@ -135,138 +136,167 @@ class _MainShellState extends ConsumerState<MainShell> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ======= APP BAR =======
-            Container(
-              height: topBarHeight,
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(
-                horizontal: horizontalPadding,
-              ),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x0F000000), // Shadow soft
-                    blurRadius: 4,
-                    offset: Offset(0, 2),
+      // Stack para que el aviso de pedido entrante quede ENCIMA de cualquier
+      // pantalla: un pedido que entra solo tiene que verse esté donde esté el
+      // equipo, no solo en Ventas.
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Column(
+              children: [
+                // ======= APP BAR =======
+                Container(
+                  height: topBarHeight,
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: horizontalPadding,
                   ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(width: 12),
-                  const _Logo(),
-                  const SizedBox(width: 32),
-
-                  // Menú principal (Centro) - scroll horizontal cuando no cabe.
-                  // Filtramos destinos por:
-                  //   1) Permiso del rol (oculta lo bloqueado en vez de
-                  //      mostrar el candado gris).
-                  //   2) Config del business (`header_destinations_disabled`)
-                  //      — el owner puede ocultar destinos a todos los
-                  //      empleados sin tocar permisos por rol.
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      child: Builder(builder: (context) {
-                        final session = ref.watch(sessionProvider);
-                        final sessionCtrl =
-                            ref.read(sessionProvider.notifier);
-                        final businessId = session.activeBusinessId ?? '';
-                        final disabledAsync = ref.watch(
-                          headerDestinationsDisabledProvider(businessId),
-                        );
-                        // Mientras carga la config, usamos `[]` —
-                        // muestra todos los destinos permitidos por rol,
-                        // que es el comportamiento histórico.
-                        final disabledRoutes = disabledAsync.value ??
-                            const <String>[];
-                        final features = ref.watchBusinessFeatures();
-                        final modules = ref.watchEnabledModules();
-                        final visible = kPrimaryDestinations.where((d) {
-                          final code = d.permissionCode;
-                          final hasPerm =
-                              code == null || sessionCtrl.hasPermission(code);
-                          final hidden = disabledRoutes.contains(d.route);
-                          final featureOk =
-                              isDestinationFeatureEnabled(d, features);
-                          final moduleOk =
-                              isDestinationModuleEnabled(d, modules);
-                          return hasPerm && !hidden && featureOk && moduleOk;
-                        }).toList(growable: false);
-                        return Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (var i = 0; i < visible.length; i++) ...[
-                              if (i > 0) const SizedBox(width: navGap),
-                              _TopNavItem(
-                                destination: visible[i],
-                                navigationShell: widget.navigationShell,
-                              ),
-                            ],
-                          ],
-                        );
-                      }),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(
+                      bottom: BorderSide(color: Color(0xFFE5E7EB)),
                     ),
-                  ),
-
-                  // Sección derecha (Acciones)
-                  Row(
-                    children: [
-                      // Pantalla completa
-                      const _FullscreenButton(),
-
-                      // Abrir gaveta a mano (solo cajero / administrador).
-                      const _OpenDrawerButton(),
-
-                      const SizedBox(width: 12),
-
-                      // Badge de operaciones offline pendientes
-                      const _OfflineQueueBadge(),
-
-                      const SizedBox(width: 8),
-
-                      // Badge de estado de impresoras (heartbeat 30s).
-                      // Verde = todas OK, amarillo = ≥1 offline, gris
-                      // = aún sondeando o sin impresoras configuradas.
-                      const _PrinterHeartbeatBadge(),
-
-                      // Badge de conexión BLE persistente (impresora BT). Solo
-                      // aparece cuando hay impresoras BT: azul=conectada,
-                      // amarillo=reconectando.
-                      const _BlePrinterBadge(),
-
-                      // Vencimientos y stock bajo se movieron al menú del
-                      // usuario (avatar) para aligerar el header.
-
-                      const SizedBox(width: 16),
-
-                      // Divider
-                      Container(height: 32, width: 1, color: Colors.grey[300]),
-
-                      const SizedBox(width: 16),
-
-                      // User Info
-                      const _UserInfo(),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x0F000000), // Shadow soft
+                        blurRadius: 4,
+                        offset: Offset(0, 2),
+                      ),
                     ],
                   ),
-                ],
-              ),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 12),
+                      const _Logo(),
+                      const SizedBox(width: 32),
+
+                      // Menú principal (Centro) - scroll horizontal cuando no cabe.
+                      // Filtramos destinos por:
+                      //   1) Permiso del rol (oculta lo bloqueado en vez de
+                      //      mostrar el candado gris).
+                      //   2) Config del business (`header_destinations_disabled`)
+                      //      — el owner puede ocultar destinos a todos los
+                      //      empleados sin tocar permisos por rol.
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          child: Builder(
+                            builder: (context) {
+                              final session = ref.watch(sessionProvider);
+                              final sessionCtrl = ref.read(
+                                sessionProvider.notifier,
+                              );
+                              final businessId = session.activeBusinessId ?? '';
+                              final disabledAsync = ref.watch(
+                                headerDestinationsDisabledProvider(businessId),
+                              );
+                              // Mientras carga la config, usamos `[]` —
+                              // muestra todos los destinos permitidos por rol,
+                              // que es el comportamiento histórico.
+                              final disabledRoutes =
+                                  disabledAsync.value ?? const <String>[];
+                              final features = ref.watchBusinessFeatures();
+                              final modules = ref.watchEnabledModules();
+                              final visible = kPrimaryDestinations
+                                  .where((d) {
+                                    final code = d.permissionCode;
+                                    final hasPerm =
+                                        code == null ||
+                                        sessionCtrl.hasPermission(code);
+                                    final hidden = disabledRoutes.contains(
+                                      d.route,
+                                    );
+                                    final featureOk =
+                                        isDestinationFeatureEnabled(
+                                          d,
+                                          features,
+                                        );
+                                    final moduleOk = isDestinationModuleEnabled(
+                                      d,
+                                      modules,
+                                    );
+                                    return hasPerm &&
+                                        !hidden &&
+                                        featureOk &&
+                                        moduleOk;
+                                  })
+                                  .toList(growable: false);
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  for (var i = 0; i < visible.length; i++) ...[
+                                    if (i > 0) const SizedBox(width: navGap),
+                                    _TopNavItem(
+                                      destination: visible[i],
+                                      navigationShell: widget.navigationShell,
+                                    ),
+                                  ],
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+
+                      // Sección derecha (Acciones)
+                      Row(
+                        children: [
+                          // Pantalla completa
+                          const _FullscreenButton(),
+
+                          // Abrir gaveta a mano (solo cajero / administrador).
+                          const _OpenDrawerButton(),
+
+                          const SizedBox(width: 12),
+
+                          // Badge de operaciones offline pendientes
+                          const _OfflineQueueBadge(),
+
+                          const SizedBox(width: 8),
+
+                          // Badge de estado de impresoras (heartbeat 30s).
+                          // Verde = todas OK, amarillo = ≥1 offline, gris
+                          // = aún sondeando o sin impresoras configuradas.
+                          const _PrinterHeartbeatBadge(),
+
+                          // Badge de conexión BLE persistente (impresora BT). Solo
+                          // aparece cuando hay impresoras BT: azul=conectada,
+                          // amarillo=reconectando.
+                          const _BlePrinterBadge(),
+
+                          // Vencimientos y stock bajo se movieron al menú del
+                          // usuario (avatar) para aligerar el header.
+                          const SizedBox(width: 16),
+
+                          // Divider
+                          Container(
+                            height: 32,
+                            width: 1,
+                            color: Colors.grey[300],
+                          ),
+
+                          const SizedBox(width: 16),
+
+                          // User Info
+                          const _UserInfo(),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ======= BANNER ACTUALIZACIÓN (solo web, solo si hay deploy nuevo)
+                const UpdateAvailableBanner(),
+                const OfflinePreparationBanner(),
+
+                // ======= CONTENIDO =======
+                Expanded(child: child),
+              ],
             ),
-
-            // ======= BANNER ACTUALIZACIÓN (solo web, solo si hay deploy nuevo)
-            const UpdateAvailableBanner(),
-            const OfflinePreparationBanner(),
-
-            // ======= CONTENIDO =======
-            Expanded(child: child),
-          ],
-        ),
+          ),
+          const ExternalOrderAlertOverlay(),
+        ],
       ),
     );
   }
@@ -280,8 +310,9 @@ class _MainShellState extends ConsumerState<MainShell> {
     // Nota de dead-letter: acciones que agotaron reintentos y requieren
     // intervención manual. Se anexa a cualquier mensaje para que el cajero
     // sepa que hay operaciones atascadas que no reintentan solas.
-    final deadNote =
-        r.dead > 0 ? ' ${r.dead} sin resolver (requieren revisión).' : '';
+    final deadNote = r.dead > 0
+        ? ' ${r.dead} sin resolver (requieren revisión).'
+        : '';
     final Color bg;
     final String message;
     if (r.hasFailures) {
@@ -329,12 +360,12 @@ class _MainShellState extends ConsumerState<MainShell> {
                     unawaited(showOfflineQueueDetailDialog(context, ref)),
               )
             : r.hasConflicts
-                ? SnackBarAction(
-                    label: 'Ver detalle',
-                    textColor: Colors.white,
-                    onPressed: () => _showConflictsDialog(context, r.conflicts),
-                  )
-                : null,
+            ? SnackBarAction(
+                label: 'Ver detalle',
+                textColor: Colors.white,
+                onPressed: () => _showConflictsDialog(context, r.conflicts),
+              )
+            : null,
       ),
     );
   }
@@ -440,8 +471,11 @@ class _OfflineQueueBadge extends ConsumerWidget {
           value: 'view',
           child: Row(
             children: [
-              Icon(Icons.receipt_long_rounded,
-                  size: 18, color: Color(0xFF111827)),
+              Icon(
+                Icons.receipt_long_rounded,
+                size: 18,
+                color: Color(0xFF111827),
+              ),
               SizedBox(width: 8),
               Text('Ver operaciones...'),
             ],
@@ -466,8 +500,10 @@ class _OfflineQueueBadge extends ConsumerWidget {
               children: [
                 Icon(Icons.replay_rounded, size: 18, color: Color(0xFFB45309)),
                 SizedBox(width: 8),
-                Text('Reintentar sin resolver',
-                    style: TextStyle(color: Color(0xFFB45309))),
+                Text(
+                  'Reintentar sin resolver',
+                  style: TextStyle(color: Color(0xFFB45309)),
+                ),
               ],
             ),
           ),
@@ -475,11 +511,12 @@ class _OfflineQueueBadge extends ConsumerWidget {
           value: 'clear',
           child: Row(
             children: [
-              Icon(Icons.delete_outline,
-                  size: 18, color: Color(0xFFEF4444)),
+              Icon(Icons.delete_outline, size: 18, color: Color(0xFFEF4444)),
               SizedBox(width: 8),
-              Text('Limpiar cola...',
-                  style: TextStyle(color: Color(0xFFEF4444))),
+              Text(
+                'Limpiar cola...',
+                style: TextStyle(color: Color(0xFFEF4444)),
+              ),
             ],
           ),
         ),
@@ -526,10 +563,7 @@ class _OfflineQueueBadge extends ConsumerWidget {
     );
   }
 
-  Future<void> _confirmAndClear(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
+  Future<void> _confirmAndClear(BuildContext context, WidgetRef ref) async {
     // clearPendingActions borra todas las no-completadas (pendientes +
     // dead-letter); el conteo del aviso debe reflejar ambas para no
     // subestimar lo que se va a descartar.
@@ -557,7 +591,9 @@ class _OfflineQueueBadge extends ConsumerWidget {
             child: const Text('Cancelar'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFFEF4444)),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFEF4444),
+            ),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Limpiar'),
           ),
@@ -594,21 +630,17 @@ class _OfflineQueueBadge extends ConsumerWidget {
     final badgeText = total > 99 ? '99+' : '$total';
     // Rojo = hay dead-letter (requiere acción). Ámbar = solo pendientes
     // (esperan conexión). Gris = todo al día.
-    final accent = hasDead
-        ? const Color(0xFFB91C1C)
-        : const Color(0xFFB45309);
+    final accent = hasDead ? const Color(0xFFB91C1C) : const Color(0xFFB45309);
 
     return Tooltip(
       message: hasDead
           ? '$dead sin resolver (requieren revisión)'
-              '${hasPending ? ' · $count pendiente(s)' : ''} — click para gestionar'
+                '${hasPending ? ' · $count pendiente(s)' : ''} — click para gestionar'
           : hasPending
-              ? '$count operación(es) offline pendiente(s) — click para sync o limpiar'
-              : 'Todo sincronizado',
+          ? '$count operación(es) offline pendiente(s) — click para sync o limpiar'
+          : 'Todo sincronizado',
       child: MouseRegion(
-        cursor: active
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.basic,
+        cursor: active ? SystemMouseCursors.click : SystemMouseCursors.basic,
         child: GestureDetector(
           onTap: active ? () => _showMenu(context, ref) : null,
           child: Stack(
@@ -621,8 +653,8 @@ class _OfflineQueueBadge extends ConsumerWidget {
                   color: hasDead
                       ? const Color(0xFFFEE2E2)
                       : hasPending
-                          ? const Color(0xFFFFF3CD)
-                          : Colors.grey[100],
+                      ? const Color(0xFFFFF3CD)
+                      : Colors.grey[100],
                   shape: BoxShape.circle,
                 ),
                 alignment: Alignment.center,
@@ -630,8 +662,8 @@ class _OfflineQueueBadge extends ConsumerWidget {
                   hasDead
                       ? Icons.error_outline_rounded
                       : hasPending
-                          ? Icons.cloud_off_rounded
-                          : Icons.cloud_done_rounded,
+                      ? Icons.cloud_off_rounded
+                      : Icons.cloud_done_rounded,
                   color: active ? accent : Colors.grey[500],
                 ),
               ),
@@ -746,9 +778,11 @@ Future<void> showOfflineQueueDetailDialog(
             label: const Text('Sincronizar ahora'),
             onPressed: () {
               Navigator.of(dialogContext).pop();
-              unawaited(ref
-                  .read(currentOrderProvider.notifier)
-                  .syncPendingOfflineActions(force: true));
+              unawaited(
+                ref
+                    .read(currentOrderProvider.notifier)
+                    .syncPendingOfflineActions(force: true),
+              );
             },
           ),
       ],
@@ -839,8 +873,9 @@ class _OfflineQueueActionRow extends StatelessWidget {
     final isDead = status == 'dead';
     final attempts = (action['attempts'] as num?)?.toInt() ?? 0;
     final lastError = action['last_error']?.toString().trim();
-    final queuedAt =
-        DateTime.tryParse(action['queued_at']?.toString() ?? '')?.toLocal();
+    final queuedAt = DateTime.tryParse(
+      action['queued_at']?.toString() ?? '',
+    )?.toLocal();
 
     final String chipLabel;
     final Color chipColor;
@@ -948,10 +983,7 @@ class _OfflineQueueActionRow extends StatelessWidget {
 class _TopNavItem extends ConsumerStatefulWidget {
   final ShellDestination destination;
   final StatefulNavigationShell navigationShell;
-  const _TopNavItem({
-    required this.destination,
-    required this.navigationShell,
-  });
+  const _TopNavItem({required this.destination, required this.navigationShell});
 
   @override
   ConsumerState<_TopNavItem> createState() => _TopNavItemState();
@@ -964,10 +996,9 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
   Widget build(BuildContext context) {
     ref.watch(sessionProvider);
     final d = widget.destination;
-    final hasAccess = d.permissionCode == null ||
-        ref
-            .read(sessionProvider.notifier)
-            .hasPermission(d.permissionCode!);
+    final hasAccess =
+        d.permissionCode == null ||
+        ref.read(sessionProvider.notifier).hasPermission(d.permissionCode!);
     final loc = GoRouterState.of(context).uri.toString();
     final active = isDestinationActive(d, loc);
 
@@ -1001,62 +1032,62 @@ class _TopNavItemState extends ConsumerState<_TopNavItem> {
         message: d.label,
         waitDuration: const Duration(milliseconds: 400),
         child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: hasAccess
-            ? () => goToShellDestination(
+          behavior: HitTestBehavior.opaque,
+          onTap: hasAccess
+              ? () => goToShellDestination(
                   context,
                   widget.navigationShell,
                   d.route,
                 )
-            : null,
-        child: Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: showLabel ? (labelCompact ? 12 : 16) : 10,
-            vertical: 8,
-          ),
-          decoration: BoxDecoration(
-            color: hasAccess
-                ? (active
-                      ? MangoColors.primaryOrange
-                      : (_isHovering
-                            ? const Color(0xFFF7F7F9)
-                            : Colors.transparent))
-                : const Color(0xFFF7F7F9),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (d.svgAsset != null)
-                SvgPicture.asset(
-                  d.svgAsset!,
-                  width: 22,
-                  height: 22,
-                  colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
-                )
-              else
-                Icon(d.materialIcon, size: 22, color: iconColor),
-              if (showLabel) ...[
-                SizedBox(width: labelCompact ? 6 : 8),
-                Text(
-                  d.label,
-                  style: GoogleFonts.plusJakartaSans(
-                    fontSize: labelCompact ? 13 : 15,
-                    fontWeight: active && hasAccess
-                        ? FontWeight.bold
-                        : FontWeight.w600,
-                    color: labelColor,
+              : null,
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: showLabel ? (labelCompact ? 12 : 16) : 10,
+              vertical: 8,
+            ),
+            decoration: BoxDecoration(
+              color: hasAccess
+                  ? (active
+                        ? MangoColors.primaryOrange
+                        : (_isHovering
+                              ? const Color(0xFFF7F7F9)
+                              : Colors.transparent))
+                  : const Color(0xFFF7F7F9),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (d.svgAsset != null)
+                  SvgPicture.asset(
+                    d.svgAsset!,
+                    width: 22,
+                    height: 22,
+                    colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+                  )
+                else
+                  Icon(d.materialIcon, size: 22, color: iconColor),
+                if (showLabel) ...[
+                  SizedBox(width: labelCompact ? 6 : 8),
+                  Text(
+                    d.label,
+                    style: GoogleFonts.plusJakartaSans(
+                      fontSize: labelCompact ? 13 : 15,
+                      fontWeight: active && hasAccess
+                          ? FontWeight.bold
+                          : FontWeight.w600,
+                      color: labelColor,
+                    ),
                   ),
-                ),
+                ],
+                if (!hasAccess) ...[
+                  const SizedBox(width: 6),
+                  const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
+                ],
               ],
-              if (!hasAccess) ...[
-                const SizedBox(width: 6),
-                const Icon(Icons.lock_outline, size: 14, color: Colors.grey),
-              ],
-            ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -1118,7 +1149,9 @@ class _FullscreenButtonState extends State<_FullscreenButton> {
             ),
             alignment: Alignment.center,
             child: Icon(
-              _fullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+              _fullscreen
+                  ? Icons.fullscreen_exit_rounded
+                  : Icons.fullscreen_rounded,
               color: Colors.grey[700],
             ),
           ),
@@ -1197,10 +1230,7 @@ class _OpenDrawerButtonState extends ConsumerState<_OpenDrawerButton> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : Icon(
-                      Icons.point_of_sale_rounded,
-                      color: Colors.grey[700],
-                    ),
+                  : Icon(Icons.point_of_sale_rounded, color: Colors.grey[700]),
             ),
           ),
         ),
@@ -1422,7 +1452,11 @@ class _UserInfo extends ConsumerWidget {
           onSelected: (value) async {
             switch (value) {
               case _UserMenuAction.switchBranch:
-                final selected = await _showBranchPicker(context, session, ctrl);
+                final selected = await _showBranchPicker(
+                  context,
+                  session,
+                  ctrl,
+                );
                 if (selected != null && context.mounted) {
                   context.go(AppRoutes.dashboard);
                 }
@@ -1444,7 +1478,9 @@ class _UserInfo extends ConsumerWidget {
                 break;
               case _UserMenuAction.logout:
                 final proceed = await confirmLogoutDiscardingOffline(
-                    context, session.activeBusinessId);
+                  context,
+                  session.activeBusinessId,
+                );
                 if (!proceed || !context.mounted) break;
                 await ctrl.signOut();
                 if (!context.mounted) return;
@@ -1458,10 +1494,10 @@ class _UserInfo extends ConsumerWidget {
             // (Gestionar sucursales, Mejorar plan, Ajustes) — quedan
             // ocultas, no solo deshabilitadas. La home del rol siempre
             // está disponible vía la navegación principal del shell.
-            final isAdminLevel =
-                session.activeRole == PosRole.administrador;
-            final canOpenSettings =
-                ctrl.hasPermission('settings.usuarios.acceso');
+            final isAdminLevel = session.activeRole == PosRole.administrador;
+            final canOpenSettings = ctrl.hasPermission(
+              'settings.usuarios.acceso',
+            );
             final canSwitchBranch = session.availableBusinesses.length > 1;
             return [
               PopupMenuItem<_UserMenuAction>(
@@ -1891,12 +1927,15 @@ class _BlePrinterBadge extends ConsumerWidget {
     if (overall == BlePrinterOverall.idle) return const SizedBox.shrink();
 
     final bool connected = overall == BlePrinterOverall.connected;
-    final Color bg =
-        connected ? const Color(0xFFDBEAFE) : const Color(0xFFFEF3C7);
-    final Color fg =
-        connected ? const Color(0xFF1E40AF) : const Color(0xFFB45309);
-    final IconData icon =
-        connected ? Icons.bluetooth_connected : Icons.bluetooth_searching;
+    final Color bg = connected
+        ? const Color(0xFFDBEAFE)
+        : const Color(0xFFFEF3C7);
+    final Color fg = connected
+        ? const Color(0xFF1E40AF)
+        : const Color(0xFFB45309);
+    final IconData icon = connected
+        ? Icons.bluetooth_connected
+        : Icons.bluetooth_searching;
     final String tooltip = connected
         ? 'Impresora Bluetooth conectada'
         : 'Reconectando impresora Bluetooth…';
@@ -1956,7 +1995,8 @@ class _PrinterHeartbeatBadge extends ConsumerWidget {
       bg = const Color(0xFFD1FAE5);
       fg = const Color(0xFF065F46);
       icon = Icons.print_outlined;
-      tooltip = 'Todas las impresoras responden '
+      tooltip =
+          'Todas las impresoras responden '
           '(${snapshot.statuses.length})';
     } else {
       offlineCount = snapshot.offline.length;
@@ -1967,7 +2007,8 @@ class _PrinterHeartbeatBadge extends ConsumerWidget {
           .map((s) => s.name)
           .where((n) => n.trim().isNotEmpty)
           .join(', ');
-      tooltip = '$offlineCount impresora(s) sin conexión'
+      tooltip =
+          '$offlineCount impresora(s) sin conexión'
           '${names.isEmpty ? '' : ': $names'}';
     }
 

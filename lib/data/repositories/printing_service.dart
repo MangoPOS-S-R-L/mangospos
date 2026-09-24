@@ -1575,6 +1575,17 @@ class PrintingService {
     // papel de Cocina. Null (p. ej. desde "Completados hoy", que agrupa la
     // orden completa) = todas las áreas de los ítems.
     String? onlyAreaCode,
+    // En false el ticket sale como comanda ORIGINAL, sin el sello de
+    // REIMPRESION. Lo usa la cola de pedidos de canales externos (Pincer): sus
+    // ítems ya entraron a cocina en la ingesta, y `sendOrderToKitchen` solo
+    // mira los que están en 'draft', así que la primera impresión tiene que
+    // salir por este camino. Para quien reimprime desde el KDS sigue en true.
+    bool asReprint = true,
+    // Clave de idempotencia. La reimpresión manual usa una por microsegundo
+    // (es un duplicado deliberado); la cola externa pasa una por pedido+intento,
+    // para que dos tablets no saquen el mismo papel y un reintento SÍ pueda
+    // volver a encolarse.
+    String? idempotencyTag,
   }) async {
     try {
       final order = await _salesRepo.getOrder(orderId);
@@ -1613,7 +1624,8 @@ class PrintingService {
       // 'cancelled', ver mig 20260513_0008) como la cola BT la descartaban
       // contra el job viejo —normalmente ya 'done'— y no salía papel, pero el
       // dispatch reportaba éxito y el KDS decía "Comanda reimpresa".
-      final reprintTag = 'reprint-${DateTime.now().microsecondsSinceEpoch}';
+      final reprintTag =
+          idempotencyTag ?? 'reprint-${DateTime.now().microsecondsSinceEpoch}';
 
       var areasPrinted = 0;
       final areasWithoutPrinter = <String>[];
@@ -1647,7 +1659,7 @@ class PrintingService {
                 customerName: orderData['customerName']?.toString(),
                 businessName: businessName,
                 areaCode: areaCode,
-                isReprint: true,
+                isReprint: asReprint,
                 receiptItemDisplayMode: receiptItemDisplayMode,
                 showDineInBanner: kitchenBanners.dineIn,
                 showTakeoutBanner: kitchenBanners.takeout,
@@ -1659,11 +1671,13 @@ class PrintingService {
             buildBytes: buildKitchenBytes,
             areaCode: areaCode,
             fallbackData: {
-              'title': 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}',
+              'title': asReprint
+                  ? 'REIMPRESION ${orderData['tableName'] ?? 'COCINA'}'
+                  : (orderData['tableName']?.toString() ?? 'COCINA'),
               'body':
                   'Orden ${orderData['orderNumber'] ?? ''}\n'
-                  'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
-                  'REIMPRESION de comanda',
+                  'Mesa: ${orderData['tableName'] ?? 'N/A'}'
+                  '${asReprint ? '\nREIMPRESION de comanda' : ''}',
             },
             businessId: businessId,
             orderId: orderId,

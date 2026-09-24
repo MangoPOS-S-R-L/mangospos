@@ -163,6 +163,10 @@ flutter:
     - assets/images/
     - assets/favicon/
     - assets/Login Images/
+    # Aviso de pedido entrante por canal externo (Pincer). Sintetizado, no
+    # descargado: dos notas ascendentes que se oyen sobre el ruido de cocina
+    # y no se confunden con el sonido de error del sistema.
+    - assets/sounds/
     # Raices de confianza empacadas (bundle CA de Mozilla, via curl.se).
     #
     # No reemplazan al almacen del sistema: se SUMAN a el. Existen porque

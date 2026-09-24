@@ -450,6 +450,12 @@ sí cuenta en el total de tarjeta del día.
   que se agradece que la hayan puesto.
 - Sin RNC: consumo normal. Con RNC: `fn_process_payment_v3` recibe `p_customer_rnc` y
   `p_requested_ncf_type`; el crédito fiscal sale por la vía normal.
+- **Qué serie pide la ingesta con RNC:** la decide `fn_external_credit_ncf_type`, que
+  toma la que el negocio tenga **viva** — E31 si la modalidad e-CF está encendida y su
+  secuencia tiene números, si no B01 (papel), y `NULL` si no hay ninguna, y entonces el
+  cobro usa el default del negocio. Es la misma elección que hace el cajero al marcar
+  "crédito fiscal" en el mostrador, así que apagar el switch de e-CF apaga los E31
+  también por este lado, sin tener que ir a desactivar la secuencia a mano.
 - El NCF se emite al registrar el pago (en la ingesta), no en el checkout de Pincer. Si
   quieren mostrárselo al cliente, tienen que consultarlo después: el e-CF de Alanube es
   asíncrono.

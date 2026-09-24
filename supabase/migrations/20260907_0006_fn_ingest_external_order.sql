@@ -363,7 +363,11 @@ begin
           p_customer_rnc       => v_rnc,
           p_cashier_session_id => v_cash_session,
           p_change_amount      => 0,
-          p_requested_ncf_type => case when v_rnc is not null then 'B01' else null end,
+          -- Con RNC: la serie de credito fiscal que el negocio tenga VIVA
+          -- (E31 si emite electronico, B01 si es de papel). Ver 20260924_0001.
+          p_requested_ncf_type => case when v_rnc is not null
+                                       then public.fn_external_credit_ncf_type(p_business_id)
+                                       else null end,
           p_close_order        => true
         );
         v_pay_state := 'recorded';

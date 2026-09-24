@@ -12,6 +12,8 @@ import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/printing/external_order_alerts.dart';
+import 'package:mangopos/core/printing/external_order_print_worker.dart';
 import 'package:mangopos/core/printing/cloud_print_queue_worker.dart';
 import 'package:mangopos/core/printing/printer_heartbeat_scheduler.dart';
 import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
@@ -55,6 +57,15 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
       // donde no hay agente Node que drene la cloud queue). Mismo ciclo de
       // vida que el heartbeat.
       ref.read(cloudPrintQueueWorkerProvider).start();
+      // Comanda de los pedidos que entran por un canal externo (Pincer): nacen
+      // por API, así que no hay quién les arme el ESC/POS. Corre en TODAS las
+      // tablets a propósito — el claim es atómico y solo una imprime cada
+      // pedido, así que si una se queda sin batería otra cubre.
+      ref.read(externalOrderPrintWorkerProvider).start();
+      // Aviso (sonido + tarjeta en la esquina) de los pedidos que entran por
+      // canal externo. Va aparte del worker de impresión a propósito: suena en
+      // TODAS las tablets, no solo en la que le tocó imprimir.
+      ref.read(externalOrderAlertsProvider.notifier).start();
     });
   }
 
