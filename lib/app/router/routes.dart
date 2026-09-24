@@ -42,6 +42,7 @@ class AppRoutes {
   static const reportsFinances = '$reports/finances';
   static const reportsInventory = '$reports/inventory';
   static const reportsPurchases = '$reports/purchases';
+
   /// Comparador de precios de compra por proveedor (Compras F4).
   static const reportsSupplierPrices = '$reports/supplier-prices';
   static const reportsTaxes = '$reports/taxes';
@@ -50,12 +51,14 @@ class AppRoutes {
   static const settingsPlan = '$settings/plan';
   static const purchasesList = '$settings/purchases';
   static const purchasesRegister = '$settings/purchases/register';
+
   /// Detalle de UNA factura de compra. `:orderId` es el uuid de la orden.
   /// Cuelga de `purchasesList`, así hereda su permiso (`compras.acceso`):
   /// consultar una factura es lo mismo que consultar el listado.
   static const purchasesOrderDetail = '$purchasesList/order/:orderId';
   static String purchasesOrderDetailPath(String orderId) =>
       '$purchasesList/order/$orderId';
+
   /// Corrección de una compra ya registrada. Lleva su propio permiso
   /// (`compras.ordenes.editar`): consultar una factura y poder rehacerla no
   /// son la misma facultad.
@@ -96,10 +99,12 @@ class AppRoutes {
   static const settingsPaymentMethods = '$settings/payment-methods';
   static const settingsTaxes = '$settings/taxes';
   static const settingsFiscalReceipts = '$settings/fiscal-receipts';
+  static const settingsIntegrations = '$settings/integrations';
   static const settingsBranches = '$settings/branches';
   static const settingsCashRegisters = '$settings/cash-registers';
   static const settingsCashCloseMode = '$settings/cash-close-mode';
-  static const settingsMallSalesExport = '$settings/cash-close-mode/mall-export';
+  static const settingsMallSalesExport =
+      '$settings/cash-close-mode/mall-export';
   static const settingsCashReasons = '$settings/cash-reasons';
   static const settingsBusinessFeatures = '$settings/business-features';
 
@@ -127,11 +132,12 @@ class AppRoutes {
   static const inventoryHome = '/inventory';
   static const inventoryItems = '$inventoryHome/items';
   static const inventoryWarehouses = '$inventoryHome/warehouses';
+
   /// Interior de UNA bodega (Fase 2). `:warehouseId` es el uuid; el query
   /// opcional `?tab=movimientos|transferencias` abre la pestaña directo.
-  static const inventoryWarehouseDetail =
-      '$inventoryWarehouses/:warehouseId';
+  static const inventoryWarehouseDetail = '$inventoryWarehouses/:warehouseId';
   static const inventorySuppliers = '$inventoryHome/suppliers';
+
   /// Interior de UN proveedor (Fase 3). `:supplierId` es el uuid; el query
   /// opcional `?tab=ordenes|cuenta` abre la pestaña directo.
   static const inventorySupplierDetail = '$inventorySuppliers/:supplierId';

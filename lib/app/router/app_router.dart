@@ -28,6 +28,7 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/users_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/users/view/waiters_view.dart';
 import 'package:mangopos/presentation/settings/more%20settings/system%20settings/fiscal/view/fiscal_receipts_view.dart';
+import 'package:mangopos/presentation/settings/more%20settings/system%20settings/integrations/view/integrations_view.dart';
 import '../../presentation/auth/login/login_view.dart';
 import '../../presentation/auth/login/select_business_view.dart';
 import '../../tests/cache_test_page.dart';
@@ -382,704 +383,750 @@ class AppRouter {
             MainShell(navigationShell: navigationShell),
         branches: [
           // ── Rama 0: Dashboard ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.dashboard,
-            builder: (context, state) => const DashboardView(),
-          ),
-          ]),
-
-          // ── Rama 1: Ventas (shell anidado + mesa a pantalla completa) ──
-          StatefulShellBranch(routes: [
-          // ---------- Shell anidado: Ventas ----------
-          ShellRoute(
-            builder: (context, state, child) => SalesShellView(child: child),
+          StatefulShellBranch(
             routes: [
-              // /sales (legacy) -> /ventas
               GoRoute(
-                path: AppRoutes.sales,
-                redirect: (context, state) {
-                  final mode = state.uri.queryParameters['mode'];
-                  if (mode == null || mode.isEmpty) return AppRoutes.salesReact;
-                  return Uri(
-                    path: AppRoutes.salesReact,
-                    queryParameters: {'mode': mode},
-                  ).toString();
-                },
-              ),
-              // /ventas?mode=manual|rapida|delivery|selfservice
-              GoRoute(
-                path: AppRoutes.salesReact,
-                redirect: (context, state) {
-                  final mode = state.uri.queryParameters['mode']
-                      ?.toLowerCase()
-                      .trim();
-                  if (mode == 'selfservice') {
-                    return AppRoutes.salesReact;
-                  }
-                  return null;
-                },
-                builder: (context, state) {
-                  final mode = state.uri.queryParameters['mode']
-                      ?.toLowerCase()
-                      .trim();
-                  switch (mode) {
-                    case 'manual':
-                      return const PosBarcodeScanner(
-                        child: OrderScreen(origin: OrderOrigin.manual),
-                      );
-                    case 'rapida':
-                      // RF-R1: escaneo de barras HID en venta rápida (retail).
-                      // Gateado por barcodeEnabled dentro de PosBarcodeScanner.
-                      return const PosBarcodeScanner(
-                        autoOpenQuick: true,
-                        child: OrderScreen(origin: OrderOrigin.quick),
-                      );
-                    case 'delivery':
-                      return const DeliveryExpressView();
-                    case 'delivery_order':
-                      final tableId = state.uri.queryParameters['tableId'];
-                      final deliveryType = state.uri.queryParameters['deliveryType'] ?? 'own';
-                      return PosBarcodeScanner(
-                        child: OrderScreen(
-                          origin: OrderOrigin.delivery,
-                          tableId: tableId,
-                          deliveryType: deliveryType,
-                        ),
-                      );
-                    case 'selfservice':
-                      return const SelfServiceView();
-                    default:
-                      return const SalesByZoneView(businessId: 'auto');
-                  }
-                },
-              ),
-              GoRoute(
-                path: AppRoutes.salesByZone,
-                builder: (context, state) => SalesByZoneView(
-                  businessId: 'auto',
-                  // Si viene de regreso desde una mesa, queremos
-                  // mantenernos en la misma zona en vez de saltar a la
-                  // primera. La pantalla de mesa pasa ?zone=<id> al
-                  // hacer back.
-                  initialZoneId: state.uri.queryParameters['zone'],
-                ),
-              ),
-              GoRoute(
-                path: AppRoutes.salesManual,
-                builder: (context, state) => const PosBarcodeScanner(
-                  child: OrderScreen(origin: OrderOrigin.manual),
-                ),
-              ),
-              GoRoute(
-                path: AppRoutes.salesQuick,
-                builder: (context, state) => const PosBarcodeScanner(
-                  autoOpenQuick: true,
-                  child: OrderScreen(origin: OrderOrigin.quick),
-                ),
-              ),
-              GoRoute(
-                path: AppRoutes.salesDelivery,
-                redirect: (context, state) => AppRoutes.salesReact,
-                builder: (context, state) => const DeliveryExpressView(),
-              ),
-              GoRoute(
-                path: AppRoutes.salesSelfService,
-                redirect: (context, state) => AppRoutes.salesReact,
-                builder: (context, state) => const SelfServiceView(),
+                path: AppRoutes.dashboard,
+                builder: (context, state) => const DashboardView(),
               ),
             ],
           ),
 
-          // ---------- Ruta de mesa (fuera del shell para pantalla completa) ----------
-          GoRoute(
-            path: '${AppRoutes.sales}/table/:tableId',
-            builder: (context, state) {
-              final tableId = state.pathParameters['tableId']!;
-              final tableCode = state.uri.queryParameters['code'] ?? 'Mesa';
-              final zoneId = state.uri.queryParameters['zone'] ?? '';
-              final initialPeopleCount =
-                  int.tryParse(state.uri.queryParameters['guests'] ?? '') ?? 1;
-              // Escaneo HID también en venta por zona: la mesa ya tiene orden
-              // abierta, así que autoOpenQuick queda en false — el ítem se
-              // agrega a la orden de la mesa, no abre una venta rápida.
-              return PosBarcodeScanner(
-                child: OrderScreen(
-                  origin: OrderOrigin.table,
-                  tableId: tableId,
-                  tableCode: tableCode,
-                  zoneId: zoneId,
-                  initialPeopleCount: initialPeopleCount > 0
-                      ? initialPeopleCount
-                      : 1,
-                ),
-              );
-            },
-          ),
-          ]),
-
-          // ── Rama 2: Caja ──
-          StatefulShellBranch(routes: [
-          // ---------- Otros módulos (placeholder por ahora) ----------
-          GoRoute(
-            path: AppRoutes.cashier,
-            builder: (context, state) => const CashierView(),
-          ),
-          GoRoute(
-            path: AppRoutes.cashierHistory,
-            builder: (context, state) => const SalesHistoryView(),
-          ),
-          GoRoute(
-            path: AppRoutes.cashierClosures,
-            builder: (context, state) => const CashClosuresView(),
-          ),
-          GoRoute(
-            path: AppRoutes.cashierIncomeExpense,
-            builder: (context, state) => const IncomeExpenseView(),
-          ),
-          ]),
-
-          // ── Rama 3: Cocina (KDS) ──
-          StatefulShellBranch(routes: [
-          // 2026-05-13: removida la ruta cashierSessionsHealth del cliente.
-          // El dashboard NOC se traslada a mango_administrador. Ver PRD-12.
-          GoRoute(
-            path: AppRoutes.kitchen,
-            builder: (context, state) => const KitchenView(),
-          ),
-          ]),
-
-          // ── Rama 4: Reservas ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.reservations,
-            builder: (context, state) => const ReservationsView(),
-          ),
-          ]),
-
-          // ── Rama 5: Clientes ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.customers,
-            builder: (context, state) => const CustomersView(),
+          // ── Rama 1: Ventas (shell anidado + mesa a pantalla completa) ──
+          StatefulShellBranch(
             routes: [
+              // ---------- Shell anidado: Ventas ----------
+              ShellRoute(
+                builder: (context, state, child) =>
+                    SalesShellView(child: child),
+                routes: [
+                  // /sales (legacy) -> /ventas
+                  GoRoute(
+                    path: AppRoutes.sales,
+                    redirect: (context, state) {
+                      final mode = state.uri.queryParameters['mode'];
+                      if (mode == null || mode.isEmpty)
+                        return AppRoutes.salesReact;
+                      return Uri(
+                        path: AppRoutes.salesReact,
+                        queryParameters: {'mode': mode},
+                      ).toString();
+                    },
+                  ),
+                  // /ventas?mode=manual|rapida|delivery|selfservice
+                  GoRoute(
+                    path: AppRoutes.salesReact,
+                    redirect: (context, state) {
+                      final mode = state.uri.queryParameters['mode']
+                          ?.toLowerCase()
+                          .trim();
+                      if (mode == 'selfservice') {
+                        return AppRoutes.salesReact;
+                      }
+                      return null;
+                    },
+                    builder: (context, state) {
+                      final mode = state.uri.queryParameters['mode']
+                          ?.toLowerCase()
+                          .trim();
+                      switch (mode) {
+                        case 'manual':
+                          return const PosBarcodeScanner(
+                            child: OrderScreen(origin: OrderOrigin.manual),
+                          );
+                        case 'rapida':
+                          // RF-R1: escaneo de barras HID en venta rápida (retail).
+                          // Gateado por barcodeEnabled dentro de PosBarcodeScanner.
+                          return const PosBarcodeScanner(
+                            autoOpenQuick: true,
+                            child: OrderScreen(origin: OrderOrigin.quick),
+                          );
+                        case 'delivery':
+                          return const DeliveryExpressView();
+                        case 'delivery_order':
+                          final tableId = state.uri.queryParameters['tableId'];
+                          final deliveryType =
+                              state.uri.queryParameters['deliveryType'] ??
+                              'own';
+                          return PosBarcodeScanner(
+                            child: OrderScreen(
+                              origin: OrderOrigin.delivery,
+                              tableId: tableId,
+                              deliveryType: deliveryType,
+                            ),
+                          );
+                        case 'selfservice':
+                          return const SelfServiceView();
+                        default:
+                          return const SalesByZoneView(businessId: 'auto');
+                      }
+                    },
+                  ),
+                  GoRoute(
+                    path: AppRoutes.salesByZone,
+                    builder: (context, state) => SalesByZoneView(
+                      businessId: 'auto',
+                      // Si viene de regreso desde una mesa, queremos
+                      // mantenernos en la misma zona en vez de saltar a la
+                      // primera. La pantalla de mesa pasa ?zone=<id> al
+                      // hacer back.
+                      initialZoneId: state.uri.queryParameters['zone'],
+                    ),
+                  ),
+                  GoRoute(
+                    path: AppRoutes.salesManual,
+                    builder: (context, state) => const PosBarcodeScanner(
+                      child: OrderScreen(origin: OrderOrigin.manual),
+                    ),
+                  ),
+                  GoRoute(
+                    path: AppRoutes.salesQuick,
+                    builder: (context, state) => const PosBarcodeScanner(
+                      autoOpenQuick: true,
+                      child: OrderScreen(origin: OrderOrigin.quick),
+                    ),
+                  ),
+                  GoRoute(
+                    path: AppRoutes.salesDelivery,
+                    redirect: (context, state) => AppRoutes.salesReact,
+                    builder: (context, state) => const DeliveryExpressView(),
+                  ),
+                  GoRoute(
+                    path: AppRoutes.salesSelfService,
+                    redirect: (context, state) => AppRoutes.salesReact,
+                    builder: (context, state) => const SelfServiceView(),
+                  ),
+                ],
+              ),
+
+              // ---------- Ruta de mesa (fuera del shell para pantalla completa) ----------
               GoRoute(
-                path: ':id',
+                path: '${AppRoutes.sales}/table/:tableId',
                 builder: (context, state) {
-                  final name = state.uri.queryParameters['name'] ?? 'Cliente';
-                  final orders =
-                      int.tryParse(
-                        state.uri.queryParameters['orders'] ?? '0',
-                      ) ??
-                      0;
-                  return CustomerDetailView(
-                    customerName: name,
-                    ordersCount: orders,
+                  final tableId = state.pathParameters['tableId']!;
+                  final tableCode = state.uri.queryParameters['code'] ?? 'Mesa';
+                  final zoneId = state.uri.queryParameters['zone'] ?? '';
+                  final initialPeopleCount =
+                      int.tryParse(state.uri.queryParameters['guests'] ?? '') ??
+                      1;
+                  // Escaneo HID también en venta por zona: la mesa ya tiene orden
+                  // abierta, así que autoOpenQuick queda en false — el ítem se
+                  // agrega a la orden de la mesa, no abre una venta rápida.
+                  return PosBarcodeScanner(
+                    child: OrderScreen(
+                      origin: OrderOrigin.table,
+                      tableId: tableId,
+                      tableCode: tableCode,
+                      zoneId: zoneId,
+                      initialPeopleCount: initialPeopleCount > 0
+                          ? initialPeopleCount
+                          : 1,
+                    ),
                   );
                 },
               ),
             ],
           ),
-          ]),
+
+          // ── Rama 2: Caja ──
+          StatefulShellBranch(
+            routes: [
+              // ---------- Otros módulos (placeholder por ahora) ----------
+              GoRoute(
+                path: AppRoutes.cashier,
+                builder: (context, state) => const CashierView(),
+              ),
+              GoRoute(
+                path: AppRoutes.cashierHistory,
+                builder: (context, state) => const SalesHistoryView(),
+              ),
+              GoRoute(
+                path: AppRoutes.cashierClosures,
+                builder: (context, state) => const CashClosuresView(),
+              ),
+              GoRoute(
+                path: AppRoutes.cashierIncomeExpense,
+                builder: (context, state) => const IncomeExpenseView(),
+              ),
+            ],
+          ),
+
+          // ── Rama 3: Cocina (KDS) ──
+          StatefulShellBranch(
+            routes: [
+              // 2026-05-13: removida la ruta cashierSessionsHealth del cliente.
+              // El dashboard NOC se traslada a mango_administrador. Ver PRD-12.
+              GoRoute(
+                path: AppRoutes.kitchen,
+                builder: (context, state) => const KitchenView(),
+              ),
+            ],
+          ),
+
+          // ── Rama 4: Reservas ──
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.reservations,
+                builder: (context, state) => const ReservationsView(),
+              ),
+            ],
+          ),
+
+          // ── Rama 5: Clientes ──
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.customers,
+                builder: (context, state) => const CustomersView(),
+                routes: [
+                  GoRoute(
+                    path: ':id',
+                    builder: (context, state) {
+                      final name =
+                          state.uri.queryParameters['name'] ?? 'Cliente';
+                      final orders =
+                          int.tryParse(
+                            state.uri.queryParameters['orders'] ?? '0',
+                          ) ??
+                          0;
+                      return CustomerDetailView(
+                        customerName: name,
+                        ordersCount: orders,
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
 
           // ── Rama 6: Productos ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.products,
-            builder: (context, state) => const ProductsView(),
-          ),
-          ]),
-
-          // ── Rama 7: Reportes ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.reports,
-            builder: (context, state) => ReportsView(
-              initialCategory: _reportCategoryFromQuery(
-                state.uri.queryParameters['tab'],
-              ),
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsSales,
-            builder: (context, state) => const SalesReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsOffers,
-            builder: (context, state) => const OffersReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsDelivery,
-            builder: (context, state) => const DeliveryReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsDeposits,
-            builder: (context, state) => const TableDepositsReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsComandas,
-            builder: (context, state) => const KitchenComandasReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsSalesByWaiter,
-            builder: (context, state) => const SalesByWaiterView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsFinances,
-            builder: (context, state) => const FinanceReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsInventory,
-            builder: (context, state) => const InventoryReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsPurchases,
-            builder: (context, state) => const PurchasesReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsSupplierPrices,
-            builder: (context, state) => const SupplierPricesReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsTaxes,
-            builder: (context, state) => const TaxReportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.reportsFiscal,
-            builder: (context, state) => const FiscalReportView(),
-          ),
-          ]),
-
-          // ── Rama 8: Ajustes (+ billing, sucursales, moneda, etc.) ──
-          StatefulShellBranch(routes: [
-          // ✅ Ajustes (vista principal)
-          GoRoute(
-            path: AppRoutes.settings,
-            builder: (context, state) => const SettingsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsPlan,
-            builder: (context, state) => const PlanManagementView(),
-          ),
-          // Billing operativo (PRD Azul Subscriptions §5.2).
-          GoRoute(
-            path: AppRoutes.settingsBilling,
-            builder: (context, state) => const MySubscriptionView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBillingPlans,
-            builder: (context, state) => const PlanSelectionView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBillingPaymentMethod,
-            builder: (context, state) => const PaymentMethodView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBillingHistory,
-            builder: (context, state) => const ChargeHistoryView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsUsers,
-            builder: (context, state) =>
-                const SettingsUsersView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsWaiters,
-            builder: (context, state) =>
-                const SettingsWaitersView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: '${AppRoutes.settingsRoles}/:userId/:employeeId',
-            builder: (context, state) {
-              final userId = state.pathParameters['userId'];
-              final employeeId = state.pathParameters['employeeId'];
-              return SettingsRolesView(
-                businessId: 'auto',
-                targetUserId: userId,
-                targetEmployeeId: employeeId,
-              );
-            },
-          ),
-          GoRoute(
-            path: AppRoutes.settingsRoles,
-            builder: (context, state) =>
-                const SettingsRolesView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBusinessProfile,
-            builder: (context, state) =>
-                const BusinessProfileScreen(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsMyAccount,
-            builder: (context, state) => const MyAccountScreen(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsZonesTables,
-            builder: (context, state) =>
-                const ZonesTablesView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsPaymentMethods,
-            builder: (context, state) =>
-                const PaymentMethodsView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsTaxes,
-            builder: (context, state) => const TaxesView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsFiscalReceipts,
-            builder: (context, state) =>
-                const FiscalReceiptsView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBranches,
-            builder: (context, state) => const BranchManagementView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsCashRegisters,
-            builder: (context, state) => const CashRegistersView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsCashCloseMode,
-            builder: (context, state) => const CashCloseModeView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsMallSalesExport,
-            builder: (context, state) => const MallSalesExportView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsCashReasons,
-            builder: (context, state) =>
-                const CashReasonsView(businessId: 'auto'),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsBusinessFeatures,
-            builder: (context, state) => const BusinessFeaturesView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsComandasConfig,
-            builder: (context, state) => const ComandasConfigView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsHeaderPersonalize,
-            builder: (context, state) => const HeaderPersonalizeView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsCurrencies,
-            builder: (context, state) => const CurrenciesView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsRegional,
-            builder: (context, state) => const RegionalView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsDeviceBinding,
-            builder: (context, state) => const DeviceBindingView(),
-          ),
-          GoRoute(
-            path: AppRoutes.settingsDevices,
-            builder: (context, state) => const DeviceSessionsView(),
-          ),
-          ]),
-
-          // ── Rama 9: Inventario ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.inventoryHome,
-            builder: (context, state) => const InventoryHubView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryItems,
-            builder: (context, state) => const InventoryItemsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryWarehouses,
-            builder: (context, state) => const WarehousesView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryWarehouseDetail,
-            builder: (context, state) => WarehouseDetailView(
-              warehouseId: state.pathParameters['warehouseId'] ?? '',
-              initialTab: switch (state.uri.queryParameters['tab']) {
-                'movimientos' => WarehouseTab.movements,
-                'transferencias' => WarehouseTab.transfers,
-                _ => WarehouseTab.stock,
-              },
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.inventorySuppliers,
-            builder: (context, state) => const SuppliersView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventorySupplierDetail,
-            builder: (context, state) => SupplierDetailView(
-              supplierId: state.pathParameters['supplierId'] ?? '',
-              initialTab: switch (state.uri.queryParameters['tab']) {
-                'ordenes' => SupplierTab.orders,
-                'cuenta' => SupplierTab.account,
-                _ => SupplierTab.items,
-              },
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryRequirements,
-            builder: (context, state) => const RequirementsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryOutflow,
-            builder: (context, state) => const InventoryOutflowView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryReconciliation,
-            builder: (context, state) => const StockReconciliationView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryKardex,
-            builder: (context, state) => const InventoryKardexView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryLowStock,
-            builder: (context, state) => const InventoryLowStockView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryReceipts,
-            builder: (context, state) => const InventoryDirectReceiptsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryLots,
-            builder: (context, state) => const InventoryLotsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryValuation,
-            builder: (context, state) => const InventoryValuationView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryRotation,
-            builder: (context, state) => const InventoryRotationView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryTransfers,
-            builder: (context, state) => const TransfersView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryRequisitions,
-            builder: (context, state) => const RequisitionsView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryConsolidated,
-            builder: (context, state) => const ConsolidatedInventoryView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryProduction,
-            builder: (context, state) => const ProductionOrdersView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryPhysicalCount,
-            builder: (context, state) => PhysicalCountView(
-              initialWarehouseId: state.uri.queryParameters['warehouse'],
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryReorder,
-            // Pedido sugerido (Compras F2). Cae a la vista vieja de Reorden
-            // si la base no tiene fn_purchase_projection.
-            builder: (context, state) => const PurchaseSuggestedOrderView(),
-          ),
-          GoRoute(
-            path: AppRoutes.inventoryMinStock,
-            // Mínimos en lote (Compras F3). Ver o exportar pide acceso a
-            // inventario; guardar lo valida la base.
-            builder: (context, state) => const MinStockBulkView(),
-          ),
-          ]),
-
-          // ── Rama 10: Compras ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.purchasesList,
-            builder: (context, state) => const PurchasesListView(),
-          ),
-          GoRoute(
-            path: AppRoutes.purchasesRegister,
-            builder: (context, state) => const PurchasesRegisterView(),
-          ),
-          GoRoute(
-            path: AppRoutes.purchasesOrderDetail,
-            builder: (context, state) => PurchaseOrderDetailView(
-              orderId: state.pathParameters['orderId'] ?? '',
-            ),
-          ),
-          GoRoute(
-            path: AppRoutes.purchasesOrderEdit,
-            builder: (context, state) => PurchasesRegisterView(
-              editOrderId: state.pathParameters['orderId'] ?? '',
-            ),
-          ),
-          ]),
-
-          // ── Rama 11: Promociones ──
-          StatefulShellBranch(routes: [
-          GoRoute(
-            path: AppRoutes.promosCenter,
-            // ?offers=1 abre el modo solo-ofertas (sin cupones ni gift cards),
-            // usado por la entrada "Ofertas y Promociones" de Ajustes. Sin el
-            // query param se muestra el hub completo (Fidelización).
-            builder: (context, state) => DiscountsView(
-              offersOnly: state.uri.queryParameters['offers'] == '1',
-            ),
-          ),
-          ]),
-
-          // ── Rama 12: Menú (shell anidado) ──
-          StatefulShellBranch(routes: [
-          // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
-          ShellRoute(
-            builder: (context, state, child) => MenuShellView(child: child),
+          StatefulShellBranch(
             routes: [
-              // /menu -> redirige a /menu/menus
               GoRoute(
-                path: AppRoutes.menu,
-                redirect: (context, state) => AppRoutes.menuMenus,
-              ),
-
-              // /menu/menus
-              GoRoute(
-                path: AppRoutes.menuMenus,
-                builder: (context, state) =>
-                    const MenusView(businessId: 'auto'),
-              ),
-
-              // /menu/items
-              GoRoute(
-                path: AppRoutes.menuItems,
+                path: AppRoutes.products,
                 builder: (context, state) => const ProductsView(),
               ),
+            ],
+          ),
 
-              // /menu/categories
+          // ── Rama 7: Reportes ──
+          StatefulShellBranch(
+            routes: [
               GoRoute(
-                path: AppRoutes.menuCategories,
-                builder: (context, state) =>
-                    const CategoriesView(businessId: 'auto'),
+                path: AppRoutes.reports,
+                builder: (context, state) => ReportsView(
+                  initialCategory: _reportCategoryFromQuery(
+                    state.uri.queryParameters['tab'],
+                  ),
+                ),
               ),
-
               GoRoute(
-                path: AppRoutes.menuRecipes,
-                builder: (context, state) => const RecipesView(),
+                path: AppRoutes.reportsSales,
+                builder: (context, state) => const SalesReportView(),
               ),
               GoRoute(
-                path: AppRoutes.menuCombos,
-                builder: (context, state) => const CombosView(),
+                path: AppRoutes.reportsOffers,
+                builder: (context, state) => const OffersReportView(),
               ),
-
-              // /menu/modifier-groups
               GoRoute(
-                path: AppRoutes.menuModifierGroups,
-                redirect: (context, state) => AppRoutes.menuModifiers,
+                path: AppRoutes.reportsDelivery,
+                builder: (context, state) => const DeliveryReportView(),
               ),
-
-              // /menu/modifiers
               GoRoute(
-                path: AppRoutes.menuModifiers,
-                builder: (context, state) => const ModifiersView(),
+                path: AppRoutes.reportsDeposits,
+                builder: (context, state) => const TableDepositsReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsComandas,
+                builder: (context, state) => const KitchenComandasReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsSalesByWaiter,
+                builder: (context, state) => const SalesByWaiterView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsFinances,
+                builder: (context, state) => const FinanceReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsInventory,
+                builder: (context, state) => const InventoryReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsPurchases,
+                builder: (context, state) => const PurchasesReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsSupplierPrices,
+                builder: (context, state) => const SupplierPricesReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsTaxes,
+                builder: (context, state) => const TaxReportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.reportsFiscal,
+                builder: (context, state) => const FiscalReportView(),
               ),
             ],
           ),
-          ]),
+
+          // ── Rama 8: Ajustes (+ billing, sucursales, moneda, etc.) ──
+          StatefulShellBranch(
+            routes: [
+              // ✅ Ajustes (vista principal)
+              GoRoute(
+                path: AppRoutes.settings,
+                builder: (context, state) => const SettingsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsPlan,
+                builder: (context, state) => const PlanManagementView(),
+              ),
+              // Billing operativo (PRD Azul Subscriptions §5.2).
+              GoRoute(
+                path: AppRoutes.settingsBilling,
+                builder: (context, state) => const MySubscriptionView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBillingPlans,
+                builder: (context, state) => const PlanSelectionView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBillingPaymentMethod,
+                builder: (context, state) => const PaymentMethodView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBillingHistory,
+                builder: (context, state) => const ChargeHistoryView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsUsers,
+                builder: (context, state) =>
+                    const SettingsUsersView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsWaiters,
+                builder: (context, state) =>
+                    const SettingsWaitersView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: '${AppRoutes.settingsRoles}/:userId/:employeeId',
+                builder: (context, state) {
+                  final userId = state.pathParameters['userId'];
+                  final employeeId = state.pathParameters['employeeId'];
+                  return SettingsRolesView(
+                    businessId: 'auto',
+                    targetUserId: userId,
+                    targetEmployeeId: employeeId,
+                  );
+                },
+              ),
+              GoRoute(
+                path: AppRoutes.settingsRoles,
+                builder: (context, state) =>
+                    const SettingsRolesView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBusinessProfile,
+                builder: (context, state) =>
+                    const BusinessProfileScreen(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsMyAccount,
+                builder: (context, state) => const MyAccountScreen(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsZonesTables,
+                builder: (context, state) =>
+                    const ZonesTablesView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsPaymentMethods,
+                builder: (context, state) =>
+                    const PaymentMethodsView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsTaxes,
+                builder: (context, state) =>
+                    const TaxesView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsFiscalReceipts,
+                builder: (context, state) =>
+                    const FiscalReceiptsView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsIntegrations,
+                builder: (context, state) =>
+                    const IntegrationsView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBranches,
+                builder: (context, state) => const BranchManagementView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsCashRegisters,
+                builder: (context, state) => const CashRegistersView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsCashCloseMode,
+                builder: (context, state) => const CashCloseModeView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsMallSalesExport,
+                builder: (context, state) => const MallSalesExportView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsCashReasons,
+                builder: (context, state) =>
+                    const CashReasonsView(businessId: 'auto'),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsBusinessFeatures,
+                builder: (context, state) => const BusinessFeaturesView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsComandasConfig,
+                builder: (context, state) => const ComandasConfigView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsHeaderPersonalize,
+                builder: (context, state) => const HeaderPersonalizeView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsCurrencies,
+                builder: (context, state) => const CurrenciesView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsRegional,
+                builder: (context, state) => const RegionalView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsDeviceBinding,
+                builder: (context, state) => const DeviceBindingView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsDevices,
+                builder: (context, state) => const DeviceSessionsView(),
+              ),
+            ],
+          ),
+
+          // ── Rama 9: Inventario ──
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.inventoryHome,
+                builder: (context, state) => const InventoryHubView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryItems,
+                builder: (context, state) => const InventoryItemsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryWarehouses,
+                builder: (context, state) => const WarehousesView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryWarehouseDetail,
+                builder: (context, state) => WarehouseDetailView(
+                  warehouseId: state.pathParameters['warehouseId'] ?? '',
+                  initialTab: switch (state.uri.queryParameters['tab']) {
+                    'movimientos' => WarehouseTab.movements,
+                    'transferencias' => WarehouseTab.transfers,
+                    _ => WarehouseTab.stock,
+                  },
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.inventorySuppliers,
+                builder: (context, state) => const SuppliersView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventorySupplierDetail,
+                builder: (context, state) => SupplierDetailView(
+                  supplierId: state.pathParameters['supplierId'] ?? '',
+                  initialTab: switch (state.uri.queryParameters['tab']) {
+                    'ordenes' => SupplierTab.orders,
+                    'cuenta' => SupplierTab.account,
+                    _ => SupplierTab.items,
+                  },
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryRequirements,
+                builder: (context, state) => const RequirementsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryOutflow,
+                builder: (context, state) => const InventoryOutflowView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryReconciliation,
+                builder: (context, state) => const StockReconciliationView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryKardex,
+                builder: (context, state) => const InventoryKardexView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryLowStock,
+                builder: (context, state) => const InventoryLowStockView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryReceipts,
+                builder: (context, state) =>
+                    const InventoryDirectReceiptsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryLots,
+                builder: (context, state) => const InventoryLotsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryValuation,
+                builder: (context, state) => const InventoryValuationView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryRotation,
+                builder: (context, state) => const InventoryRotationView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryTransfers,
+                builder: (context, state) => const TransfersView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryRequisitions,
+                builder: (context, state) => const RequisitionsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryConsolidated,
+                builder: (context, state) => const ConsolidatedInventoryView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryProduction,
+                builder: (context, state) => const ProductionOrdersView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryPhysicalCount,
+                builder: (context, state) => PhysicalCountView(
+                  initialWarehouseId: state.uri.queryParameters['warehouse'],
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryReorder,
+                // Pedido sugerido (Compras F2). Cae a la vista vieja de Reorden
+                // si la base no tiene fn_purchase_projection.
+                builder: (context, state) => const PurchaseSuggestedOrderView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryMinStock,
+                // Mínimos en lote (Compras F3). Ver o exportar pide acceso a
+                // inventario; guardar lo valida la base.
+                builder: (context, state) => const MinStockBulkView(),
+              ),
+            ],
+          ),
+
+          // ── Rama 10: Compras ──
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.purchasesList,
+                builder: (context, state) => const PurchasesListView(),
+              ),
+              GoRoute(
+                path: AppRoutes.purchasesRegister,
+                builder: (context, state) => const PurchasesRegisterView(),
+              ),
+              GoRoute(
+                path: AppRoutes.purchasesOrderDetail,
+                builder: (context, state) => PurchaseOrderDetailView(
+                  orderId: state.pathParameters['orderId'] ?? '',
+                ),
+              ),
+              GoRoute(
+                path: AppRoutes.purchasesOrderEdit,
+                builder: (context, state) => PurchasesRegisterView(
+                  editOrderId: state.pathParameters['orderId'] ?? '',
+                ),
+              ),
+            ],
+          ),
+
+          // ── Rama 11: Promociones ──
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.promosCenter,
+                // ?offers=1 abre el modo solo-ofertas (sin cupones ni gift cards),
+                // usado por la entrada "Ofertas y Promociones" de Ajustes. Sin el
+                // query param se muestra el hub completo (Fidelización).
+                builder: (context, state) => DiscountsView(
+                  offersOnly: state.uri.queryParameters['offers'] == '1',
+                ),
+              ),
+            ],
+          ),
+
+          // ── Rama 12: Menú (shell anidado) ──
+          StatefulShellBranch(
+            routes: [
+              // ===================== GESTIÓN DE PRODUCTOS (MENÚ) =====================
+              ShellRoute(
+                builder: (context, state, child) => MenuShellView(child: child),
+                routes: [
+                  // /menu -> redirige a /menu/menus
+                  GoRoute(
+                    path: AppRoutes.menu,
+                    redirect: (context, state) => AppRoutes.menuMenus,
+                  ),
+
+                  // /menu/menus
+                  GoRoute(
+                    path: AppRoutes.menuMenus,
+                    builder: (context, state) =>
+                        const MenusView(businessId: 'auto'),
+                  ),
+
+                  // /menu/items
+                  GoRoute(
+                    path: AppRoutes.menuItems,
+                    builder: (context, state) => const ProductsView(),
+                  ),
+
+                  // /menu/categories
+                  GoRoute(
+                    path: AppRoutes.menuCategories,
+                    builder: (context, state) =>
+                        const CategoriesView(businessId: 'auto'),
+                  ),
+
+                  GoRoute(
+                    path: AppRoutes.menuRecipes,
+                    builder: (context, state) => const RecipesView(),
+                  ),
+                  GoRoute(
+                    path: AppRoutes.menuCombos,
+                    builder: (context, state) => const CombosView(),
+                  ),
+
+                  // /menu/modifier-groups
+                  GoRoute(
+                    path: AppRoutes.menuModifierGroups,
+                    redirect: (context, state) => AppRoutes.menuModifiers,
+                  ),
+
+                  // /menu/modifiers
+                  GoRoute(
+                    path: AppRoutes.menuModifiers,
+                    builder: (context, state) => const ModifiersView(),
+                  ),
+                ],
+              ),
+            ],
+          ),
 
           // ── Rama 13: Impresión (shell anidado) ──
-          StatefulShellBranch(routes: [
-          // =======================================================================
-
-          // ===================== GESTIÓN DE IMPRESIÓN =====================
-          ShellRoute(
-            builder: (context, state, child) => PrintingShellView(child: child),
+          StatefulShellBranch(
             routes: [
-              // /settings/printing
-              GoRoute(
-                path: AppRoutes.printingBase,
-                builder: (context, state) =>
-                    const PrintingHomeView(businessId: 'auto'),
+              // =======================================================================
+
+              // ===================== GESTIÓN DE IMPRESIÓN =====================
+              ShellRoute(
+                builder: (context, state, child) =>
+                    PrintingShellView(child: child),
+                routes: [
+                  // /settings/printing
+                  GoRoute(
+                    path: AppRoutes.printingBase,
+                    builder: (context, state) =>
+                        const PrintingHomeView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/printers
+                  GoRoute(
+                    path: AppRoutes.printingPrinters,
+                    builder: (context, state) =>
+                        const PrintingPrintersView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/areas
+                  GoRoute(
+                    path: AppRoutes.printingAreas,
+                    builder: (context, state) =>
+                        const PrintingAreasView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/products
+                  GoRoute(
+                    path: AppRoutes.printingProducts,
+                    builder: (context, state) =>
+                        const PrintingProductsView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/receipts
+                  GoRoute(
+                    path: AppRoutes.printingReceipts,
+                    builder: (context, state) =>
+                        const PrintingReceiptsView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/orders
+                  GoRoute(
+                    path: AppRoutes.printingOrders,
+                    builder: (context, state) =>
+                        const PrintingOrdersView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/diagnostics
+                  GoRoute(
+                    path: AppRoutes.printingDiagnostics,
+                    builder: (context, state) =>
+                        const PrintingDiagnosticsView(businessId: 'auto'),
+                  ),
+                  // Sprint 5 — /settings/printing/health
+                  GoRoute(
+                    path: AppRoutes.printingHealth,
+                    builder: (context, state) =>
+                        const PrintingHealthView(businessId: 'auto'),
+                  ),
+                  // /settings/printing/printerless — operar sin impresoras
+                  GoRoute(
+                    path: AppRoutes.printingPrinterless,
+                    builder: (context, state) =>
+                        const PrinterlessModeView(businessId: 'auto'),
+                  ),
+                ],
               ),
-              // /settings/printing/printers
-              GoRoute(
-                path: AppRoutes.printingPrinters,
-                builder: (context, state) =>
-                    const PrintingPrintersView(businessId: 'auto'),
-              ),
-              // /settings/printing/areas
-              GoRoute(
-                path: AppRoutes.printingAreas,
-                builder: (context, state) =>
-                    const PrintingAreasView(businessId: 'auto'),
-              ),
-              // /settings/printing/products
-              GoRoute(
-                path: AppRoutes.printingProducts,
-                builder: (context, state) =>
-                    const PrintingProductsView(businessId: 'auto'),
-              ),
-              // /settings/printing/receipts
-              GoRoute(
-                path: AppRoutes.printingReceipts,
-                builder: (context, state) =>
-                    const PrintingReceiptsView(businessId: 'auto'),
-              ),
-              // /settings/printing/orders
-              GoRoute(
-                path: AppRoutes.printingOrders,
-                builder: (context, state) =>
-                    const PrintingOrdersView(businessId: 'auto'),
-              ),
-              // /settings/printing/diagnostics
-              GoRoute(
-                path: AppRoutes.printingDiagnostics,
-                builder: (context, state) =>
-                    const PrintingDiagnosticsView(businessId: 'auto'),
-              ),
-              // Sprint 5 — /settings/printing/health
-              GoRoute(
-                path: AppRoutes.printingHealth,
-                builder: (context, state) =>
-                    const PrintingHealthView(businessId: 'auto'),
-              ),
-              // /settings/printing/printerless — operar sin impresoras
-              GoRoute(
-                path: AppRoutes.printingPrinterless,
-                builder: (context, state) =>
-                    const PrinterlessModeView(businessId: 'auto'),
-              ),
+              // =======================================================================
             ],
           ),
-          // =======================================================================
-          ]),
 
           // ── Rama 14: Créditos (CxC / CxP) ──
           // OJO: el índice debe coincidir con shellBranchIndexForDestination
           // en shell_destinations.dart.
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: AppRoutes.credits,
-              builder: (context, state) => const CreditsView(),
-            ),
-          ]),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.credits,
+                builder: (context, state) => const CreditsView(),
+              ),
+            ],
+          ),
 
           // ── Rama 15: Contabilidad (PRD_CONTABILIDAD.md) ──
           // `?tab=catalog|trial|income|balance|periods` entra directo a una
           // pestaña; sin query param abre en Asientos.
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: AppRoutes.accounting,
-              builder: (context, state) => AccountingView(
-                key: ValueKey(state.uri.queryParameters['tab'] ?? 'entries'),
-                initialTab: accountingTabFromQuery(
-                  state.uri.queryParameters['tab'],
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: AppRoutes.accounting,
+                builder: (context, state) => AccountingView(
+                  key: ValueKey(state.uri.queryParameters['tab'] ?? 'entries'),
+                  initialTab: accountingTabFromQuery(
+                    state.uri.queryParameters['tab'],
+                  ),
                 ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ],
       ),
     ],

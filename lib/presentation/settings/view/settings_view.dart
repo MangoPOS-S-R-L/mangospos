@@ -85,7 +85,8 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
     if (businessId.isNotEmpty) {
       try {
         final svc = OfflinePosService();
-        pendingOffline = await svc.pendingActionsCount(businessId) +
+        pendingOffline =
+            await svc.pendingActionsCount(businessId) +
             await svc.deadActionsCount(businessId);
       } catch (_) {
         pendingOffline = 0;
@@ -596,7 +597,8 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
               ref.watch(sessionProvider).activeRole == PosRole.administrador)
             const _SettingsOption(
               title: 'Dispositivos conectados',
-              subtitle: 'Equipos con sesión iniciada; cerrar sesión a distancia',
+              subtitle:
+                  'Equipos con sesión iniciada; cerrar sesión a distancia',
               icon: Icons.devices_other_rounded,
               color: Color(0xFFEAF0FF),
               route: AppRoutes.settingsDevices,
@@ -954,6 +956,13 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
             route: AppRoutes.settingsFiscalReceipts,
           ),
           _SettingsOption(
+            title: 'Integraciones',
+            subtitle: 'Conecta plataformas de pedidos en línea',
+            icon: Icons.storefront_rounded,
+            color: Color(0xFFFFE6D5),
+            route: AppRoutes.settingsIntegrations,
+          ),
+          _SettingsOption(
             title: 'Informe de Impuestos',
             subtitle: 'ITBIS facturado y cobrado por período',
             icon: Icons.summarize_rounded,
@@ -1224,11 +1233,17 @@ class _SettingsSearchField extends StatelessWidget {
         controller: controller,
         onChanged: onChanged,
         textInputAction: TextInputAction.search,
-        style: const TextStyle(fontSize: 14, color: _SettingsSurface.foreground),
+        style: const TextStyle(
+          fontSize: 14,
+          color: _SettingsSurface.foreground,
+        ),
         decoration: InputDecoration(
           isDense: true,
           hintText: 'Buscar en ajustes…',
-          hintStyle: const TextStyle(fontSize: 14, color: _SettingsSurface.muted),
+          hintStyle: const TextStyle(
+            fontSize: 14,
+            color: _SettingsSurface.muted,
+          ),
           prefixIcon: const Icon(
             Icons.search_rounded,
             size: 20,
