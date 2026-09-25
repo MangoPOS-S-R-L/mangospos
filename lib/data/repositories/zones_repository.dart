@@ -388,6 +388,69 @@ class ZonesRepository {
     return <String, dynamic>{};
   }
 
+  /// Le asigna una mesa ABIERTA a otro mesero (`fn_reassign_table_waiter`,
+  /// 20260924_0001).
+  ///
+  /// Vale de aquí en adelante: lo que ya se consumió sigue acreditado a quien
+  /// lo digitó. El servidor se encarga de que así sea — antes de cambiar el
+  /// dueño, estampa los ítems sin autor con el mesero anterior, porque el
+  /// reporte de ventas por mesero los cuelga del dueño de la mesa y si no se
+  /// moverían solos.
+  ///
+  /// Devuelve el `Map` crudo del RPC (`changed`, `items_frozen`,
+  /// `to_employee_name`…) para que la pantalla pueda decir qué pasó.
+  Future<Map<String, dynamic>> reassignTableWaiter({
+    required String sessionId,
+    required String employeeId,
+    String? reason,
+  }) async {
+    try {
+      final res = await sb.rpc(
+        'fn_reassign_table_waiter',
+        params: {
+          'p_session_id': sessionId,
+          'p_employee_id': employeeId,
+          'p_reason': reason,
+        },
+      );
+      if (res is Map) return Map<String, dynamic>.from(res);
+      return <String, dynamic>{};
+    } on PostgrestException catch (e) {
+      throw Exception(_reassignErrorMessage(e));
+    }
+  }
+
+  /// Traduce el contrato de errores de `fn_reassign_table_waiter` a español.
+  String _reassignErrorMessage(PostgrestException e) {
+    final raw = '${e.message} ${e.details ?? ''}';
+
+    // Migración sin aplicar. No hay camino viejo: cambiar el dueño de la mesa
+    // a mano desde la app dejaría el reporte de ventas por mesero movido.
+    if (e.code == 'PGRST202' || e.code == '42883') {
+      return 'Este servidor todavía no tiene habilitado asignar mesas a otro '
+          'mesero. Aplica la migración '
+          '20260924_0001_reassign_table_waiter.sql y vuelve a intentar.';
+    }
+    if (raw.contains('SESSION_CLOSED')) {
+      return 'Esta mesa ya se cobró y se cerró: su mesero no se puede '
+          'cambiar.';
+    }
+    if (raw.contains('SESSION_NOT_FOUND')) {
+      return 'Esta mesa ya no tiene una cuenta abierta.';
+    }
+    if (raw.contains('REASSIGN_DENIED')) {
+      return 'No tienes permiso para asignarle la mesa a otro mesero.';
+    }
+    if (raw.contains('EMPLOYEE_NOT_IN_BUSINESS')) {
+      return 'Ese mesero no está activo en este negocio. Refresca la lista y '
+          'vuelve a elegir.';
+    }
+    if (raw.contains('TABLE_BUSINESS_NOT_FOUND')) {
+      return 'No se pudo identificar el negocio de esta mesa.';
+    }
+    return 'No se pudo asignar la mesa: ${e.message}';
+  }
+
   /// PRD-12 F3: devuelve el `id` de la sesión abierta de una mesa
   /// (sin closed_at). Si no hay ninguna abierta, devuelve null. Usado
   /// por el flow de "Unir mesas" desde el grid: el cajero hace

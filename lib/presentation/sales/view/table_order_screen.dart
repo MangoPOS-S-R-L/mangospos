@@ -19,6 +19,7 @@ import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
+import 'package:mangopos/presentation/sales/widgets/reassign_waiter_dialog.dart';
 import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import 'package:mangopos/data/models/printing.dart';
@@ -761,6 +762,48 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     context.go(AppRoutes.salesByZone);
   }
 
+  /// Solo para cuentas de MESA y con el permiso: la reasignación mueve a quién
+  /// pertenece la mesa en el salón, en la precuenta, en la factura y en el
+  /// reporte de mozos. Un mesero no se regala ni se quita mesas solo.
+  bool get _canReassignWaiter {
+    if (widget.origin != OrderOrigin.table) return false;
+    if (operatorIsOwner(ref)) return true;
+    return operatorHasPermission(ref, 'ventas.mesas.reasignar_mesero');
+  }
+
+  /// Le asigna esta mesa a otro mesero. A diferencia de transferir la cuenta,
+  /// acá NO se navega fuera: la cuenta sigue en la misma mesa, solo cambia de
+  /// dueño. Se recarga la orden para que el nombre del mesero salga bien en la
+  /// precuenta que se imprima después.
+  Future<void> _handleReassignWaiter(BuildContext context) async {
+    final orderState = ref.read(currentOrderProvider);
+    final order = orderState.order;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (order == null || order.sessionId.isEmpty) {
+      messenger.showAppSnackBar(
+        const SnackBar(content: Text('No hay cuenta activa para asignar.')),
+      );
+      return;
+    }
+
+    final businessId = await BusinessResolver.ensure('auto');
+    if (!context.mounted) return;
+
+    final changed = await showReassignWaiterDialog(
+      context,
+      ref,
+      businessId: businessId,
+      sessionId: order.sessionId,
+      tableLabel: _currentTableCode ?? widget.tableCode ?? 'Esta mesa',
+    );
+    if (!changed || !context.mounted) return;
+
+    // El "MESERO:" de la precuenta sale del opener que resuelve el servidor:
+    // sin releer, la próxima impresión seguiría con el nombre viejo.
+    await ref.read(currentOrderProvider.notifier).reloadOrderNow();
+  }
+
   Future<void> _handleReleaseTable(BuildContext context) async {
     await _handleVoidCurrentOrder(
       context,
@@ -1478,6 +1521,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     onTransferSession: widget.origin == OrderOrigin.table
                         ? () => _handleTransferSession(context)
                         : null,
+                    onReassignWaiter: _canReassignWaiter
+                        ? () => _handleReassignWaiter(context)
+                        : null,
                     onReleaseTable: widget.origin == OrderOrigin.table
                         ? () => _handleReleaseTable(context)
                         : null,
@@ -1553,6 +1599,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     onApplyCourtesy: () => _handleCourtesyByProduct(context),
                     onTransferSession: widget.origin == OrderOrigin.table
                         ? () => _handleTransferSession(context)
+                        : null,
+                    onReassignWaiter: _canReassignWaiter
+                        ? () => _handleReassignWaiter(context)
                         : null,
                     onMarkAllTakeout: () => _handleMarkAllTakeout(context),
                     onChargeCredit: _canSellCredit
@@ -1652,6 +1701,10 @@ class _MobileSalesHeader extends StatelessWidget {
   /// Solo cuentas de mesa. Null = opción oculta (delivery no tiene mesa).
   final VoidCallback? onTransferSession;
 
+  /// Asignarle la mesa a otro mesero. Null cuando no aplica (no es mesa)
+  /// o el operador no tiene `ventas.mesas.reasignar_mesero`.
+  final VoidCallback? onReassignWaiter;
+
   /// Solo cuentas de mesa. Null = opción oculta (delivery no tiene mesa).
   final VoidCallback? onReleaseTable;
   final VoidCallback onVoidOrder;
@@ -1674,6 +1727,7 @@ class _MobileSalesHeader extends StatelessWidget {
     required this.showTableActions,
     required this.onBack,
     this.onTransferSession,
+    this.onReassignWaiter,
     this.onReleaseTable,
     required this.onVoidOrder,
     required this.onApplyDiscount,
@@ -1721,6 +1775,9 @@ class _MobileSalesHeader extends StatelessWidget {
                   case _MobileSalesAction.transferSession:
                     onTransferSession?.call();
                     break;
+                  case _MobileSalesAction.reassignWaiter:
+                    onReassignWaiter?.call();
+                    break;
                   case _MobileSalesAction.releaseTable:
                     onReleaseTable?.call();
                     break;
@@ -1751,6 +1808,15 @@ class _MobileSalesHeader extends StatelessWidget {
                     child: ListTile(
                       leading: Icon(Icons.swap_horiz_rounded),
                       title: Text('Transferir cuenta'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                if (onReassignWaiter != null)
+                  const PopupMenuItem(
+                    value: _MobileSalesAction.reassignWaiter,
+                    child: ListTile(
+                      leading: Icon(Icons.person_search_outlined),
+                      title: Text('Asignar a otro mesero'),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
@@ -1825,6 +1891,7 @@ class _MobileSalesHeader extends StatelessWidget {
 
 enum _MobileSalesAction {
   transferSession,
+  reassignWaiter,
   releaseTable,
   voidOrder,
   applyDiscount,
@@ -7214,6 +7281,10 @@ class _SalesToolsRail extends StatelessWidget {
   /// Solo cuentas de mesa. Null = botón oculto (el RPC de transferencia
   /// requiere mesa origen).
   final VoidCallback? onTransferSession;
+
+  /// Asignarle la mesa a otro mesero. Null cuando no aplica (no es mesa)
+  /// o el operador no tiene `ventas.mesas.reasignar_mesero`.
+  final VoidCallback? onReassignWaiter;
   final VoidCallback onMarkAllTakeout;
 
   /// Abono (saldo prepagado) de la mesa. Null = no es mesa o el usuario no
@@ -7236,6 +7307,7 @@ class _SalesToolsRail extends StatelessWidget {
     required this.onApplyDiscount,
     required this.onApplyCourtesy,
     this.onTransferSession,
+    this.onReassignWaiter,
     required this.onMarkAllTakeout,
     this.onChargeCredit,
     this.onTableDeposit,
@@ -7284,6 +7356,13 @@ class _SalesToolsRail extends StatelessWidget {
                       icon: Icons.swap_horiz_rounded,
                       label: 'Transferir\ncuenta',
                       onTap: onTransferSession!,
+                    ),
+                  if (onReassignWaiter != null)
+                    _RailButton(
+                      compact: compact,
+                      icon: Icons.person_search_outlined,
+                      label: 'Asignar a\notro mesero',
+                      onTap: onReassignWaiter!,
                     ),
                   if (onReleaseTable != null)
                     _RailButton(

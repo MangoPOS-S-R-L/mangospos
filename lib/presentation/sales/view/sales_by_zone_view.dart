@@ -23,6 +23,8 @@ import 'package:mangopos/presentation/sales/view/theme/table_status_style.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
+import 'package:mangopos/presentation/sales/widgets/reassign_waiter_dialog.dart';
+import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/data/models/table_status.dart';
@@ -1135,8 +1137,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
                         widget.canOpenTables &&
                             table.sessionId != null &&
                             !table.isPendingSync
-                        ? () =>
-                            _handleMergeTable(context, ref, table, widget.zoneId)
+                        ? () => _handleTableLongPress(
+                            context, ref, table, widget.zoneId)
                         : null,
                   );
                 },
@@ -1281,7 +1283,7 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
             enabled: widget.canOpenTables,
             onTapTable: (ts) => _handleTableAction(context, ref, ts),
             onLongPressTable: (ts) =>
-                _handleMergeTable(context, ref, ts, widget.zoneId),
+                _handleTableLongPress(context, ref, ts, widget.zoneId),
             onExpand: widget.allowExpand ? () => _openFullscreen() : null,
             depositByTableId: depositByTableId,
           ),
@@ -1318,6 +1320,127 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
       ),
     );
   }
+}
+
+/// Long-press en una mesa ocupada → qué se puede hacer con ella.
+///
+/// Antes el long-press iba DIRECTO a "Unir mesas". Ahora hay dos cosas que se
+/// resuelven mirando el salón, así que se pregunta cuál. Si el operador no
+/// puede reasignar meseros, se salta el menú y se va derecho a unir: no tiene
+/// sentido una hoja de una sola opción.
+Future<void> _handleTableLongPress(
+  BuildContext context,
+  WidgetRef ref,
+  TableStatus ts,
+  String zoneId,
+) async {
+  final canReassign = operatorIsOwner(ref) ||
+      operatorHasPermission(ref, 'ventas.mesas.reasignar_mesero');
+  if (!canReassign) {
+    return _handleMergeTable(context, ref, ts, zoneId);
+  }
+
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Row(
+              children: [
+                Text(
+                  'Mesa ${ts.code}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+                if ((ts.waiterName ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '· ${ts.waiterName}',
+                    style: const TextStyle(
+                      color: Color(0xFF64748B),
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.person_search_outlined),
+            title: const Text('Asignar a otro mesero'),
+            subtitle: const Text(
+              'Lo ya consumido queda con quien lo digitó',
+            ),
+            onTap: () => Navigator.of(ctx).pop('reassign'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.merge_type_rounded),
+            title: const Text('Unir con otra mesa'),
+            onTap: () => Navigator.of(ctx).pop('merge'),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+
+  if (action == null || !context.mounted) return;
+  if (action == 'merge') {
+    return _handleMergeTable(context, ref, ts, zoneId);
+  }
+  return _handleReassignWaiter(context, ref, ts, zoneId);
+}
+
+/// Abre el diálogo de reasignación y refresca la zona si cambió algo: la
+/// tarjeta tiene que pasar a decir el nombre nuevo de inmediato, que es la
+/// señal de que funcionó.
+Future<void> _handleReassignWaiter(
+  BuildContext context,
+  WidgetRef ref,
+  TableStatus ts,
+  String zoneId,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final sessionId = ts.sessionId;
+  if (sessionId == null || sessionId.isEmpty) {
+    messenger.showAppSnackBar(
+      const SnackBar(
+        content: Text('Esta mesa no tiene cuenta abierta para asignar.'),
+      ),
+    );
+    return;
+  }
+
+  final String businessId;
+  try {
+    businessId = await BusinessResolver.ensure('auto');
+  } catch (e) {
+    if (!context.mounted) return;
+    messenger.showAppSnackBar(
+      SnackBar(content: Text('No se pudo identificar el negocio: $e')),
+    );
+    return;
+  }
+  if (!context.mounted) return;
+
+  final changed = await showReassignWaiterDialog(
+    context,
+    ref,
+    businessId: businessId,
+    sessionId: sessionId,
+    tableLabel: 'Mesa ${ts.code}',
+    currentWaiterName: ts.waiterName,
+  );
+
+  if (!changed || !context.mounted) return;
+  await ref
+      .read(byZoneVmProvider.notifier)
+      .loadZoneStatus(zoneId, emitError: false);
 }
 
 /// PRD-12 F3: long-press en mesa ocupada → abre dialog "Unir mesas"

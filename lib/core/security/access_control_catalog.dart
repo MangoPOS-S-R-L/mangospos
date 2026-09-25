@@ -85,6 +85,16 @@ const accessPermissions = <AccessPermission>[
     description: 'Permite mover una cuenta a otra mesa o fusionar mesas.',
   ),
   AccessPermission(
+    code: 'ventas.mesas.reasignar_mesero',
+    label: 'Asignar una mesa a otro mesero',
+    categoryId: 'operations',
+    categoryLabel: 'Gestion Operativa',
+    description: 'Cambia a qué mesero pertenece una mesa ya abierta (cambio '
+        'de turno, mesa abierta a nombre equivocado). Lo ya consumido sigue '
+        'acreditado a quien lo digitó. No se le da al rol mesero: nadie se '
+        'regala ni se quita mesas solo.',
+  ),
+  AccessPermission(
     code: 'ventas.mesas.marcar_pagando',
     label: 'Marcar mesa pagando',
     categoryId: 'operations',
@@ -878,6 +888,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'ventas.mesas.ver_estado',
       'ventas.mesas.abrir',
       'ventas.mesas.mover_unir',
+      'ventas.mesas.reasignar_mesero',
       'ventas.mesas.marcar_pagando',
       'ventas.mesas.liberar',
       'ventas.orden.ver_total',
@@ -984,6 +995,7 @@ final rolePresets = <String, RolePresetDefinition>{
       'ventas.mesas.ver_estado',
       'ventas.mesas.abrir',
       'ventas.mesas.mover_unir',
+      'ventas.mesas.reasignar_mesero',
       'ventas.mesas.marcar_pagando',
       'ventas.mesas.liberar',
       // Orden — en negocios chicos el cajero hace todo el flujo de mesero
