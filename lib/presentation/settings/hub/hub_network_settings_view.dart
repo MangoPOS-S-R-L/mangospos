@@ -778,6 +778,11 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
   // Acumulador dedupeado por IP/host de ambas fuentes (mDNS + barrido TCP).
   final Map<String, DiscoveredAgent> _byKey = {};
 
+  /// Qué resultó ser cada equipo (`/hub/health`). El escaneo encuentra
+  /// AGENTES —casi todos son de impresión—, y sin esto la lista los mostraba
+  /// todos iguales como "Caja": se elegía uno al azar y fallaba en silencio.
+  final Map<String, HubProbeResult> _probed = {};
+
   @override
   void initState() {
     super.initState();
@@ -785,11 +790,34 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
   }
 
   void _merge(Iterable<DiscoveredAgent> agents) {
+    final nuevos = <DiscoveredAgent>[];
     for (final a in agents) {
-      _byKey[a.ip ?? a.host] = a;
+      final key = a.ip ?? a.host;
+      if (!_byKey.containsKey(key)) nuevos.add(a);
+      _byKey[key] = a;
     }
     if (mounted) {
       setState(() => _results = _byKey.values.toList(growable: false));
+    }
+    for (final a in nuevos) {
+      unawaited(_probe(a));
+    }
+  }
+
+  /// Sondea un equipo recién encontrado, sin frenar la lista: aparece primero
+  /// y se etiqueta cuando contesta.
+  Future<void> _probe(DiscoveredAgent a) async {
+    final key = a.ip ?? a.host;
+    try {
+      final r = await HubClient().probeCandidate(
+        a.baseUrl,
+        businessId: widget.businessId,
+      );
+      if (!mounted) return;
+      setState(() => _probed[key] = r);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _probed[key] = HubProbeResult.unreachable);
     }
   }
 
@@ -906,13 +934,9 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
                   shrinkWrap: true,
                   children: [
                     for (final a in _results)
-                      ListTile(
-                        leading: const Icon(Icons.computer_outlined),
-                        title: Text(
-                          a.name.trim().isNotEmpty ? a.name : (a.ip ?? a.host),
-                        ),
-                        subtitle: Text('${a.ip ?? a.host}:${a.port}'),
-                        trailing: const Icon(Icons.chevron_right),
+                      _AgentTile(
+                        agent: a,
+                        probe: _probed[a.ip ?? a.host],
                         onTap: () => Navigator.of(context).pop(a),
                       ),
                   ],
@@ -955,6 +979,63 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+
+/// Fila de un equipo encontrado, etiquetada con lo que resultó ser.
+///
+/// Un equipo que no es el Hub se deja TOCABLE a propósito: puede ser la caja
+/// correcta a la que todavía no le pusieron el rol, y el mesero necesita poder
+/// guardarla para cuando la configuren. Lo que cambia es que ya no miente
+/// sobre lo que es.
+class _AgentTile extends StatelessWidget {
+  const _AgentTile({
+    required this.agent,
+    required this.probe,
+    required this.onTap,
+  });
+
+  final DiscoveredAgent agent;
+  final HubProbeResult? probe;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final address = '${agent.ip ?? agent.host}:${agent.port}';
+    final (icon, color, label) = switch (probe) {
+      HubProbeResult.hub => (
+        Icons.check_circle_rounded,
+        const Color(0xFF15803D),
+        'Es la caja de este local',
+      ),
+      HubProbeResult.otherBusiness => (
+        Icons.business_outlined,
+        const Color(0xFFB45309),
+        'Es la caja de otro negocio',
+      ),
+      HubProbeResult.notHub => (
+        Icons.print_outlined,
+        const Color(0xFF64748B),
+        'No está configurado como caja',
+      ),
+      HubProbeResult.unreachable => (
+        Icons.help_outline_rounded,
+        const Color(0xFF94A3B8),
+        'No respondió',
+      ),
+      null => (Icons.computer_outlined, const Color(0xFF94A3B8), 'Revisando…'),
+    };
+
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(
+        agent.name.trim().isNotEmpty ? agent.name : (agent.ip ?? agent.host),
+      ),
+      subtitle: Text('$address · $label', style: TextStyle(color: color)),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
     );
   }
 }

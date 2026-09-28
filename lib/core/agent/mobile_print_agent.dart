@@ -354,6 +354,18 @@ class MobilePrintAgent {
     try {
       final storage = await StorageService.getInstance();
       businessId = await storage.read(StorageKeys.activeBusinessId) ?? '';
+      // Cinturón: si este equipo todavía no dejó su negocio en disco, se usa
+      // el que pregunta el cliente. No es un agujero — el rol se sigue
+      // leyendo de la configuración LOCAL (`hub_device_role_<negocio>`), así
+      // que solo responde 'hub' un equipo que de verdad fue configurado como
+      // Hub para ESE negocio. Sin esto, un equipo bien configurado respondía
+      // 'pos' solo porque `activeBusinessId` nunca se había escrito (lo
+      // grababa únicamente la pantalla de elegir negocio, que un usuario con
+      // un solo negocio nunca ve). Reportado en tablet 2026-09-28.
+      if (businessId.isEmpty) {
+        businessId =
+            request.url.queryParameters['business_id']?.trim() ?? '';
+      }
       if (businessId.isNotEmpty) {
         role = hubDeviceRoleToString(
           await HubConfigService().getDeviceRole(businessId),

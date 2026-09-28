@@ -21,6 +21,27 @@ import 'hub_roster_codec.dart';
 ///   2. Si no, se descubre vía `AgentDiscovery` (mDNS, filtrado por negocio)
 ///      y se prueba cada candidato.
 /// Devuelve la `baseUrl` del primer Hub que responde, o null.
+/// Qué resultó ser un equipo encontrado en la red.
+///
+/// Existe porque "no responde" y "responde pero no es la caja" se arreglan de
+/// formas OPUESTAS —revisar la red vs. configurar ese equipo como Hub— y antes
+/// los dos caían en el mismo mensaje genérico, mandando a revisar un wifi que
+/// estaba perfecto.
+enum HubProbeResult {
+  /// No contestó en ninguno de los puertos.
+  unreachable,
+
+  /// Contestó, pero su rol es `pos`: es un agente de impresión u otra caja,
+  /// no el Hub. Nadie lo configuró como Hub todavía.
+  notHub,
+
+  /// Es un Hub, pero de OTRO negocio. Engancharse mostraría mesas ajenas.
+  otherBusiness,
+
+  /// Es el Hub de este negocio.
+  hub,
+}
+
 class HubClient {
   HubClient({
     AgentDiscovery? discovery,
@@ -156,11 +177,58 @@ class HubClient {
     return out;
   }
 
+  /// Diagnostica un equipo de la red: no solo si es Hub, sino POR QUÉ no lo
+  /// es. Prueba la URL tal cual y los puertos 4000/4100, y se queda con el
+  /// resultado más informativo (un `notHub` dice más que un `unreachable`).
+  Future<HubProbeResult> probeCandidate(
+    String baseUrl, {
+    String? businessId,
+  }) async {
+    var best = HubProbeResult.unreachable;
+    for (final url in _hubCandidateUrls(baseUrl)) {
+      final r = await _probeOne(url, businessId: businessId);
+      if (r == HubProbeResult.hub) return r;
+      if (r.index > best.index) best = r;
+    }
+    return best;
+  }
+
+  Future<HubProbeResult> _probeOne(
+    String baseUrl, {
+    String? businessId,
+  }) async {
+    try {
+      final resp = await _http
+          .get(_healthUri(baseUrl, businessId))
+          .timeout(_probeTimeout);
+      if (resp.statusCode != 200) return HubProbeResult.unreachable;
+      final body = jsonDecode(resp.body);
+      if (body is! Map) return HubProbeResult.unreachable;
+      if (body['role'] != 'hub') return HubProbeResult.notHub;
+      if (businessId == null ||
+          businessId.isEmpty ||
+          body['business_id'] == businessId) {
+        return HubProbeResult.hub;
+      }
+      return HubProbeResult.otherBusiness;
+    } catch (_) {
+      return HubProbeResult.unreachable;
+    }
+  }
+
+  /// `/hub/health` con el negocio que pregunta. El equipo lo usa solo si el
+  /// suyo no está en disco; el rol lo sigue leyendo de SU configuración.
+  Uri _healthUri(String baseUrl, String? businessId) {
+    final base = '${_normalize(baseUrl)}/hub/health';
+    final bid = businessId?.trim() ?? '';
+    return Uri.parse(bid.isEmpty ? base : '$base?business_id=$bid');
+  }
+
   /// Prueba `GET <baseUrl>/hub/health` y confirma que es un Hub (role=hub).
   Future<bool> _isHub(String baseUrl, {String? businessId}) async {
     try {
       final resp = await _http
-          .get(Uri.parse('${_normalize(baseUrl)}/hub/health'))
+          .get(_healthUri(baseUrl, businessId))
           .timeout(_probeTimeout);
       if (resp.statusCode != 200) return false;
       final body = jsonDecode(resp.body);

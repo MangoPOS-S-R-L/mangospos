@@ -169,25 +169,56 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
   /// Guarda la IP y vuelve a resolver el modo. No se valida antes a propósito:
   /// la caja puede estar apagada en este momento y el mesero igual necesita
   /// dejarla configurada para cuando encienda.
+  ///
+  /// Si no engancha, se DIAGNOSTICA en vez de culpar a la red: un equipo que
+  /// responde pero no está configurado como Hub se arregla en ese equipo, no
+  /// revisando el wifi.
   Future<void> _save(String raw, {required bool announce}) async {
     final bid = _businessId;
     if (bid == null || bid.isEmpty) return;
-    await HubConfigService().setHubUrl(bid, raw.trim());
+    final clean = raw.trim();
+    await HubConfigService().setHubUrl(bid, clean);
     await ref.read(hubModeProvider.notifier).reloadConfigAndRefresh();
     if (!mounted) return;
     final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
-    setState(() {
-      _messageIsError = url == null;
-      _message = url != null
-          ? 'Conectado a $url.'
-          : 'Guardado, pero no se pudo contactar la caja. Revisa que esté '
-                'encendida y en la misma red.';
-    });
-    if (announce && url != null && mounted) {
-      ScaffoldMessenger.of(context).showAppSnackBar(
-        SnackBar(content: Text('Conectado a la caja ($url).')),
-      );
+    if (url != null) {
+      setState(() {
+        _messageIsError = false;
+        _message = 'Conectado a $url.';
+      });
+      if (announce && mounted) {
+        ScaffoldMessenger.of(context).showAppSnackBar(
+          SnackBar(content: Text('Conectado a la caja ($url).')),
+        );
+      }
+      return;
     }
+    await _explainFailure(clean);
+  }
+
+  /// Traduce el resultado del sondeo a lo que hay que hacer.
+  Future<void> _explainFailure(String url) async {
+    final result = await HubClient().probeCandidate(
+      url,
+      businessId: _businessId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _messageIsError = true;
+      _message = switch (result) {
+        HubProbeResult.hub =>
+          'La caja respondió, pero el equipo todavía no la tomó. Vuelve a '
+              'probar en unos segundos.',
+        HubProbeResult.notHub =>
+          'Ese equipo responde, pero NO está configurado como la caja. En ÉL: '
+              'Ajustes → Red local → rol «Hub».',
+        HubProbeResult.otherBusiness =>
+          'Ese equipo es la caja de OTRO negocio. Elige el de este local.',
+        HubProbeResult.unreachable =>
+          'No responde. Revisa que esté encendida y en la misma red (el wifi '
+              'del local, no datos móviles).',
+      };
+    });
   }
 
   Future<void> _search() async {
@@ -231,14 +262,15 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
         configuredUrl: _ipCtrl.text.trim(),
       );
       if (!mounted) return;
-      setState(() {
-        _messageIsError = url == null;
-        _message = url != null
-            ? 'La caja respondió en $url.'
-            : 'No respondió. Revisa que esté encendida y en la misma red '
-                  '(el wifi del local, no datos móviles).';
-      });
-      if (url != null) await ref.read(hubModeProvider.notifier).refresh();
+      if (url != null) {
+        setState(() {
+          _messageIsError = false;
+          _message = 'La caja respondió en $url.';
+        });
+        await ref.read(hubModeProvider.notifier).refresh();
+      } else {
+        await _explainFailure(_ipCtrl.text.trim());
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
