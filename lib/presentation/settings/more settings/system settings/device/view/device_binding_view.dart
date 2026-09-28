@@ -12,11 +12,7 @@ import 'package:mangopos/core/offline/offline_readiness_provider.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
-/// Pantalla "Vincular dispositivo" — Fase 2.5 del rollout offline.
-///
-/// Permite al owner/admin vincular este terminal físico a su negocio.
-/// Una vez vinculado, el cliente puede sincronizar el roster de usuarios
-/// y validar PINs sin conexión a internet.
+/// PIN synchronization status, with optional legacy terminal registration.
 class DeviceBindingView extends ConsumerStatefulWidget {
   const DeviceBindingView({super.key, this.service});
 
@@ -66,7 +62,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
     setState(() => _loading = true);
     try {
       final bound = await _service.isDeviceBound();
-      final businessId = await _service.currentBoundBusinessId();
+      final boundBusiness = await _service.currentBoundBusinessId();
+      final businessId = ref.read(sessionProvider).activeBusinessId;
       DateTime? syncedAt;
       int rosterCount = 0;
       if (businessId != null && businessId.isNotEmpty) {
@@ -76,7 +73,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
       if (!mounted) return;
       setState(() {
-        _bound = bound;
+        _bound = bound && boundBusiness == businessId;
         _boundBusinessId = businessId;
         _lastSyncAt = syncedAt;
         _rosterCount = rosterCount;
@@ -116,14 +113,11 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
     });
 
     try {
-      await _service.bindDevice(
-        businessId: businessId,
-        deviceName: deviceName,
-      );
+      await _service.bindDevice(businessId: businessId, deviceName: deviceName);
       // Sync inicial inmediato. Si falla, el bind igual queda hecho —
       // el usuario puede reintentar manualmente.
       try {
-        await _service.syncRoster();
+        await _service.syncRoster(businessId: businessId);
       } catch (e) {
         if (mounted) {
           setState(() {
@@ -140,7 +134,10 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = FriendlyError.humanize('No se pudo vincular: $e'));
+        setState(
+          () =>
+              _errorMessage = FriendlyError.humanize('No se pudo vincular: $e'),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -154,12 +151,14 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       _statusMessage = null;
     });
     try {
-      final users = await _service.syncRoster();
+      final users = await _service.syncRoster(
+        businessId: ref.read(sessionProvider).activeBusinessId,
+      );
       await _refresh();
       if (mounted) {
         setState(() {
           _statusMessage =
-              'Roster sincronizado: ${users.length} usuario(s) en caché offline.';
+              'PIN actualizados: ${users.length} usuario(s) guardados en este equipo.';
         });
       }
     } catch (e) {
@@ -173,7 +172,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
 
   String _syncFailureMessage(Object error) {
     debugPrint('DeviceBindingView: descarga de usuarios falló: $error');
-    if (error is PostgrestException && error.code == '42883' &&
+    if (error is PostgrestException &&
+        error.code == '42883' &&
         error.message.toLowerCase().contains('crypt')) {
       return 'El equipo está vinculado, pero falta una actualización del servidor '
           'para descargar los usuarios. El acceso con PIN sin internet aún no está listo. '
@@ -188,8 +188,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
       builder: (ctx) => AlertDialog(
         title: const Text('Desvincular dispositivo'),
         content: const Text(
-          'Después de desvincular, este dispositivo no podrá validar PINs '
-          'offline hasta vincularlo de nuevo. ¿Continuar?',
+          'Se eliminará el registro manual de este equipo. La sincronización '
+          'automática de PIN seguirá disponible con la sesión del negocio. ¿Continuar?',
         ),
         actions: [
           TextButton(
@@ -215,13 +215,18 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
     });
     try {
       await _service.clearDeviceBinding();
+      final businessId = ref.read(sessionProvider).activeBusinessId;
+      if (businessId != null) await _service.startBackgroundSync(businessId);
       await _refresh();
       if (mounted) {
         setState(() => _statusMessage = 'Dispositivo desvinculado.');
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = FriendlyError.humanize('Error desvinculando: $e'));
+        setState(
+          () =>
+              _errorMessage = FriendlyError.humanize('Error desvinculando: $e'),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -231,7 +236,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Vincular dispositivo')),
+      appBar: AppBar(title: const Text('PIN sin internet')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -243,7 +248,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
                   children: [
                     _buildIntroCard(),
                     const SizedBox(height: 16),
-                    if (_bound) _buildBoundCard() else _buildBindForm(),
+                    _buildBoundCard(),
+                    if (!_bound) _buildBindForm(),
                     if (_errorMessage != null) ...[
                       const SizedBox(height: 12),
                       _MessageBanner(
@@ -275,15 +281,15 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: const [
             Text(
-              '¿Qué hace vincular el dispositivo?',
+              'Sincronización automática de PIN',
               style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
             ),
             SizedBox(height: 8),
             Text(
-              'Permite iniciar sesión con PIN de empleados sin internet. '
-              'La lista de usuarios autorizados se guarda cifrada en este equipo y se actualiza '
-              'cuando hay red. Solo el propietario o administradores del '
-              'negocio pueden vincular o desvincular terminales.',
+              'Los PIN y permisos se descargan al entrar al negocio, sin vincular '
+              'este equipo. Se actualizan desde la caja principal por intranet '
+              'o desde internet y se guardan cifrados. La caja principal debe '
+              'seguir encendida y conectada a la red local.',
             ),
           ],
         ),
@@ -299,7 +305,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Vincular este dispositivo',
+              'Registro manual opcional (compatibilidad)',
               style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
             ),
             const SizedBox(height: 12),
@@ -328,7 +334,8 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
     final synced = _lastSyncAt != null
         ? DateFormat('dd MMM yyyy HH:mm').format(_lastSyncAt!.toLocal())
         : 'Nunca';
-    final stale = _lastSyncAt == null ||
+    final stale =
+        _lastSyncAt == null ||
         DateTime.now().toUtc().difference(_lastSyncAt!.toUtc()) >
             OfflineAuthService.rosterTtl;
 
@@ -340,26 +347,19 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.check_circle,
-                  color: Color(0xFF16A34A),
-                ),
+                const Icon(Icons.check_circle, color: Color(0xFF16A34A)),
                 const SizedBox(width: 8),
-                const Text(
-                  'Dispositivo vinculado',
+                Text(
+                  _bound
+                      ? 'Dispositivo vinculado'
+                      : 'Acceso con PIN automático',
                   style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            _InfoRow(
-              label: 'Negocio',
-              value: _boundBusinessId ?? '—',
-            ),
-            _InfoRow(
-              label: 'Usuarios en caché',
-              value: '$_rosterCount',
-            ),
+            _InfoRow(label: 'Negocio', value: _boundBusinessId ?? '—'),
+            _InfoRow(label: 'Usuarios en caché', value: '$_rosterCount'),
             _InfoRow(
               label: 'Última sincronización',
               value: synced,
@@ -372,10 +372,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
                   _lastSyncAt == null
                       ? 'Aún no se han descargado los usuarios. Sincroniza para preparar el acceso con PIN sin internet.'
                       : 'Los permisos guardados vencieron. Sincroniza para poder entrar con PIN sin internet.',
-                  style: TextStyle(
-                    color: Color(0xFFB91C1C),
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Color(0xFFB91C1C), fontSize: 12),
                 ),
               ),
             const SizedBox(height: 16),
@@ -384,20 +381,23 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
                 Expanded(
                   child: FilledButton.icon(
                     icon: const Icon(Icons.sync),
-                    label: Text(_busy ? 'Sincronizando...' : 'Sincronizar ahora'),
+                    label: Text(
+                      _busy ? 'Sincronizando...' : 'Sincronizar ahora',
+                    ),
                     onPressed: _busy ? null : _syncNow,
                   ),
                 ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.link_off),
-                  label: const Text('Desvincular'),
-                  onPressed: _busy ? null : _unbind,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFFEF4444),
-                    side: const BorderSide(color: Color(0xFFEF4444)),
+                if (_bound) const SizedBox(width: 12),
+                if (_bound)
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.link_off),
+                    label: const Text('Desvincular'),
+                    onPressed: _busy ? null : _unbind,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFEF4444),
+                      side: const BorderSide(color: Color(0xFFEF4444)),
+                    ),
                   ),
-                ),
               ],
             ),
           ],
@@ -408,11 +408,7 @@ class _DeviceBindingViewState extends ConsumerState<DeviceBindingView> {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.label,
-    required this.value,
-    this.valueColor,
-  });
+  const _InfoRow({required this.label, required this.value, this.valueColor});
 
   final String label;
   final String value;
@@ -428,10 +424,7 @@ class _InfoRow extends StatelessWidget {
             width: 180,
             child: Text(
               label,
-              style: const TextStyle(
-                color: Color(0xFF6B7280),
-                fontSize: 13,
-              ),
+              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
             ),
           ),
           Expanded(

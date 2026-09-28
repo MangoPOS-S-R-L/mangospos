@@ -23,15 +23,17 @@ class HubLanScanner {
     Duration? connectTimeout,
     Duration? httpTimeout,
     int? concurrency,
-  })  : _http = httpClient ?? http.Client(),
-        _connectTimeout = connectTimeout ?? const Duration(milliseconds: 400),
-        _httpTimeout = httpTimeout ?? const Duration(milliseconds: 1200),
-        _concurrency = concurrency ?? 48;
+  }) : _http = httpClient ?? http.Client(),
+       _connectTimeout = connectTimeout ?? const Duration(milliseconds: 400),
+       _httpTimeout = httpTimeout ?? const Duration(milliseconds: 1200),
+       _concurrency = concurrency ?? 48;
 
   final http.Client _http;
   final Duration _connectTimeout;
   final Duration _httpTimeout;
   final int _concurrency;
+
+  void dispose() => _http.close();
 
   static const List<int> _ports = [kHubPortPrimary, kHubPortAlt];
 
@@ -128,10 +130,13 @@ class HubLanScanner {
   Future<bool> _isMangoAgent(String baseUrl) async {
     for (final path in const ['/status', '/hub/health']) {
       try {
-        final resp =
-            await _http.get(Uri.parse('$baseUrl$path')).timeout(_httpTimeout);
+        final resp = await _http
+            .get(Uri.parse('$baseUrl$path'))
+            .timeout(_httpTimeout);
         if (resp.statusCode == 200) return true;
-      } catch (_) {/* siguiente path */}
+      } catch (_) {
+        /* siguiente path */
+      }
     }
     return false;
   }

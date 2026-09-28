@@ -37,7 +37,7 @@ class _Auth implements OfflineAuthService {
   }
 
   @override
-  Future<List<OfflineRosterUser>> syncRoster() async {
+  Future<List<OfflineRosterUser>> syncRoster({String? businessId}) async {
     downloads++;
     throw const PostgrestException(
       message: 'function crypt(text, text) does not exist',
@@ -61,6 +61,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.widgetWithText(FilledButton, 'Vincular dispositivo'),
+      );
       await tester.tap(
         find.widgetWithText(FilledButton, 'Vincular dispositivo'),
       );

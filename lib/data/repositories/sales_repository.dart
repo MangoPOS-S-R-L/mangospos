@@ -9,6 +9,7 @@ import '../models/credit_note_result.dart';
 import '../models/order_item_removal_reason.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
+import '../utils/payment_recovery.dart';
 import '../models/sales_note.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
@@ -29,7 +30,7 @@ typedef OpenTableResult = ({
     String? customerName,
     String? note,
   })
-      bundle,
+  bundle,
 });
 
 /// Excepción tipada para señalizar que la orden consultada no pertenece
@@ -339,7 +340,8 @@ class SalesRepository {
     // en `completed` sin forma de anularla desde la UI (la fila ya no
     // aparecía como activa). Por eso se anulan juntas todas las piernas que
     // comparten el mismo NCF.
-    const paymentCols = 'id, order_id, check_id, fiscal_document_id, '
+    const paymentCols =
+        'id, order_id, check_id, fiscal_document_id, '
         'payment_method_id, amount, change_amount, session_id, status';
 
     final pivotRaw = await _client
@@ -360,8 +362,9 @@ class SalesRepository {
 
     // Piernas de ESTA venta. Sin fiscal_document_id (venta sin NCF), la
     // venta es solo el pago pivote.
-    final fiscalDocumentId =
-        pivotPayment['fiscal_document_id']?.toString().trim();
+    final fiscalDocumentId = pivotPayment['fiscal_document_id']
+        ?.toString()
+        .trim();
     var salePayments = <Map<String, dynamic>>[pivotPayment];
     if (fiscalDocumentId != null && fiscalDocumentId.isNotEmpty) {
       final legsRaw = await _client
@@ -372,8 +375,7 @@ class SalesRepository {
       final legs = List<Map<String, dynamic>>.from(legsRaw);
       if (legs.isNotEmpty) salePayments = legs;
     }
-    final salePaymentIds =
-        salePayments.map((p) => p['id'].toString()).toSet();
+    final salePaymentIds = salePayments.map((p) => p['id'].toString()).toSet();
 
     // ¿Le quedan pagos vivos a la orden FUERA de esta venta? Si no, la
     // anulación es total: anula ítems, cierra la orden como `void` y libera
@@ -513,10 +515,7 @@ class SalesRepository {
       for (final leg in salePayments) {
         if (codeOf(leg) != 'cash') continue;
         final cashierSessionId = leg['session_id']?.toString();
-        final netAmount = netPaymentAmount(
-          leg['amount'],
-          leg['change_amount'],
-        );
+        final netAmount = netPaymentAmount(leg['amount'], leg['change_amount']);
         if (cashierSessionId != null &&
             cashierSessionId.isNotEmpty &&
             netAmount > 0) {
@@ -830,9 +829,7 @@ class SalesRepository {
         }
       }
 
-      items.add(
-        baseItem.copyWith(modifiers: modifiers, taxLines: taxLines),
-      );
+      items.add(baseItem.copyWith(modifiers: modifiers, taxLines: taxLines));
     }
 
     final checksRaw = (bundleMap['checks'] as List?) ?? const [];
@@ -1186,10 +1183,14 @@ class SalesRepository {
     try {
       await _assertSessionInBusinessScope(sessionId, businessId: businessId);
 
-      var query = _client.from('table_sessions').update({
-        'delivery_address':
-            address?.trim().isEmpty == true ? null : address?.trim(),
-      }).eq('id', sessionId);
+      var query = _client
+          .from('table_sessions')
+          .update({
+            'delivery_address': address?.trim().isEmpty == true
+                ? null
+                : address?.trim(),
+          })
+          .eq('id', sessionId);
 
       final scopedBusinessId = businessId?.trim();
       if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
@@ -1419,14 +1420,15 @@ class SalesRepository {
       // El cliente reordena los grupos desde el editor de producto.
       Future<List<dynamic>> fetch({required bool withSoldOut}) async {
         return await _client
-            .from('menu_item_groups')
-            .select(
-              'group_id, position, modifier_groups!inner($_modifierGroupColumns, '
-              'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''}))',
-            )
-            .eq('menu_item_id', menuItemId)
-            .eq('modifier_groups.is_active', true)
-            .order('position', ascending: true) as List<dynamic>;
+                .from('menu_item_groups')
+                .select(
+                  'group_id, position, modifier_groups!inner($_modifierGroupColumns, '
+                  'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''}))',
+                )
+                .eq('menu_item_id', menuItemId)
+                .eq('modifier_groups.is_active', true)
+                .order('position', ascending: true)
+            as List<dynamic>;
       }
 
       List<dynamic> data;
@@ -1456,16 +1458,17 @@ class SalesRepository {
   /// bajada offline en background: dos consultas livianas (grupos una vez +
   /// enlaces producto→grupo) en vez de una por producto.
   Future<Map<String, List<Map<String, dynamic>>>>
-      getModifierGroupsByItemForBusiness(String businessId) async {
+  getModifierGroupsByItemForBusiness(String businessId) async {
     Future<List<dynamic>> fetchGroups({required bool withSoldOut}) async {
       return await _client
-          .from('modifier_groups')
-          .select(
-            '$_modifierGroupColumns, '
-            'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''})',
-          )
-          .eq('business_id', businessId)
-          .eq('is_active', true) as List<dynamic>;
+              .from('modifier_groups')
+              .select(
+                '$_modifierGroupColumns, '
+                'modifiers($_modifierColumns${withSoldOut ? ', is_sold_out' : ''})',
+              )
+              .eq('business_id', businessId)
+              .eq('is_active', true)
+          as List<dynamic>;
     }
 
     List<dynamic> groupRows;
@@ -1486,11 +1489,15 @@ class SalesRepository {
     }
     if (groupsById.isEmpty) return const {};
 
-    final links = await _client
-        .from('menu_item_groups')
-        .select('menu_item_id, group_id, position, modifier_groups!inner(business_id)')
-        .eq('modifier_groups.business_id', businessId)
-        .order('position', ascending: true) as List<dynamic>;
+    final links =
+        await _client
+                .from('menu_item_groups')
+                .select(
+                  'menu_item_id, group_id, position, modifier_groups!inner(business_id)',
+                )
+                .eq('modifier_groups.business_id', businessId)
+                .order('position', ascending: true)
+            as List<dynamic>;
 
     final byItem = <String, List<Map<String, dynamic>>>{};
     for (final raw in links.whereType<Map>()) {
@@ -1523,21 +1530,20 @@ class SalesRepository {
     List<Map<String, dynamic>> rows({
       required bool withMenuItem,
       required bool withModifierId,
-    }) =>
-        modifiers
-            .map(
-              (modifier) => {
-                'item_id': itemId,
-                'name': modifier['name'],
-                'qty': modifier['qty'] ?? 1,
-                'price': modifier['price'] ?? 0,
-                if (withMenuItem && modifier['menu_item_id'] != null)
-                  'menu_item_id': modifier['menu_item_id'],
-                if (withModifierId && modifier['modifier_id'] != null)
-                  'modifier_id': modifier['modifier_id'],
-              },
-            )
-            .toList(growable: false);
+    }) => modifiers
+        .map(
+          (modifier) => {
+            'item_id': itemId,
+            'name': modifier['name'],
+            'qty': modifier['qty'] ?? 1,
+            'price': modifier['price'] ?? 0,
+            if (withMenuItem && modifier['menu_item_id'] != null)
+              'menu_item_id': modifier['menu_item_id'],
+            if (withModifierId && modifier['modifier_id'] != null)
+              'modifier_id': modifier['modifier_id'],
+          },
+        )
+        .toList(growable: false);
 
     final hasComponentId = modifiers.any((m) => m['menu_item_id'] != null);
     final hasModifierId = modifiers.any((m) => m['modifier_id'] != null);
@@ -1553,7 +1559,9 @@ class SalesRepository {
     Object? firstError;
     for (final attempt in attempts) {
       try {
-        await _client.from('order_item_modifiers').insert(
+        await _client
+            .from('order_item_modifiers')
+            .insert(
               rows(
                 withMenuItem: attempt.menuItem,
                 withModifierId: attempt.modifierId,
@@ -1685,9 +1693,7 @@ class SalesRepository {
             // Última línea de defensa: si toggle también falla, registramos
             // pero no rompemos el flow — el UPDATE básico ya se hizo.
             // ignore: avoid_print
-            print(
-              '[updateItemDetails fallback] toggleItemTakeout failed: $e',
-            );
+            print('[updateItemDetails fallback] toggleItemTakeout failed: $e');
           }
         }
         await updateItemDiscountAndNotes(
@@ -2004,12 +2010,14 @@ class SalesRepository {
 
       List<OrderItem> items;
       if (hasEmbeddedRelations) {
-        items = itemMaps.map((itemMap) {
-          return OrderItem.fromMap(itemMap).copyWith(
-            modifiers: _parseEmbeddedModifiers(itemMap['modifiers']),
-            taxLines: _parseEmbeddedTaxLines(itemMap['tax_lines']),
-          );
-        }).toList(growable: false);
+        items = itemMaps
+            .map((itemMap) {
+              return OrderItem.fromMap(itemMap).copyWith(
+                modifiers: _parseEmbeddedModifiers(itemMap['modifiers']),
+                taxLines: _parseEmbeddedTaxLines(itemMap['tax_lines']),
+              );
+            })
+            .toList(growable: false);
       } else {
         // Retrocompat: DB sin la migración del embed → traemos modifiers y
         // tax_lines en lotes (ver _loadTaxLinesByItem) para evitar HTTP 414.
@@ -2040,8 +2048,7 @@ class SalesRepository {
               (item) => item.copyWith(
                 modifiers:
                     modifiersByItem[item.id] ?? const <OrderItemModifier>[],
-                taxLines:
-                    taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
+                taxLines: taxLinesByItem[item.id] ?? const <OrderItemTaxLine>[],
               ),
             )
             .toList(growable: false);
@@ -2826,29 +2833,40 @@ class SalesRepository {
     String? offlineNcf,
   }) async {
     try {
-      final response = await _client.rpc(
-        SalesQueries.rpcProcessPayment,
-        params: {
-          'p_order_id': orderId,
-          'p_check_id': checkId,
-          'p_payment_method_id': paymentMethodId,
-          'p_amount': amount,
-          'p_reference': reference,
-          'p_change_amount': changeAmount,
-          'p_customer_id': customerId,
-          'p_customer_rnc': customerRnc,
-          'p_requested_ncf_type': fiscalType,
-          'p_cashier_session_id': cashierSessionId,
-          'p_close_order': closeOrder,
-          'p_close_check': closeCheck,
-          'p_split_sequence': splitSequence,
-          if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
-          if (offlineNcf != null && offlineNcf.isNotEmpty)
-            'p_offline_ncf': offlineNcf,
-        },
-      );
+      final response = await _client
+          .rpc(
+            SalesQueries.rpcProcessPayment,
+            params: {
+              'p_order_id': orderId,
+              'p_check_id': checkId,
+              'p_payment_method_id': paymentMethodId,
+              'p_amount': amount,
+              'p_reference': reference,
+              'p_change_amount': changeAmount,
+              'p_customer_id': customerId,
+              'p_customer_rnc': customerRnc,
+              'p_requested_ncf_type': fiscalType,
+              'p_cashier_session_id': cashierSessionId,
+              'p_close_order': closeOrder,
+              'p_close_check': closeCheck,
+              'p_split_sequence': splitSequence,
+              if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
+              if (offlineNcf != null && offlineNcf.isNotEmpty)
+                'p_offline_ncf': offlineNcf,
+            },
+          )
+          .timeout(const Duration(seconds: 12));
 
-      return Payment.fromMap(response as Map<String, dynamic>);
+      return await validatePaymentResponse(
+        _client,
+        Map<String, dynamic>.from(response as Map),
+        orderId: orderId,
+        checkId: checkId,
+        paymentMethodId: paymentMethodId,
+        splitSequence: splitSequence,
+        amount: amount,
+        changeAmount: changeAmount,
+      );
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('CASH_SESSION_REQUIRED') ||
@@ -2862,6 +2880,8 @@ class SalesRepository {
           amount: amount,
           changeAmount: changeAmount,
           cashierSessionId: cashierSessionId,
+          paymentMethodId: paymentMethodId,
+          splitSequence: splitSequence,
         );
         if (recovered != null) {
           return recovered;
@@ -2883,6 +2903,8 @@ class SalesRepository {
           checkId: checkId,
           splitSequence: splitSequence,
           amount: amount,
+          paymentMethodId: paymentMethodId,
+          changeAmount: changeAmount,
         );
         if (recovered != null) {
           return recovered;
@@ -2890,7 +2912,7 @@ class SalesRepository {
       }
 
       throw Exception(
-        'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
+        'No se pudo confirmar el resultado del pago. No asumas que fue cancelado: $e',
       );
     }
   }
@@ -2900,30 +2922,18 @@ class SalesRepository {
     String? checkId,
     required int splitSequence,
     required double amount,
+    required String paymentMethodId,
+    required double changeAmount,
   }) async {
-    try {
-      dynamic query = _client
-          .from('payments')
-          .select()
-          .eq('order_id', orderId)
-          .eq('status', 'completed')
-          .eq('split_sequence', splitSequence);
-
-      query = checkId == null
-          ? query.isFilter('check_id', null)
-          : query.eq('check_id', checkId);
-
-      final rows = await query.order('created_at', ascending: false).limit(5);
-
-      for (final row in rows) {
-        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
-        if ((payment.amount - amount).abs() <= 0.01) {
-          return payment;
-        }
-      }
-    } catch (_) {}
-
-    return null;
+    return recoverCompletedPayment(
+      _client,
+      orderId: orderId,
+      checkId: checkId,
+      paymentMethodId: paymentMethodId,
+      splitSequence: splitSequence,
+      amount: amount,
+      changeAmount: changeAmount,
+    );
   }
 
   Future<Payment?> _recoverCompletedPaymentAfterNcfCollision({
@@ -2932,42 +2942,24 @@ class SalesRepository {
     required double amount,
     required double changeAmount,
     String? cashierSessionId,
+    required String paymentMethodId,
+    required int splitSequence,
   }) async {
-    try {
-      dynamic query = _client
-          .from('payments')
-          .select()
-          .eq('order_id', orderId)
-          .eq('status', 'completed');
-
-      query = checkId == null
-          ? query.isFilter('check_id', null)
-          : query.eq('check_id', checkId);
-
-      if (cashierSessionId != null && cashierSessionId.isNotEmpty) {
-        query = query.eq('session_id', cashierSessionId);
-      }
-
-      final rows = await query.order('created_at', ascending: false).limit(5);
-      final now = DateTime.now().toUtc();
-
-      for (final row in rows) {
-        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
-        final secondsDiff = now
-            .difference(payment.createdAt.toUtc())
-            .inSeconds
-            .abs();
-        final amountMatches = (payment.amount - amount).abs() <= 0.01;
-        final changeMatches =
-            (payment.changeAmount - changeAmount).abs() <= 0.01;
-
-        if (secondsDiff <= 120 && amountMatches && changeMatches) {
-          return payment;
-        }
-      }
-    } catch (_) {}
-
-    return null;
+    final payment = await recoverCompletedPayment(
+      _client,
+      orderId: orderId,
+      checkId: checkId,
+      paymentMethodId: paymentMethodId,
+      splitSequence: splitSequence,
+      amount: amount,
+      changeAmount: changeAmount,
+    );
+    if (cashierSessionId != null &&
+        cashierSessionId.isNotEmpty &&
+        payment?.sessionId != cashierSessionId) {
+      return null;
+    }
+    return payment;
   }
 
   /// Obtener pagos de una orden
@@ -3551,7 +3543,9 @@ class SalesRepository {
     final itemRows = List<Map<String, dynamic>>.from(
       await _client
           .from('order_items')
-          .select('product_id,product_name,qty,quantity,subtotal,discounts,status')
+          .select(
+            'product_id,product_name,qty,quantity,subtotal,discounts,status',
+          )
           .eq('business_id', businessId)
           .neq('status', 'void')
           .gte('created_at', fromIso)
@@ -3582,8 +3576,11 @@ class SalesRepository {
     }
 
     final ranked = agg.values.toList()
-      ..sort((a, b) => (b['total_quantity'] as double)
-          .compareTo(a['total_quantity'] as double));
+      ..sort(
+        (a, b) => (b['total_quantity'] as double).compareTo(
+          a['total_quantity'] as double,
+        ),
+      );
     final top = ranked.take(limit).toList(growable: false);
     if (top.isEmpty) return const [];
 
@@ -3600,19 +3597,21 @@ class SalesRepository {
         if (row['id'] != null) row['id'].toString(): row,
     };
 
-    return top.map((row) {
-      final m = meta[row['product_id']];
-      final menuName = m?['name']?.toString().trim();
-      return <String, dynamic>{
-        'product_id': row['product_id'],
-        'product_name': (menuName != null && menuName.isNotEmpty)
-            ? menuName
-            : row['product_name'],
-        'image_url': m?['image_url'],
-        'total_quantity': row['total_quantity'],
-        'total_amount': row['total_amount'],
-      };
-    }).toList(growable: false);
+    return top
+        .map((row) {
+          final m = meta[row['product_id']];
+          final menuName = m?['name']?.toString().trim();
+          return <String, dynamic>{
+            'product_id': row['product_id'],
+            'product_name': (menuName != null && menuName.isNotEmpty)
+                ? menuName
+                : row['product_name'],
+            'image_url': m?['image_url'],
+            'total_quantity': row['total_quantity'],
+            'total_amount': row['total_amount'],
+          };
+        })
+        .toList(growable: false);
   }
 
   /// Últimas N órdenes del business para el panel "Recent Orders" del
@@ -3626,10 +3625,7 @@ class SalesRepository {
   }) async {
     final response = await _client.rpc(
       'fn_dashboard_recent_orders',
-      params: {
-        '_business_id': businessId,
-        '_limit': limit,
-      },
+      params: {'_business_id': businessId, '_limit': limit},
     );
     if (response == null) return const [];
     return List<Map<String, dynamic>>.from(response as List);
@@ -3699,7 +3695,8 @@ class SalesRepository {
       final period = periodOf(row['created_at']);
       if (period == null) continue;
       income[period] =
-          income[period]! + (asDouble(row['amount']) - asDouble(row['change_amount']));
+          income[period]! +
+          (asDouble(row['amount']) - asDouble(row['change_amount']));
     }
 
     // 2. Órdenes: total (no void), en curso y completadas. Vocabulario del
@@ -3743,7 +3740,8 @@ class SalesRepository {
       if (period == null) continue;
       final qtyRaw = asDouble(row['qty']);
       itemsSold[period] =
-          itemsSold[period]! + (qtyRaw != 0 ? qtyRaw : asDouble(row['quantity']));
+          itemsSold[period]! +
+          (qtyRaw != 0 ? qtyRaw : asDouble(row['quantity']));
     }
 
     return [

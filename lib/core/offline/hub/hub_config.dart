@@ -107,7 +107,8 @@ class HubConfigService {
   static String _roleKey(String businessId) => 'hub_device_role_$businessId';
   static String _primaryUrlKey(String businessId) =>
       'hub_primary_url_$businessId';
-  static String _backupUrlKey(String businessId) => 'hub_backup_url_$businessId';
+  static String _backupUrlKey(String businessId) =>
+      'hub_backup_url_$businessId';
 
   Future<HubDeviceRole> getDeviceRole(String businessId) async {
     if (businessId.isEmpty) return HubDeviceRole.pos;
@@ -118,7 +119,12 @@ class HubConfigService {
   Future<void> setDeviceRole(String businessId, HubDeviceRole role) async {
     if (businessId.isEmpty) return;
     final storage = await StorageService.getInstance();
-    await storage.write(_roleKey(businessId), hubDeviceRoleToString(role));
+    if (!await storage.write(
+      _roleKey(businessId),
+      hubDeviceRoleToString(role),
+    )) {
+      throw StateError('No se pudo persistir el rol del Hub.');
+    }
   }
 
   /// URL/IP del Hub primario que las cajas usan para conectarse (p.ej.
@@ -159,7 +165,8 @@ class HubConfigService {
     }
   }
 
-  static String _leaseLostKey(String businessId) => 'hub_lease_lost_$businessId';
+  static String _leaseLostKey(String businessId) =>
+      'hub_lease_lost_$businessId';
 
   /// H7: registra que ESTE equipo cedió el Hub porque otro fue promovido.
   ///

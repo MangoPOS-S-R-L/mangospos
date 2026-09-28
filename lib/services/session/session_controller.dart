@@ -353,10 +353,7 @@ class SessionController extends Notifier<SessionState> {
       ),
     );
 
-    // Fase 2.6 — auto-sync del roster offline al login y cada hora mientras
-    // la app esté abierta + al recuperar conectividad. Idempotente: si ya
-    // hay un ciclo corriendo para este business, no duplica. Si el device
-    // no fue vinculado, internamente se vuelve no-op.
+    // Download PINs for this business without a manual device binding.
     if (businessId != null && businessId.isNotEmpty) {
       unawaited(OfflineAuthService().startBackgroundSync(businessId));
       // Prewarm del cache de impresoras por área. Sin esto, si el cajero
@@ -367,8 +364,9 @@ class SessionController extends Notifier<SessionState> {
       // las áreas que sí se pudieron cachear quedan; el resto reintenta
       // al siguiente login.
       unawaited(
-        PrintingService(Supabase.instance.client)
-            .prewarmPrinterCache(businessId: businessId),
+        PrintingService(
+          Supabase.instance.client,
+        ).prewarmPrinterCache(businessId: businessId),
       );
     }
   }
@@ -377,6 +375,7 @@ class SessionController extends Notifier<SessionState> {
     _clearActiveWaiterIfForeign(businessId);
     BusinessResolver.setActiveBusinessId(businessId);
     _safeSet(state.copyWith(activeBusinessId: businessId));
+    unawaited(OfflineAuthService().startBackgroundSync(businessId));
   }
 
   /// Descarta el PIN multimesero cacheado si pertenece a otro negocio.
@@ -455,7 +454,9 @@ class SessionController extends Notifier<SessionState> {
           ? const <Map<String, dynamic>>[]
           : await client
                 .from('businesses')
-                .select('id, business_name, branch_name, status, domain, owner_id')
+                .select(
+                  'id, business_name, branch_name, status, domain, owner_id',
+                )
                 .inFilter('id', membershipBusinessIds);
 
       final businessMap = {
@@ -652,7 +653,9 @@ class SessionController extends Notifier<SessionState> {
         try {
           final storage = await StorageService.getInstance();
           businessId = await storage.read(StorageKeys.activeBusinessId);
-        } catch (_) {/* storage no crítico */}
+        } catch (_) {
+          /* storage no crítico */
+        }
       }
       if ((businessId == null || businessId.isEmpty) && cachedRows != null) {
         businessId = cachedRows.first['business_id']?.toString();
@@ -715,8 +718,9 @@ class SessionController extends Notifier<SessionState> {
         final id = candidate['business_id']?.toString();
         if (id == null || id.isEmpty) continue;
         final raw = candidate['businesses'];
-        final map =
-            raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+        final map = raw is Map
+            ? Map<String, dynamic>.from(raw)
+            : <String, dynamic>{};
         final candidateBranch = map['branch_name']?.toString().trim();
         availableBusinesses.add(
           SessionBusiness(
@@ -808,9 +812,7 @@ class SessionController extends Notifier<SessionState> {
     // con una fila marcada `shared_across_branches` en otra sucursal del mismo
     // grupo (mismo `owner_id`). Hereda el rol de esa fila. El RLS respalda el
     // acceso a datos vía la rama de usuario compartido.
-    if (roleStr == null &&
-        targetOwnerId != null &&
-        targetOwnerId.isNotEmpty) {
+    if (roleStr == null && targetOwnerId != null && targetOwnerId.isNotEmpty) {
       final shared = await client
           .from('user_businesses')
           .select('role, businesses!inner(owner_id)')
@@ -952,8 +954,7 @@ class SessionController extends Notifier<SessionState> {
 
   /// Whether the current user can access the full dashboard.
   /// Controlled by the `dashboard.acceso` permission in the database.
-  bool get canAccessDashboard =>
-      hasPermission('dashboard.acceso');
+  bool get canAccessDashboard => hasPermission('dashboard.acceso');
 
   bool hasPermission(String permission) =>
       _hasPermission(state.permissions, permission);
@@ -1250,6 +1251,7 @@ class SessionController extends Notifier<SessionState> {
   }
 
   Future<void> setUnauthenticated() async {
+    OfflineAuthService().stopBackgroundSync();
     // El PIN multimesero es identidad del usuario/turno, no del device:
     // si sobrevive al logout, el próximo usuario abre mesas atribuidas
     // al mesero anterior (precuenta/factura salen con otro nombre).
@@ -1284,8 +1286,10 @@ class SessionController extends Notifier<SessionState> {
       // snapshots y mappings se conservan. Best-effort: nunca bloquea el logout.
       if (businessId != null && businessId.isNotEmpty) {
         try {
-          await OfflinePosService()
-              .clearOfflineBusinessData(businessId, preservePending: true);
+          await OfflinePosService().clearOfflineBusinessData(
+            businessId,
+            preservePending: true,
+          );
         } catch (e) {
           debugPrint('[session] limpieza offline en signOut falló: $e');
         }

@@ -12,7 +12,6 @@ import '../../../core/offline/hub/hub_lan_scan.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/printing/agent_discovery.dart';
-import '../../../data/repositories/pos_settings_repository.dart';
 import '../../../services/session/session_controller.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 
@@ -39,15 +38,15 @@ class _HubNetworkSettingsViewState
   final TextEditingController _backupController = TextEditingController();
 
   bool _loading = true;
-  bool _saving = false;
   String? _businessId;
-  NetworkPolicy _policy = NetworkPolicy.cloud;
   HubDeviceRole _role = HubDeviceRole.pos;
   String? _probeResult; // texto del último "probar conexión"
   bool _discovering = false; // buscando equipos en la red (mDNS)
   int _pendingCount = 0; // operaciones sin subir al servidor (cola + dead)
-  int _hubOpLogCount = 0; // ops en el op-log del Hub (solo si este equipo es Hub)
-  String? _backupUrl; // respaldo configurado; null = el Hub es punto único de falla
+  int _hubOpLogCount =
+      0; // ops en el op-log del Hub (solo si este equipo es Hub)
+  String?
+  _backupUrl; // respaldo configurado; null = el Hub es punto único de falla
   Map<String, dynamic>? _leaseLost; // este equipo cedió el Hub a otro
   bool _promoting = false;
 
@@ -72,8 +71,6 @@ class _HubNetworkSettingsViewState
       return;
     }
     try {
-      final repo = ref.read(posSettingsRepositoryProvider);
-      final modeStr = await repo.getNetworkMode(bizId);
       final role = await _hubConfig.getDeviceRole(bizId);
       final url = await _hubConfig.getHubUrl(bizId);
       final backup = await _hubConfig.getBackupUrl(bizId);
@@ -84,7 +81,6 @@ class _HubNetworkSettingsViewState
         _backupUrl = backup;
         _leaseLost = leaseLost;
         _businessId = bizId;
-        _policy = networkPolicyFromString(modeStr);
         _role = role;
         _urlController.text = url ?? '';
         _loading = false;
@@ -105,7 +101,8 @@ class _HubNetworkSettingsViewState
     var pending = 0;
     var hubOps = 0;
     try {
-      pending = await svc.pendingActionsCount(bizId) +
+      pending =
+          await svc.pendingActionsCount(bizId) +
           await svc.deadActionsCount(bizId);
     } catch (_) {}
     try {
@@ -116,29 +113,6 @@ class _HubNetworkSettingsViewState
       _pendingCount = pending;
       _hubOpLogCount = hubOps;
     });
-  }
-
-  Future<void> _savePolicy(NetworkPolicy p) async {
-    final bizId = _businessId;
-    if (bizId == null) return;
-    setState(() {
-      _policy = p;
-      _saving = true;
-    });
-    try {
-      await ref.read(posSettingsRepositoryProvider).setNetworkMode(
-            businessId: bizId,
-            mode: networkPolicyToString(p),
-          );
-      // Efecto inmediato: recalcular el modo del terminal con la nueva política.
-      unawaited(
-        ref.read(hubModeProvider.notifier).reloadConfigAndRefresh(),
-      );
-    } catch (e) {
-      _toast('No se pudo guardar la política: $e');
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
   }
 
   Future<void> _saveRole(HubDeviceRole r) async {
@@ -272,9 +246,11 @@ class _HubNetworkSettingsViewState
             : _urlController.text.trim(),
       );
       if (!mounted) return;
-      setState(() => _probeResult = url != null
-          ? '✅ Hub alcanzable en $url'
-          : '❌ No se encontró un Hub alcanzable');
+      setState(
+        () => _probeResult = url != null
+            ? '✅ Hub alcanzable en $url'
+            : '❌ No se encontró un Hub alcanzable',
+      );
     } catch (e) {
       if (mounted) setState(() => _probeResult = '❌ Error al probar: $e');
     }
@@ -317,43 +293,54 @@ class _HubNetworkSettingsViewState
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _businessId == null
-              ? const Center(child: Text('No hay un negocio activo.'))
-              : ListView(
-                  padding: const EdgeInsets.all(16),
+          ? const Center(child: Text('No hay un negocio activo.'))
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _infoCard(),
+                const SizedBox(height: 16),
+                _statusCard(),
+                const SizedBox(height: 16),
+                const ListTile(
+                  title: Text('Intranet automatica'),
+                  subtitle: Text(
+                    'No necesitas elegir un modo de red ni ingresar una IP. '
+                    'La caja se prepara con internet y los demas equipos la detectan por LAN.',
+                  ),
+                ),
+                if (ref.read(hubModeProvider.notifier).preparationStatus
+                    case final String message)
+                  ListTile(title: Text(message)),
+                ExpansionTile(
+                  title: const Text('Diagnostico y recuperacion avanzada'),
                   children: [
-                    _infoCard(),
                     const SizedBox(height: 16),
-                    _statusCard(),
-                    const SizedBox(height: 16),
-                    _sectionTitle('Modo del local'),
-                    _policySelector(isOwner),
-                    if (_policy == NetworkPolicy.hub) ...[
+                    if (_leaseLost != null) _leaseLostNotice(),
+                    // Solo el Hub es punto único de falla: en una caja o en
+                    // el respaldo este aviso era falso y confundía.
+                    if (_role == HubDeviceRole.hub)
+                      _singlePointOfFailureWarning(),
+                    _sectionTitle('Rol de este dispositivo'),
+                    _roleSelector(),
+                    if (_role == HubDeviceRole.hub) ...[
                       const SizedBox(height: 16),
-                      if (_leaseLost != null) _leaseLostNotice(),
-                      // Solo el Hub es punto único de falla: en una caja o en
-                      // el respaldo este aviso era falso y confundía.
-                      if (_role == HubDeviceRole.hub)
-                        _singlePointOfFailureWarning(),
-                      _sectionTitle('Rol de este dispositivo'),
-                      _roleSelector(),
-                      if (_role == HubDeviceRole.hub) ...[
-                        const SizedBox(height: 16),
-                        _sectionTitle('Equipo de respaldo'),
-                        _backupField(),
-                      ],
-                      if (_role != HubDeviceRole.hub) ...[
-                        const SizedBox(height: 16),
-                        _sectionTitle('Dirección del Hub'),
-                        _urlField(),
-                      ],
-                      if (_role == HubDeviceRole.hubBackup) ...[
-                        const SizedBox(height: 16),
-                        _sectionTitle('Promover a Hub'),
-                        _promoteCard(isOwner),
-                      ],
+                      _sectionTitle('Equipo de respaldo'),
+                      _backupField(),
+                    ],
+                    if (_role != HubDeviceRole.hub) ...[
+                      const SizedBox(height: 16),
+                      _sectionTitle('Dirección del Hub'),
+                      _urlField(),
+                    ],
+                    if (_role == HubDeviceRole.hubBackup) ...[
+                      const SizedBox(height: 16),
+                      _sectionTitle('Promover a Hub'),
+                      _promoteCard(isOwner),
                     ],
                   ],
                 ),
+              ],
+            ),
     );
   }
 
@@ -382,9 +369,10 @@ class _HubNetworkSettingsViewState
             Row(
               children: [
                 const Expanded(
-                  child: Text('Estado de este equipo',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 15)),
+                  child: Text(
+                    'Estado de este equipo',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
                 ),
                 IconButton(
                   tooltip: 'Actualizar',
@@ -413,13 +401,16 @@ class _HubNetworkSettingsViewState
         children: [
           SizedBox(
             width: 150,
-            child: Text(label,
-                style: const TextStyle(color: Colors.grey, fontSize: 13)),
+            child: Text(
+              label,
+              style: const TextStyle(color: Colors.grey, fontSize: 13),
+            ),
           ),
           Expanded(
-            child: Text(value,
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600)),
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
@@ -438,10 +429,10 @@ class _HubNetworkSettingsViewState
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'En modo Hub, una computadora del local (la caja principal) es '
-                'el servidor central de la red local: todas las cajas leen y '
-                'escriben de ella y solo el Hub sube al servidor. Úsalo cuando '
-                'el internet del local sea malo o intermitente.',
+                'La caja principal se prepara automaticamente como servidor '
+                'local. Al perder internet, los equipos preparados mantienen '
+                'la comunicacion por la red del negocio. La caja y el router '
+                'deben permanecer encendidos.',
                 style: const TextStyle(color: Color(0xFF1E3A8A), fontSize: 13),
               ),
             ),
@@ -493,53 +484,12 @@ class _HubNetworkSettingsViewState
   }
 
   Widget _sectionTitle(String t) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(t,
-            style:
-                const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-      );
-
-  Widget _policySelector(bool isOwner) {
-    return Column(
-      children: [
-        // Solo el dueño (o mientras no se guarda) puede interactuar; para el
-        // resto se absorbe el toque (RadioGroup.onChanged no admite null).
-        AbsorbPointer(
-          absorbing: !isOwner || _saving,
-          child: RadioGroup<NetworkPolicy>(
-            groupValue: _policy,
-            onChanged: (v) {
-              if (v != null) _savePolicy(v);
-            },
-            child: const Column(
-            children: [
-              RadioListTile<NetworkPolicy>(
-                value: NetworkPolicy.cloud,
-                title: Text('Nube (directo al servidor)'),
-                subtitle: Text(
-                    'Cada caja se comunica directo con el servidor. Ideal si '
-                    'la red del local es buena.'),
-              ),
-              RadioListTile<NetworkPolicy>(
-                value: NetworkPolicy.hub,
-                title: Text('Hub local (caja principal como servidor)'),
-                subtitle: Text(
-                    'Las cajas van por la LAN a la caja principal. Resuelve el '
-                    'internet malo/intermitente.'),
-              ),
-            ],
-            ),
-          ),
-        ),
-        if (!isOwner)
-          const Padding(
-            padding: EdgeInsets.only(top: 4),
-            child: Text('Solo el dueño puede cambiar la política del local.',
-                style: TextStyle(color: Colors.grey, fontSize: 12)),
-          ),
-      ],
-    );
-  }
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Text(
+      t,
+      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+    ),
+  );
 
   /// H7: este equipo era el Hub y otro fue promovido mientras estaba apagado o
   /// sin red. Ya no sube (para no duplicar ventas) y quedó como respaldo.
@@ -548,7 +498,7 @@ class _HubNetworkSettingsViewState
     final pendientes = (lost['pending_ops'] as num?)?.toInt() ?? 0;
     final detalle = pendientes > 0
         ? ' Quedaron $pendientes operaciones en este equipo; lo que alcanzó a '
-            'copiarse al respaldo ya lo sube el Hub nuevo.'
+              'copiarse al respaldo ya lo sube el Hub nuevo.'
         : '';
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -712,15 +662,17 @@ class _HubNetworkSettingsViewState
             value: HubDeviceRole.hub,
             title: Text('Este equipo ES el Hub'),
             subtitle: Text(
-                'Debe permanecer encendido con la app abierta durante el '
-                'servicio. Solo uno por local.'),
+              'Debe permanecer encendido con la app abierta durante el '
+              'servicio. Solo uno por local.',
+            ),
           ),
           RadioListTile<HubDeviceRole>(
             value: HubDeviceRole.hubBackup,
             title: Text('Respaldo del Hub'),
             subtitle: Text(
-                'Guarda copia de las ventas del Hub. Si el Hub se daña, se '
-                'promueve a mano desde aquí.'),
+              'Guarda copia de las ventas del Hub. Si el Hub se daña, se '
+              'promueve a mano desde aquí.',
+            ),
           ),
         ],
       ),
@@ -781,8 +733,7 @@ class _HubNetworkSettingsViewState
         if (_probeResult != null)
           Padding(
             padding: const EdgeInsets.only(top: 10),
-            child: Text(_probeResult!,
-                style: const TextStyle(fontSize: 13)),
+            child: Text(_probeResult!, style: const TextStyle(fontSize: 13)),
           ),
       ],
     );
@@ -848,7 +799,9 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
           timeout: const Duration(seconds: 6),
         );
         _merge(a);
-      } catch (_) {/* el barrido TCP cubre el fallo de mDNS */}
+      } catch (_) {
+        /* el barrido TCP cubre el fallo de mDNS */
+      }
     }();
 
     final sweep = () async {
@@ -863,7 +816,9 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
           },
         );
         _merge(agents);
-      } catch (_) {/* mDNS cubre el fallo del barrido */}
+      } catch (_) {
+        /* mDNS cubre el fallo del barrido */
+      }
     }();
 
     await Future.wait([mdns, sweep]);
@@ -916,7 +871,7 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
                       child: Text(
                         _sweepTotal > 0
                             ? 'Buscando equipos… revisando la red '
-                                '($_sweepDone/$_sweepTotal)'
+                                  '($_sweepDone/$_sweepTotal)'
                             : 'Buscando equipos en la red…',
                         style: const TextStyle(fontSize: 13.5),
                       ),

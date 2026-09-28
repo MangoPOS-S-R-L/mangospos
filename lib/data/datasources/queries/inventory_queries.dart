@@ -5,6 +5,8 @@ class InventoryQueries {
   static const tableWarehouses = 'warehouses';
   static const rpcRecordMovement = 'fn_inventory_record_movement';
   static const rpcAdjustInventory = 'fn_inventory_adjust';
+  // Salida con motivo de catálogo (migración 20260928_0001).
+  static const rpcRecordOutflow = 'fn_inventory_record_outflow';
   static const rpcTransferSend = 'fn_inventory_transfer_send';
   static const rpcTransferReceive = 'fn_inventory_transfer_receive';
   static const rpcTransferCancel = 'fn_inventory_transfer_cancel';

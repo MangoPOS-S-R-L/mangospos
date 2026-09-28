@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../services/inventory_scan.dart';
+import '../state/adjust_reasons.dart';
 import '../state/inventory_state.dart';
+import '../utils/waste_exit_printing.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -12,6 +14,9 @@ import '../../../core/theme/app_shadows.dart';
 import 'widgets/inventory_back_button.dart';
 import 'widgets/unit_dropdown.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
+import '../../../core/currency/business_currency_provider.dart';
+import '../../../services/printing/waste_exit_pdf.dart';
+import '../../../services/session/session_controller.dart';
 
 class InventoryOutflowView extends ConsumerStatefulWidget {
   const InventoryOutflowView({super.key});
@@ -23,6 +28,30 @@ class InventoryOutflowView extends ConsumerStatefulWidget {
 
 class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
   final TextEditingController _searchController = TextEditingController();
+
+  /// Filas de la tabla que se dibujan. La tabla vive dentro de un scroll de
+  /// página (`shrinkWrap`), así que dibuja TODAS sus filas en cada rebuild:
+  /// con catálogos de cientos de insumos eso trababa la pantalla. Se muestra
+  /// una página y "Ver más"; buscar es lo que acota de verdad.
+  static const int _pageSize = 50;
+  int _visibleCount = _pageSize;
+
+  /// Búsqueda LOCAL sobre los insumos ya cargados. Antes cada tecla recargaba
+  /// todo del servidor (~7 consultas) para filtrar igual en el cliente, y
+  /// además dejaba filtrada la lista compartida con las otras pantallas.
+  List<InventoryItemSummary> _filter(List<InventoryItemSummary> items) {
+    final q = _searchController.text.trim().toLowerCase();
+    if (q.isEmpty) return items;
+    return items
+        .where(
+          (i) =>
+              i.name.toLowerCase().contains(q) ||
+              i.sku.toLowerCase().contains(q) ||
+              i.description.toLowerCase().contains(q) ||
+              i.barcode.toLowerCase().contains(q),
+        )
+        .toList(growable: false);
+  }
 
   @override
   void initState() {
@@ -42,6 +71,10 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(inventoryViewModelProvider);
     final state = vm.state;
+    final filteredItems = _filter(state.items);
+    final visibleItems = filteredItems.length > _visibleCount
+        ? filteredItems.sublist(0, _visibleCount)
+        : filteredItems;
     final currency = NumberFormat.currency(
       locale: 'en_US',
       symbol: 'RD\$',
@@ -99,6 +132,11 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         runSpacing: 12,
                         children: [
                           OutlinedButton.icon(
+                            onPressed: () => _printTodayA4(context),
+                            icon: const Icon(Icons.print_outlined),
+                            label: const Text('Imprimir A4'),
+                          ),
+                          OutlinedButton.icon(
                             onPressed: state.saving
                                 ? null
                                 : () => _showCreateItemDialog(context),
@@ -149,9 +187,9 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         flex: 2,
                         child: TextField(
                           controller: _searchController,
-                          onChanged: (value) => ref
-                              .read(inventoryViewModelProvider)
-                              .search(value),
+                          onChanged: (_) => setState(
+                            () => _visibleCount = _pageSize,
+                          ),
                           decoration: InputDecoration(
                             hintText: 'Buscar por nombre, SKU o descripcion',
                             prefixIcon: const Icon(Icons.search),
@@ -169,7 +207,12 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                         child: DropdownButtonFormField<String>(
                           key: ValueKey(state.selectedWarehouseId),
                           isExpanded: true,
-                          initialValue: state.selectedWarehouseId,
+                          // Solo si está en la lista: un id que no está en
+                          // `items` tumba el DropdownButton con un assert.
+                          initialValue: state.warehouses.any(
+                                  (w) => w.id == state.selectedWarehouseId)
+                              ? state.selectedWarehouseId
+                              : null,
                           decoration: InputDecoration(
                             labelText: 'Almacen',
                             border: OutlineInputBorder(
@@ -301,7 +344,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                           ),
                         ),
                         const Divider(height: 1),
-                        if (state.items.isEmpty)
+                        if (filteredItems.isEmpty)
                           Padding(
                             padding: const EdgeInsets.all(32),
                             child: Center(
@@ -311,7 +354,9 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                   Icon(Icons.inventory_2_outlined, size: 32, color: AppColors.mutedForeground),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'No hay insumos registrados en este almacen.',
+                                    state.items.isEmpty
+                                        ? 'No hay insumos registrados en este almacen.'
+                                        : 'Ningún insumo coincide con la búsqueda.',
                                     style: TextStyle(color: AppColors.mutedForeground),
                                   ),
                                 ],
@@ -322,11 +367,11 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                           ListView.separated(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
-                            itemCount: state.items.length,
+                            itemCount: visibleItems.length,
                             separatorBuilder: (context, index) =>
                                 const Divider(height: 1),
                             itemBuilder: (context, index) {
-                              final item = state.items[index];
+                              final item = visibleItems[index];
                               return Padding(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 20,
@@ -438,6 +483,21 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                               );
                             },
                           ),
+                        if (filteredItems.length > visibleItems.length) ...[
+                          const Divider(height: 1),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: TextButton.icon(
+                              onPressed: () => setState(
+                                () => _visibleCount += _pageSize,
+                              ),
+                              icon: const Icon(Icons.expand_more),
+                              label: Text(
+                                'Ver más (${filteredItems.length - visibleItems.length} restantes)',
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -502,14 +562,29 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                 subtitle: Text(
                                   '${movement.warehouseName} · ${movement.movementType} · ${DateFormat('dd/MM/yyyy HH:mm').format(movement.createdAt)}',
                                 ),
-                                trailing: Text(
-                                  movement.quantity.toStringAsFixed(2),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: isOutflow
-                                        ? AppColors.destructive
-                                        : AppColors.success,
-                                  ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      movement.quantity.toStringAsFixed(2),
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: isOutflow
+                                            ? AppColors.destructive
+                                            : AppColors.success,
+                                      ),
+                                    ),
+                                    if (movement.movementType == 'waste')
+                                      IconButton(
+                                        tooltip: 'Imprimir conduce (A4)',
+                                        icon: const Icon(
+                                          Icons.print_outlined,
+                                          size: 20,
+                                        ),
+                                        onPressed: () =>
+                                            _printA4([movement]),
+                                      ),
+                                  ],
                                 ),
                               );
                             },
@@ -519,6 +594,85 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
               ),
             ),
     );
+  }
+
+  /// Mermas de HOY de la bodega seleccionada, en una hoja A4 para firmar.
+  Future<void> _printTodayA4(BuildContext context) async {
+    final now = DateTime.now();
+    final today = ref
+        .read(inventoryViewModelProvider)
+        .state
+        .movements
+        .where(
+          (m) =>
+              m.movementType == 'waste' &&
+              m.createdAt.year == now.year &&
+              m.createdAt.month == now.month &&
+              m.createdAt.day == now.day,
+        )
+        .toList(growable: false);
+    if (today.isEmpty) {
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(content: Text('No hay salidas registradas hoy.')),
+      );
+      return;
+    }
+    await _printA4(today);
+  }
+
+  /// Conduce en PDF (A4) de las salidas dadas. El motivo se lee del prefijo
+  /// de la nota ("Vencido — …"), que la salida guarda siempre, esté o no
+  /// desplegada la columna `reason_code`.
+  Future<void> _printA4(List<InventoryMovementEntry> movements) async {
+    final state = ref.read(inventoryViewModelProvider).state;
+    final itemsById = {for (final i in state.items) i.id: i};
+    final exitLabels = {
+      for (final r in kAdjustReasons.where((r) => r.isExit)) r.label,
+    };
+    var warehouseName = 'Bodega';
+    for (final w in state.warehouses) {
+      if (w.id == state.selectedWarehouseId) warehouseName = w.name;
+    }
+
+    final lines = [
+      for (final m in movements)
+        () {
+          final item = itemsById[m.itemId];
+          final notes = m.notes.trim();
+          final dash = notes.indexOf(' — ');
+          final head = dash >= 0 ? notes.substring(0, dash) : notes;
+          final isReason = exitLabels.contains(head);
+          return WasteExitPdfLine(
+            date: m.createdAt,
+            itemName: m.itemName,
+            quantity: m.quantity.abs(),
+            unit: item?.unit ?? '',
+            reason: isReason ? head : 'Merma',
+            notes: isReason
+                ? (dash >= 0 ? notes.substring(dash + 3) : '')
+                : notes,
+            costPerUnit: item?.cost ?? 0,
+          );
+        }(),
+    ];
+
+    final session = ref.read(sessionProvider);
+    final negocio = (session.activeBusinessName ?? '').trim();
+    try {
+      await WasteExitPdf.printDocument(
+        lines: lines,
+        businessName: negocio.isEmpty ? 'MangoPOS' : negocio,
+        warehouseName: warehouseName,
+        // Sin nombre a propósito: quien imprime no es necesariamente quien
+        // sacó la mercancía. Las dos firmas se llenan a mano.
+        currency: currentBusinessCurrencyOrFallback(ref),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        SnackBar(content: Text('No se pudo imprimir: $e')),
+      );
+    }
   }
 
   Future<void> _showCreateItemDialog(BuildContext context) async {
@@ -626,19 +780,61 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
     BuildContext context, {
     required InventoryItemSummary initialItem,
   }) async {
+    final pageContext = context;
     await showDialog<void>(
       context: context,
-      builder: (context) => _InventoryOutflowDialog(
+      builder: (_) => _InventoryOutflowDialog(
         items: ref.read(inventoryViewModelProvider).state.items,
         initialItemId: initialItem.id,
-        onSubmit: (itemId, quantity, notes) async {
-          await ref
-              .read(inventoryViewModelProvider)
-              .registerOutflow(
-                itemId: itemId,
-                quantity: quantity,
-                notes: notes,
-              );
+        onSubmit: (itemId, quantity, reason, notes) async {
+          final vm = ref.read(inventoryViewModelProvider);
+          final state = vm.state;
+          // Se leen ANTES de guardar: son los números del conduce, y después
+          // de la salida el stock del estado ya es el nuevo.
+          InventoryItemSummary? item;
+          for (final i in state.items) {
+            if (i.id == itemId) item = i;
+          }
+          var warehouseName = 'Bodega';
+          for (final w in state.warehouses) {
+            if (w.id == state.selectedWarehouseId) warehouseName = w.name;
+          }
+          final businessId = state.businessId;
+          final antes = item?.stock ?? 0;
+
+          await vm.registerOutflow(
+            itemId: itemId,
+            quantity: quantity,
+            reasonCode: reason.code,
+            reasonLabel: reason.label,
+            notes: notes,
+          );
+
+          // EL CONDUCE, igual que el ajuste de Insumos: DESPUÉS de guardar
+          // (una impresora caída no puede impedir que la merma quede) y
+          // siempre, porque todo lo que sale por esta pantalla es mercancía
+          // que se fue. `WasteExitPrinting` no lanza.
+          if (businessId == null || item == null || !pageContext.mounted) {
+            return;
+          }
+          final session = ref.read(sessionProvider);
+          final negocio = (session.activeBusinessName ?? '').trim();
+          await WasteExitPrinting.print(
+            pageContext,
+            ref,
+            businessId: businessId,
+            businessName: negocio.isEmpty ? 'MangoPOS' : negocio,
+            itemName: item.name,
+            quantity: quantity,
+            unit: item.unit,
+            reasonLabel: reason.label,
+            warehouseName: warehouseName,
+            notes: notes,
+            operatorName: session.userName,
+            stockBefore: antes,
+            stockAfter: antes - quantity,
+            costPerUnit: item.cost,
+          );
         },
       ),
     );
@@ -1309,7 +1505,12 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
 class _InventoryOutflowDialog extends StatefulWidget {
   final List<InventoryItemSummary> items;
   final String initialItemId;
-  final Future<void> Function(String itemId, double quantity, String? notes)
+  final Future<void> Function(
+    String itemId,
+    double quantity,
+    AdjustReason reason,
+    String? notes,
+  )
   onSubmit;
 
   const _InventoryOutflowDialog({
@@ -1329,6 +1530,15 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   bool _saving = false;
+  AdjustReason? _reason;
+  String? _error;
+
+  /// Solo los motivos que son SALIDA (rotura, vencido, limpieza, faltante,
+  /// donación). Un conteo o una corrección se hacen desde el ajuste de
+  /// Insumos, que fija el stock; esta pantalla resta.
+  static final List<AdjustReason> _exitReasons = kAdjustReasons
+      .where((r) => r.isExit)
+      .toList(growable: false);
 
   @override
   void initState() {
@@ -1468,17 +1678,81 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
                 ),
               ),
             ),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Motivo',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.foreground,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 7,
+                runSpacing: 7,
+                children: [
+                  for (final reason in _exitReasons)
+                    ChoiceChip(
+                      avatar: Icon(
+                        reason.icon,
+                        size: 16,
+                        color: _reason?.code == reason.code
+                            ? Colors.white
+                            : AppColors.mutedForeground,
+                      ),
+                      label: Text(reason.label),
+                      tooltip: reason.description,
+                      showCheckmark: false,
+                      selected: _reason?.code == reason.code,
+                      selectedColor: AppColors.primary,
+                      labelStyle: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: _reason?.code == reason.code
+                            ? Colors.white
+                            : AppColors.foreground,
+                      ),
+                      onSelected: _saving
+                          ? null
+                          : (_) => setState(() {
+                                _reason = reason;
+                                _error = null;
+                              }),
+                    ),
+                ],
+              ),
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _notesController,
               maxLines: 2,
               decoration: InputDecoration(
-                labelText: 'Motivo / notas',
+                labelText: 'Notas (opcional)',
+                hintText: 'Qué pasó, quién lo vio',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
               ),
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: Color(0xFFEF4444),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ],
           ),
         ),
@@ -1499,19 +1773,35 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
 
   Future<void> _submit() async {
     final quantity = double.tryParse(_quantityController.text.trim()) ?? 0;
-    if (quantity <= 0) return;
+    if (quantity <= 0) {
+      setState(() => _error = 'Ingresa la cantidad que salió');
+      return;
+    }
+    final reason = _reason;
+    if (reason == null) {
+      setState(() => _error = 'Selecciona el motivo de la salida');
+      return;
+    }
 
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
       await widget.onSubmit(
         _selectedItemId,
         quantity,
+        reason,
         _notesController.text.trim().isEmpty
             ? null
             : _notesController.text.trim(),
       );
       if (!mounted) return;
       Navigator.of(context).pop();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'No se pudo registrar la salida. Intenta de nuevo.');
+      }
     } finally {
       if (mounted) {
         setState(() => _saving = false);

@@ -27,20 +27,11 @@ final offlineReadinessProvider = FutureProvider<OfflineReadiness>((ref) async {
     read: storage.read,
     checkAccess: (bid) async {
       final auth = OfflineAuthService();
-      if (!await auth.isDeviceBound() ||
-          await auth.currentBoundBusinessId() != bid) {
-        return const OfflineReadinessCheck(
-          'Acceso con PIN',
-          false,
-          'Vincula este equipo con una cuenta de propietario o administrador para poder entrar con PIN sin internet.',
-          action: OfflineReadinessAction.bindDevice,
-        );
-      }
       if (await auth.isRosterStale(bid)) {
         return const OfflineReadinessCheck(
           'Acceso con PIN',
           false,
-          'Permisos ausentes o vencidos. Actualízalos con internet.',
+          'PIN pendientes de actualizar. Se descargan automáticamente con la sesión del negocio o desde la caja principal por intranet.',
         );
       }
       final users = await auth.cachedRoster(bid);

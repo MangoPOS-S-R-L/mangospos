@@ -69,6 +69,8 @@ Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhi
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; Check: ShouldStopExistingAgentService
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent HTTP"" >nul 2>&1"; Flags: runhidden waituntilterminated; StatusMsg: "Configurando firewall (HTTP)..."
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall add rule name=""MangoPOS Agent HTTP"" dir=in action=allow protocol=TCP localport=4000 profile=any program=""{app}\Agent\mangopos-agent.exe"" enable=yes"; Flags: runhidden waituntilterminated
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Hub LAN"" >nul 2>&1"; Flags: runhidden waituntilterminated; StatusMsg: "Configurando intranet de caja y meseros..."
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall add rule name=""MangoPOS Hub LAN"" dir=in action=allow protocol=TCP localport=4100 remoteip=localsubnet profile=private,domain program=""{app}\App\{#AppExeName}"" enable=yes"; Flags: runhidden waituntilterminated
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent mDNS"" >nul 2>&1"; Flags: runhidden waituntilterminated; StatusMsg: "Configurando firewall (mDNS)..."
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall add rule name=""MangoPOS Agent mDNS"" dir=in action=allow protocol=UDP localport=5353 profile=any program=""{app}\Agent\mangopos-agent.exe"" enable=yes"; Flags: runhidden waituntilterminated
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "install"; Flags: runhidden waituntilterminated; Check: ShouldInstallAgent
@@ -81,6 +83,7 @@ Filename: "{cmd}"; Parameters: "/c taskkill /F /IM mangopos-agent-service.exe /T
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopMangoPOSAgentService"
 Filename: "{app}\Agent\{#AgentServiceWrapper}"; Parameters: "uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "UninstallMangoPOSAgentService"
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent HTTP"" >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRuleHTTP"
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Hub LAN"" >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRuleHub"
 Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""MangoPOS Agent mDNS"" >nul 2>&1"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveFirewallRuleMdns"
 
 [Code]

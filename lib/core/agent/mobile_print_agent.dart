@@ -28,6 +28,9 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../printing/android_usb_raw_printer.dart';
 import '../printing/usb_printer_identity.dart';
 import '../offline/hub/hub_config.dart';
+import '../auth/offline_auth_service.dart';
+import '../offline/hub/hub_roster_codec.dart';
+import '../offline/hub/hub_read_cache.dart';
 import '../offline/hub/hub_lan_token.dart';
 import '../offline/hub/hub_op_log.dart';
 import '../offline/hub/hub_order_projector.dart';
@@ -51,6 +54,14 @@ const Duration _btWriteTimeout = Duration(seconds: 8);
 // ─────────────────────────────────────────────────────────────────────────────
 
 class MobilePrintAgent {
+  MobilePrintAgent({
+    HubLanTokenService? hubTokens,
+    OfflineAuthService? offlineAuth,
+  }) : _hubTokens = hubTokens ?? HubLanTokenService.instance,
+       _offlineAuth = offlineAuth ?? OfflineAuthService();
+
+  final HubLanTokenService _hubTokens;
+  final OfflineAuthService _offlineAuth;
   HttpServer? _server;
   int _port = _defaultPort;
   final List<Map<String, dynamic>> _jobHistory = [];
@@ -140,6 +151,8 @@ class MobilePrintAgent {
 
     // Hub Local (F3): health/handshake. Sin auth (igual que /health).
     router.get('/hub/health', _handleHubHealth);
+    router.get('/hub/roster', _handleHubRoster);
+    router.get('/hub/read-cache', _handleHubReadCache);
     // Hub Local (F3b): recibir una operación (POST) y servir el delta del
     // op-log (GET). Con auth (igual que el resto de endpoints).
     router.post('/hub/ops', _handleHubOps);
@@ -204,7 +217,8 @@ class MobilePrintAgent {
   static const _corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers':
+        'Content-Type, Authorization, x-roster-time, x-roster-nonce',
   };
 
   shelf.Middleware _authMiddleware() {
@@ -236,10 +250,14 @@ class MobilePrintAgent {
               : (request.url.queryParameters['token'] ?? '');
 
           final businessId = await _resolveOwnBusinessId();
-          final ok = await HubLanTokenService.instance.isValid(
-            businessId,
-            presented,
-          );
+          final ok = (path == 'hub/roster' || path == 'hub/read-cache')
+              ? businessId.isNotEmpty &&
+                    await HubRosterCodec.authorize(
+                      headers: request.headers,
+                      businessId: businessId,
+                      token: await _hubTokens.tokenFor(businessId),
+                    )
+              : await _hubTokens.isValid(businessId, presented);
           if (!ok) {
             return shelf.Response.forbidden(
               jsonEncode({'error': 'Unauthorized'}),
@@ -301,16 +319,11 @@ class MobilePrintAgent {
     return value;
   }
 
-  /// Negocio de ESTE equipo, para validar el token del Hub. Se cachea: el
-  /// middleware corre en cada request.
-  String? _ownBusinessIdCache;
+  /// Read the current business so switching sessions cannot expose old data.
   Future<String> _resolveOwnBusinessId() async {
-    final cached = _ownBusinessIdCache;
-    if (cached != null) return cached;
     try {
       final storage = await StorageService.getInstance();
       final id = await storage.read(StorageKeys.activeBusinessId) ?? '';
-      _ownBusinessIdCache = id;
       return id;
     } catch (_) {
       return '';
@@ -337,9 +350,10 @@ class MobilePrintAgent {
     // como Hub responde 'hub'. Best-effort: ante cualquier fallo cae a 'pos'
     // (no-hub), que es el lado seguro (el cliente NO lo tomará como Hub).
     var role = 'pos';
+    var businessId = '';
     try {
       final storage = await StorageService.getInstance();
-      final businessId = await storage.read(StorageKeys.activeBusinessId) ?? '';
+      businessId = await storage.read(StorageKeys.activeBusinessId) ?? '';
       if (businessId.isNotEmpty) {
         role = hubDeviceRoleToString(
           await HubConfigService().getDeviceRole(businessId),
@@ -348,7 +362,67 @@ class MobilePrintAgent {
     } catch (_) {
       // best-effort → 'pos'
     }
-    return _jsonOk({'status': 'ok', 'role': role, 'hub_protocol': 1, 'seq': 0});
+    return _jsonOk({
+      'status': 'ok',
+      'role': role,
+      'business_id': businessId,
+      'hub_protocol': 2,
+      'seq': 0,
+    });
+  }
+
+  Future<shelf.Response> _handleHubRoster(shelf.Request request) async {
+    final businessId = await _resolveOwnBusinessId();
+    if (businessId.isEmpty ||
+        request.url.queryParameters['business_id'] != businessId) {
+      return _jsonError('Unauthorized business', 403);
+    }
+    if (await HubConfigService().getDeviceRole(businessId) !=
+        HubDeviceRole.hub) {
+      return _jsonError('This terminal is not the hub', 409);
+    }
+    final auth = _offlineAuth;
+    if (await auth.isRosterStale(businessId)) {
+      return _jsonError('Roster unavailable or expired', 503);
+    }
+    final payload = await auth.cachedRosterPayload(businessId);
+    if (payload == null) return _jsonError('Roster unavailable', 503);
+    final envelope = await HubRosterCodec.seal(
+      payload,
+      businessId: businessId,
+      token: await _hubTokens.tokenFor(businessId),
+    );
+    return shelf.Response.ok(
+      jsonEncode(envelope),
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
+    );
+  }
+
+  Future<shelf.Response> _handleHubReadCache(shelf.Request request) async {
+    final businessId = await _resolveOwnBusinessId();
+    if (businessId.isEmpty ||
+        request.url.queryParameters['business_id'] != businessId) {
+      return _jsonError('Unauthorized business', 403);
+    }
+    if (await HubConfigService().getDeviceRole(businessId) !=
+        HubDeviceRole.hub) {
+      return _jsonError('This terminal is not the hub', 409);
+    }
+    final envelope = await HubRosterCodec.seal(
+      await HubReadCache().export(businessId),
+      businessId: businessId,
+      token: await _hubTokens.tokenFor(businessId),
+    );
+    return shelf.Response.ok(
+      jsonEncode(envelope),
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
+    );
   }
 
   /// F3b: recibe una operación de un terminal, la agrega al op-log (seq +
@@ -448,8 +522,10 @@ class MobilePrintAgent {
         .where((e) => e.isNotEmpty)
         .toList(growable: false);
     try {
-      final marcadas =
-          await OfflinePosService().markHubOpsCompleted(businessId, ids);
+      final marcadas = await OfflinePosService().markHubOpsCompleted(
+        businessId,
+        ids,
+      );
       var quedan = -1;
       final keepRaw = body['keep_order_ids'];
       final upToSeq = (body['up_to_seq'] as num?)?.toInt();

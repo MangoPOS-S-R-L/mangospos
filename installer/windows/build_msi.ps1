@@ -161,6 +161,7 @@ Write-Host "==> Building MSI with WiX v7" -ForegroundColor Cyan
 # Asegurar que la extension de UI esté instalada (para WiX 4 a 7+)
 try { & wix -acceptEula wix7 extension add WixToolset.UI.wixext --global } catch { }
 try { & wix -acceptEula wix7 extension add WixToolset.Util.wixext --global } catch { }
+try { & wix -acceptEula wix7 extension add WixToolset.Firewall.wixext --global } catch { }
 
 $wixArgs = @(
   "build",
@@ -171,6 +172,7 @@ $wixArgs = @(
   "-d", "ProductName=MangoPOS",
   "-ext", "WixToolset.UI.wixext",
   "-ext", "WixToolset.Util.wixext",
+  "-ext", "WixToolset.Firewall.wixext",
   "-o", $msiPath,
   (Join-Path $wixDir "Product.wxs")
 )

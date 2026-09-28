@@ -8,6 +8,8 @@ import '../ncf_offline_allocator.dart';
 import '../../storage/storage_service.dart';
 import 'hub_config.dart' show kHubPortPrimary, kHubPortAlt;
 import 'hub_lan_token.dart';
+import 'hub_lan_scan.dart';
+import 'hub_roster_codec.dart';
 
 /// Cliente del Hub Local (F3). En F3a solo hace el *handshake*: localizar un
 /// Hub alcanzable en la LAN y confirmar que responde `/hub/health`. Las
@@ -20,12 +22,31 @@ import 'hub_lan_token.dart';
 ///      y se prueba cada candidato.
 /// Devuelve la `baseUrl` del primer Hub que responde, o null.
 class HubClient {
-  HubClient({AgentDiscovery? discovery, http.Client? httpClient})
-    : _discovery = discovery ?? AgentDiscovery(),
-      _http = httpClient ?? http.Client();
+  HubClient({
+    AgentDiscovery? discovery,
+    http.Client? httpClient,
+    Future<String> Function(String)? businessToken,
+    Future<List<DiscoveredAgent>> Function()? lanScan,
+  }) : _discovery = discovery ?? AgentDiscovery(),
+       _businessToken = businessToken ?? HubLanTokenService.instance.tokenFor,
+       _lanScan = lanScan ?? _scanLan,
+       _http = httpClient ?? http.Client();
 
   final AgentDiscovery _discovery;
   final http.Client _http;
+  final Future<String> Function(String) _businessToken;
+  final Future<List<DiscoveredAgent>> Function() _lanScan;
+  final Map<String, DateTime> _lastScan = {};
+
+  static Future<List<DiscoveredAgent>> _scanLan() async {
+    if (kIsWeb) return const [];
+    final scanner = HubLanScanner();
+    try {
+      return await scanner.scan();
+    } finally {
+      scanner.dispose();
+    }
+  }
 
   static const Duration _probeTimeout = Duration(seconds: 2);
   static const Duration _discoverTimeout = Duration(seconds: 3);
@@ -64,12 +85,13 @@ class HubClient {
   Future<String?> findReachableHub({
     String? businessId,
     String? configuredUrl,
+    bool scanFallback = false,
   }) async {
     // 1. Primario configurado. Probamos la URL tal cual + el mismo host en los
     //    puertos 4000/4100 (Mac vs Windows) para no depender de la plataforma.
     if (configuredUrl != null && configuredUrl.trim().isNotEmpty) {
       for (final url in _hubCandidateUrls(configuredUrl)) {
-        if (await _isHub(url)) return url;
+        if (await _isHub(url, businessId: businessId)) return url;
       }
     }
 
@@ -83,11 +105,30 @@ class HubClient {
       );
       for (final agent in agents) {
         for (final url in _hubCandidateUrls(agent.baseUrl)) {
-          if (await _isHub(url)) return url;
+          if (await _isHub(url, businessId: businessId)) return url;
         }
       }
     } catch (e) {
       debugPrint('[HubClient] descubrimiento falló: $e');
+    }
+    // Windows does not require Bonjour or a manually entered IP. Only the
+    // background controller enables this bounded, rate-limited fallback.
+    if (scanFallback && businessId != null && businessId.isNotEmpty) {
+      final now = DateTime.now();
+      final previous = _lastScan[businessId];
+      if (previous == null ||
+          now.difference(previous) >= const Duration(seconds: 30)) {
+        _lastScan[businessId] = now;
+        try {
+          for (final agent in await _lanScan()) {
+            for (final url in _hubCandidateUrls(agent.baseUrl)) {
+              if (await _isHub(url, businessId: businessId)) return url;
+            }
+          }
+        } catch (e) {
+          debugPrint('[HubClient] busqueda LAN fallida: $e');
+        }
+      }
     }
     return null;
   }
@@ -116,16 +157,67 @@ class HubClient {
   }
 
   /// Prueba `GET <baseUrl>/hub/health` y confirma que es un Hub (role=hub).
-  Future<bool> _isHub(String baseUrl) async {
+  Future<bool> _isHub(String baseUrl, {String? businessId}) async {
     try {
       final resp = await _http
           .get(Uri.parse('${_normalize(baseUrl)}/hub/health'))
           .timeout(_probeTimeout);
       if (resp.statusCode != 200) return false;
       final body = jsonDecode(resp.body);
-      return body is Map && body['role'] == 'hub';
+      return body is Map &&
+          body['role'] == 'hub' &&
+          (businessId == null ||
+              businessId.isEmpty ||
+              body['business_id'] == businessId);
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getRoster(
+    String baseUrl, {
+    required String businessId,
+  }) => _getEncryptedSnapshot(baseUrl, businessId: businessId, path: 'roster');
+
+  Future<Map<String, dynamic>?> getReadCache(
+    String baseUrl, {
+    required String businessId,
+  }) => _getEncryptedSnapshot(
+    baseUrl,
+    businessId: businessId,
+    path: 'read-cache',
+  );
+
+  Future<Map<String, dynamic>?> _getEncryptedSnapshot(
+    String baseUrl, {
+    required String businessId,
+    required String path,
+  }) async {
+    try {
+      final token = await _businessToken(businessId);
+      if (token.isEmpty || token == kLegacyHubLanToken) return null;
+      final uri = Uri.parse(
+        '${_normalize(baseUrl)}/hub/$path',
+      ).replace(queryParameters: {'business_id': businessId});
+      final response = await _http
+          .get(
+            uri,
+            headers: await HubRosterCodec.requestHeaders(
+              businessId: businessId,
+              token: token,
+            ),
+          )
+          .timeout(_opTimeout);
+      if (response.statusCode != 200) return null;
+      final payload = await HubRosterCodec.open(
+        Map<String, dynamic>.from(jsonDecode(response.body) as Map),
+        businessId: businessId,
+        token: token,
+      );
+      return payload['business_id'] == businessId ? payload : null;
+    } catch (e) {
+      debugPrint('[HubClient] No se pudo descargar $path por intranet: $e');
+      return null;
     }
   }
 

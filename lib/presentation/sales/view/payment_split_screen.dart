@@ -38,7 +38,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   /// papel, llega aquí para que el caller imprima el comprobante con ese
   /// número en el acto (en vez de la precuenta). Null = sin NCF offline.
   final Future<void> Function(List<Payment> payments, {String? offlineNcf})?
-      onConfirmed;
+  onConfirmed;
 
   const PaymentSplitDialog({
     super.key,
@@ -59,6 +59,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
 
 class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   late FocusNode _focusNode;
+  bool _finishing = false;
 
   /// Cierre del dialog con la lista de payments. Si el caller pasó
   /// `onConfirmed`, lo awaitamos PRIMERO — esto mantiene el modal de
@@ -73,6 +74,8 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   /// dialog de reintentar se encarga; cuando ese dialog resuelve,
   /// recien aqui hacemos pop.
   Future<void> _finishWithPayments(List<Payment> payments) async {
+    if (_finishing) return;
+    _finishing = true;
     final hook = widget.onConfirmed;
     final key = (
       widget.orderId,
@@ -90,6 +93,28 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
       vm.setPrinting(true);
       try {
         await hook(payments, offlineNcf: offlineNcf);
+      } catch (e, stack) {
+        debugPrint('Post-payment callback failed: $e\n$stack');
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Pago registrado'),
+              content: const Text(
+                'El pago fue registrado, pero no se pudo completar el proceso '
+                'posterior al cobro. Verifica el comprobante y reimprime desde '
+                'el historial si hace falta. No vuelvas a cobrar esta venta.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Entendido'),
+                ),
+              ],
+            ),
+          );
+        }
       } finally {
         if (mounted) vm.markFinished();
       }
@@ -104,7 +129,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     // va en el mismo frame en que termina de imprimir y el cajero nunca ve
     // que la emision cerro bien — ve desaparecer el modal, que es exactamente
     // lo que veria si algo hubiera fallado.
-    await Future.delayed(const Duration(milliseconds: 1200));
+    await Future.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
     Navigator.pop(context, payments);
   }
@@ -196,7 +221,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     // confirmPayment (que el servidor rechazaria con ORDER_ALREADY_CLOSED
     // pero genera un toast de error confuso). El feedback de "Imprimiendo..."
     // ya esta en el boton — no hay nada util que el cajero pueda teclear.
-    if (state.isPrinting) return;
+    if (state.isBusy) return;
 
     final char = event.character?.toLowerCase();
 
@@ -294,95 +319,100 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
 
-    return Focus(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: (node, event) {
-        _handleKeyEvent(event, vm, state);
-        return KeyEventResult.handled;
-      },
-      child: MangoModal.wrap(
-        context: context,
-        type: MangoModalType.form,
-        child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: isMobile ? double.infinity : 880,
-                maxHeight: isMobile ? double.infinity : 680,
-              ),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: _kSurface,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 20,
-                      offset: Offset(0, 12),
-                    ),
-                  ],
+    return PopScope(
+      canPop: !state.isBusy,
+      child: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          _handleKeyEvent(event, vm, state);
+          return KeyEventResult.handled;
+        },
+        child: MangoModal.wrap(
+          context: context,
+          type: MangoModalType.form,
+          child: SafeArea(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: isMobile ? double.infinity : 880,
+                  maxHeight: isMobile ? double.infinity : 680,
                 ),
-                child: Column(
-            children: [
-              _buildHeader(context, isPrinting: state.isPrinting),
-              const Divider(height: 1, color: _kBorder),
-              Expanded(
-                child: isMobile
-                    ? SingleChildScrollView(
-                        child: Padding(
-                          padding: EdgeInsets.all(
-                            MediaQuery.sizeOf(context).width < 600 ? 12 : 16,
-                          ),
-                          child: _MobileLayout(
-                            state: state,
-                            vm: vm,
-                            pressedKey: _pressedKeyVN,
-                            onConfirm: _finishWithPayments,
-                          ),
-                        ),
-                      )
-                    : Padding(
-                        // Padding interno reducido para que todo el contenido
-                        // entre sin scroll en el modal de 680px.
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: _LeftPanel(
-                                state: state,
-                                vm: vm,
-                                pressedKey: _pressedKeyVN,
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Container(width: 1, color: _kBorder),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              flex: 2,
-                              child: _RightPanel(
-                                state: state,
-                                vm: vm,
-                                onClose: () => Navigator.pop(context),
-                                onConfirm: _finishWithPayments,
-                              ),
-                            ),
-                          ],
-                        ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: _kSurface,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x22000000),
+                        blurRadius: 20,
+                        offset: Offset(0, 12),
                       ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      _buildHeader(context, isPrinting: state.isBusy),
+                      const Divider(height: 1, color: _kBorder),
+                      Expanded(
+                        child: isMobile
+                            ? SingleChildScrollView(
+                                child: Padding(
+                                  padding: EdgeInsets.all(
+                                    MediaQuery.sizeOf(context).width < 600
+                                        ? 12
+                                        : 16,
+                                  ),
+                                  child: _MobileLayout(
+                                    state: state,
+                                    vm: vm,
+                                    pressedKey: _pressedKeyVN,
+                                    onConfirm: _finishWithPayments,
+                                  ),
+                                ),
+                              )
+                            : Padding(
+                                // Padding interno reducido para que todo el contenido
+                                // entre sin scroll en el modal de 680px.
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      flex: 3,
+                                      child: _LeftPanel(
+                                        state: state,
+                                        vm: vm,
+                                        pressedKey: _pressedKeyVN,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Container(width: 1, color: _kBorder),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      flex: 2,
+                                      child: _RightPanel(
+                                        state: state,
+                                        vm: vm,
+                                        onClose: () => Navigator.pop(context),
+                                        onConfirm: _finishWithPayments,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                      ),
+                      if (state.validationError != null || state.error != null)
+                        _ErrorBar(
+                          message: state.validationError ?? state.error!,
+                          isDanger: state.error != null,
+                        ),
+                    ],
+                  ),
+                ),
               ),
-                  if (state.validationError != null || state.error != null)
-                    _ErrorBar(
-                      message: state.validationError ?? state.error!,
-                      isDanger: state.error != null,
-                    ),
-                ],
-              ),
-            ),
             ),
           ),
         ),
@@ -393,9 +423,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
   Widget _buildHeader(BuildContext context, {required bool isPrinting}) {
     final isPhone = MediaQuery.sizeOf(context).width < 600;
     final title = widget.customerName?.trim().isNotEmpty == true
-        ? (isPhone
-            ? widget.customerName!
-            : 'Pago - ${widget.customerName}')
+        ? (isPhone ? widget.customerName! : 'Pago - ${widget.customerName}')
         : 'Pago - Mesa ${widget.tableName}';
     return Padding(
       padding: EdgeInsets.symmetric(
@@ -589,8 +617,7 @@ class _LeftPanel extends ConsumerWidget {
                   Expanded(
                     child: _QuickAmountChip(
                       label: amounts[i].toString(),
-                      onTap: () =>
-                          vm.setQuickAmount(amounts[i].toDouble()),
+                      onTap: () => vm.setQuickAmount(amounts[i].toDouble()),
                     ),
                   ),
                   if (i != amounts.length - 1) const SizedBox(width: 4),
@@ -736,8 +763,9 @@ class _LeftPanel extends ConsumerWidget {
       builder: (ctx) {
         return Consumer(
           builder: (innerCtx, innerRef, _) {
-            final asyncAccounts =
-                innerRef.watch(activeBankAccountsProvider('auto'));
+            final asyncAccounts = innerRef.watch(
+              activeBankAccountsProvider('auto'),
+            );
             return AlertDialog(
               backgroundColor: Colors.white,
               surfaceTintColor: Colors.white,
@@ -871,10 +899,9 @@ class _BankAccountPickerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     const orange = Color(0xFFF97316);
     final borderColor = isSelected ? orange : const Color(0xFFE5E7EB);
-    final aliasOrBank =
-        (account.alias?.trim().isNotEmpty ?? false)
-            ? account.alias!.trim()
-            : account.bankName;
+    final aliasOrBank = (account.alias?.trim().isNotEmpty ?? false)
+        ? account.alias!.trim()
+        : account.bankName;
     final showBankUnderAlias =
         (account.alias?.trim().isNotEmpty ?? false) &&
         account.bankName.trim().isNotEmpty;
@@ -887,10 +914,7 @@ class _BankAccountPickerCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: borderColor,
-            width: isSelected ? 2 : 1,
-          ),
+          border: Border.all(color: borderColor, width: isSelected ? 2 : 1),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -904,11 +928,7 @@ class _BankAccountPickerCard extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               alignment: Alignment.center,
-              child: const Icon(
-                Icons.account_balance,
-                color: orange,
-                size: 20,
-              ),
+              child: const Icon(Icons.account_balance, color: orange, size: 20),
             ),
             const SizedBox(width: 12),
             // Info principal
@@ -993,11 +1013,7 @@ class _BankAccountPickerCard extends StatelessWidget {
               width: 24,
               height: 24,
               child: isSelected
-                  ? const Icon(
-                      Icons.check_circle,
-                      color: orange,
-                      size: 24,
-                    )
+                  ? const Icon(Icons.check_circle, color: orange, size: 24)
                   : Container(
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
@@ -1068,9 +1084,7 @@ class _SelectedBankBanner extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: hasAccount
-              ? const Color(0xFFFFF7ED)
-              : const Color(0xFFFFEDD5),
+          color: hasAccount ? const Color(0xFFFFF7ED) : const Color(0xFFFFEDD5),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: hasAccount
@@ -1082,9 +1096,7 @@ class _SelectedBankBanner extends StatelessWidget {
         child: Row(
           children: [
             Icon(
-              hasAccount
-                  ? Icons.check_circle
-                  : Icons.warning_amber_rounded,
+              hasAccount ? Icons.check_circle : Icons.warning_amber_rounded,
               color: const Color(0xFFF97316),
               size: 18,
             ),
@@ -1921,9 +1933,7 @@ class _TotalsCard extends StatelessWidget {
                     ? 'Cambio RD\$ ${state.change.toStringAsFixed(2)}'
                     : 'Restante RD\$ ${remaining.toStringAsFixed(2)}',
                 style: TextStyle(
-                  color: isComplete
-                      ? Colors.redAccent
-                      : Colors.grey[700],
+                  color: isComplete ? Colors.redAccent : Colors.grey[700],
                   fontWeight: FontWeight.w700,
                   fontSize: isPhone ? 11 : 12,
                 ),
@@ -2120,11 +2130,7 @@ class _PaymentList extends StatelessWidget {
                   color: _kPrimaryTint,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(
-                  _iconFor(tx.method),
-                  color: _kPrimary,
-                  size: 18,
-                ),
+                child: Icon(_iconFor(tx.method), color: _kPrimary, size: 18),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -2141,10 +2147,7 @@ class _PaymentList extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       '${tx.timestamp.hour.toString().padLeft(2, '0')}:${tx.timestamp.minute.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 11,
-                      ),
+                      style: TextStyle(color: Colors.grey[600], fontSize: 11),
                     ),
                   ],
                 ),
@@ -2163,10 +2166,7 @@ class _PaymentList extends StatelessWidget {
                 splashRadius: 16,
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(
-                  minWidth: 32,
-                  minHeight: 32,
-                ),
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                 icon: const Icon(
                   Icons.delete_outline,
                   color: Colors.grey,

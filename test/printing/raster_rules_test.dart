@@ -120,8 +120,8 @@ void main() {
       for (final h in huecos) {
         expect(
           h,
-          inInclusiveRange(40, 80),
-          reason: 'el ritmo del ticket es ~58 puntos de aire en todas partes',
+          closeTo(TicketRasterizer.proportionalLeading, 12),
+          reason: 'el ritmo del ticket es el mismo aire en todas partes',
         );
       }
     });

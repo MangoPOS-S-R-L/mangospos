@@ -1120,6 +1120,7 @@ class PrintTicketService {
       usdSettings,
       showRate: false,
       leadingGap: !modern,
+      modern: modern,
     );
 
     // ════════════════════════════════════════════
@@ -1156,12 +1157,17 @@ class PrintTicketService {
       blankFieldLine('RNC/Cédula: ______________________');
       blankFieldLine('Razón social: ____________________');
       ModernInvoiceLayout.rule(gen);
+      // Última sección: conserva el interlineado del cuerpo y el aire
+      // alrededor del aviso (el dueño pidió dejarla igual).
+      ModernInvoiceLayout.closingSection(gen);
+      ModernInvoiceLayout.gap(gen);
       // Sin gritar y sin caja de `====`: en el modelo moderno el peso lo da
       // la negrita, y el aviso pesa por lo que dice.
       ModernInvoiceLayout.emphasisCentered(
         gen,
         'Este documento es solo una precuenta',
       );
+      ModernInvoiceLayout.gap(gen);
     } else {
       blankFieldLine('RNC/CÉDULA: ______________________');
       gen.lineFeed();
@@ -1936,6 +1942,7 @@ class PrintTicketService {
       usdSettings,
       showRate: false,
       leadingGap: !modern,
+      modern: modern,
     );
 
     if (modern) {
@@ -2096,6 +2103,8 @@ class PrintTicketService {
     // Footer: bloques en orden segun footerBlocks (o defaults canonicos
     // si null). El renderer skipea bloques sin contenido.
     if (!modern) gen.lineFeed(compact ? 1 : 2);
+    // El pie es la última sección: conserva el interlineado del cuerpo.
+    if (modern) ModernInvoiceLayout.closingSection(gen);
     _renderFooterBlocks(
       gen,
       blocks: footerBlocks ?? TicketBlocks.defaultFooter,
@@ -2964,6 +2973,11 @@ class PrintTicketService {
     /// interlineado ya separa los renglones, y encima de eso el bloque del
     /// TOTAL quedaba con el doble de aire que el resto del ticket.
     bool leadingGap = true,
+
+    /// Modelo moderno: va en el bloque de montos de la derecha, como el resto
+    /// de los totales, y SIN negrita (PRD §6.3). A todo el ancho y en negrita
+    /// se veía desalineado y competía con el TOTAL.
+    bool modern = false,
   }) {
     // Blindaje: cualquier error (formato de número, símbolo raro, etc.)
     // se silencia. PRD 6 es DISPLAY-ONLY — nunca debe romper la
@@ -2990,10 +3004,14 @@ class PrintTicketService {
       // unicode `≈` no está en Latin-1 y `Latin1Codec.encode` lanza
       // excepción con cualquier codepoint > 0xFF (`allowInvalid: true`
       // solo aplica al decoder), lo que tumbaba todo el bloque USD.
-      if (leadingGap) gen.lineFeed();
-      gen.setBold(true);
-      gen.textRow('Total USD:', '~ $equivLabel');
-      gen.setBold(false);
+      if (modern) {
+        ModernInvoiceLayout.amountRow(gen, 'Total USD', '~ $equivLabel');
+      } else {
+        if (leadingGap) gen.lineFeed();
+        gen.setBold(true);
+        gen.textRow('Total USD:', '~ $equivLabel');
+        gen.setBold(false);
+      }
       if (showRate) {
         gen.textRow('Tasa:', '${_currency.symbol} ${rate.toStringAsFixed(4)}');
       }

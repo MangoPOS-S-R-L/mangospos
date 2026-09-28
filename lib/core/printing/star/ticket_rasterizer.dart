@@ -64,21 +64,18 @@ class TicketRasterizer {
   /// AIRE entre renglones en modo proporcional, en puntos. Es el blanco que
   /// queda entre la tinta de una línea y la de la siguiente.
   ///
-  /// El valor sale de MEDIR el papel que el dueño aprobó. Sobre la factura
-  /// impresa el 2026-08-18 señaló el bloque TOTAL / Total USD / Efectivo:
-  /// *"para mí ese es perfecto, así debería estar todo el espacio"*. Ese
-  /// bloque tenía 61, 63 y 69 puntos de blanco — le sobraba aire porque
-  /// llevaba renglones en blanco de más — contra los 19 a 25 del resto del
-  /// ticket. De ahí estos 58: el mismo ritmo, ahora en TODO el ticket.
+  /// REGLA DEL DUEÑO (2026-09-25): la Moderna NUNCA puede salir más larga que
+  /// la Estándar. Con 58 (el valor de R4) una precuenta de 9 productos con
+  /// notas medía 428mm contra 339mm de la Estándar, porque cada renglón se
+  /// llevaba ~11mm. Con 22 el paso es ~6.5mm y esa misma precuenta mide
+  /// ~250mm (26% MENOS que la Estándar), con el doble de aire que la
+  /// Estándar (22 puntos contra ~10 del 1/6" de fábrica).
   ///
-  /// HISTORIA, para que nadie lo baje sin imprimir: 26 → rechazado, 32 →
-  /// rechazado, 38 → rechazado ("entre 2 líneas de texto es muy pegado").
-  /// Este valor se calibra en papel, nunca en pantalla: a 203 dpi el ticket
-  /// siempre se ve más denso impreso que en el mockup.
-  ///
-  /// LO QUE CUESTA: la factura de una mesa con logo y QR pasa de ~240mm a
-  /// ~350mm de papel. Es la decisión del dueño, tomada viendo el rollo.
-  static const int proportionalLeading = 58;
+  /// HISTORIA: 26/32/38 se rechazaron por "pegado" cuando además el raster
+  /// no leía `ESC 3`; 58 se rechazó por largo. Si se toca, medir la longitud
+  /// contra la Estándar con la misma orden: la Moderna tiene ~57% de los
+  /// renglones, así que el paso tiene que quedar por debajo de ~7.5mm.
+  static const int proportionalLeading = 22;
 
   /// Tamaño de fuente a 203 dpi. 24 puntos ≈ 3mm de altura de mayúscula, que
   /// es lo que se lee cómodo en un recibo térmico a un brazo de distancia.

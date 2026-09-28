@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
 import '../models/sales_models.dart';
+import '../utils/payment_recovery.dart';
 import '../utils/business_id_resolver.dart';
 import '../../core/network/database_operation_wrapper.dart';
 import 'sales_repository.dart' show closedOrderErrorMessage;
@@ -357,32 +358,43 @@ class SalesRepositoryImproved {
     DateTime? paidAt,
   }) async {
     try {
-      final response = await _client.rpc(
-        SalesQueries.rpcProcessPayment,
-        params: {
-          'p_order_id': orderId,
-          'p_check_id': checkId,
-          'p_payment_method_id': paymentMethodId,
-          'p_amount': amount,
-          'p_reference': reference,
-          'p_change_amount': changeAmount,
-          'p_customer_id': customerId,
-          'p_customer_rnc': customerRnc,
-          'p_requested_ncf_type': fiscalType,
-          'p_cashier_session_id': cashierSessionId,
-          'p_close_order': closeOrder,
-          'p_split_sequence': splitSequence,
-          'p_close_check': closeCheck,
-          if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
-        },
-      );
+      final response = await _client
+          .rpc(
+            SalesQueries.rpcProcessPayment,
+            params: {
+              'p_order_id': orderId,
+              'p_check_id': checkId,
+              'p_payment_method_id': paymentMethodId,
+              'p_amount': amount,
+              'p_reference': reference,
+              'p_change_amount': changeAmount,
+              'p_customer_id': customerId,
+              'p_customer_rnc': customerRnc,
+              'p_requested_ncf_type': fiscalType,
+              'p_cashier_session_id': cashierSessionId,
+              'p_close_order': closeOrder,
+              'p_split_sequence': splitSequence,
+              'p_close_check': closeCheck,
+              if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
+            },
+          )
+          .timeout(const Duration(seconds: 12));
 
       debugPrint('Rpc Response Type: ${response.runtimeType}');
       if (response is! Map) {
         debugPrint('⚠️ Rpc Response is not a Map: $response');
       }
 
-      return Payment.fromMap(Map<String, dynamic>.from(response as Map));
+      return await validatePaymentResponse(
+        _client,
+        Map<String, dynamic>.from(response as Map),
+        orderId: orderId,
+        checkId: checkId,
+        paymentMethodId: paymentMethodId,
+        splitSequence: splitSequence,
+        amount: amount,
+        changeAmount: changeAmount,
+      );
     } catch (e, s) {
       debugPrint('⚠️ Error en RPC processPayment: $e\nStack: $s');
       final msg = e.toString();
@@ -397,6 +409,8 @@ class SalesRepositoryImproved {
           amount: amount,
           changeAmount: changeAmount,
           cashierSessionId: cashierSessionId,
+          paymentMethodId: paymentMethodId,
+          splitSequence: splitSequence,
         );
         if (recovered != null) {
           return recovered;
@@ -415,6 +429,8 @@ class SalesRepositoryImproved {
           checkId: checkId,
           splitSequence: splitSequence,
           amount: amount,
+          paymentMethodId: paymentMethodId,
+          changeAmount: changeAmount,
         );
         if (recovered != null) {
           return recovered;
@@ -422,7 +438,7 @@ class SalesRepositoryImproved {
       }
 
       throw Exception(
-        'No se pudo procesar el pago de forma atomica. La operacion fue cancelada: $e',
+        'No se pudo confirmar el resultado del pago. No asumas que fue cancelado: $e',
       );
     }
   }
@@ -432,30 +448,18 @@ class SalesRepositoryImproved {
     String? checkId,
     required int splitSequence,
     required double amount,
+    required String paymentMethodId,
+    required double changeAmount,
   }) async {
-    try {
-      dynamic query = _client
-          .from('payments')
-          .select()
-          .eq('order_id', orderId)
-          .eq('status', 'completed')
-          .eq('split_sequence', splitSequence);
-
-      query = checkId == null
-          ? query.isFilter('check_id', null)
-          : query.eq('check_id', checkId);
-
-      final rows = await query.order('created_at', ascending: false).limit(5);
-
-      for (final row in rows) {
-        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
-        if ((payment.amount - amount).abs() <= 0.01) {
-          return payment;
-        }
-      }
-    } catch (_) {}
-
-    return null;
+    return recoverCompletedPayment(
+      _client,
+      orderId: orderId,
+      checkId: checkId,
+      paymentMethodId: paymentMethodId,
+      splitSequence: splitSequence,
+      amount: amount,
+      changeAmount: changeAmount,
+    );
   }
 
   Future<Payment?> _recoverCompletedPaymentAfterNcfCollision({
@@ -464,42 +468,24 @@ class SalesRepositoryImproved {
     required double amount,
     required double changeAmount,
     String? cashierSessionId,
+    required String paymentMethodId,
+    required int splitSequence,
   }) async {
-    try {
-      dynamic query = _client
-          .from('payments')
-          .select()
-          .eq('order_id', orderId)
-          .eq('status', 'completed');
-
-      query = checkId == null
-          ? query.isFilter('check_id', null)
-          : query.eq('check_id', checkId);
-
-      if (cashierSessionId != null && cashierSessionId.isNotEmpty) {
-        query = query.eq('session_id', cashierSessionId);
-      }
-
-      final rows = await query.order('created_at', ascending: false).limit(5);
-      final now = DateTime.now().toUtc();
-
-      for (final row in rows) {
-        final payment = Payment.fromMap(Map<String, dynamic>.from(row as Map));
-        final secondsDiff = now
-            .difference(payment.createdAt.toUtc())
-            .inSeconds
-            .abs();
-        final amountMatches = (payment.amount - amount).abs() <= 0.01;
-        final changeMatches =
-            (payment.changeAmount - changeAmount).abs() <= 0.01;
-
-        if (secondsDiff <= 120 && amountMatches && changeMatches) {
-          return payment;
-        }
-      }
-    } catch (_) {}
-
-    return null;
+    final payment = await recoverCompletedPayment(
+      _client,
+      orderId: orderId,
+      checkId: checkId,
+      paymentMethodId: paymentMethodId,
+      splitSequence: splitSequence,
+      amount: amount,
+      changeAmount: changeAmount,
+    );
+    if (cashierSessionId != null &&
+        cashierSessionId.isNotEmpty &&
+        payment?.sessionId != cashierSessionId) {
+      return null;
+    }
+    return payment;
   }
 
   /// Cerrar orden y sesión con reintentos

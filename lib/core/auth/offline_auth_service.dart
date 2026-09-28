@@ -7,6 +7,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../network/connectivity_service.dart';
+import '../offline/business_settings_offline_cache.dart';
+import '../offline/hub/hub_client.dart';
+import '../offline/hub/hub_config.dart';
 import '../security/secure_blob_cipher.dart';
 import '../storage/storage_service.dart';
 
@@ -25,6 +28,8 @@ class OfflineRosterUser {
     required this.role,
     required this.permissions,
     required this.isActive,
+    this.firstName,
+    this.lastName,
   });
 
   final String userId;
@@ -35,11 +40,16 @@ class OfflineRosterUser {
   final String role;
   final List<String> permissions;
   final bool isActive;
+  final String? firstName;
+  final String? lastName;
 
   factory OfflineRosterUser.fromJson(Map<String, dynamic> json) {
     final rawPerms = json['permissions'];
     final permissions = rawPerms is List
-        ? rawPerms.map((p) => p?.toString() ?? '').where((p) => p.isNotEmpty).toList()
+        ? rawPerms
+              .map((p) => p?.toString() ?? '')
+              .where((p) => p.isNotEmpty)
+              .toList()
         : <String>[];
     return OfflineRosterUser(
       userId: json['user_id']?.toString() ?? '',
@@ -50,19 +60,23 @@ class OfflineRosterUser {
       role: json['role']?.toString() ?? '',
       permissions: permissions,
       isActive: json['is_active'] == true,
+      firstName: json['first_name']?.toString(),
+      lastName: json['last_name']?.toString(),
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'user_id': userId,
-        'employee_id': employeeId,
-        'name': name,
-        'email': email,
-        'pin_hash': pinHash,
-        'role': role,
-        'permissions': permissions,
-        'is_active': isActive,
-      };
+    'user_id': userId,
+    'employee_id': employeeId,
+    'name': name,
+    'email': email,
+    'pin_hash': pinHash,
+    'role': role,
+    'permissions': permissions,
+    'is_active': isActive,
+    'first_name': firstName,
+    'last_name': lastName,
+  };
 }
 
 /// Excepción cuando el roster no se puede sincronizar.
@@ -73,19 +87,26 @@ class OfflineRosterSyncException implements Exception {
   String toString() => 'OfflineRosterSyncException: $message';
 }
 
-/// Servicio de autenticación offline nivel Toast.
-///
-/// Responsabilidades:
-///  - Vincular el terminal al business con un `device_token` revocable
-///    (`bind(businessId, deviceName)`), almacenado en flutter_secure_storage.
-///  - Sincronizar el roster de usuarios autorizados desde Supabase
-///    (`syncRoster()`), persistirlo en SharedPreferences (los `pin_hash`
-///    ya son seguros).
-///  - Validar PIN offline contra el cache (`verifyPin(pin)`).
-///  - Refrescar TTL del roster y bloquear operativamente si pasó demasiado
-///    tiempo sin sync (`isRosterStale`).
+/// Downloads business PIN hashes through the authenticated session or LAN Hub,
+/// keeps an encrypted snapshot and verifies PINs without WAN. Manual binding
+/// is supported for legacy servers, but is not required by the new RPC.
 class OfflineAuthService {
   OfflineAuthService._();
+
+  @visibleForTesting
+  OfflineAuthService.forTesting({
+    required Future<Map<String, dynamic>> Function(String) cloudRoster,
+    required Future<Map<String, dynamic>?> Function(String) lanRoster,
+    required bool Function() isOnline,
+  }) : _cloudRoster = cloudRoster,
+       _lanRoster = lanRoster,
+       _isOnline = isOnline;
+
+  Future<Map<String, dynamic>> Function(String)? _cloudRoster;
+  Future<Map<String, dynamic>?> Function(String)? _lanRoster;
+  bool Function()? _isOnline;
+  final Map<String, Future<List<OfflineRosterUser>>> _syncing = {};
+  final Map<String, DateTime> _lastPinRefresh = {};
 
   static final OfflineAuthService _instance = OfflineAuthService._();
   factory OfflineAuthService() => _instance;
@@ -135,10 +156,7 @@ class OfflineAuthService {
     final client = Supabase.instance.client;
     final response = await client.rpc(
       'fn_device_bind',
-      params: {
-        'p_business_id': businessId,
-        'p_device_name': deviceName,
-      },
+      params: {'p_business_id': businessId, 'p_device_name': deviceName},
     );
 
     if (response is! Map) {
@@ -150,9 +168,7 @@ class OfflineAuthService {
     final token = response['device_token']?.toString();
     final deviceId = response['device_id']?.toString();
     if (token == null || token.isEmpty || deviceId == null) {
-      throw OfflineRosterSyncException(
-        'fn_device_bind devolvió token vacío',
-      );
+      throw OfflineRosterSyncException('fn_device_bind devolvió token vacío');
     }
 
     try {
@@ -204,30 +220,125 @@ class OfflineAuthService {
   // Roster sync
   // ─────────────────────────────────────────────────────────────────────
 
-  /// Sincroniza el roster del business actual. Requiere internet y que el
-  /// terminal haya sido bindado previamente. Idempotente: re-llamarla
-  /// solo refresca el cache.
-  Future<List<OfflineRosterUser>> syncRoster() async {
-    final token = await _safeRead(_kDeviceTokenKey);
-    if (token == null || token.isEmpty) {
-      throw OfflineRosterSyncException('Device no vinculado');
+  /// LAN first, then the authenticated business session. Device binding is
+  /// retained only as compatibility with servers missing the new RPC.
+  Future<List<OfflineRosterUser>> syncRoster({String? businessId}) async {
+    final storage = await StorageService.getInstance();
+    final bid =
+        businessId ??
+        _backgroundSyncBusinessId ??
+        await storage.read(StorageKeys.activeBusinessId) ??
+        await currentBoundBusinessId();
+    if (bid == null || bid.isEmpty) {
+      throw OfflineRosterSyncException('No hay un negocio activo.');
     }
+    final pending = _syncing[bid];
+    if (pending != null) return pending;
+    final future = _syncBusinessRoster(bid);
+    _syncing[bid] = future;
+    try {
+      return await future;
+    } finally {
+      _syncing.remove(bid);
+    }
+  }
 
+  Future<Map<String, dynamic>?> _downloadLanRoster(String businessId) async {
+    final injected = _lanRoster;
+    if (injected != null) return injected(businessId);
+    final config = HubConfigService();
+    if (await config.getDeviceRole(businessId) == HubDeviceRole.hub) {
+      return null;
+    }
+    final settings = await BusinessSettingsOfflineCache().loadRow(businessId);
+    final configured = await config.getHubUrl(businessId);
+    if (settings?['network_mode'] != 'hub' && configured == null) return null;
+    final hub = HubClient();
+    try {
+      final url = await hub.findReachableHub(
+        businessId: businessId,
+        configuredUrl: configured,
+      );
+      if (url == null) return null;
+      return await hub.getRoster(url, businessId: businessId);
+    } finally {
+      hub.dispose();
+    }
+  }
+
+  Future<Map<String, dynamic>> _downloadCloudRoster(String businessId) async {
+    final injected = _cloudRoster;
+    if (injected != null) return injected(businessId);
     final client = Supabase.instance.client;
-    final response = await client.rpc(
-      'fn_sync_roster',
-      params: {'p_device_token': token},
-    );
-
-    if (response is! Map) {
+    if (client.auth.currentSession != null) {
+      try {
+        final response = await client
+            .rpc(
+              'fn_sync_business_roster',
+              params: {'p_business_id': businessId},
+            )
+            .timeout(const Duration(seconds: 8));
+        if (response is! Map) {
+          throw OfflineRosterSyncException('Respuesta de permisos inválida.');
+        }
+        return Map<String, dynamic>.from(response);
+      } on PostgrestException catch (e) {
+        // A denied session must not bypass authorization with a device token.
+        if (e.code != 'PGRST202' && e.code != '42883') rethrow;
+      }
+    }
+    final token = await _safeRead(_kDeviceTokenKey);
+    if (token == null ||
+        token.isEmpty ||
+        await currentBoundBusinessId() != businessId) {
       throw OfflineRosterSyncException(
-        'fn_sync_roster no devolvió un payload válido',
+        'Actualiza el servidor para sincronizar PIN sin vinculación.',
       );
     }
+    final response = await client
+        .rpc('fn_sync_roster', params: {'p_device_token': token})
+        .timeout(const Duration(seconds: 8));
+    if (response is! Map) {
+      throw OfflineRosterSyncException('Respuesta de permisos inválida.');
+    }
+    return Map<String, dynamic>.from(response);
+  }
 
-    final businessId = response['business_id']?.toString() ?? '';
+  Future<List<OfflineRosterUser>> _syncBusinessRoster(String businessId) async {
+    try {
+      final lan = await _downloadLanRoster(businessId);
+      if (lan != null) return await _storeRoster(businessId, lan);
+    } catch (e) {
+      debugPrint('[OfflineAuth] No se pudo actualizar por intranet: $e');
+    }
+    if (!(_isOnline?.call() ?? ConnectivityService().isConnected)) {
+      throw OfflineRosterSyncException(
+        'No hay permisos actualizados en la intranet.',
+      );
+    }
+    return _storeRoster(businessId, await _downloadCloudRoster(businessId));
+  }
+
+  Future<List<OfflineRosterUser>> _storeRoster(
+    String businessId,
+    Map<String, dynamic> response,
+  ) async {
+    if (response['business_id'] != businessId) {
+      throw OfflineRosterSyncException(
+        'Los permisos pertenecen a otro negocio.',
+      );
+    }
+    final syncedAt = DateTime.tryParse(response['synced_at']?.toString() ?? '');
+    final now = DateTime.now().toUtc();
+    if (syncedAt == null ||
+        now.difference(syncedAt) > rosterTtl ||
+        syncedAt.isAfter(now.add(const Duration(minutes: 5)))) {
+      throw OfflineRosterSyncException(
+        'Los permisos recibidos están vencidos.',
+      );
+    }
     final rawList = response['roster'];
-    if (rawList is! List) {
+    if (rawList is! List || rawList.any((row) => row is! Map)) {
       throw OfflineRosterSyncException(
         'fn_sync_roster devolvió roster no-lista',
       );
@@ -235,27 +346,32 @@ class OfflineAuthService {
 
     final users = rawList
         .whereType<Map>()
-        .map((row) => OfflineRosterUser.fromJson(
-              Map<String, dynamic>.from(row),
-            ))
+        .map(
+          (row) => OfflineRosterUser.fromJson(Map<String, dynamic>.from(row)),
+        )
         .toList(growable: false);
 
-    // Persistir en SharedPreferences, CIFRADO en reposo: los pin_hash son
-    // bcrypt (one-way), pero el roster también lleva PII (nombres, emails,
-    // roles) que no debe quedar legible en disco. Ver [SecureBlobCipher].
+    final existing = await rosterSyncedAt(businessId);
+    if (existing != null && existing.isAfter(syncedAt)) {
+      return cachedRoster(businessId);
+    }
+    // One encrypted write keeps the roster and its original freshness atomic.
+    // A LAN copy must never renew the cloud timestamp of revoked permissions.
     final storage = await StorageService.getInstance();
-    final serialized = users
-        .map((u) => u.toJson())
-        .toList(growable: false);
-    await storage.write(
+    final serialized = users.map((u) => u.toJson()).toList(growable: false);
+    final saved = await storage.write(
       _rosterKey(businessId),
-      await SecureBlobCipher.instance.seal(jsonEncode(serialized)),
+      await SecureBlobCipher.instance.seal(
+        jsonEncode({
+          'business_id': businessId,
+          'synced_at': syncedAt.toUtc().toIso8601String(),
+          'roster': serialized,
+        }),
+      ),
     );
-    await storage.write(
-      _rosterSyncedAtKey(businessId),
-      DateTime.now().toUtc().toIso8601String(),
-    );
-
+    if (!saved) {
+      throw OfflineRosterSyncException('No se pudieron guardar los PIN.');
+    }
     return users;
   }
 
@@ -271,12 +387,14 @@ class OfflineAuthService {
       final plain = await SecureBlobCipher.instance.open(raw);
       if (plain == null || plain.isEmpty) return const [];
       final decoded = jsonDecode(plain);
-      if (decoded is! List) return const [];
-      return decoded
+      if (decoded is Map && decoded['business_id'] != businessId) return const [];
+      final rows = decoded is Map ? decoded['roster'] : decoded;
+      if (rows is! List) return const [];
+      return rows
           .whereType<Map>()
-          .map((row) => OfflineRosterUser.fromJson(
-                Map<String, dynamic>.from(row),
-              ))
+          .map(
+            (row) => OfflineRosterUser.fromJson(Map<String, dynamic>.from(row)),
+          )
           .toList(growable: false);
     } catch (e) {
       debugPrint('OfflineAuthService: roster cache corrupto: $e');
@@ -288,9 +406,41 @@ class OfflineAuthService {
   /// nunca se sincronizó.
   Future<DateTime?> rosterSyncedAt(String businessId) async {
     final storage = await StorageService.getInstance();
+    final snapshot = await cachedRosterPayload(businessId);
+    if (snapshot != null) {
+      return DateTime.tryParse(snapshot['synced_at']?.toString() ?? '');
+    }
     final raw = await storage.read(_rosterSyncedAtKey(businessId));
     if (raw == null || raw.isEmpty) return null;
     return DateTime.tryParse(raw);
+  }
+
+  /// Export only the cached snapshot; serving LAN requests never needs WAN.
+  Future<Map<String, dynamic>?> cachedRosterPayload(String businessId) async {
+    final storage = await StorageService.getInstance();
+    final raw = await storage.read(_rosterKey(businessId));
+    if (raw == null) return null;
+    try {
+      final plain = await SecureBlobCipher.instance.open(raw);
+      if (plain == null) return null;
+      final decoded = jsonDecode(plain);
+      if (decoded is Map) {
+        if (decoded['business_id'] != businessId ||
+            decoded['roster'] is! List) {
+          return null;
+        }
+        return Map<String, dynamic>.from(decoded);
+      }
+      if (decoded is! List) return null;
+      final syncedAt = await storage.read(_rosterSyncedAtKey(businessId));
+      return {
+        'business_id': businessId,
+        'synced_at': syncedAt,
+        'roster': decoded,
+      };
+    } catch (_) {
+      return null;
+    }
   }
 
   /// True si el roster expiró (más de `rosterTtl` desde el último sync).
@@ -309,73 +459,64 @@ class OfflineAuthService {
   /// usuario que matchea, o `null` si ningún hash coincide, el usuario
   /// está inactivo, o el roster venció (>24h sin sync).
   ///
-  /// **Bloqueo por staleness (Fase 2.6)**: cuando el roster está stale,
-  /// `verifyPin` retorna null directamente sin probar hashes. El caller
-  /// cae a su fallback online; si tampoco hay internet, el login se
-  /// bloquea — protección contra dispositivos olvidados con un usuario
-  /// despedido aún en el cache.
+  /// Expired permissions trigger a bounded refresh through LAN/cloud. If no
+  /// fresh snapshot is available, hashes are not checked and access is denied.
   ///
-  /// bcrypt es lento por diseño: ~50-100ms por verificación con cost=8.
-  /// Para un roster de 20 empleados eso son ~1-2s en el peor caso (todos
-  /// los hashes diferentes). Aceptable para login. Si el roster crece a
-  /// >50 empleados se puede paralelizar con `Future.wait` o un isolate.
+  /// Bcrypt runs in an isolate on native platforms to keep the UI responsive.
   Future<OfflineRosterUser?> verifyPin({
     required String businessId,
     required String pin,
   }) async {
-    if (pin.isEmpty) return null;
-
+    final normalized = pin.trim();
+    if (normalized.isEmpty || businessId.isEmpty) return null;
     if (await isRosterStale(businessId)) {
-      debugPrint(
-        'OfflineAuthService: roster stale para $businessId, '
-        'bloqueando verificación offline.',
-      );
-      return null;
+      await _refreshForPin(businessId);
+      if (await isRosterStale(businessId)) return null;
+    }
+    Future<OfflineRosterUser?> match() async {
+      final roster = await cachedRoster(businessId);
+      final index = await compute(_matchRosterPin, (
+        pin: normalized,
+        users: roster.map((u) => u.toJson()).toList(),
+      ));
+      return index == null ? null : roster[index];
     }
 
-    final roster = await cachedRoster(businessId);
-    for (final user in roster) {
-      if (!user.isActive) continue;
-      final hash = user.pinHash;
-      if (hash == null || hash.isEmpty) continue;
-
-      try {
-        if (BCrypt.checkpw(pin, hash)) {
-          return user;
-        }
-      } catch (e) {
-        // Hash mal formado: lo saltamos sin abortar la búsqueda completa
-        // (un hash corrupto no debería bloquear el login del resto).
-        debugPrint(
-          'OfflineAuthService: hash inválido para ${user.userId}: $e',
-        );
-        continue;
-      }
-    }
+    final local = await match();
+    if (local != null) return local;
+    // A recently changed PIN should not wait for the periodic refresh.
+    if (await _refreshForPin(businessId)) return match();
     return null;
   }
 
+  Future<bool> _refreshForPin(String businessId) async {
+    final now = DateTime.now();
+    final last = _lastPinRefresh[businessId];
+    if (last != null && now.difference(last) < const Duration(seconds: 15)) {
+      return false;
+    }
+    _lastPinRefresh[businessId] = now;
+    try {
+      await syncRoster(businessId: businessId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────
-  // Background sync (Fase 2.6 — auto-sync al login + cada hora)
+  // Background sync: login, business changes, connectivity changes and timer.
   // ─────────────────────────────────────────────────────────────────────
 
   Timer? _periodicSyncTimer;
   StreamSubscription<bool>? _connectivitySub;
   String? _backgroundSyncBusinessId;
 
-  /// Cuántas veces refrescamos el roster cuando la app está activa con red.
-  /// Una hora es un balance razonable entre frescura y carga al server.
-  static const Duration _periodicSyncInterval = Duration(hours: 1);
+  /// Bounds propagation delay for PIN and permission changes.
+  static const Duration _periodicSyncInterval = Duration(minutes: 1);
 
-  /// Inicia el ciclo de sync en background para el business dado:
-  ///  1. Intenta sync inmediato (si hay red).
-  ///  2. Programa un Timer.periodic de 1h mientras la app esté abierta.
-  ///  3. Re-sincroniza cada vez que `ConnectivityService` reporta
-  ///     reconexión (cuando volvemos online después de un periodo offline).
-  ///
-  /// Idempotente: re-llamar con el mismo businessId cancela y reprograma.
-  /// Si se llama con un businessId distinto, también re-engancha el ciclo
-  /// al nuevo negocio.
+  /// Starts one timer per active business. WAN loss also triggers a refresh:
+  /// the LAN can still be available. Concurrent downloads are deduplicated.
   Future<void> startBackgroundSync(String businessId) async {
     if (businessId.isEmpty) return;
     if (_backgroundSyncBusinessId == businessId &&
@@ -398,10 +539,9 @@ class OfflineAuthService {
     });
 
     _connectivitySub?.cancel();
-    _connectivitySub = ConnectivityService()
-        .connectionStream
-        .listen((connected) async {
-      if (!connected) return;
+    _connectivitySub = ConnectivityService().connectionStream.listen((
+      connected,
+    ) async {
       await _safeSync();
     });
   }
@@ -417,11 +557,25 @@ class OfflineAuthService {
 
   Future<void> _safeSync() async {
     try {
-      if (!await isDeviceBound()) return;
-      if (!ConnectivityService().isConnected) return;
-      await syncRoster();
+      final businessId = _backgroundSyncBusinessId;
+      if (businessId == null) return;
+      await syncRoster(businessId: businessId);
     } catch (e) {
       debugPrint('OfflineAuthService: background sync falló: $e');
     }
   }
+}
+
+int? _matchRosterPin(({String pin, List<Map<String, dynamic>> users}) input) {
+  for (var i = 0; i < input.users.length; i++) {
+    final user = input.users[i];
+    final hash = user['pin_hash'] as String?;
+    if (user['is_active'] != true || hash == null || hash.isEmpty) continue;
+    try {
+      if (BCrypt.checkpw(input.pin, hash)) return i;
+    } catch (_) {
+      // A malformed hash must not disable the other employees' PINs.
+    }
+  }
+  return null;
 }

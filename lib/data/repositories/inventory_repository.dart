@@ -861,7 +861,9 @@ class InventoryRepository {
       // uso real (el cajero siempre busca). Con catálogos POS típicos
       // (~hasta unos miles de items) la diferencia es despreciable y
       // ganamos hidratación garantizada del snapshot offline.
-      final itemsResponse = await _withConversionColumns(
+      // Las tres lecturas no dependen entre sí: van EN PARALELO. En serie
+      // eran tres viajes de ida y vuelta seguidos en cada carga.
+      final itemsFuture = _withConversionColumns(
         columns,
         (cols) => _client
             .from(InventoryQueries.tableInventoryItems)
@@ -869,12 +871,23 @@ class InventoryRepository {
             .eq('business_id', businessId)
             .order('name'),
       );
-      final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
-
-      final stockResponse = await _client
+      final stockFuture = _client
           .from(InventoryQueries.tableInventoryStock)
           .select('item_id, quantity')
           .eq('warehouse_id', warehouseId);
+      final warehousesFuture = _client
+          .from(InventoryQueries.tableWarehouses)
+          .select('id, is_main')
+          .eq('business_id', businessId);
+      final results = await Future.wait<dynamic>([
+        itemsFuture,
+        stockFuture,
+        warehousesFuture,
+      ]);
+      final itemsResponse = results[0];
+      final stockResponse = results[1];
+      final warehousesRaw = results[2];
+      final itemsRaw = List<Map<String, dynamic>>.from(itemsResponse);
 
       final stockByItem = <String, double>{};
       for (final row in List<Map<String, dynamic>>.from(stockResponse)) {
@@ -906,10 +919,6 @@ class InventoryRepository {
       // sea 0). En el almacén PRINCIPAL además incluimos los "huérfanos" (sin
       // stock en NINGÚN almacén del negocio) para que insumos recién creados o
       // sin asignar no desaparezcan de la vista.
-      final warehousesRaw = await _client
-          .from(InventoryQueries.tableWarehouses)
-          .select('id, is_main')
-          .eq('business_id', businessId);
       final allWarehouseIds = <String>[];
       var selectedIsMain = false;
       for (final w in List<Map<String, dynamic>>.from(warehousesRaw)) {
@@ -1278,23 +1287,37 @@ class InventoryRepository {
         .toSet()
         .toList(growable: false);
 
+    // Nombres de insumos y de bodegas: dos lecturas independientes, en
+    // paralelo.
+    final itemsFuture = itemIds.isEmpty
+        ? null
+        : _client
+              .from(InventoryQueries.tableInventoryItems)
+              .select('id, name')
+              .inFilter('id', itemIds);
+    final warehousesFuture = warehouseIds.isEmpty
+        ? null
+        : _client
+              .from(InventoryQueries.tableWarehouses)
+              .select('id, name')
+              .inFilter('id', warehouseIds);
+
+    final lookups = await Future.wait<dynamic>([
+      itemsFuture ?? Future<dynamic>.value(const []),
+      warehousesFuture ?? Future<dynamic>.value(const []),
+    ]);
+
     final itemsById = <String, String>{};
-    if (itemIds.isNotEmpty) {
-      final items = await _client
-          .from(InventoryQueries.tableInventoryItems)
-          .select('id, name')
-          .inFilter('id', itemIds);
+    if (itemsFuture != null) {
+      final items = lookups[0];
       for (final row in List<Map<String, dynamic>>.from(items)) {
         itemsById[row['id']?.toString() ?? ''] = row['name']?.toString() ?? '';
       }
     }
 
     final warehousesById = <String, String>{};
-    if (warehouseIds.isNotEmpty) {
-      final warehouses = await _client
-          .from(InventoryQueries.tableWarehouses)
-          .select('id, name')
-          .inFilter('id', warehouseIds);
+    if (warehousesFuture != null) {
+      final warehouses = lookups[1];
       for (final row in List<Map<String, dynamic>>.from(warehouses)) {
         warehousesById[row['id']?.toString() ?? ''] =
             row['name']?.toString() ?? '';
@@ -1951,6 +1974,60 @@ class InventoryRepository {
         return;
       }
       rethrow;
+    }
+  }
+
+  /// Salida de inventario (merma) con motivo de catálogo.
+  ///
+  /// Es RELATIVA: resta [quantity], igual que el `waste` de siempre. No usa
+  /// [adjustInventory] a propósito: ese fija el stock a un número, y una venta
+  /// que entre mientras el diálogo está abierto quedaría pisada.
+  ///
+  /// El motivo viaja DOS veces: como `reason_code` (reportes por causa) y como
+  /// prefijo de la nota (`Vencido — …`), para que se lea aunque la función
+  /// nueva no esté desplegada. Sin la función, o sin red, cae a
+  /// [recordMovement] — que además encola offline.
+  Future<void> recordOutflow({
+    required String businessId,
+    required String warehouseId,
+    required String itemId,
+    required double quantity,
+    required String reasonCode,
+    required String reasonLabel,
+    String? notes,
+    double? costPerUnit,
+  }) async {
+    final detail = notes?.trim() ?? '';
+    final fullNotes = detail.isEmpty ? reasonLabel : '$reasonLabel — $detail';
+    try {
+      await _client.rpc(
+        InventoryQueries.rpcRecordOutflow,
+        params: {
+          'p_business_id': businessId,
+          'p_warehouse_id': warehouseId,
+          'p_item_id': itemId,
+          'p_quantity': quantity,
+          'p_reason_code': reasonCode,
+          'p_notes': fullNotes,
+          'p_cost_per_unit': costPerUnit,
+        },
+      );
+    } catch (e) {
+      final missing = e is PostgrestException &&
+          (e.code == 'PGRST202' || e.code == '42883');
+      if (!missing && !_isConnectivityError(e) && _connectivity.isConnected) {
+        rethrow;
+      }
+      await recordMovement(
+        businessId: businessId,
+        warehouseId: warehouseId,
+        itemId: itemId,
+        movementType: 'waste',
+        quantity: quantity,
+        costPerUnit: costPerUnit,
+        notes: fullNotes,
+        referenceType: 'manual_outflow',
+      );
     }
   }
 

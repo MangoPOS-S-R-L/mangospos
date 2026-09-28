@@ -71,8 +71,15 @@ class InventoryViewModel extends ChangeNotifier {
         businessId,
         validIds: warehouses.map((w) => w.id),
       );
-      final fallback = _state.selectedWarehouseId ??
-          (warehouses.isNotEmpty ? warehouses.first.id : null);
+      // El respaldo también se valida: la bodega que traía el estado puede
+      // ser de OTRO negocio (cambio de negocio) o estar desactivada. Sin esto
+      // el selector de Salidas/Mermas recibía un id fuera de su lista y
+      // Flutter reventaba con "There should be exactly one item…".
+      final validIds = warehouses.map((w) => w.id).toSet();
+      final previous = _state.selectedWarehouseId;
+      final fallback = previous != null && validIds.contains(previous)
+          ? previous
+          : (warehouses.isNotEmpty ? warehouses.first.id : null);
       final selectedWarehouseId = scope.effectiveId(
         warehouses.map((w) => w.id),
         fallback,
@@ -286,6 +293,8 @@ class InventoryViewModel extends ChangeNotifier {
   Future<void> registerOutflow({
     required String itemId,
     required double quantity,
+    required String reasonCode,
+    required String reasonLabel,
     String? notes,
   }) async {
     final businessId = _state.businessId;
@@ -298,17 +307,20 @@ class InventoryViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _repository.recordMovement(
+      await _repository.recordOutflow(
         businessId: businessId,
         warehouseId: warehouseId,
         itemId: itemId,
-        movementType: 'waste',
         quantity: quantity,
+        reasonCode: reasonCode,
+        reasonLabel: reasonLabel,
         notes: notes,
-        referenceType: 'manual_outflow',
       );
       _state = _state.copyWith(saving: false);
-      await refresh();
+      // La recarga NO se espera: el diálogo cierra e imprime el conduce ya,
+      // y la lista se pone al día detrás. Esperarla eran ~7 consultas antes
+      // de que el usuario viera algo.
+      unawaited(refresh());
     } catch (e) {
       _state = _state.copyWith(
         saving: false,
@@ -437,15 +449,19 @@ class InventoryViewModel extends ChangeNotifier {
       return;
     }
 
-    final items = await _repository.getItems(
+    // Insumos y movimientos no dependen entre sí: en paralelo.
+    final itemsFuture = _repository.getItems(
       businessId: businessId,
       warehouseId: warehouseId,
       query: _state.searchQuery,
     );
-    final movements = await _repository.getMovements(
+    final movementsFuture = _repository.getMovements(
       businessId: businessId,
       warehouseId: warehouseId,
     );
+    final results = await Future.wait<Object>([itemsFuture, movementsFuture]);
+    final items = results[0] as List<InventoryItemSummary>;
+    final movements = results[1] as List<InventoryMovementEntry>;
 
     _state = _state.copyWith(
       loading: false,

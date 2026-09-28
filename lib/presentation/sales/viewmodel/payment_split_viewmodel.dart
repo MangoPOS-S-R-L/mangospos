@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/fiscal/ncf_types.dart';
 import '../../../core/fiscal/payment_stage.dart';
@@ -101,6 +102,7 @@ class PaymentSplitState {
   /// `fiscal_document` que el RPC ya creo — no hay round-trip extra, es la
   /// misma consulta que ya se hacia para la emision e-CF.
   final String? emittedNcf;
+
   /// Fase post-cobro: el pago ya esta grabado en DB pero la impresion del
   /// ticket esta en curso. Mientras `isPrinting=true` el modal NO debe
   /// cerrarse y los botones de salir/cancelar quedan bloqueados — sino el
@@ -113,6 +115,7 @@ class PaymentSplitState {
   /// Cuenta bancaria seleccionada para el próximo `addTransaction` cuando
   /// el método activo es transferencia. Se limpia al cambiar de método.
   final BankAccount? selectedBankAccount;
+
   /// True cuando el cobro no pudo llegar al server y se encoló para sync.
   /// El caller usa este flag para imprimir precuenta en vez de factura
   /// (NCF se emite al sincronizar, no antes).
@@ -241,6 +244,7 @@ class PaymentSplitState {
     final diff = totalAmount - (tableDeposit?.balance ?? 0);
     return diff > 0.005 ? diff : 0;
   }
+
   double get remaining =>
       (totalAmount - totalPaid) > 0 ? (totalAmount - totalPaid) : 0;
   double get change =>
@@ -273,6 +277,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final String? _fiscalType;
   final String? _cashierSessionId;
   final Ref _ref;
+  final Future<String?> Function({bool skipLocal})? _sessionResolver;
+  final Future<String?> Function()? _businessResolver;
+  final Future<void> Function({
+    required String businessId,
+    required Map<String, dynamic> action,
+  })?
+  _enqueuePayment;
+  final bool Function()? _connectionStatus;
+
+  bool get _isConnected =>
+      _connectionStatus?.call() ?? _connectivity.isConnected;
 
   /// Guard sincronico antes de cualquier `await` para bloquear
   /// double-tap / re-fire en el mismo frame. `state.isProcessing` es
@@ -280,6 +295,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// llega en el siguiente frame y deja una ventana de race minima.
   /// Este flag es field privado: las dos invocaciones lo ven sincrono.
   bool _localProcessing = false;
+  bool _attemptLocked = false;
+  bool _paymentConfirmed = false;
+  bool _offlineAttempt = false;
+  final Map<int, Payment> _recordedPayments = {};
+  final String _attemptId = const Uuid().v4();
+  DateTime? _attemptPaidAt;
+  bool _offlineNcfResolved = false;
+  String? _attemptOfflineNcf;
+
+  bool get _canEdit => !state.isBusy && !_attemptLocked && !_paymentConfirmed;
 
   PaymentSplitViewModel(
     this._salesRepo,
@@ -291,16 +316,31 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     String? fiscalType,
     String? cashierSessionId,
     required Ref ref,
+    bool initialize = true,
+    Future<String?> Function({bool skipLocal})? sessionResolver,
+    Future<String?> Function()? businessResolver,
+    Future<void> Function({
+      required String businessId,
+      required Map<String, dynamic> action,
+    })?
+    enqueuePayment,
+    bool Function()? connectionStatus,
   }) : _checkId = checkId,
        _customerId = customerId,
        _customerRnc = customerRnc,
        _fiscalType = fiscalType,
        _cashierSessionId = cashierSessionId,
        _ref = ref,
+       _sessionResolver = sessionResolver,
+       _businessResolver = businessResolver,
+       _enqueuePayment = enqueuePayment,
+       _connectionStatus = connectionStatus,
        super(PaymentSplitState(totalAmount: total)) {
-    unawaited(_connectivity.initialize());
-    _loadOrderForReceipt();
-    _loadTableDeposit();
+    if (initialize) {
+      unawaited(_connectivity.initialize());
+      _loadOrderForReceipt();
+      _loadTableDeposit();
+    }
     // Cortesía 100%: cuando total == 0 no hay nada que cobrar, pero el
     // flujo de cierre necesita pasar por processPayment para generar
     // fiscal_document y cerrar orden/check. Pre-seedeamos una transacción
@@ -311,7 +351,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       state = state.copyWith(
         transactions: [
           PaymentTransaction(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            id: const Uuid().v4(),
             method: PaymentMethodType.cash,
             amount: 0,
             timestamp: DateTime.now(),
@@ -403,6 +443,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// abierta) → consulta al servidor. Con [skipLocal] va directo al servidor:
   /// es el reintento cuando el servidor dijo que la caja local ya se cerró.
   Future<String?> _resolveCashierSessionId({bool skipLocal = false}) async {
+    if (_sessionResolver != null) return _sessionResolver(skipLocal: skipLocal);
     final cashier = _ref.read(cashierViewModelProvider);
 
     if (!skipLocal) {
@@ -414,10 +455,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     // siempre para que el cobro offline no cambie. En el reintento no: esa
     // caja ya la rechazó el servidor.
     final offlineFallback =
-        (!skipLocal && _cashierSessionId != null && _cashierSessionId.isNotEmpty)
+        (!skipLocal &&
+            _cashierSessionId != null &&
+            _cashierSessionId.isNotEmpty)
         ? _cashierSessionId
         : null;
-    if (!_connectivity.isConnected) return offlineFallback;
+    if (!_isConnected) return offlineFallback;
 
     try {
       return await _resolveOpenSessionFromServer(
@@ -494,6 +537,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         final features = await _ref
             .read(posSettingsRepositoryProvider)
             .getBusinessFeatures(businessId);
+        if (!_canEdit || !mounted) return;
         state = state.copyWith(
           salesNoteAvailable: features.salesNoteEnabled,
           salesNoteSelected:
@@ -521,6 +565,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
   /// Alterna entre comprobante fiscal y NOTA DE VENTA para este cobro.
   void setSalesNote(bool value) {
+    if (!_canEdit) return;
     if (state.salesNoteSelected == value) return;
     state = state.copyWith(salesNoteSelected: value);
   }
@@ -549,20 +594,22 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     if (state.isPrinting == value) return;
     state = state.copyWith(
       isPrinting: value,
-      // Al soltar la fase de impresion el cobro terminó: devolvemos la etapa
-      // a idle para que un segundo cobro sobre el mismo modal no arranque
-      // mostrando el stepper ya completo del anterior.
-      stage: value ? PaymentStage.imprimiendo : PaymentStage.idle,
+      // A completed payment never becomes editable or chargeable again.
+      stage: value
+          ? PaymentStage.imprimiendo
+          : (_paymentConfirmed ? PaymentStage.listo : PaymentStage.idle),
     );
   }
 
   // --- INPUT HANDLING ---
 
   void setInput(String val) {
+    if (!_canEdit) return;
     state = state.copyWith(currentInput: val, validationError: null);
   }
 
   void appendInput(String char) {
+    if (!_canEdit) return;
     if (char == '.' && state.currentInput.contains('.')) return;
     state = state.copyWith(
       currentInput: state.currentInput + char,
@@ -571,6 +618,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void backspace() {
+    if (!_canEdit) return;
     if (state.currentInput.isNotEmpty) {
       state = state.copyWith(
         currentInput: state.currentInput.substring(
@@ -583,10 +631,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void clearInput() {
+    if (!_canEdit) return;
     state = state.copyWith(currentInput: '', validationError: null);
   }
 
   void setMethod(PaymentMethodType method, {bool presetRemaining = true}) {
+    if (!_canEdit) return;
     state = state.copyWith(
       activeMethod: method,
       validationError: null,
@@ -620,6 +670,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// transferencia; persistimos el id en `payments.bank_account_id` al
   /// confirmar el pago.
   void setBankAccount(BankAccount? account) {
+    if (!_canEdit) return;
     if (!_ref
         .read(sessionProvider.notifier)
         .hasPermission('pagos.asignar_referencia')) {
@@ -629,13 +680,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       );
       return;
     }
-    state = state.copyWith(
-      selectedBankAccount: account,
-      validationError: null,
-    );
+    state = state.copyWith(selectedBankAccount: account, validationError: null);
   }
 
   void setQuickAmount(double amount) {
+    if (!_canEdit) return;
     state = state.copyWith(
       currentInput: amount.toStringAsFixed(0),
       validationError: null,
@@ -643,6 +692,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void setExactAmount() {
+    if (!_canEdit) return;
     state = state.copyWith(
       currentInput: state.remaining.toStringAsFixed(2),
       validationError: null,
@@ -652,8 +702,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   // --- TRANSACTION MANAGEMENT (Split Logic) ---
 
   void addTransaction() {
+    if (!_canEdit) return;
     final amount = state.inputAmount;
-    if (amount <= 0) {
+    if (!amount.isFinite || amount <= 0) {
       state = state.copyWith(validationError: 'Ingresa un monto mayor a cero.');
       return;
     }
@@ -690,13 +741,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         );
         return;
       }
-      if (!_connectivity.isConnected) {
+      if (!_isConnected) {
         // El saldo se valida y se descuenta en el servidor. Si el cobro se
         // encola offline, al sincronizar podría no haber saldo (otra caja lo
         // consumió) y el pago quedaría rechazado con la mesa ya liberada.
         state = state.copyWith(
-          validationError:
-              'El saldo de mesa no está disponible sin conexión.',
+          validationError: 'El saldo de mesa no está disponible sin conexión.',
         );
         return;
       }
@@ -719,7 +769,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     if (state.activeMethod == PaymentMethodType.transfer &&
         state.selectedBankAccount == null) {
       state = state.copyWith(
-        validationError: 'Selecciona la cuenta bancaria que recibió la transferencia.',
+        validationError:
+            'Selecciona la cuenta bancaria que recibió la transferencia.',
       );
       return;
     }
@@ -730,7 +781,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     );
 
     final newTx = PaymentTransaction(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: const Uuid().v4(),
       method: state.activeMethod,
       amount: amount,
       timestamp: DateTime.now(),
@@ -753,6 +804,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   }
 
   void removeTransaction(String id) {
+    if (!_canEdit) return;
     // Cortesía 100%: la transacción seed $0 (ver constructor) es la única
     // forma de cerrar la orden. No permitir borrarla; el cajero puede
     // cancelar el modal si no quiere cobrar.
@@ -799,13 +851,18 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
 
     try {
-      final businessId = await resolveBusinessIdOrNull(
-        Supabase.instance.client,
-        'auto',
-      );
-      if (businessId == null || businessId.isEmpty) return null;
+      final businessId =
+          await (_businessResolver?.call() ??
+              resolveBusinessIdOrNull(Supabase.instance.client, 'auto'));
+      if (businessId == null || businessId.isEmpty) {
+        throw StateError(
+          'No se pudo identificar el negocio para guardar el cobro.',
+        );
+      }
 
-      final paidAtOffline = DateTime.now().toUtc();
+      _attemptLocked = true;
+      _offlineAttempt = true;
+      final paidAtOffline = _attemptPaidAt ??= DateTime.now().toUtc();
       final paidAtIso = paidAtOffline.toIso8601String();
       // `_customerRnc` ya viene resuelto por sub-cuenta desde el call site
       // (RNC del cliente del check, con fallback al de la orden). Pasarlo
@@ -815,8 +872,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // (override del check si lo tiene). Solo caemos al tipo de la orden si
       // no se pasó ninguno, para no perder el comprobante por sub-cuenta en
       // el camino offline (la emisión online usa `_fiscalType` directo).
-      final ncfType =
-          (_fiscalType != null && _fiscalType.trim().isNotEmpty)
+      final ncfType = (_fiscalType != null && _fiscalType.trim().isNotEmpty)
           ? _fiscalType
           : _ref.read(currentOrderProvider).fiscalType;
 
@@ -826,17 +882,27 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // Si no hay NCF (no papel / sin Hub / agotado) → recibo provisional.
       // Con NOTA DE VENTA no se pide número al Hub: quemaría un NCF del rango
       // autorizado para una venta que nunca va a declararse.
-      final offlineNcf = state.salesNoteSelected
-          ? null
-          : await allocateOfflineNcfPaper(
-              client: Supabase.instance.client,
-              businessId: businessId,
-              ncfType: ncfType,
-              isConnected: () => ConnectivityService().isConnected,
-            );
+      if (!_offlineNcfResolved) {
+        final allocated = state.salesNoteSelected
+            ? null
+            : await allocateOfflineNcfPaper(
+                client: Supabase.instance.client,
+                businessId: businessId,
+                ncfType: ncfType,
+                isConnected: () => ConnectivityService().isConnected,
+              );
+        _attemptOfflineNcf = allocated?.ncf;
+        _offlineNcfResolved = true;
+      }
+      final offlineNcf = _attemptOfflineNcf;
 
       final localPayments = <Payment>[];
       for (int i = 0; i < state.transactions.length; i++) {
+        final recorded = _recordedPayments[i];
+        if (recorded != null) {
+          localPayments.add(recorded);
+          continue;
+        }
         final tx = state.transactions[i];
         final isLast = i == state.transactions.length - 1;
 
@@ -855,9 +921,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             methodId = 'cash';
         }
 
-        await _offlinePos.enqueueAction(
+        await (_enqueuePayment ?? _offlinePos.enqueueAction)(
           businessId: businessId,
           action: {
+            'id': 'payment-$_attemptId-$i',
             'type': 'process_payment',
             'origin': _orderId.startsWith('local-order-')
                 ? 'offline'
@@ -879,7 +946,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             'paid_at': paidAtIso,
             // F4: el NCF asignado offline viaja SOLO en la primera transacción
             // (un comprobante por cobro). El server lo usa al sincronizar.
-            if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
+            if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf,
             'requested_ncf_type': state.salesNoteSelected ? null : ncfType,
             // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
             // el replay la ponga antes de reproducir el cobro. Si llega
@@ -913,20 +980,27 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             bankAccountId: tx.bankAccount?.id,
           ),
         );
+        _recordedPayments[i] = localPayments.last;
       }
       // F4: dejamos el NCF en el estado para que el caller imprima el
       // comprobante con su número en el acto (en vez de la precuenta).
       if (offlineNcf != null) {
-        state = state.copyWith(offlineNcf: offlineNcf.ncf);
+        state = state.copyWith(offlineNcf: offlineNcf);
       }
       return localPayments;
     } catch (e, s) {
       debugPrint('❌ Error encolando pago offline: $e\n$s');
+      state = state.copyWith(
+        error:
+            'No se pudo completar el guardado local del cobro. '
+            'Reintenta sin cambiar los pagos. ${_friendlyPaymentError(e)}',
+      );
       return null;
     }
   }
 
   Future<List<Payment>?> confirmPayment(BuildContext context) async {
+    if (_localProcessing || state.isBusy || _paymentConfirmed) return null;
     if (state.transactions.isEmpty) {
       state = state.copyWith(
         validationError: 'Agrega al menos un pago antes de confirmar.',
@@ -946,7 +1020,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     // que dejaba una ventana de race con doble-tap. El backend ya tiene guard
     // atomico (20260509_0001) que retorna el payment existente, pero esto
     // evita lanzar el RPC duplicado innecesariamente.
-    if (_localProcessing || state.isProcessing) return null;
     _localProcessing = true;
 
     state = state.copyWith(
@@ -989,7 +1062,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // prendida.
       // Sin red se salta: la marca viaja en el payload de la cola, y esperar
       // a que esta escritura muriera retrasaba cada cobro offline.
-      if (state.salesNoteAvailable && _connectivity.isConnected) {
+      var useOffline =
+          _offlineAttempt ||
+          !_isConnected ||
+          _orderId.startsWith('local-order-');
+      if (useOffline && !_offlineAttempt && _recordedPayments.isNotEmpty) {
+        throw StateError(
+          'Hay abonos registrados en el servidor. '
+          'Recupera la conexion para completar este cobro.',
+        );
+      }
+      if (state.salesNoteAvailable && !useOffline) {
         try {
           await _salesRepo
               .markAsSalesNote(
@@ -1012,6 +1095,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           }
           // Error de transporte: sigue al camino offline, donde la marca
           // viaja en el payload de la cola.
+          if (_recordedPayments.isNotEmpty && !_offlineAttempt) rethrow;
+          useOffline = true;
         }
       }
 
@@ -1029,11 +1114,12 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // construimos payments locales con status='pending'. Una vez en
       // sync, el RPC fn_process_payment_v3 los replayará preservando la
       // fecha (ver 20260522_0003_paid_at_offline_sync.sql).
-      if (!_connectivity.isConnected) {
+      if (useOffline) {
         final offlineResult = await _confirmPaymentOffline(
           cashierSessionId: cashierSessionId,
         );
         if (offlineResult != null) {
+          _paymentConfirmed = true;
           createdPayments.addAll(offlineResult);
           state = state.copyWith(
             isProcessing: false,
@@ -1046,12 +1132,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           );
           return createdPayments;
         }
-        // offlineResult==null → error al encolar; cae al flujo online
-        // (que probablemente también fallará) para reportar al usuario.
+        state = state.copyWith(isProcessing: false, stage: PaymentStage.idle);
+        return null;
       }
 
       // 1. Process all transactions
       for (int i = 0; i < state.transactions.length; i++) {
+        final recorded = _recordedPayments[i];
+        if (recorded != null) {
+          createdPayments.add(recorded);
+          continue;
+        }
         final tx = state.transactions[i];
         final isLast = i == state.transactions.length - 1;
 
@@ -1102,11 +1193,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           // guardaría en el pago un NCF que nunca se emitió.
           fiscalType: state.salesNoteSelected ? null : _fiscalType,
           cashierSessionId: sessionId,
-          reference: null,
+          reference: tx.reference,
           splitSequence: i,
+          paidAt: _attemptPaidAt,
         );
 
         Payment payment;
+        // Once a write starts its outcome may be uncertain. Retries must keep
+        // the same methods, amounts and split indices, including after errors.
+        _attemptLocked = true;
+        _attemptPaidAt ??= DateTime.now().toUtc();
         try {
           payment = await payWith(cashierSessionId);
         } catch (e) {
@@ -1157,6 +1253,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
                 cashierSessionId: cashierSessionId,
               );
               if (offlineResult != null) {
+                _paymentConfirmed = true;
                 createdPayments
                   ..clear()
                   ..addAll(offlineResult);
@@ -1183,15 +1280,18 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           paymentMethodCode: methodId,
           paymentMethodName: tx.methodLabel,
         );
+        _recordedPayments[i] = enrichedPayment;
         final bankAccount = tx.bankAccount;
         if (bankAccount != null) {
           try {
             await Supabase.instance.client
                 .from('payments')
                 .update({'bank_account_id': bankAccount.id})
-                .eq('id', payment.id);
-            enrichedPayment =
-                enrichedPayment.copyWith(bankAccountId: bankAccount.id);
+                .eq('id', payment.id)
+                .timeout(const Duration(seconds: 3));
+            enrichedPayment = enrichedPayment.copyWith(
+              bankAccountId: bankAccount.id,
+            );
           } catch (e) {
             debugPrint(
               'No se pudo asociar bank_account a payment ${payment.id}: $e',
@@ -1199,7 +1299,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           }
         }
         createdPayments.add(enrichedPayment);
+        _recordedPayments[i] = enrichedPayment;
       }
+      _paymentConfirmed = true;
 
       // Para e-CF (Norma DGII 01-2020): invocamos emit-document SYNC despues
       // del processPayment para que cuando el caller imprima el ticket, el
@@ -1227,7 +1329,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           final noteRow = await noteQuery
               .order('created_at', ascending: false)
               .limit(1)
-              .maybeSingle();
+              .maybeSingle()
+              .timeout(const Duration(seconds: 3));
           final number = noteRow?['note_number'] as String?;
           if (number != null && number.trim().isNotEmpty) {
             state = state.copyWith(emittedSalesNote: number.trim());
@@ -1242,15 +1345,21 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       try {
         // Con nota de venta no se consulta el comprobante: no existe. El
         // resto del bloque ya trata `null` como "no hay doc que emitir".
-        final fiscalDocRow = state.salesNoteSelected
-            ? null
-            : await Supabase.instance.client
-                  .from('fiscal_documents')
-                  .select('id, is_electronic, ncf_number')
-                  .eq('order_id', _orderId)
-                  .order('created_at', ascending: false)
-                  .limit(1)
-                  .maybeSingle();
+        Map<String, dynamic>? fiscalDocRow;
+        if (!state.salesNoteSelected) {
+          var query = Supabase.instance.client
+              .from('fiscal_documents')
+              .select('id, is_electronic, ncf_number')
+              .eq('order_id', _orderId);
+          query = _checkId != null && _checkId.isNotEmpty
+              ? query.eq('check_id', _checkId)
+              : query.isFilter('check_id', null);
+          fiscalDocRow = await query
+              .order('created_at', ascending: false)
+              .limit(1)
+              .maybeSingle()
+              .timeout(const Duration(seconds: 3));
+        }
 
         final ncf = fiscalDocRow?['ncf_number'] as String?;
         if (ncf != null && ncf.trim().isNotEmpty) {
@@ -1267,15 +1376,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           debugPrint('[split-emit-sync] START doc=$fiscalId');
           try {
             final res = await Supabase.instance.client.functions
-                .invoke(
-                  'emit-document',
-                  body: {'fiscal_document_id': fiscalId},
-                )
+                .invoke('emit-document', body: {'fiscal_document_id': fiscalId})
                 .timeout(const Duration(seconds: 8));
             final dt = DateTime.now().difference(t0).inMilliseconds;
-            debugPrint(
-              '[split-emit-sync] OK status=${res.status} dt=${dt}ms',
-            );
+            debugPrint('[split-emit-sync] OK status=${res.status} dt=${dt}ms');
           } on TimeoutException {
             final dt = DateTime.now().difference(t0).inMilliseconds;
             debugPrint('[split-emit-sync] TIMEOUT despues de ${dt}ms');
@@ -1322,10 +1426,21 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return createdPayments;
     } catch (e, stack) {
       debugPrint('❌ Fatal Error in confirmPayment: $e\n$stack');
+      if (_paymentConfirmed) {
+        state = state.copyWith(
+          isProcessing: false,
+          isPrinting: true,
+          stage: PaymentStage.imprimiendo,
+        );
+        return createdPayments;
+      }
       state = state.copyWith(
         isProcessing: false,
         stage: PaymentStage.idle,
-        error: _friendlyPaymentError(e),
+        error: _attemptLocked
+            ? '${_friendlyPaymentError(e)} Reintenta este mismo cobro; '
+                  'los pagos ya confirmados se conservan.'
+            : _friendlyPaymentError(e),
       );
       return null;
     } finally {
@@ -1345,7 +1460,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
   }
   */
-
 }
 
 final paymentSplitProvider =

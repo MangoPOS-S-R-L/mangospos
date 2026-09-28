@@ -5,12 +5,86 @@ import 'package:mangopos/core/offline/hub/hub_order_projector.dart';
 /// ocupadas del salón y (b) el detalle de una orden. Es lo que hace visible
 /// entre cajas la mesa que abrió el mesero.
 Map<String, dynamic> _op(int seq, String type, Map<String, dynamic> extra) => {
-      'seq': seq,
-      'type': type,
-      ...extra,
-    };
+  'seq': seq,
+  'type': type,
+  ...extra,
+};
 
 void main() {
+  test('a partial split never releases the table or permits log pruning', () {
+    final ops = [
+      _op(1, 'add_item', {
+        'order_id': 'o1',
+        'table_id': 't1',
+        'item_id': 'i1',
+        'product_price': 100,
+        'qty': 1,
+      }),
+      _op(2, 'process_payment', {
+        'order_id': 'o1',
+        'amount': 40,
+        'close_order': false,
+        'close_check': false,
+        'split_sequence': 0,
+      }),
+    ];
+    expect(HubOrderProjector.projectSalon(ops), hasLength(1));
+    expect(HubOrderProjector.openOrderIds(ops), contains('o1'));
+    ops.add(
+      _op(3, 'process_payment', {
+        'order_id': 'o1',
+        'amount': 60,
+        'close_order': true,
+        'split_sequence': 1,
+      }),
+    );
+    expect(HubOrderProjector.projectSalon(ops), isEmpty);
+    expect(HubOrderProjector.openOrderIds(ops), isEmpty);
+  });
+
+  test(
+    'check settlement removes only paid items and closes the last check',
+    () {
+      final ops = [
+        for (var i = 1; i <= 2; i++)
+          _op(i, 'add_item', {
+            'order_id': 'o1',
+            'table_id': 't1',
+            'item_id': 'i$i',
+            'check_pos': 'c$i',
+            'product_price': 100,
+            'qty': 1,
+          }),
+        _op(3, 'process_payment', {
+          'order_id': 'o1',
+          'check_id': 'c1',
+          'close_order': false,
+          'close_check': false,
+        }),
+      ];
+      expect(HubOrderProjector.projectSalon(ops).single.total, 200);
+      ops.add(
+        _op(4, 'process_payment', {
+          'order_id': 'o1',
+          'check_id': 'c1',
+          'close_order': false,
+          'close_check': true,
+        }),
+      );
+      expect(HubOrderProjector.projectSalon(ops).single.total, 100);
+      ops.add(
+        _op(5, 'process_payment', {
+          'order_id': 'o1',
+          'check_id': 'c2',
+          'close_order': false,
+          'close_check': true,
+        }),
+      );
+      expect(HubOrderProjector.projectSalon(ops), isEmpty);
+      expect(HubOrderProjector.openOrderIds(ops), isEmpty);
+    },
+  );
+
   group('projectSalon', () {
     test('mesa con 2 ítems → 1 mesa ocupada con total correcto', () {
       final ops = [
@@ -40,19 +114,21 @@ void main() {
       expect(salon.first.sentToKitchen, false);
     });
 
-    test('add_item sin table_id (venta rápida/manual) NO aparece en el salón',
-        () {
-      final ops = [
-        _op(1, 'add_item', {
-          'order_id': 'oq',
-          'item_id': 'i1',
-          'product_name': 'X',
-          'product_price': 100,
-          'qty': 1,
-        }),
-      ];
-      expect(HubOrderProjector.projectSalon(ops), isEmpty);
-    });
+    test(
+      'add_item sin table_id (venta rápida/manual) NO aparece en el salón',
+      () {
+        final ops = [
+          _op(1, 'add_item', {
+            'order_id': 'oq',
+            'item_id': 'i1',
+            'product_name': 'X',
+            'product_price': 100,
+            'qty': 1,
+          }),
+        ];
+        expect(HubOrderProjector.projectSalon(ops), isEmpty);
+      },
+    );
 
     test('delete_item reduce el conteo; si quedan 0 la mesa se libera', () {
       final ops = [
@@ -129,28 +205,30 @@ void main() {
       expect(salon.single.sentToKitchen, true);
     });
 
-    test('el orden de las ops se respeta por seq aunque lleguen desordenadas',
-        () {
-      final ops = [
-        _op(3, 'delete_item', {'order_id': 'o1', 'item_id': 'i1'}),
-        _op(1, 'add_item', {
-          'order_id': 'o1',
-          'table_id': 't1',
-          'item_id': 'i1',
-          'product_price': 100,
-          'qty': 1,
-        }),
-        _op(2, 'add_item', {
-          'order_id': 'o1',
-          'item_id': 'i2',
-          'product_price': 100,
-          'qty': 1,
-        }),
-      ];
-      // i1 se borra (seq 3 tras crear en 1); queda i2.
-      final salon = HubOrderProjector.projectSalon(ops);
-      expect(salon.single.itemsCount, 1);
-    });
+    test(
+      'el orden de las ops se respeta por seq aunque lleguen desordenadas',
+      () {
+        final ops = [
+          _op(3, 'delete_item', {'order_id': 'o1', 'item_id': 'i1'}),
+          _op(1, 'add_item', {
+            'order_id': 'o1',
+            'table_id': 't1',
+            'item_id': 'i1',
+            'product_price': 100,
+            'qty': 1,
+          }),
+          _op(2, 'add_item', {
+            'order_id': 'o1',
+            'item_id': 'i2',
+            'product_price': 100,
+            'qty': 1,
+          }),
+        ];
+        // i1 se borra (seq 3 tras crear en 1); queda i2.
+        final salon = HubOrderProjector.projectSalon(ops);
+        expect(salon.single.itemsCount, 1);
+      },
+    );
   });
 
   group('projectOrder', () {

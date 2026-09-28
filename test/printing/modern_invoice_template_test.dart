@@ -392,10 +392,10 @@ void main() {
       );
 
       // UN SOLO RITMO: los únicos interlineados del ticket son el del cuerpo
-      // y el de las líneas en doble altura. Cualquier tercer valor sería un
-      // renglón de aire metido a mano, y es justo lo que rompía la uniformidad
-      // — el ticket tenía el doble de espacio alrededor de las reglas que
-      // entre dos líneas de texto.
+      // y el de las líneas en doble altura, más el separador `gapSpacing`
+      // entre ítems, títulos y TOTAL (pedido del dueño 2026-09-25). Cualquier
+      // otro valor sería un renglón de aire metido a mano, y es justo lo que
+      // rompía la uniformidad del ticket.
       final interlineados = <int>{};
       for (var i = 0; i + 2 < bytes.length; i++) {
         if (bytes[i] == 0x1B && bytes[i + 1] == 0x33) {
@@ -405,6 +405,8 @@ void main() {
       expect(interlineados, {
         ModernInvoiceLayout.bodyLineSpacing,
         ModernInvoiceLayout.bigLineSpacing,
+        ModernInvoiceLayout.gapSpacing,
+        ModernInvoiceLayout.sectionLineSpacing,
       });
 
       // NUNCA fuente B (ESC M 1). Se probó y el dueño la rechazó al verla

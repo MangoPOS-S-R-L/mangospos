@@ -257,14 +257,7 @@ final offlineSyncCoordinatorProvider = ChangeNotifierProvider<OfflineSyncCoordin
       refreshers: buildOfflineRefreshers(
         resolveBusinessId: () => businessId,
         refreshAuth: (bid) async {
-          final auth = OfflineAuthService();
-          if (!await auth.isDeviceBound() ||
-              await auth.currentBoundBusinessId() != bid) {
-            // Es configuración pendiente, no un fallo de descarga. El
-            // inspector muestra la vinculación y su acción correspondiente.
-            return;
-          }
-          await auth.syncRoster();
+          await OfflineAuthService().syncRoster(businessId: bid);
         },
       ),
     )..start();

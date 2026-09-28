@@ -20,10 +20,9 @@
 ///   - `mark_order_takeout`    → marca toda la orden para llevar.
 ///   - `send_to_kitchen` / `confirm_local_order` → marca la orden enviada.
 ///   - `void_order`            → anula la orden (libera la mesa).
-///   - `process_payment`       → cobro. Si es full-order (check_id nulo) o
-///                               `close_order == true`, cierra la orden
-///                               (libera la mesa). Los cobros por-subcuenta
-///                               dejan la mesa ocupada hasta el cierre total.
+///   - `process_payment`       → respeta los flags de cierre; un abono no
+///                               libera la mesa. El cierre de subcuenta quita
+///                               sus items cuando se conoce su check_id.
 ///
 /// LÍMITE (baseline): solo reconstruye órdenes CREADAS durante la ventana hub
 /// (sus ops están en el op-log). Las mesas abiertas ANTES de entrar a modo hub
@@ -59,13 +58,15 @@ class HubOrderProjector {
       if (acc.voided || acc.closed) continue;
       final liveItems = acc.items.values.toList(growable: false);
       if (liveItems.isEmpty) continue;
-      result.add(HubTableState(
-        tableId: acc.tableId!,
-        orderId: acc.orderId,
-        itemsCount: liveItems.length,
-        total: acc.total,
-        sentToKitchen: acc.sent,
-      ));
+      result.add(
+        HubTableState(
+          tableId: acc.tableId!,
+          orderId: acc.orderId,
+          itemsCount: liveItems.length,
+          total: acc.total,
+          sentToKitchen: acc.sent,
+        ),
+      );
     }
     return result;
   }
@@ -86,9 +87,12 @@ class HubOrderProjector {
   }
 
   static Map<String, _OrderAcc> _fold(List<Map<String, dynamic>> ops) {
-    final sorted = [...ops]..sort((a, b) =>
-        ((a['seq'] as num?)?.toInt() ?? 0)
-            .compareTo((b['seq'] as num?)?.toInt() ?? 0));
+    final sorted = [...ops]
+      ..sort(
+        (a, b) => ((a['seq'] as num?)?.toInt() ?? 0).compareTo(
+          (b['seq'] as num?)?.toInt() ?? 0,
+        ),
+      );
 
     final orders = <String, _OrderAcc>{};
     _OrderAcc accFor(String orderId, Map<String, dynamic> op) {
@@ -116,10 +120,12 @@ class HubOrderProjector {
           acc.items[itemId] = _ItemAcc(
             id: itemId,
             productName: op['product_name']?.toString() ?? 'Producto',
-            quantity: (op['qty'] as num?)?.toDouble() ??
+            quantity:
+                (op['qty'] as num?)?.toDouble() ??
                 (op['quantity'] as num?)?.toDouble() ??
                 1,
-            unitPrice: (op['product_price'] as num?)?.toDouble() ??
+            unitPrice:
+                (op['product_price'] as num?)?.toDouble() ??
                 (op['unit_price'] as num?)?.toDouble() ??
                 0,
             checkPos: op['check_pos']?.toString(),
@@ -133,7 +139,8 @@ class HubOrderProjector {
         case 'update_item_quantity':
           final it = orders[orderId]?.items[op['item_id']?.toString()];
           if (it != null) {
-            it.quantity = (op['quantity'] as num?)?.toDouble() ??
+            it.quantity =
+                (op['quantity'] as num?)?.toDouble() ??
                 (op['qty'] as num?)?.toDouble() ??
                 it.quantity;
           }
@@ -170,9 +177,16 @@ class HubOrderProjector {
           if (acc == null) break;
           final checkId = op['check_id']?.toString();
           final closeOrder = op['close_order'] == true;
-          // Full-order (sin check) o cierre explícito → cierra/libera la mesa.
-          if (checkId == null || checkId.isEmpty || closeOrder) {
+          // Respect partial split payments. Missing flags are legacy full payments.
+          final fullOrder = checkId == null || checkId.isEmpty;
+          if (closeOrder || (fullOrder && op['close_order'] != false)) {
             acc.closed = true;
+          } else if (!fullOrder && op['close_check'] == true) {
+            // Baselines carry the real check ID in check_pos. Only remove an
+            // explicit match; older logs can use a numeric position instead.
+            final previousCount = acc.items.length;
+            acc.items.removeWhere((_, item) => item.checkPos == checkId);
+            if (previousCount > 0 && acc.items.isEmpty) acc.closed = true;
           }
           break;
       }
@@ -197,12 +211,12 @@ class HubTableState {
   final bool sentToKitchen;
 
   Map<String, dynamic> toJson() => {
-        'table_id': tableId,
-        'order_id': orderId,
-        'items_count': itemsCount,
-        'total': total,
-        'sent_to_kitchen': sentToKitchen,
-      };
+    'table_id': tableId,
+    'order_id': orderId,
+    'items_count': itemsCount,
+    'total': total,
+    'sent_to_kitchen': sentToKitchen,
+  };
 }
 
 class HubOrderItemState {
@@ -225,14 +239,14 @@ class HubOrderItemState {
   final bool takeout;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'product_name': productName,
-        'quantity': quantity,
-        'unit_price': unitPrice,
-        if (checkPos != null) 'check_pos': checkPos,
-        if (notes != null) 'notes': notes,
-        'takeout': takeout,
-      };
+    'id': id,
+    'product_name': productName,
+    'quantity': quantity,
+    'unit_price': unitPrice,
+    if (checkPos != null) 'check_pos': checkPos,
+    if (notes != null) 'notes': notes,
+    'takeout': takeout,
+  };
 }
 
 class HubOrderState {
@@ -251,12 +265,12 @@ class HubOrderState {
   final bool sentToKitchen;
 
   Map<String, dynamic> toJson() => {
-        'order_id': orderId,
-        if (tableId != null) 'table_id': tableId,
-        'items': items.map((i) => i.toJson()).toList(growable: false),
-        'total': total,
-        'sent_to_kitchen': sentToKitchen,
-      };
+    'order_id': orderId,
+    if (tableId != null) 'table_id': tableId,
+    'items': items.map((i) => i.toJson()).toList(growable: false),
+    'total': total,
+    'sent_to_kitchen': sentToKitchen,
+  };
 }
 
 class _OrderAcc {
@@ -277,14 +291,12 @@ class _OrderAcc {
   }
 
   HubOrderState toOrderState() => HubOrderState(
-        orderId: orderId,
-        tableId: tableId,
-        items: items.values
-            .map((i) => i.toState())
-            .toList(growable: false),
-        total: total,
-        sentToKitchen: sent,
-      );
+    orderId: orderId,
+    tableId: tableId,
+    items: items.values.map((i) => i.toState()).toList(growable: false),
+    total: total,
+    sentToKitchen: sent,
+  );
 }
 
 class _ItemAcc {
@@ -307,12 +319,12 @@ class _ItemAcc {
   bool takeout;
 
   HubOrderItemState toState() => HubOrderItemState(
-        id: id,
-        productName: productName,
-        quantity: quantity,
-        unitPrice: unitPrice,
-        checkPos: checkPos,
-        notes: notes,
-        takeout: takeout,
-      );
+    id: id,
+    productName: productName,
+    quantity: quantity,
+    unitPrice: unitPrice,
+    checkPos: checkPos,
+    notes: notes,
+    takeout: takeout,
+  );
 }

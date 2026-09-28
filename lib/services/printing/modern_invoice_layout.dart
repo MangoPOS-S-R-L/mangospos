@@ -47,14 +47,16 @@ typedef ModernModifier = ({String name, String amount});
 class ModernInvoiceLayout {
   /// Interlineado del cuerpo, en puntos.
   ///
-  /// La fuente A mide 24 puntos de alto, así que 88 deja 64 de aire. Es MUCHO
-  /// más que el 1/6" de fábrica (~34) y es a propósito: este modelo no separa
+  /// La fuente A mide 24 puntos de alto, así que 52 deja 28 de aire, casi el
+  /// triple que el 1/6" de fábrica (~34 de paso, ~10 de aire). Desde
+  /// 2026-09-25 la regla es que la Moderna nunca salga más larga que la
+  /// Estándar (con 88 salía un 30% más larga). Es más aire a propósito: este modelo no separa
   /// los bloques con reglas `====` sino con espacio, y el dueño calibró
   /// cuánto espacio sobre el papel (ver `TicketRasterizer.proportionalLeading`
   /// — el mismo aire, para que la factura se lea igual salga por el camino
   /// que salga).
   ///
-  /// HISTORIA, para que nadie lo vuelva a bajar "para ahorrar papel":
+  /// HISTORIA (antes de la regla de 2026-09-25):
   ///  - la primera versión usaba fuente B con interlineado 26: renglones
   ///    pegados y letra pobre, revertido al ver el papel;
   ///  - la segunda usó 32 (el `tightLineSpacing` de la familia compacta) y el
@@ -68,16 +70,44 @@ class ModernInvoiceLayout {
   ///
   /// El ahorro de este modelo viene del LAYOUT (la mitad de renglones que el
   /// estándar), no de exprimir el interlineado.
-  static const int bodyLineSpacing = 88;
+  static const int bodyLineSpacing = 52;
 
   /// Interlineado para las líneas en doble altura (48 puntos de glifo). El
   /// avance de papel es SIEMPRE el interlineado vigente, así que dejar el
   /// del cuerpo haría que el TOTAL se solape con la línea siguiente.
   ///
-  /// Mismo aire que el cuerpo (64 puntos) sobre un glifo del doble de alto:
+  /// Mismo aire que el cuerpo (28 puntos) sobre un glifo del doble de alto:
   /// el nombre del negocio y el TOTAL respiran como el resto en vez de
   /// llevarse el doble de espacio por ser más grandes.
-  static const int bigLineSpacing = 112;
+  static const int bigLineSpacing = 85;
+
+  /// Interlineado de las SECCIONES que no son productos: cabecera, títulos,
+  /// subtotales, TOTAL y la parte de RNC/razón social.
+  ///
+  /// Regla del dueño (2026-09-25): esas líneas llevan 2/3 del aire que separa
+  /// un producto del siguiente. Entre productos hay 38 puntos de aire (22 del
+  /// interlineado del cuerpo + [gapSpacing]); 2/3 son 25. En el raster el
+  /// paso es caja del glifo (30) + aire, o sea 55. El TOTAL y el nombre del
+  /// negocio usan [bigLineSpacing] con el mismo aire sobre un glifo de 60.
+  ///
+  /// El detalle de un producto (c/u, modificadores, nota) y la ÚLTIMA sección
+  /// del ticket (aviso, agradecimiento, pie) siguen en [bodyLineSpacing].
+  static const int sectionLineSpacing = 55;
+
+  /// Interlineado vigente de la sección en curso de cada ticket. Los helpers
+  /// que cambian el interlineado (ítem, TOTAL, separador) vuelven a este, no
+  /// a uno fijo.
+  static final Expando<int> _base = Expando<int>();
+
+  static int _baseSpacing(EscPosGenerator gen) =>
+      _base[gen] ?? sectionLineSpacing;
+
+  /// Pasa a la ÚLTIMA sección del ticket, que conserva el interlineado del
+  /// cuerpo.
+  static void closingSection(EscPosGenerator gen) {
+    _base[gen] = bodyLineSpacing;
+    gen.setLineSpacing(bodyLineSpacing);
+  }
 
 
   /// Ancho del bloque de montos (totales y pagos), alineado a la derecha.
@@ -99,7 +129,8 @@ class ModernInvoiceLayout {
   /// layout los envuelve (ver `_wrappedRow`).
   static void begin(EscPosGenerator gen) {
     gen.setFont(Font.a);
-    gen.setLineSpacing(bodyLineSpacing);
+    _base[gen] = sectionLineSpacing;
+    gen.setLineSpacing(sectionLineSpacing);
   }
 
   /// Devuelve la impresora a su estado de fábrica. OBLIGATORIO antes del
@@ -123,12 +154,25 @@ class ModernInvoiceLayout {
     gen.text('.' * gen.maxChars);
   }
 
-  // NO hay helper de "medio renglón" a propósito. El ticket tiene UN solo
-  // ritmo: el interlineado deja el mismo aire a los dos lados de cada
-  // elemento — texto, regla, logo o QR — y cualquier renglón suelto que se
-  // añada encima rompe justo eso. Si un bloque necesita separarse más, la
-  // respuesta es una regla, no un blanco.
+  /// Aire EXTRA, en puntos, que separa cada ítem del anterior (y el aviso
+  /// de la última sección de la pre-cuenta).
+  ///
+  /// Pedido del dueño (2026-09-25), tras bajar el interlineado para que la
+  /// Moderna no pase de largo a la Estándar: "sepáralas un poquito más, pero
+  /// solo en los ítems, no en las notas ni el precio de c/u; en los títulos y
+  /// el total sí". O sea, el detalle de un ítem (c/u, modificadores, nota)
+  /// va con el interlineado normal y se lee como un grupo; lo que se separa
+  /// es un grupo del siguiente.
+  static const int gapSpacing = 16;
 
+  /// Renglón en blanco de [gapSpacing] puntos. En el raster un renglón vacío
+  /// avanza exactamente su interlineado (sin piso de glifo), y en firmware un
+  /// LF avanza el `ESC 3` vigente — mismo resultado por los dos caminos.
+  static void gap(EscPosGenerator gen) {
+    gen.setLineSpacing(gapSpacing);
+    gen.text('');
+    gen.setLineSpacing(_baseSpacing(gen));
+  }
 
   /// Regla SOLIDA, para encerrar el total.
   ///
@@ -153,7 +197,7 @@ class ModernInvoiceLayout {
     gen.setDoubleStrike(false);
     gen.setBold(false);
     gen.setTextSize();
-    gen.setLineSpacing(bodyLineSpacing);
+    gen.setLineSpacing(_baseSpacing(gen));
   }
 
   /// Línea centrada en negrita (tipo de comprobante fiscal, título del
@@ -191,7 +235,8 @@ class ModernInvoiceLayout {
     gen.textWrapped('$label  $v');
   }
 
-  /// Un ítem de la factura.
+  /// Un ítem de la factura. El renglón del producto sale en negrita; el
+  /// detalle, en normal.
   ///
   /// ```
   /// 2  Tacos al pastor                                    760.00
@@ -212,12 +257,21 @@ class ModernInvoiceLayout {
     List<ModernModifier> modifiers = const [],
     String note = '',
   }) {
+    // Aire ANTES del ítem y no dentro: c/u, modificadores y nota se quedan
+    // pegados a su producto.
+    gap(gen);
+    gen.setLineSpacing(bodyLineSpacing);
+    // JERARQUÍA (dueño, 2026-09-25): el renglón del producto va en NEGRITA y
+    // su detalle (c/u, modificadores, nota) en normal. Así el ojo recorre la
+    // lista por productos y el detalle se lee como secundario.
+    gen.setBold(true);
     _wrappedRow(
       gen,
       '${qty.padRight(2)}  $name',
       amount,
       hangingIndent: _indent,
     );
+    gen.setBold(false);
 
     if (unitPrice != null && unitPrice.isNotEmpty) {
       gen.text('$_indent$unitPrice c/u');
@@ -242,6 +296,7 @@ class ModernInvoiceLayout {
     if (note.isNotEmpty) {
       gen.textWrapped('${_indent}Nota: $note');
     }
+    gen.setLineSpacing(_baseSpacing(gen));
   }
 
   /// Fila del bloque de montos, pegada al margen derecho:
@@ -284,7 +339,7 @@ class ModernInvoiceLayout {
     gen.setTextSize();
     gen.setDoubleStrike(false);
     gen.setBold(false);
-    gen.setLineSpacing(bodyLineSpacing);
+    gen.setLineSpacing(_baseSpacing(gen));
   }
 
   // ── Internos ──────────────────────────────────────────────────────────
@@ -339,6 +394,10 @@ class ModernInvoiceLayout {
   /// es preferible a que el firmware las corte en un punto arbitrario.
   static List<String> _wrapToWidth(String text, int width, String indent) {
     if (width <= 0) return [text];
+    // Si la sangría no cabe en el ancho, el troceo de abajo nunca acorta
+    // `remaining` y el bucle no termina (congela la app hasta quedarse sin
+    // memoria). Pasa con columnas muy estrechas: 58 mm + monto largo.
+    if (indent.length >= width) indent = '';
     final words = text.trim().split(RegExp(r'\s+'));
     final lines = <String>[];
     var current = '';

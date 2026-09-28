@@ -3,14 +3,20 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
-import '../../../data/repositories/pos_settings_repository.dart';
+import 'package:flutter/foundation.dart';
+import '../../../presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import '../../../services/session/session_controller.dart';
 import '../../network/connectivity_service.dart';
+import '../../utils/device_utils.dart';
 import '../offline_pos_service.dart';
 import 'hub_baseline_service.dart';
 import 'hub_client.dart';
 import 'hub_config.dart';
 import 'hub_mode.dart';
+import 'hub_read_cache.dart';
+import 'hub_auto_setup.dart';
+import 'hub_lease_service.dart';
+import 'hub_lan_token.dart';
 
 /// Resuelve el [TerminalMode] del dispositivo (H4) a partir de la POLÍTICA del
 /// local (`business_settings.network_mode`), el ROL de este equipo
@@ -39,9 +45,20 @@ class HubModeController extends StateNotifier<TerminalMode> {
   final HubConfigService _hubConfig = HubConfigService();
   StreamSubscription<bool>? _sub;
   Timer? _timer;
+  Future<void>? _refreshing;
+  bool _refreshingReadCache = false;
+  DateTime? _lastReadCacheAt;
 
-  NetworkPolicy _policy = NetworkPolicy.cloud;
+  // Network continuity is automatic for every business, including legacy cloud.
+  final NetworkPolicy _policy = NetworkPolicy.hub;
   HubDeviceRole _role = HubDeviceRole.pos;
+  late final HubAutoSetup _autoSetup = HubAutoSetup(
+    readRole: _hubConfig.getDeviceRole,
+    writeRole: _hubConfig.setDeviceRole,
+    acquireLease: (biz) => HubLeaseService().acquire(biz),
+    readToken: HubLanTokenService.instance.tokenFor,
+  );
+  String? get preparationStatus => _autoSetup.status;
 
   final HubBaselineService _baseline = HubBaselineService();
 
@@ -68,7 +85,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
     // La política/rol/alcanzabilidad del Hub puede cambiar sin un evento de
     // conexión → re-evaluar periódicamente (reusa la config cacheada).
     _timer = Timer.periodic(
-      const Duration(seconds: 20),
+      const Duration(seconds: 5),
       (_) => unawaited(refresh()),
     );
   }
@@ -77,31 +94,34 @@ class HubModeController extends StateNotifier<TerminalMode> {
   /// (local) y re-evalúa el modo. La UI de Ajustes la llama tras cambiar la
   /// política o el rol para que el efecto sea inmediato.
   Future<void> reloadConfigAndRefresh() async {
-    if (kHubModeEnabled) {
-      final businessId = _ref.read(sessionProvider).activeBusinessId;
-      if (businessId != null && businessId.isNotEmpty) {
-        try {
-          final raw = await _ref
-              .read(posSettingsRepositoryProvider)
-              .getNetworkMode(businessId);
-          _policy = networkPolicyFromString(raw);
-        } catch (_) {
-          // Sin poder leer la política, conservamos la cacheada (default cloud).
-        }
-        _role = await _hubConfig.getDeviceRole(businessId);
-      }
-    }
-    await refresh();
+    if (mounted) await refresh();
   }
 
   /// Re-evalúa el modo con la config CACHEADA (barato: solo re-sondea la
   /// alcanzabilidad del Hub si aplica). Lo disparan la conexión y el timer.
   Future<void> refresh() async {
+    final pending = _refreshing;
+    if (pending != null) return pending;
+    final future = _refresh();
+    _refreshing = future;
+    try {
+      await future;
+    } catch (e) {
+      debugPrint('[HubAutoSetup] preparacion pendiente: $e');
+    } finally {
+      _refreshing = null;
+    }
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
     final pos = OfflinePosService();
 
     if (!kHubModeEnabled) {
       pos.setHubUploader(null);
-      final m = _connectivity.isConnected ? TerminalMode.cloud : TerminalMode.solo;
+      final m = _connectivity.isConnected
+          ? TerminalMode.cloud
+          : TerminalMode.solo;
       if (m != state) state = m;
       return;
     }
@@ -114,20 +134,53 @@ class HubModeController extends StateNotifier<TerminalMode> {
       return;
     }
 
+    var canHost = false;
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS)) {
+      final role = _ref.read(sessionProvider).activeRole;
+      canHost = role == PosRole.cajero;
+      if (!canHost &&
+          (role == PosRole.administrador || role == PosRole.supervisor)) {
+        final cash = _ref.read(cashierViewModelProvider).lastSession;
+        canHost =
+            cash?['status'] == 'open' &&
+            cash?['closed_at'] == null &&
+            cash?['device_id'] == await DeviceUtils.getDeviceId();
+      }
+    }
+    _role = await _autoSetup.prepare(
+      businessId,
+      online: _connectivity.isConnected,
+      canHost: canHost,
+    );
+    if (!mounted) return;
+
     final connected = _connectivity.isConnected;
     var hubReachable = false;
-    _reachableHubUrl = null;
+    String? reachableUrl;
 
     // Solo una CAJA (no el propio Hub) necesita descubrir/alcanzar el Hub.
     if (_policy == NetworkPolicy.hub && _role != HubDeviceRole.hub) {
-      final configured = await _hubConfig.getHubUrl(businessId);
+      final configured =
+          _reachableHubUrl ?? await _hubConfig.getHubUrl(businessId);
       final url = await _hubClient.findReachableHub(
         businessId: businessId,
         configuredUrl: configured,
+        scanFallback: true,
       );
-      _reachableHubUrl = url;
+      reachableUrl = url;
       hubReachable = url != null;
+      if (url != null && url != configured) {
+        await _hubConfig.setHubUrl(businessId, url);
+      }
     }
+
+    if (!mounted || _ref.read(sessionProvider).activeBusinessId != businessId) {
+      return;
+    }
+    _reachableHubUrl = reachableUrl;
 
     final mode = resolveTerminalMode(
       policy: _policy,
@@ -140,6 +193,32 @@ class HubModeController extends StateNotifier<TerminalMode> {
     if (mode != state) state = mode;
 
     unawaited(_captureBaselineIfDue(mode, connected, businessId));
+    if (mode == TerminalMode.hubClient && reachableUrl != null) {
+      unawaited(_refreshReadCache(businessId, reachableUrl));
+    }
+  }
+
+  Future<void> _refreshReadCache(String businessId, String url) async {
+    if (_refreshingReadCache) return;
+    final last = _lastReadCacheAt;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 1)) {
+      return;
+    }
+    _refreshingReadCache = true;
+    try {
+      final snapshot = await _hubClient.getReadCache(
+        url,
+        businessId: businessId,
+      );
+      if (!mounted || snapshot == null) return;
+      await HubReadCache().import(businessId, snapshot);
+      _lastReadCacheAt = DateTime.now();
+    } catch (_) {
+      // Keep the last usable copy and retry on the next hub probe.
+    } finally {
+      _refreshingReadCache = false;
+    }
   }
 
   /// Refresca la foto de las órdenes YA abiertas mientras este equipo es el Hub
@@ -185,9 +264,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
         // Soy el Hub: mis propias mutaciones van al op-log local compartido
         // (lo sirve /hub/salon y lo drena syncHubOpLog hacia Supabase), no a la
         // cola por-device ni directo a Supabase.
-        pos.setHubUploader(
-          (biz, op) => pos.appendToLocalHubOpLog(biz, op),
-        );
+        pos.setHubUploader((biz, op) => pos.appendToLocalHubOpLog(biz, op));
         break;
       case TerminalMode.cloud:
       case TerminalMode.solo:
@@ -205,7 +282,9 @@ class HubModeController extends StateNotifier<TerminalMode> {
   }
 }
 
-final hubModeProvider =
-    StateNotifierProvider<HubModeController, TerminalMode>((ref) {
+final hubModeProvider = StateNotifierProvider<HubModeController, TerminalMode>((
+  ref,
+) {
+  ref.watch(sessionProvider.select((session) => session.activeBusinessId));
   return HubModeController(ref);
 });
