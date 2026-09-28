@@ -33,6 +33,7 @@ import 'package:window_manager/window_manager.dart';
 import 'app/router/app_router.dart';
 import 'app/router/routes.dart';
 import 'app/theme/mango_theme.dart';
+import 'app/widgets/app_version_badge.dart';
 import 'app/theme/ui_scale.dart';
 import 'services/session/session_controller.dart';
 import 'core/cache/cache_manager.dart';
@@ -1036,7 +1037,12 @@ class MyApp extends ConsumerWidget {
       theme: buildMangoTheme(),
       builder: (context, child) => UiScaleWrapper(
         factor: uiScale,
-        child: child ?? const SizedBox.shrink(),
+        child: Stack(
+          children: [
+            Positioned.fill(child: child ?? const SizedBox.shrink()),
+            const Positioned.fill(child: AppVersionBadge()),
+          ],
+        ),
       ),
     );
   }

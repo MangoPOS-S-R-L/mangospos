@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/models/fiscal_models.dart';
 import '../../core/business/business_resolver.dart';
+import '../../core/network/connectivity_service.dart';
 import '../../core/storage/storage_service.dart';
 
 final fiscalServiceProvider = Provider((ref) => FiscalService());
@@ -21,6 +22,14 @@ class FiscalService {
   /// las tuviera — el NCF real igual lo asigna el server al sincronizar.
   Future<List<FiscalNcfSequence>> getSequences(String businessId) async {
     final bid = await BusinessResolver.ensure(businessId);
+    // Sin conexión, el caché de una vez: antes se intentaba la red y el
+    // cajero esperaba el timeout (8 s) en cada mesa/cobro antes de ver los
+    // comprobantes. Solo si no hay caché se cae al intento de red de abajo.
+    final connectivity = ConnectivityService();
+    if (connectivity.isKnownOffline || !connectivity.isConnected) {
+      final cached = await _readCachedSequences(bid);
+      if (cached != null) return cached;
+    }
     try {
       final res = await _db
           .from('ncf_sequences')
@@ -37,21 +46,28 @@ class FiscalService {
       } catch (_) {}
       return rows.map(FiscalNcfSequence.fromJson).toList();
     } catch (e) {
-      try {
-        final storage = await StorageService.getInstance();
-        final cached = await storage.readList(_sequencesCacheKey(bid));
-        if (cached != null && cached.isNotEmpty) {
-          debugPrint(
-            'FiscalService: usando secuencias NCF cacheadas offline ($e)',
-          );
-          return cached
-              .map((it) => FiscalNcfSequence.fromJson(
-                    Map<String, dynamic>.from(it as Map),
-                  ))
-              .toList(growable: false);
-        }
-      } catch (_) {}
+      final cached = await _readCachedSequences(bid);
+      if (cached != null) {
+        debugPrint('FiscalService: usando secuencias NCF cacheadas offline ($e)');
+        return cached;
+      }
       rethrow;
+    }
+  }
+
+  /// Último snapshot de secuencias guardado en disco, o `null` si no hay.
+  Future<List<FiscalNcfSequence>?> _readCachedSequences(String bid) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final cached = await storage.readList(_sequencesCacheKey(bid));
+      if (cached == null || cached.isEmpty) return null;
+      return cached
+          .map((it) => FiscalNcfSequence.fromJson(
+                Map<String, dynamic>.from(it as Map),
+              ))
+          .toList(growable: false);
+    } catch (_) {
+      return null;
     }
   }
 
