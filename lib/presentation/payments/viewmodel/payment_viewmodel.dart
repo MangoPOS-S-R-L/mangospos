@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -13,6 +14,7 @@ import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/ncf_offline_allocator.dart' show NcfAssignment;
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/storage/storage_service.dart';
 import '../../../core/tax/tax_exceptions.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
@@ -161,11 +163,27 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         throw Exception('No se pudo identificar el negocio');
       }
 
+      // Lecturas previas al cobro con timeout CORTO: mientras el detector aún
+      // no admite una caída (wifi sin internet), cada una esperaba el timeout
+      // global de 30 s y el modal quedaba cargando minutos. Un fallo de red
+      // pasa el cobro a modo offline en vez de tumbarlo.
+      var online = _connectivity.isConnected;
+      void markOffline(Object e) {
+        online = false;
+        _connectivity.reportTransportFailure();
+        debugPrint('[payment] lectura previa al cobro sin red: $e');
+      }
+
       CashRegisterSession? cashSession;
-      if (_connectivity.isConnected) {
-        cashSession = await _cashierRepo.requireActiveSession(
-          businessId: businessId,
-        );
+      if (online) {
+        try {
+          cashSession = await _cashierRepo
+              .requireActiveSession(businessId: businessId)
+              .timeout(_preReadTimeout);
+        } catch (e) {
+          if (!_isNetworkFailure(e)) rethrow;
+          markOffline(e);
+        }
       }
 
       // Venta a crédito: solo visible con permiso. El seed del método
@@ -173,15 +191,27 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       final canSellCredit = _ref
           .read(sessionProvider.notifier)
           .hasPermission('creditos.vender');
-      if (_connectivity.isConnected && canSellCredit) {
-        await CreditsRepository(
-          Supabase.instance.client,
-        ).ensureCreditPaymentMethod(businessId);
+      if (online && canSellCredit) {
+        try {
+          await CreditsRepository(
+            Supabase.instance.client,
+          ).ensureCreditPaymentMethod(businessId).timeout(_preReadTimeout);
+        } catch (e) {
+          if (_isNetworkFailure(e)) markOffline(e);
+        }
       }
 
       var methods = <PaymentMethod>[];
-      if (_connectivity.isConnected) {
-        methods = await _cashierRepo.getPaymentMethods(businessId);
+      if (online) {
+        try {
+          methods = await _cashierRepo.getPaymentMethods(businessId);
+        } catch (e) {
+          if (!_isNetworkFailure(e)) rethrow;
+          markOffline(e);
+        }
+      }
+      if (!online) {
+        methods = await _cashierRepo.getCachedPaymentMethods(businessId);
       }
 
       final fixedMethods = _getFixedPaymentMethods(businessId);
@@ -204,16 +234,14 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       List<String> availableNcfTypes = const [];
       String? selectedNcfType;
       bool ecfEnabled = false;
-      if (_connectivity.isConnected) {
-        try {
-          final config = await _loadFiscalConfig(businessId);
-          availableNcfTypes = config.types;
-          selectedNcfType = config.defaultType;
-          ecfEnabled = config.ecfEnabled;
-        } catch (_) {
-          // Fail-soft: si no se cargan tipos, el cobro queda con default
-          // del backend (B02). No tumbamos el flujo de cobro por esto.
-        }
+      try {
+        final config = await _loadFiscalConfig(businessId, online: online);
+        availableNcfTypes = config.types;
+        selectedNcfType = config.defaultType;
+        ecfEnabled = config.ecfEnabled;
+      } catch (_) {
+        // Fail-soft: si no se cargan tipos, el cobro queda con default
+        // del backend (B02). No tumbamos el flujo de cobro por esto.
       }
 
       // Nota de venta: documento NO fiscal, alternativo al NCF. Sale de las
@@ -281,7 +309,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         customerName: prefilledCustomerName,
         customerRnc: prefilledCustomerRnc,
         ecfEnabled: ecfEnabled,
-        error: _connectivity.isConnected
+        error: online
             ? null
             : 'Modo offline: el pago se guardará para sincronizar luego.',
       );
@@ -306,27 +334,46 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   /// y si tiene e-CF habilitado. Fail-soft: si la query falla devuelve config
   /// vacía (el backend caerá al default 'B02').
   Future<({List<String> types, String? defaultType, bool ecfEnabled})>
-      _loadFiscalConfig(String businessId) async {
+      _loadFiscalConfig(String businessId, {required bool online}) async {
     final sb = Supabase.instance.client;
+    final cacheKey = 'payment_fiscal_config_$businessId';
 
-    // 1. fiscal_settings: default_ncf_type del business.
-    final fs = await sb
-        .from('fiscal_settings')
-        .select('default_ncf_type, ecf_enabled')
-        .eq('business_id', businessId)
-        .maybeSingle();
+    // Sin red: la última config leída en este equipo, al instante. El NCF
+    // real lo asigna el server al sincronizar; aquí solo se elige el tipo.
+    if (!online) return _readCachedFiscalConfig(cacheKey);
+
+    Map<String, dynamic>? fs;
+    List<dynamic> sequences;
+    try {
+      // 1. fiscal_settings: default_ncf_type del business.
+      // 2. ncf_sequences activas con rango disponible.
+      // En paralelo: son independientes y cada una lleva timeout corto.
+      final results = await Future.wait<Object?>([
+        sb
+            .from('fiscal_settings')
+            .select('default_ncf_type, ecf_enabled')
+            .eq('business_id', businessId)
+            .maybeSingle()
+            .timeout(_preReadTimeout),
+        sb
+            .from('ncf_sequences')
+            .select('ncf_type, current_number, range_end')
+            .eq('business_id', businessId)
+            .eq('is_active', true)
+            .timeout(_preReadTimeout),
+      ]);
+      fs = results[0] as Map<String, dynamic>?;
+      sequences = results[1] as List<dynamic>;
+    } catch (e) {
+      if (!_isNetworkFailure(e)) rethrow;
+      _connectivity.reportTransportFailure();
+      return _readCachedFiscalConfig(cacheKey);
+    }
 
     final defaultType = fs?['default_ncf_type'] as String?;
 
-    // 2. ncf_sequences activas con rango disponible.
-    final sequences = await sb
-        .from('ncf_sequences')
-        .select('ncf_type, current_number, range_end')
-        .eq('business_id', businessId)
-        .eq('is_active', true);
-
     final types = <String>{};
-    for (final row in (sequences as List).cast<Map<String, dynamic>>()) {
+    for (final row in sequences.cast<Map<String, dynamic>>()) {
       final type = row['ncf_type']?.toString();
       final current = (row['current_number'] as num?)?.toInt() ?? 0;
       final end = (row['range_end'] as num?)?.toInt() ?? 0;
@@ -361,11 +408,61 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       }
     }
 
+    unawaited(
+      _persistFiscalConfig(cacheKey, {
+        'types': sortedTypes,
+        'default_type': resolvedDefault,
+        'ecf_enabled': ecfEnabled,
+      }),
+    );
+
     return (
       types: sortedTypes,
       defaultType: resolvedDefault,
       ecfEnabled: ecfEnabled,
     );
+  }
+
+  static const Duration _preReadTimeout = Duration(seconds: 5);
+
+  /// Fallo de RED (timeout, socket, corto-circuito offline): el cobro sigue
+  /// en modo offline. Cualquier otro error (p. ej. "no hay caja abierta") se
+  /// propaga como siempre.
+  static bool _isNetworkFailure(Object e) =>
+      e is TimeoutException || OfflinePosService.isTransportError(e);
+
+  /// Último JSON escrito por clave: solo se toca el disco cuando cambia (en
+  /// Windows cada escritura de prefs reescribe el archivo entero).
+  static final Map<String, String> _lastPersistedFiscalConfig = {};
+
+  Future<void> _persistFiscalConfig(
+    String cacheKey,
+    Map<String, dynamic> config,
+  ) async {
+    try {
+      final encoded = jsonEncode(config);
+      if (_lastPersistedFiscalConfig[cacheKey] == encoded) return;
+      final storage = await StorageService.getInstance();
+      await storage.write(cacheKey, encoded);
+      _lastPersistedFiscalConfig[cacheKey] = encoded;
+    } catch (_) {}
+  }
+
+  Future<({List<String> types, String? defaultType, bool ecfEnabled})>
+      _readCachedFiscalConfig(String cacheKey) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(cacheKey);
+      if (raw != null && raw.isNotEmpty) {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        return (
+          types: List<String>.from(map['types'] as List? ?? const []),
+          defaultType: map['default_type'] as String?,
+          ecfEnabled: map['ecf_enabled'] == true,
+        );
+      }
+    } catch (_) {}
+    return (types: const <String>[], defaultType: null, ecfEnabled: false);
   }
 
   /// Cambia el tipo de comprobante seleccionado para este cobro.

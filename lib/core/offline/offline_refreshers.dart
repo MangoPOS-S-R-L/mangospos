@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/legacy.dart' show ChangeNotifierProvider;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/network/connectivity_service.dart';
+import 'package:mangopos/data/repositories/bank_accounts_repository.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
+import 'package:mangopos/data/repositories/customers_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -56,6 +58,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
   Future<void> Function(String businessId)? refreshFiscalSequences,
   Future<void> Function(String businessId)? refreshNcfSeed,
   Future<void> Function(String businessId)? refreshPosLookups,
+  Future<void> Function(String businessId)? refreshPaymentPickers,
   Future<void> Function(String businessId)? refreshAuth,
 }) {
   // Resuelto perezosamente: solo se toca Supabase.instance si de verdad corre
@@ -117,6 +120,28 @@ List<Future<void> Function()> buildOfflineRefreshers({
   final posLookups =
       refreshPosLookups ?? (String b) => _refreshPosLookups(resolveClient(), b);
 
+  // Selectores del cobro: clientes, métodos de pago y cuentas bancarias.
+  // Cada lectura guarda su copia en disco como efecto secundario; sin esto,
+  // un equipo que nunca abrió el selector online llegaba a la caída sin
+  // clientes ni transferencias. Independientes: un fallo no frena al resto.
+  final paymentPickers =
+      refreshPaymentPickers ??
+      (String b) async {
+        final client = resolveClient();
+        final results = await Future.wait<Object?>([
+          CustomersRepository(client).getCustomers(b).then<Object?>((_) => null,
+              onError: (Object e) => e),
+          CashierRepository(client).getPaymentMethods(b).then<Object?>(
+              (_) => null,
+              onError: (Object e) => e),
+          BankAccountsRepository(client).listActive(b).then<Object?>(
+              (_) => null,
+              onError: (Object e) => e),
+        ]);
+        final error = results.whereType<Object>().firstOrNull;
+        if (error != null) throw error;
+      };
+
   Future<void> Function() guard(Future<void> Function(String) fn) {
     return () async {
       final businessId = resolveBusinessId();
@@ -133,6 +158,7 @@ List<Future<void> Function()> buildOfflineRefreshers({
     guard(printers),
     guard(fiscalSequences),
     guard(posLookups),
+    guard(paymentPickers),
     if (refreshAuth != null) guard(refreshAuth),
   ];
 

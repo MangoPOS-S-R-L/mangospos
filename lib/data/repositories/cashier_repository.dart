@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 import '../models/payment_models.dart';
@@ -58,8 +62,47 @@ class CashierRepository {
         .select()
         .eq('business_id', businessId)
         .eq('is_active', true)
-        .order('position', ascending: true);
+        .order('position', ascending: true)
+        .timeout(const Duration(seconds: 5));
+    unawaited(_persistPaymentMethods(businessId, data));
     return data.map((json) => PaymentMethod.fromMap(json)).toList();
+  }
+
+  static String _paymentMethodsCacheKey(String businessId) =>
+      'payment_methods_cache_$businessId';
+
+  /// Último JSON escrito por negocio: solo se toca el disco cuando la lista
+  /// cambia (en Windows cada escritura de prefs reescribe el archivo entero).
+  static final Map<String, String> _lastPersistedPaymentMethods = {};
+
+  Future<void> _persistPaymentMethods(
+    String businessId,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    try {
+      final encoded = jsonEncode(rows);
+      if (_lastPersistedPaymentMethods[businessId] == encoded) return;
+      final storage = await StorageService.getInstance();
+      await storage.writeList(_paymentMethodsCacheKey(businessId), rows);
+      _lastPersistedPaymentMethods[businessId] = encoded;
+    } catch (_) {
+      // Best-effort: sin caché el cobro offline muestra los métodos fijos.
+    }
+  }
+
+  /// Métodos de pago de la última lectura online, para pintar el cobro sin
+  /// red al instante. Lista vacía si nunca se leyeron en este equipo.
+  Future<List<PaymentMethod>> getCachedPaymentMethods(String businessId) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final rows = await storage.readList(_paymentMethodsCacheKey(businessId));
+      if (rows == null) return const [];
+      return rows
+          .map((it) => PaymentMethod.fromMap(Map<String, dynamic>.from(it as Map)))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Sesión de caja con la que se debe registrar un cobro.

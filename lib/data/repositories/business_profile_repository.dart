@@ -11,10 +11,12 @@
 //     valida que solo el dueño del business puede tocar su carpeta.
 //   - Bucket: "business-logos" (publico, max 2MB, png/jpg).
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/network/connectivity_service.dart';
 import '../../core/storage/image_upload_helper.dart';
 import '../../services/printing/logo_esc_pos_builder.dart';
 import '../models/business_profile.dart';
@@ -265,6 +267,34 @@ class BusinessProfileRepository {
   /// cada cobro/reimpresion del mismo logo.
   Future<({BusinessProfile? profile, List<int>? logoEscPosBytes})>
       prepareForInvoicePrinting(String businessId) async {
+    // Sin red: el último perfil+logo de esta sesión, al instante. Antes la
+    // factura esperaba el timeout del perfil y de la descarga del logo
+    // (Storage no tiene timeout global) para salir sin branding igual.
+    final last = _lastPrepared[businessId];
+    if (!ConnectivityService().isConnected) {
+      return last ?? (profile: null, logoEscPosBytes: null);
+    }
+    try {
+      final prepared = await _prepareFromNetwork(
+        businessId,
+      ).timeout(const Duration(seconds: 8));
+      _lastPrepared[businessId] = prepared;
+      return prepared;
+    } catch (_) {
+      if (last != null) return last;
+      rethrow;
+    }
+  }
+
+  /// Último perfil+logo preparado por negocio (memoria de la sesión).
+  static final Map<
+    String,
+    ({BusinessProfile? profile, List<int>? logoEscPosBytes})
+  >
+  _lastPrepared = {};
+
+  Future<({BusinessProfile? profile, List<int>? logoEscPosBytes})>
+      _prepareFromNetwork(String businessId) async {
     final profile = await getProfile(businessId);
     if (profile == null) return (profile: null, logoEscPosBytes: null);
 

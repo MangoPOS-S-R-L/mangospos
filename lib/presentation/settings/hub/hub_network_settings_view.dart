@@ -265,11 +265,9 @@ class _HubNetworkSettingsViewState
   Future<void> _discoverDevices() async {
     if (_discovering) return;
     setState(() => _discovering = true);
-    final chosen = await showModalBottomSheet<DiscoveredAgent>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _DeviceDiscoverySheet(businessId: _businessId),
+    final chosen = await showDeviceDiscoverySheet(
+      context,
+      businessId: _businessId,
     );
     if (!mounted) return;
     setState(() => _discovering = false);
@@ -738,6 +736,24 @@ class _HubNetworkSettingsViewState
       ],
     );
   }
+}
+
+/// Abre la hoja de "Buscar equipos en la red" y devuelve el equipo elegido
+/// (o `null` si se cerró).
+///
+/// Público a propósito: el indicador de Hub del header lo reusa. Duplicar el
+/// escaneo sería duplicar el barrido TCP y el dedupe, y las dos copias se
+/// desincronizarían en cuanto una se arregle.
+Future<DiscoveredAgent?> showDeviceDiscoverySheet(
+  BuildContext context, {
+  required String? businessId,
+}) {
+  return showModalBottomSheet<DiscoveredAgent>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (_) => _DeviceDiscoverySheet(businessId: businessId),
+  );
 }
 
 /// Hoja de "Buscar equipos en la red": escanea la LAN por mDNS mostrando el

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:mangopos/core/network/resilient_http_client.dart';
+import 'package:mangopos/core/storage/storage_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -576,7 +577,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Offline con el valor ya cargado de ESTE negocio: conservarlo (la
     // config fiscal es estable). Antes se intentaba el fetch en cada carga
     // y sin internet el catch pisaba el tipo por defecto con ''.
-    if (!_connectivity.isConnected && _fiscalSettingsBusinessId == businessId) {
+    if (_preferLocalOperations && _fiscalSettingsBusinessId == businessId) {
+      return;
+    }
+    // Sin red y sin valor en memoria (arranque en frío offline): la última
+    // copia en disco, en vez de esperar el timeout para quedar en ''.
+    final diskKey = 'fiscal_default_ncf_type_$businessId';
+    if (_preferLocalOperations) {
+      try {
+        final storage = await StorageService.getInstance();
+        _cachedDefaultFiscalType = (await storage.read(diskKey)) ?? '';
+      } catch (_) {
+        _cachedDefaultFiscalType = '';
+      }
+      _fiscalSettingsBusinessId = businessId;
+      _lastFiscalSettingsLoad = DateTime.now();
       return;
     }
 
@@ -588,9 +603,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .maybeSingle()
           .timeout(const Duration(seconds: 8));
 
-      _cachedDefaultFiscalType = _normalizeFiscalTypeValue(
+      final fresh = _normalizeFiscalTypeValue(
         row?['default_ncf_type']?.toString(),
       );
+      // Solo se escribe a disco cuando cambia: esto corre en cada carga de
+      // orden y en Windows cada escritura de prefs reescribe el archivo.
+      if (fresh != _cachedDefaultFiscalType ||
+          _fiscalSettingsBusinessId != businessId) {
+        unawaited(
+          StorageService.getInstance()
+              .then((storage) => storage.write(diskKey, fresh))
+              .catchError((_) => false),
+        );
+      }
+      _cachedDefaultFiscalType = fresh;
     } catch (_) {
       // Conservar el último valor bueno si es del mismo negocio; solo
       // resetear cuando nunca se ha cargado nada para este negocio.
@@ -617,8 +643,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (_defaultTakeoutLoadedFor == businessId) return;
     // Sin red no hay nada que consultar: defaults en false y se reintenta
     // cuando vuelva la conexión (loadedFor no se marca). Evita un fetch
-    // colgado por cada carga de orden offline.
-    if (!_connectivity.isConnected) return;
+    // colgado por cada carga de orden offline. `_preferLocalOperations`
+    // cubre también el rato en que el detector aún no admite la caída.
+    if (_preferLocalOperations) return;
     try {
       final row = await Supabase.instance.client
           .from('business_settings')
@@ -2309,7 +2336,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ? const CurrentOrderState(loading: true)
         : state.copyWith(loading: true, error: null);
     try {
-      if (!_connectivity.isConnected) {
+      // `_preferLocalOperations` y no solo `!isConnected`: si otra lectura
+      // acaba de fallar por red, la venta local sale de una vez en vez de
+      // esperar 10 s al RPC mientras el detector confirma la caída.
+      if (_preferLocalOperations) {
         throw TimeoutException('Sin conexión: se abre la venta local');
       }
       final res = await ref
@@ -5343,17 +5373,31 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .where((item) => item.status != 'paid' && item.status != 'void')
         .toList(growable: false);
     if (openItems.isEmpty) return false;
+    // Sin red no hay dónde aplicarlas: antes esta lectura esperaba el timeout
+    // global (30 s) al final de CADA carga de orden, y si fallaba tumbaba
+    // `openTable` al camino offline con una mesa ya abierta en el server.
+    if (_preferLocalOperations) return false;
 
-    final promosRaw = await Supabase.instance.client
-        .from('promotions')
-        .select(
-          'id,name,promo_type,discount_type,discount_value,min_purchase,target_scope,applies_to,target_ids,days_of_week,auto_apply,is_active,start_date,end_date,start_time,end_time,buy_quantity,pay_quantity,reward_quantity,priority,stackable',
-        )
-        .eq('business_id', businessId)
-        .eq('is_active', true)
-        .eq('auto_apply', true)
-        .order('priority', ascending: false)
-        .order('created_at', ascending: false);
+    final List<dynamic> promosRaw;
+    try {
+      promosRaw = await Supabase.instance.client
+          .from('promotions')
+          .select(
+            'id,name,promo_type,discount_type,discount_value,min_purchase,target_scope,applies_to,target_ids,days_of_week,auto_apply,is_active,start_date,end_date,start_time,end_time,buy_quantity,pay_quantity,reward_quantity,priority,stackable',
+          )
+          .eq('business_id', businessId)
+          .eq('is_active', true)
+          .eq('auto_apply', true)
+          .order('priority', ascending: false)
+          .order('created_at', ascending: false)
+          .timeout(const Duration(seconds: 6));
+    } catch (e) {
+      if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
+        _recordTransportFailure();
+      }
+      debugPrint('[promos] no se pudieron leer ofertas automáticas: $e');
+      return false;
+    }
 
     final promos = List<Map<String, dynamic>>.from(promosRaw)
         .where((promo) {

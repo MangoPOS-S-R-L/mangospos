@@ -88,6 +88,9 @@ class CustomersViewModel extends ChangeNotifier {
     notifyListeners();
     try {
       _customers = await _repository.getCustomers(_businessId!, query: query);
+    } catch (e) {
+      // Se conserva la lista anterior: antes el error escapaba del onChanged.
+      debugPrint('Error buscando clientes: $e');
     } finally {
       _isLoading = false;
       notifyListeners();

@@ -81,7 +81,9 @@ class ConnectivityService {
   static const int _failureThreshold = 2;
 
   /// Periodicidad del healthcheck cuando el adapter está up Y reachable.
-  static const Duration _probeInterval = Duration(seconds: 30);
+  /// 15 s (antes 30 s): el caso "wifi sin internet" solo lo detecta este
+  /// sondeo, y con 30 s la caja tardaba medio minuto en pasar a offline.
+  static const Duration _probeInterval = Duration(seconds: 15);
 
   /// Periodicidad acelerada cuando estamos marcados como offline — para
   /// recuperar mas rapido cuando vuelve la conectividad (sin esperar

@@ -647,8 +647,20 @@ class PrintingRepository {
     final cached = _readCached(_assignedPrinterCache, cacheKey);
     if (cached != null) return cached;
 
+    // Sin red, la última impresora conocida de una vez: antes se intentaba
+    // la consulta y la precuenta/factura esperaba su timeout para empezar.
+    if (!ConnectivityService().isConnected) {
+      final persisted = await _readPersistedAssignedPrinter(cacheKey);
+      if (persisted != null) {
+        _writeCached(_assignedPrinterCache, cacheKey, persisted);
+        return persisted;
+      }
+    }
+
     try {
-      final areas = await getPrintAreas(businessId);
+      final areas = await getPrintAreas(
+        businessId,
+      ).timeout(const Duration(seconds: 5));
       final areasByCode = {for (final area in areas) area.code: area};
 
       for (final areaCode in preferredAreaCodes) {
@@ -666,7 +678,10 @@ class PrintingRepository {
         if (printsPrebills) query = query.eq('prints_prebills', true);
         if (printsReceipts) query = query.eq('prints_receipts', true);
 
-        final data = await query.order('priority', ascending: true).limit(1);
+        final data = await query
+            .order('priority', ascending: true)
+            .limit(1)
+            .timeout(const Duration(seconds: 5));
         if (data.isEmpty) continue;
 
         final printer = data.first['printers'];

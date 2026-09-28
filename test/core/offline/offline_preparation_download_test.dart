@@ -70,6 +70,7 @@ void main() {
         refreshConfig: (_) async {},
         refreshPrinters: (_) async {},
         refreshFiscalSequences: (_) async {},
+        refreshPaymentPickers: (_) async {},
       );
       await refreshers[6]();
       final cache = PosLookupOfflineCache();

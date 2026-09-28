@@ -7,7 +7,7 @@ import 'package:mangopos/core/offline/offline_refreshers.dart';
 void main() {
   test('arma un refresher por módulo '
       '(catálogo, zonas, inventario, config, impresoras, secuencias NCF, '
-      'impuestos+modificadores)', () {
+      'impuestos+modificadores, selectores del cobro)', () {
     final refreshers = buildOfflineRefreshers(
       resolveBusinessId: () => 'biz-1',
       refreshCatalog: (_) async {},
@@ -17,8 +17,9 @@ void main() {
       refreshPrinters: (_) async {},
       refreshFiscalSequences: (_) async {},
       refreshPosLookups: (_) async {},
+      refreshPaymentPickers: (_) async {},
     );
-    expect(refreshers.length, 7);
+    expect(refreshers.length, 8);
   });
 
   test(
@@ -34,6 +35,7 @@ void main() {
         refreshPrinters: (b) async => seen['printers'] = b,
         refreshFiscalSequences: (b) async => seen['fiscal'] = b,
         refreshPosLookups: (b) async => seen['lookups'] = b,
+        refreshPaymentPickers: (b) async => seen['pickers'] = b,
       );
       for (final r in refreshers) {
         await r();
@@ -46,6 +48,7 @@ void main() {
         'printers': 'biz-1',
         'fiscal': 'biz-1',
         'lookups': 'biz-1',
+        'pickers': 'biz-1',
       });
     },
   );
@@ -61,6 +64,7 @@ void main() {
       refreshPrinters: (_) async => calls++,
       refreshFiscalSequences: (_) async => calls++,
       refreshPosLookups: (_) async => calls++,
+      refreshPaymentPickers: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();
@@ -79,6 +83,7 @@ void main() {
       refreshPrinters: (_) async => calls++,
       refreshFiscalSequences: (_) async => calls++,
       refreshPosLookups: (_) async => calls++,
+      refreshPaymentPickers: (_) async => calls++,
     );
     for (final r in refreshers) {
       await r();
@@ -100,6 +105,7 @@ void main() {
         refreshPrinters: (_) async {},
         refreshFiscalSequences: (_) async {},
         refreshPosLookups: (_) async {},
+        refreshPaymentPickers: (_) async {},
       );
       await refreshers[0](); // catálogo con biz-A
       current = 'biz-B';

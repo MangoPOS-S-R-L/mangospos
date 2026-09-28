@@ -4,9 +4,15 @@
 // - Settings → Tipos de Pago → Transferencias (admin)
 // - Modal de cobro al seleccionar transferencia (cajero, solo `listActive`)
 
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../core/business/business_resolver.dart';
+import '../../core/network/connectivity_service.dart';
+import '../../core/offline/offline_pos_service.dart';
+import '../../core/storage/storage_service.dart';
 import '../models/bank_account.dart';
 import '../models/sales_models.dart';
 
@@ -34,18 +40,72 @@ class BankAccountsRepository {
 
   /// Solo cuentas activas. Usado por el modal de cobro para que el
   /// cajero no vea cuentas dadas de baja.
+  ///
+  /// Sin red (o si la consulta falla por red) sale de la última lista leída
+  /// en este equipo: antes el selector de transferencia quedaba en error y
+  /// no se podía cobrar por transferencia durante la caída.
   Future<List<BankAccount>> listActive(String businessId) async {
     final bid = await BusinessResolver.ensure(businessId);
-    final res = await _client
-        .from(_table)
-        .select()
-        .eq('business_id', bid)
-        .eq('is_active', true)
-        .order('sort_order', ascending: true)
-        .order('bank_name', ascending: true);
-    return (res as List)
-        .map((e) => BankAccount.fromMap(Map<String, dynamic>.from(e as Map)))
+    if (!ConnectivityService().isConnected) {
+      final cached = await _readCachedActive(bid);
+      if (cached != null) return cached;
+    }
+    final List<dynamic> res;
+    try {
+      res = await _client
+          .from(_table)
+          .select()
+          .eq('business_id', bid)
+          .eq('is_active', true)
+          .order('sort_order', ascending: true)
+          .order('bank_name', ascending: true)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      if (e is! TimeoutException && !OfflinePosService.isTransportError(e)) {
+        rethrow;
+      }
+      ConnectivityService().reportTransportFailure();
+      final cached = await _readCachedActive(bid);
+      if (cached != null) return cached;
+      rethrow;
+    }
+    final rows = res
+        .map((e) => Map<String, dynamic>.from(e as Map))
         .toList(growable: false);
+    unawaited(_persistActive(bid, rows));
+    return rows.map(BankAccount.fromMap).toList(growable: false);
+  }
+
+  static String _activeCacheKey(String bid) => 'bank_accounts_active_$bid';
+
+  /// Último JSON escrito por negocio: solo se toca el disco si cambia (en
+  /// Windows cada escritura de prefs reescribe el archivo entero).
+  static final Map<String, String> _lastPersisted = {};
+
+  Future<void> _persistActive(
+    String bid,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    try {
+      final encoded = jsonEncode(rows);
+      if (_lastPersisted[bid] == encoded) return;
+      final storage = await StorageService.getInstance();
+      await storage.write(_activeCacheKey(bid), encoded);
+      _lastPersisted[bid] = encoded;
+    } catch (_) {}
+  }
+
+  Future<List<BankAccount>?> _readCachedActive(String bid) async {
+    try {
+      final storage = await StorageService.getInstance();
+      final raw = await storage.read(_activeCacheKey(bid));
+      if (raw == null || raw.isEmpty) return null;
+      return (jsonDecode(raw) as List)
+          .map((e) => BankAccount.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList(growable: false);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<BankAccount> create(BankAccount data) async {

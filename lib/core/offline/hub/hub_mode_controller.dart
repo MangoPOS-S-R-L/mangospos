@@ -75,6 +75,15 @@ class HubModeController extends StateNotifier<TerminalMode> {
   String? _reachableHubUrl;
   String? get reachableHubUrl => _reachableHubUrl;
 
+  /// Última IP de Hub CONFIGURADA en este equipo, alcanzable o no.
+  ///
+  /// La usa el indicador del header para distinguir dos cosas que el modo
+  /// `cloud`/`solo` confunde: un local que NO usa Hub (no hay nada que
+  /// mostrar) de una caja que sí lo usa y en este momento lo perdió (hay que
+  /// mostrarlo en rojo, que es justo cuando el mesero necesita mirarlo).
+  String? _configuredHubUrl;
+  String? get configuredHubUrl => _configuredHubUrl;
+
   TerminalMode get mode => state;
   NetworkPolicy get policy => _policy;
   HubDeviceRole get role => _role;
@@ -165,6 +174,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
     if (_policy == NetworkPolicy.hub && _role != HubDeviceRole.hub) {
       final configured =
           _reachableHubUrl ?? await _hubConfig.getHubUrl(businessId);
+      _configuredHubUrl = configured;
       final url = await _hubClient.findReachableHub(
         businessId: businessId,
         configuredUrl: configured,
@@ -181,6 +191,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
       return;
     }
     _reachableHubUrl = reachableUrl;
+    if (reachableUrl != null) _configuredHubUrl = reachableUrl;
 
     final mode = resolveTerminalMode(
       policy: _policy,

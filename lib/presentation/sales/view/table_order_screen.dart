@@ -6090,13 +6090,19 @@ class _CartView extends ConsumerWidget {
       if (assignedPrinter == null && !printerless) {
         // 1. Try register-specific printer first (each cash register can have its own)
         final registerId = ref.read(cashierViewModelProvider).currentRegisterId;
-        if (registerId != null) {
+        // Sin red se salta (igual que antes, cuando fallaba al instante) y
+        // con timeout corto: en el rato en que aún no se detecta la caída,
+        // cada precuenta/factura esperaba hasta 30 s antes de imprimir.
+        if (registerId != null && ConnectivityService().isConnected) {
           try {
             final regPrinterId = await ref
                 .read(cashierRepositoryProvider)
-                .getRegisterPrinterId(registerId);
+                .getRegisterPrinterId(registerId)
+                .timeout(const Duration(seconds: 3));
             if (regPrinterId != null) {
-              assignedPrinter = await printRepo.getPrinter(regPrinterId);
+              assignedPrinter = await printRepo
+                  .getPrinter(regPrinterId)
+                  .timeout(const Duration(seconds: 3));
             }
           } catch (_) {}
         }

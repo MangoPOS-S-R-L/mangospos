@@ -34,6 +34,7 @@ import '../inventory/viewmodel/expiring_lots_badge_provider.dart';
 import '../../core/business/business_features_provider.dart';
 import '../../core/business/business_modules_provider.dart';
 import '../inventory/viewmodel/low_stock_badge_provider.dart';
+import 'hub_status_badge.dart';
 import '../sales/viewmodel/sales_viewmodel.dart';
 import 'mobile_shell.dart';
 import 'shell_destinations.dart';
@@ -252,6 +253,13 @@ class _MainShellState extends ConsumerState<MainShell> {
 
                           // Badge de operaciones offline pendientes
                           const _OfflineQueueBadge(),
+
+                          // Conexión con la caja (Hub) en la red local. Vive
+                          // acá y no en Ajustes porque el mesero no entra a
+                          // Ajustes, y es él quien nota primero que su tablet
+                          // dejó de hablar con la caja. Se dibuja solo en los
+                          // locales que usan Hub.
+                          const HubStatusBadge(),
 
                           const SizedBox(width: 8),
 
