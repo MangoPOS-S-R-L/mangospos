@@ -32,16 +32,21 @@ bool shouldOverlayHubTable(
   TableStatus row,
   Map<String, dynamic> hubTable, {
   required bool freshServerStatus,
+  Set<String> confirmedClosedOrderIds = const {},
 }) {
   if (row.sessionId != null) return false;
   if (!freshServerStatus) return true;
   final orderId = hubTable['order_id']?.toString() ?? '';
+  if (confirmedClosedOrderIds.contains(orderId)) return false;
   return orderId.startsWith('local-order-') ||
       ((hubTable['items_count'] as num?)?.toInt() ?? 0) > 0 ||
       ((hubTable['items'] as List?)?.isNotEmpty ?? false);
 }
 
 class ByZoneViewModel extends Notifier<ByZoneState> {
+  static final RegExp _serverOrderId = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
   late final SupabaseClient sb;
   RealtimeChannel? _rt;
   String? _rtBusinessId;
@@ -262,6 +267,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   ) async {
     final drafts = await _fetchDraftsByTable();
     final hubTables = await _fetchHubTablesByTableId();
+    final closedHubOrders = await _confirmedClosedHubOrders(
+      statusMap.values.expand((rows) => rows),
+      hubTables,
+    );
 
     final updatedStatus = {...state.statusByZone};
     final updatedErrors = {...state.errorByZone};
@@ -272,6 +281,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         _applyDraftOverlay(rows, drafts),
         hubTables,
         freshServerStatus: true,
+        confirmedClosedOrderIds: closedHubOrders.keys.toSet(),
       );
       updatedStatus[zoneId] = overlaid;
       updatedErrors[zoneId] = null;
@@ -438,11 +448,96 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     List<TableStatus> rows, {
     required bool freshServerStatus,
   }) async {
+    final hubTables = await _fetchHubTablesByTableId();
+    final closedHubOrders = freshServerStatus
+        ? await _confirmedClosedHubOrders(rows, hubTables)
+        : const <String, String>{};
     return _applyHubOverlay(
       rows,
-      await _fetchHubTablesByTableId(),
+      hubTables,
       freshServerStatus: freshServerStatus,
+      confirmedClosedOrderIds: closedHubOrders.keys.toSet(),
     );
+  }
+
+  /// A fresh free table can still have an old, itemful Hub projection after
+  /// an online payment. Only an authoritative paid/void order row may hide it;
+  /// an unknown or still-open order remains visible to protect offline work.
+  Future<Map<String, String>> _confirmedClosedHubOrders(
+    Iterable<TableStatus> rows,
+    Map<String, Map<String, dynamic>> hubTables,
+  ) async {
+    final businessId = state.businessId;
+    if (businessId == null || businessId.isEmpty || hubTables.isEmpty) {
+      return const {};
+    }
+    final remoteToHubOrder = <String, String>{};
+    for (final row in rows) {
+      if (row.sessionId != null) continue;
+      final hubOrderId = hubTables[row.tableId]?['order_id']?.toString();
+      if (hubOrderId == null || hubOrderId.isEmpty) continue;
+      final remoteOrderId = hubOrderId.startsWith('local-order-')
+          ? await _offlinePos.mappedRemoteOrderId(
+              businessId: businessId,
+              localOrderId: hubOrderId,
+            )
+          : hubOrderId;
+      if (remoteOrderId != null && _serverOrderId.hasMatch(remoteOrderId)) {
+        remoteToHubOrder[remoteOrderId] = hubOrderId;
+      }
+    }
+    if (remoteToHubOrder.isEmpty) return const {};
+    try {
+      final closed = <String, String>{};
+      final ids = remoteToHubOrder.keys.toList(growable: false);
+      for (var i = 0; i < ids.length; i += 100) {
+        final end = (i + 100).clamp(0, ids.length);
+        final found = await sb
+            .from('orders')
+            .select('id, status_ext')
+            .eq('business_id', businessId)
+            .inFilter('id', ids.sublist(i, end))
+            .inFilter('status_ext', ['paid', 'void']);
+        for (final row in found) {
+          final id = row['id']?.toString();
+          final status = row['status_ext']?.toString();
+          if (id != null && status != null) {
+            final hubOrderId = remoteToHubOrder[id];
+            if (hubOrderId != null) closed[hubOrderId] = status;
+          }
+        }
+      }
+      if (closed.isNotEmpty) _mirrorConfirmedClosures(businessId, closed);
+      return closed;
+    } catch (error) {
+      developer.log(
+        'No se pudo conciliar el cierre del Hub',
+        name: 'ByZoneViewModel',
+        error: error,
+      );
+      return const {};
+    }
+  }
+
+  void _mirrorConfirmedClosures(String businessId, Map<String, String> closed) {
+    final mode = ref.read(hubModeProvider);
+    final url = mode == TerminalMode.hubClient
+        ? ref.read(hubModeProvider.notifier).reachableHubUrl
+        : null;
+    for (final entry in closed.entries) {
+      final op = <String, dynamic>{
+        'type': entry.value == 'void' ? 'void_order' : 'process_payment',
+        'order_id': entry.key,
+        if (entry.value == 'paid') 'close_order': true,
+        'hub_applied': true,
+        'op_id': 'reconciled-closed-${entry.key}',
+      };
+      if (mode == TerminalMode.hubHost) {
+        unawaited(_offlinePos.publishHostOp(businessId, op));
+      } else if (url != null) {
+        unawaited(HubClient().postOp(url, {...op, 'business_id': businessId}));
+      }
+    }
   }
 
   /// Lee el salón del Hub UNA vez, indexado por tableId. [businessId] permite
@@ -481,12 +576,18 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     List<TableStatus> rows,
     Map<String, Map<String, dynamic>> byTable, {
     required bool freshServerStatus,
+    Set<String> confirmedClosedOrderIds = const {},
   }) {
     if (byTable.isEmpty) return rows;
     return rows.map((r) {
       final t = byTable[r.tableId];
       if (t == null ||
-          !shouldOverlayHubTable(r, t, freshServerStatus: freshServerStatus)) {
+          !shouldOverlayHubTable(
+            r,
+            t,
+            freshServerStatus: freshServerStatus,
+            confirmedClosedOrderIds: confirmedClosedOrderIds,
+          )) {
         return r;
       }
       final itemsCount = (t['items_count'] as num?)?.toInt() ?? 1;

@@ -179,6 +179,60 @@ void main() {
     expect(await svc.listPendingTableDrafts(biz), isEmpty);
   });
 
+  test('cobro total offline no revive el borrador de mesa', () async {
+    const biz = 'biz-paid-draft';
+    final draft = await svc.createLocalDraft(
+      businessId: biz,
+      origin: 'table',
+      tableId: 'table-A',
+    );
+    final orderId = draft.order!.id;
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'order_id': orderId,
+        'item_id': 'tmp_1',
+        'qty': 1,
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {'type': 'process_payment', 'order_id': orderId, 'amount': 640},
+    );
+    expect(await svc.listPendingTableDrafts(biz), isEmpty);
+  });
+
+  test('abono parcial no libera una mesa con contenido pendiente', () async {
+    const biz = 'biz-partial-payment-draft';
+    final draft = await svc.createLocalDraft(
+      businessId: biz,
+      origin: 'table',
+      tableId: 'table-A',
+    );
+    final orderId = draft.order!.id;
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'order_id': orderId,
+        'item_id': 'tmp_1',
+        'qty': 1,
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'process_payment',
+        'order_id': orderId,
+        'check_id': 'check-1',
+        'close_order': false,
+        'close_check': true,
+      },
+    );
+    expect(await svc.listPendingTableDrafts(biz), hasLength(1));
+  });
+
   test('discardLocalOrder purga cola y snapshot de la orden local', () async {
     const biz = 'biz-discard';
     final draft = await svc.createLocalDraft(

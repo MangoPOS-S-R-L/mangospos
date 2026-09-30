@@ -622,28 +622,34 @@ class OfflinePosService {
     // Se indexa por id crudo Y por id remoto mapeado, porque el snapshot
     // puede estar remapeado mientras las acciones siguen con el id local.
     final pendingContentOrderIds = <String>{};
-    final voidedOrderIds = <String>{};
+    final closedOrderIds = <String>{};
     try {
       final queue = await _readQueue(businessId);
       final orderMap = await _readOrderMap(businessId);
       for (final action in queue) {
-        if (_isSettled(action)) continue;
         final type = action['type']?.toString();
         final orderId = action['order_id']?.toString();
         if (type == null || orderId == null || orderId.isEmpty) continue;
         final mapped = orderMap[orderId]?.toString();
-        if (type == 'void_order' || type == 'release_empty_order') {
-          voidedOrderIds.add(orderId);
-          if (mapped != null && mapped.isNotEmpty) voidedOrderIds.add(mapped);
+        final closesOrder =
+            type == 'void_order' ||
+            type == 'release_empty_order' ||
+            (type == 'process_payment' &&
+                action['close_order'] != false &&
+                (action['check_id']?.toString().isEmpty ?? true));
+        if (closesOrder && !_isDead(action)) {
+          closedOrderIds.add(orderId);
+          if (mapped != null && mapped.isNotEmpty) closedOrderIds.add(mapped);
           continue;
         }
+        if (_isSettled(action)) continue;
         if (type == 'process_payment') continue;
         pendingContentOrderIds.add(orderId);
         if (mapped != null && mapped.isNotEmpty) {
           pendingContentOrderIds.add(mapped);
         }
       }
-      pendingContentOrderIds.removeAll(voidedOrderIds);
+      pendingContentOrderIds.removeAll(closedOrderIds);
     } catch (_) {
       // best-effort: sin cola legible, caemos al criterio local-order- solo.
     }
@@ -664,7 +670,7 @@ class OfflinePosService {
         final isLocalDraft = orderId.startsWith('local-order-');
         final hasPendingContent = pendingContentOrderIds.contains(orderId);
         // Una cuenta anulada offline no debe seguir ocupando la mesa.
-        if (voidedOrderIds.contains(orderId)) continue;
+        if (closedOrderIds.contains(orderId)) continue;
         if (!isLocalDraft && !hasPendingContent) continue;
         final items = (state['items'] as List?) ?? const [];
         final total = (order['total'] as num?)?.toDouble() ?? 0;

@@ -40,6 +40,48 @@ void main() {
     );
   });
 
+  test(
+    'pago confirmado por servidor descarta proyeccion vieja con importe',
+    () {
+      const orderId = '707a0b98-0000-0000-0000-000000000000';
+      expect(
+        shouldOverlayHubTable(
+          row(),
+          {'order_id': orderId, 'items_count': 1, 'total': 640},
+          freshServerStatus: true,
+          confirmedClosedOrderIds: {orderId},
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('lectura cacheada nunca desmiente trabajo pendiente del Hub', () {
+    const orderId = '707a0b98-0000-0000-0000-000000000000';
+    expect(
+      shouldOverlayHubTable(
+        row(),
+        {'order_id': orderId, 'items_count': 1},
+        freshServerStatus: false,
+        confirmedClosedOrderIds: {orderId},
+      ),
+      isTrue,
+    );
+  });
+
+  test('orden local reconciliada también deja de ocupar la mesa', () {
+    const orderId = 'local-order-paid-1';
+    expect(
+      shouldOverlayHubTable(
+        row(),
+        {'order_id': orderId, 'items_count': 1, 'total': 640},
+        freshServerStatus: true,
+        confirmedClosedOrderIds: {orderId},
+      ),
+      isFalse,
+    );
+  });
+
   test('snapshot cacheado no desmiente al Hub', () {
     expect(
       shouldOverlayHubTable(row(), {

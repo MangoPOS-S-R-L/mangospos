@@ -14,6 +14,7 @@ import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/ncf_offline_allocator.dart' show NcfAssignment;
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/offline/hub/hub_payment_mirror.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/tax/tax_exceptions.dart';
 import '../../../data/models/bank_account.dart';
@@ -334,7 +335,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   /// y si tiene e-CF habilitado. Fail-soft: si la query falla devuelve config
   /// vacía (el backend caerá al default 'B02').
   Future<({List<String> types, String? defaultType, bool ecfEnabled})>
-      _loadFiscalConfig(String businessId, {required bool online}) async {
+  _loadFiscalConfig(String businessId, {required bool online}) async {
     final sb = Supabase.instance.client;
     final cacheKey = 'payment_fiscal_config_$businessId';
 
@@ -393,7 +394,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         return a.compareTo(b);
       });
 
-    final ecfEnabled = (fs?['ecf_enabled'] == true) ||
+    final ecfEnabled =
+        (fs?['ecf_enabled'] == true) ||
         sortedTypes.any((t) => t.startsWith('E'));
 
     // Default fallback: si default_ncf_type no está en disponibles, usar el
@@ -449,7 +451,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   }
 
   Future<({List<String> types, String? defaultType, bool ecfEnabled})>
-      _readCachedFiscalConfig(String cacheKey) async {
+  _readCachedFiscalConfig(String cacheKey) async {
     try {
       final storage = await StorageService.getInstance();
       final raw = await storage.read(cacheKey);
@@ -512,7 +514,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     // body y procesa batch — igual de util porque el doc nuevo va a estar
     // entre los pending de la queue.
     final t0 = DateTime.now();
-    debugPrint('[emit-sync] START doc=$fiscalDocumentId timeout=${timeout.inSeconds}s');
+    debugPrint(
+      '[emit-sync] START doc=$fiscalDocumentId timeout=${timeout.inSeconds}s',
+    );
     try {
       final res = await Supabase.instance.client.functions
           .invoke(
@@ -539,7 +543,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     // Function (la vieja batch, la nueva sync per-doc) — solo nos importa
     // el estado actual del doc en DB despues del intento.
     try {
-      final refreshed = await _salesRepo.getOrderFiscalDocument(state.order!.id);
+      final refreshed = await _salesRepo.getOrderFiscalDocument(
+        state.order!.id,
+      );
       debugPrint(
         '[emit-sync] REFETCH status=${refreshed?.ecfStatus} '
         'sec=${refreshed?.ecfSecurityCode ?? "null"}',
@@ -670,8 +676,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     if (state.isCreditPayment) {
       String? creditError;
       if (!_connectivity.isConnected) {
-        creditError =
-            'La venta a crédito no está disponible sin conexión.';
+        creditError = 'La venta a crédito no está disponible sin conexión.';
       } else if (state.customerId == null || state.customerId!.isEmpty) {
         creditError = 'Selecciona el cliente para la venta a crédito.';
       } else {
@@ -680,12 +685,11 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
             Supabase.instance.client,
             'auto',
           );
-          final standing = await CreditsRepository(
-            Supabase.instance.client,
-          ).getCustomerCreditStanding(
-            businessId: businessId ?? '',
-            customerId: state.customerId!,
-          );
+          final standing = await CreditsRepository(Supabase.instance.client)
+              .getCustomerCreditStanding(
+                businessId: businessId ?? '',
+                customerId: state.customerId!,
+              );
           if (!standing.creditEnabled) {
             creditError =
                 'El cliente no tiene crédito habilitado. Actívalo en su '
@@ -772,6 +776,15 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         // Tipo de comprobante seleccionado en el modal. Si es null, el RPC
         // backend cae al default_ncf_type del business (típicamente B02).
         fiscalType: state.selectedNcfType,
+      );
+      unawaited(
+        mirrorConfirmedPaymentToHub(
+          ref: _ref,
+          businessId: payment.businessId,
+          orderId: orderId,
+          paymentId: payment.id,
+          checkId: checkId,
+        ),
       );
 
       // PRD 6 §6.4: snapshot de tasa y equivalente USD para auditoría.
@@ -864,9 +877,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         // Solo aquí anunciamos la DGII: en NCF de papel esta espera no
         // existe y mostrar la etapa seria mentirle al cajero.
         state = state.copyWith(stage: PaymentStage.dgii);
-        final emitted = await _emitDocumentSync(
-          fiscalDocumentId: fiscalDoc.id,
-        );
+        final emitted = await _emitDocumentSync(fiscalDocumentId: fiscalDoc.id);
         if (emitted != null) {
           fiscalDoc = emitted;
         } else {
@@ -1023,7 +1034,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           offlineQueued: true,
           error: offlineNcf != null
               ? 'Comprobante emitido offline · NCF ${offlineNcf.ncf}. '
-                  'Pendiente de sincronizar.'
+                    'Pendiente de sincronizar.'
               : 'Pago guardado en local. Pendiente de sincronizar.',
         );
       } catch (offlineError) {

@@ -11,6 +11,7 @@ import '../../../core/fiscal/payment_stage.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/offline/hub/hub_payment_mirror.dart';
 import '../../../core/offline/payment_intent_journal.dart';
 import '../../../core/utils/device_utils.dart';
 import '../../../data/models/bank_account.dart';
@@ -1691,6 +1692,17 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         _recordedPayments[i] = enrichedPayment;
       }
       _paymentConfirmed = true;
+      if (createdPayments.isNotEmpty) {
+        unawaited(
+          mirrorConfirmedPaymentToHub(
+            ref: _ref,
+            businessId: createdPayments.last.businessId,
+            orderId: _orderId,
+            paymentId: createdPayments.last.id,
+            checkId: _checkId,
+          ),
+        );
+      }
       // Todos los abonos confirmados: ya no hay nada que retomar.
       await _finishIntent();
 
