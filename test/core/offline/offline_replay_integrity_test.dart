@@ -7,6 +7,8 @@ import 'package:http/testing.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/models/order_item_tax_line.dart';
+import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -38,6 +40,94 @@ class ProbeInventory extends InventoryRepository {
 class ProbeSales extends SalesRepository {
   ProbeSales(super.client);
   final calls = <Map<String, dynamic>>[];
+  int addedItems = 0;
+  int modifierWrites = 0;
+  bool failModifiers = false;
+  bool failKitchen = false;
+  final deleted = <String>[];
+  final quantities = <String>[];
+  final kitchenStates = <String>[];
+
+  @override
+  Future<String> addItemFromMenu({
+    required String orderId,
+    required String menuItemId,
+    double quantity = 1,
+    int checkPosition = 1,
+    bool isTakeout = false,
+    String? notes,
+  }) async {
+    addedItems++;
+    return 'remote-item-$addedItems';
+  }
+
+  /// client_op_id recibidos por el alta idempotente, en orden.
+  final clientOpIds = <String>[];
+
+  @override
+  Future<({String itemId, bool replayed, bool itemExists})>
+  addItemFromMenuIdempotent({
+    required String clientOpId,
+    required String orderId,
+    required String menuItemId,
+    double quantity = 1,
+    int checkPosition = 1,
+    bool isTakeout = false,
+    String? notes,
+    String? createdByEmployeeId,
+  }) async {
+    clientOpIds.add(clientOpId);
+    final id = await addItemFromMenu(
+      orderId: orderId,
+      menuItemId: menuItemId,
+      quantity: quantity,
+      checkPosition: checkPosition,
+      isTakeout: isTakeout,
+      notes: notes,
+    );
+    return (itemId: id, replayed: false, itemExists: true);
+  }
+
+  @override
+  Future<void> replaceOrderItemModifiers({
+    required String itemId,
+    required List<Map<String, dynamic>> modifiers,
+  }) async {
+    modifierWrites++;
+    if (failModifiers) throw StateError('modifier dependency unavailable');
+  }
+
+  @override
+  Future<void> deleteItem({required String itemId}) async {
+    deleted.add(itemId);
+  }
+
+  @override
+  Future<void> noteItemRemoval({
+    required String itemId,
+    String? reason,
+    String? employeeId,
+    String? reasonCode,
+    bool? isWaste,
+  }) async {}
+
+  @override
+  Future<void> updateItemQuantity({
+    required String itemId,
+    required double quantity,
+  }) async {
+    quantities.add(itemId);
+  }
+
+  @override
+  Future<void> updateOfflineKitchenItemStatus({
+    required String itemId,
+    required String status,
+    required DateTime at,
+  }) async {
+    kitchenStates.add(status);
+    if (failKitchen) throw TimeoutException('kitchen network unavailable');
+  }
 
   @override
   Future<Payment> processPayment({
@@ -105,6 +195,19 @@ void main() {
     await client.dispose();
   });
 
+  setUp(() {
+    service.setHubUploader(null);
+    sales.calls.clear();
+    sales.addedItems = 0;
+    sales.clientOpIds.clear();
+    sales.modifierWrites = 0;
+    sales.failModifiers = false;
+    sales.failKitchen = false;
+    sales.deleted.clear();
+    sales.quantities.clear();
+    sales.kitchenStates.clear();
+  });
+
   Future<void> enqueueCount(String biz, String id, double count) =>
       service.enqueueAction(
         businessId: biz,
@@ -125,6 +228,204 @@ void main() {
     inventoryRepository: inventory,
     cashierRepository: CashierRepository(client),
     force: true,
+  );
+
+  test(
+    'LAN recovery forwards the durable queue in order without cloud',
+    () async {
+      const biz = 'lan-recovery';
+      await enqueueCount(biz, 'one', 1);
+      await enqueueCount(biz, 'two', 2);
+      final received = <String>[];
+      service.setHubUploader((_, op) async {
+        // It is already durable while the network request is in flight.
+        expect(await service.pendingActionsCount(biz), greaterThan(0));
+        received.add(op['id'] as String);
+        return received.length;
+      });
+      final result = await service.flushPendingToHub(biz);
+      expect(received, ['one', 'two']);
+      expect(result.completed, 2);
+      expect(result.pending, 0);
+      service.setHubUploader(null);
+    },
+  );
+
+  test(
+    'disk snapshot restores modifiers and fiscal detail, not just totals',
+    () async {
+      final at = DateTime.utc(2026, 9, 29);
+      final item = OrderItem(
+        id: 'tmp_snapshot',
+        orderId: 'local-order-snapshot',
+        productName: 'Cafe',
+        quantity: 1,
+        unitPrice: 100,
+        subtotal: 110,
+        discounts: 0,
+        tax: 19.8,
+        total: 129.8,
+        createdAt: at,
+        taxRate: 18,
+        originalTaxRate: 18,
+        isTakeout: false,
+        status: 'draft',
+        modifiers: const [
+          OrderItemModifier(
+            id: 'm',
+            itemId: 'tmp_snapshot',
+            name: 'Extra',
+            qty: 1,
+            price: 10,
+          ),
+        ],
+        taxLines: [
+          OrderItemTaxLine(
+            id: 't',
+            orderItemId: 'tmp_snapshot',
+            taxId: 'itbis',
+            taxName: 'ITBIS',
+            taxRate: 18,
+            amount: 19.8,
+            createdAt: at,
+          ),
+        ],
+      );
+      final order = Order(
+        id: item.orderId,
+        sessionId: 'local-session-snapshot',
+        status: 'open',
+        subtotal: 110,
+        discounts: 0,
+        serviceFee: 0,
+        tax: 19.8,
+        total: 129.8,
+        createdAt: at,
+      );
+      await service.saveSnapshot(
+        businessId: 'snapshot-test',
+        slotId: 'table',
+        origin: 'table',
+        state: CurrentOrderState(order: order, items: [item]),
+      );
+      final restored = await service.loadSnapshot(
+        businessId: 'snapshot-test',
+        slotId: 'table',
+      );
+      expect(restored!.items.single, item);
+    },
+  );
+
+  test(
+    'lost Hub reply retries same ID; does not replay against cloud',
+    () async {
+      const biz = 'lan-lost-ack';
+      await enqueueCount(biz, 'lost-ack', 3);
+      final ids = <String>[];
+      service.setHubUploader((_, op) async {
+        ids.add(op['id'] as String);
+        return null;
+      });
+      await service.flushPendingToHub(biz);
+      service.setHubUploader(null);
+      final before = inventory.counts.length;
+      await sync(biz);
+      expect(inventory.counts.length, before);
+      expect(await service.pendingActionsCount(biz), 1);
+      service.setHubUploader((_, op) async {
+        ids.add(op['id'] as String);
+        return 1;
+      });
+      await service.flushPendingToHub(biz);
+      expect(ids, ['lost-ack', 'lost-ack']);
+      expect(await service.pendingActionsCount(biz), 0);
+      service.setHubUploader(null);
+    },
+  );
+
+  test('possibly delivered item is never compacted away by a delete', () async {
+    const biz = 'lan-no-compact';
+    await service.enqueueAction(
+      businessId: biz,
+      action: {
+        'id': 'add-lan',
+        'type': 'add_item',
+        'order_id': 'local-order-lan',
+        'item_id': 'tmp_lan',
+        'qty': 1,
+      },
+    );
+    service.setHubUploader((_, _) async => null);
+    await service.flushPendingToHub(biz);
+    service.setHubUploader(null);
+    await service.enqueueAction(
+      businessId: biz,
+      action: {
+        'id': 'delete-lan',
+        'type': 'delete_item',
+        'order_id': 'local-order-lan',
+        'item_id': 'tmp_lan',
+      },
+    );
+    final received = <String>[];
+    service.setHubUploader((_, op) async {
+      received.add(op['id'] as String);
+      return received.length;
+    });
+    await service.flushPendingToHub(biz);
+    expect(received, ['add-lan', 'delete-lan']);
+    service.setHubUploader(null);
+  });
+
+  test(
+    'partially uploaded cloud order does not block unrelated LAN orders',
+    () async {
+      const biz = 'mixed-authorities';
+      sales.failModifiers = true;
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'cloud-add',
+          'type': 'add_item',
+          'order_id': 'existing-cloud-order',
+          'item_id': 'tmp_cloud',
+          'menu_item_id': 'p',
+          'qty': 1,
+          'selected_modifiers': [
+            {'name': 'Extra', 'qty': 1, 'price': 10},
+          ],
+        },
+      );
+      await sync(biz);
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'cloud-delete',
+          'type': 'delete_item',
+          'order_id': 'existing-cloud-order',
+          'item_id': 'tmp_cloud',
+        },
+      );
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'new-table',
+          'type': 'open_table',
+          'order_id': 'local-order-new',
+          'table_id': 'new-table',
+        },
+      );
+      final forwarded = <String>[];
+      service.setHubUploader((_, op) async {
+        forwarded.add(op['id'] as String);
+        return forwarded.length;
+      });
+      final result = await service.flushPendingToHub(biz);
+      expect(forwarded, ['new-table']);
+      expect(result.pending, 2);
+      expect(result.lastError, isNotNull);
+      service.setHubUploader(null);
+    },
   );
 
   test('split replay preserves sequence and both close flags', () async {
@@ -184,6 +485,147 @@ void main() {
       } finally {
         await failingClient.dispose();
       }
+    },
+  );
+
+  test(
+    'missing local identity never updates or deletes an unrelated item',
+    () async {
+      const biz = 'item-identity-audit';
+      for (final type in ['delete_item', 'update_item_quantity']) {
+        await service.enqueueAction(
+          businessId: biz,
+          action: {
+            'id': type,
+            'type': type,
+            'order_id': 'remote-order-$type',
+            'item_id': 'tmp_missing_$type',
+            'quantity': 2,
+          },
+        );
+      }
+      final result = await sync(biz);
+      expect(result.failed, 2);
+      expect(result.completed, 0);
+      expect(sales.deleted, isEmpty);
+      expect(sales.quantities, isEmpty);
+      expect(await service.unsettledActions(biz), hasLength(2));
+    },
+  );
+
+  test(
+    'failed modifiers block payment and retry reuses the created item',
+    () async {
+      const biz = 'item-modifier-audit';
+      sales.failModifiers = true;
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'add-with-extra',
+          'type': 'add_item',
+          'order_id': 'remote-order',
+          'item_id': 'tmp_extra',
+          'menu_item_id': 'product',
+          'qty': 1,
+          'selected_modifiers': [
+            {'name': 'Extra', 'qty': 1, 'price': 25},
+          ],
+        },
+      );
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'pay-with-extra',
+          'type': 'process_payment',
+          'order_id': 'remote-order',
+          'payment_method_id': 'cash',
+          'amount': 125,
+        },
+      );
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'unrelated-delete',
+          'type': 'delete_item',
+          'order_id': 'other-order',
+          'item_id': 'other-real-item',
+        },
+      );
+      final first = await sync(biz);
+      expect(first.failed, 1);
+      expect(first.skipped, 1);
+      expect(sales.calls, isEmpty);
+      expect(sales.deleted, ['other-real-item']);
+      expect(sales.addedItems, 1);
+      sales.failModifiers = false;
+      await sync(biz);
+      expect(sales.addedItems, 1, reason: 'do not insert the same item again');
+      expect(sales.modifierWrites, 2);
+      expect(sales.calls, hasLength(1));
+    },
+  );
+
+  test(
+    'KDS target state survives queue processing and network retries',
+    () async {
+      const biz = 'kds-state-audit';
+      sales.failKitchen = true;
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'kds-ready',
+          'type': 'kds_item_status',
+          'item_id': 'real-kitchen-item',
+          'status': 'ready',
+        },
+      );
+      final first = await sync(biz);
+      expect(first.failed, 1);
+      final queued = (await service.unsettledActions(biz)).single;
+      expect(queued['kds_status'], 'ready');
+      expect(queued['status'], 'failed');
+      sales.failKitchen = false;
+      final second = await sync(biz);
+      expect(second.completed, 1);
+      expect(sales.kitchenStates, ['ready', 'ready']);
+    },
+  );
+
+  test(
+    'deleting a partially uploaded item does not erase its pending add',
+    () async {
+      const biz = 'partial-item-delete-audit';
+      sales.failModifiers = true;
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'partial-add',
+          'type': 'add_item',
+          'order_id': 'remote-order',
+          'item_id': 'tmp_partial',
+          'menu_item_id': 'product',
+          'qty': 1,
+          'selected_modifiers': [
+            {'name': 'Extra', 'price': 20},
+          ],
+        },
+      );
+      await sync(biz);
+      await service.enqueueAction(
+        businessId: biz,
+        action: {
+          'id': 'partial-delete',
+          'type': 'delete_item',
+          'order_id': 'remote-order',
+          'item_id': 'tmp_partial',
+        },
+      );
+      expect(await service.unsettledActions(biz), hasLength(2));
+      sales.failModifiers = false;
+      final result = await sync(biz);
+      expect(result.completed, 2);
+      expect(sales.addedItems, 1);
+      expect(sales.deleted, ['remote-item-1']);
     },
   );
 }

@@ -18,17 +18,17 @@ import 'hub_auto_setup.dart';
 import 'hub_lease_service.dart';
 import 'hub_lan_token.dart';
 
-/// Resuelve el [TerminalMode] del dispositivo (H4) a partir de la POLÍTICA del
-/// local (`business_settings.network_mode`), el ROL de este equipo
-/// (device-level) y la conectividad/alcanzabilidad del Hub. Cablea el enrutado
+/// Resuelve el [TerminalMode] con politica Hub automatica para cada negocio,
+/// el rol persistido del equipo y la conectividad/alcanzabilidad del Hub.
+/// Cablea el enrutado
 /// de mutaciones:
 ///   - hubClient → `HubClient.postOp` al Hub remoto (por LAN).
 ///   - hubHost   → `OfflinePosService.appendToLocalHubOpLog` (mis propias
 ///                 mutaciones al op-log local que sirve el servidor en-proceso).
 ///   - cloud/solo → sin uploader (encolado local puro, comportamiento actual).
 ///
-/// Reacciona a cambios de conexión y a un timer periódico. La política/rol se
-/// cachean y se recargan en el arranque y cuando la UI de Ajustes llama
+/// Reacciona a cambios de conexión y a un timer periódico. El rol se
+/// recarga en el arranque y cuando la UI de Ajustes llama
 /// [reloadConfigAndRefresh] (para no consultar Supabase en cada tick).
 ///
 /// Mientras [kHubModeEnabled] sea `false`, NUNCA hay Hub: el modo alterna solo
@@ -155,6 +155,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
         final cash = _ref.read(cashierViewModelProvider).lastSession;
         canHost =
             cash?['status'] == 'open' &&
+            cash?['business_id'] == businessId &&
             cash?['closed_at'] == null &&
             cash?['device_id'] == await DeviceUtils.getDeviceId();
       }
@@ -202,6 +203,19 @@ class HubModeController extends StateNotifier<TerminalMode> {
 
     _wireUploader(pos, mode, businessId);
     if (mode != state) state = mode;
+
+    if (mode == TerminalMode.hubClient || mode == TerminalMode.hubHost) {
+      unawaited(
+        pos
+            .flushPendingToHub(businessId)
+            .then<void>(
+              (_) {},
+              onError: (Object e, StackTrace _) {
+                debugPrint('[HubOutbox] reenvio pendiente: $e');
+              },
+            ),
+      );
+    }
 
     unawaited(_captureBaselineIfDue(mode, connected, businessId));
     if (mode == TerminalMode.hubClient && reachableUrl != null) {
@@ -265,7 +279,9 @@ class HubModeController extends StateNotifier<TerminalMode> {
         final url = _reachableHubUrl;
         if (url != null) {
           pos.setHubUploader(
-            (biz, op) => _hubClient.postOp(url, {...op, 'business_id': biz}),
+            (biz, op) => biz == businessId
+                ? _hubClient.postOp(url, {...op, 'business_id': biz})
+                : Future<int?>.value(null),
           );
         } else {
           pos.setHubUploader(null);
@@ -275,7 +291,11 @@ class HubModeController extends StateNotifier<TerminalMode> {
         // Soy el Hub: mis propias mutaciones van al op-log local compartido
         // (lo sirve /hub/salon y lo drena syncHubOpLog hacia Supabase), no a la
         // cola por-device ni directo a Supabase.
-        pos.setHubUploader((biz, op) => pos.appendToLocalHubOpLog(biz, op));
+        pos.setHubUploader(
+          (biz, op) => biz == businessId
+              ? pos.appendToLocalHubOpLog(biz, op)
+              : Future<int?>.value(null),
+        );
         break;
       case TerminalMode.cloud:
       case TerminalMode.solo:

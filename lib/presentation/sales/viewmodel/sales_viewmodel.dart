@@ -10,6 +10,7 @@ import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/order_item_snapshot.dart';
 import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
@@ -1269,7 +1270,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (ref.read(hubModeProvider) != TerminalMode.hubHost) return;
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
-    unawaited(_offlinePos.publishHostOp(businessId, op));
+    unawaited(
+      _offlinePos.publishHostOp(businessId, {
+        ...op,
+        'item_snapshot': ?_snapshotForItem(op['item_id']?.toString()),
+      }),
+    );
+  }
+
+  Map<String, dynamic>? _snapshotForItem(String? itemId) {
+    for (final item in state.items) {
+      if (item.id == itemId) return OrderItemSnapshot.encode(item);
+    }
+    return null;
   }
 
   /// Abre una mesa en modo Hub: resume el borrador local si ya existe en este
@@ -1318,7 +1331,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         businessId: businessId,
         slotId: tableId,
       );
-      if (existing != null) {
+      final hubOrder = await _fetchHubOrder(businessId, tableId);
+      final pendingHere = existing == null
+          ? false
+          : (await _offlinePos.unsettledActions(
+              businessId,
+            )).any((op) => op['order_id'] == existing.order?.id);
+      // A cached order must not hide another terminal's acknowledged changes.
+      // Keep local state only when its edits have not reached the Hub yet.
+      if (existing != null && (hubOrder == null || pendingHere)) {
         state = _normalizeHydratedState(
           existing.copyWith(loading: false, origin: 'table', error: null),
         );
@@ -1330,10 +1351,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       //    caja)? → reconstruirla y resumirla para verla/cobrarla. Persistimos
       //    un snapshot local con el MISMO order_id del Hub para que las
       //    mutaciones (agregar ítem / cobrar) referencien esa misma orden.
-      final hubOrder = await _fetchHubOrder(businessId, tableId);
       if (hubOrder != null &&
           ((hubOrder['items'] as List?)?.isNotEmpty ?? false)) {
-        final hydrated = _stateFromHubOrder(hubOrder);
+        final hydrated = stateFromHubOrder(hubOrder);
         await _offlinePos.saveSnapshot(
           businessId: businessId,
           slotId: tableId,
@@ -1405,48 +1425,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return null;
   }
 
-  /// H4 m2: reconstruye un [CurrentOrderState] "plano" desde el JSON de una
-  /// orden del Hub (order_id + ítems con nombre/cant/precio). Suficiente para
-  /// VER y COBRAR la mesa desde otra caja. Limitación conocida: no reconstruye
-  /// modificadores, líneas de impuesto ni subcuentas (el Hub no los proyecta
-  /// aún); el desglose fiscal se reconcilia al subir a Supabase.
-  CurrentOrderState _stateFromHubOrder(Map<String, dynamic> hub) {
+  /// Conserva el desglose capturado de cada item, sin volver a valorarlo con
+  /// precios actuales ni descartar modificadores e impuestos al cruzar la LAN.
+  @visibleForTesting
+  static CurrentOrderState stateFromHubOrder(Map<String, dynamic> hub) {
     final orderId = hub['order_id']?.toString() ?? 'local-order-hub';
     final total = (hub['total'] as num?)?.toDouble() ?? 0;
     final itemsJson = (hub['items'] as List?) ?? const [];
     final items = itemsJson
         .map((e) {
           final m = Map<String, dynamic>.from(e as Map);
-          final qty =
-              (m['quantity'] as num?)?.toDouble() ??
-              (m['qty'] as num?)?.toDouble() ??
-              1;
-          final price = (m['unit_price'] as num?)?.toDouble() ?? 0;
-          return OrderItem(
-            id: m['id']?.toString() ?? '',
-            orderId: orderId,
-            productName: m['product_name']?.toString() ?? 'Producto',
-            quantity: qty,
-            unitPrice: price,
-            isTakeout: m['takeout'] == true,
-            status: 'pending',
-            notes: m['notes']?.toString(),
-            subtotal: qty * price,
-            discounts: 0,
-            tax: 0,
-            total: qty * price,
-            createdAt: DateTime.now(),
-          );
+          final legacySubtotal =
+              ((m['qty'] ?? m['quantity'] ?? 1) as num) *
+              ((m['unit_price'] ?? 0) as num);
+          return OrderItemSnapshot.decode({
+            ...m,
+            'order_id': orderId,
+            'subtotal': m['subtotal'] ?? legacySubtotal,
+            'total': m['total'] ?? legacySubtotal,
+            'is_takeout': m['is_takeout'] == true || m['takeout'] == true,
+          });
         })
         .toList(growable: false);
     final order = Order(
       id: orderId,
       sessionId: 'hub-session',
       status: 'open',
-      subtotal: total,
-      discounts: 0,
+      subtotal: (hub['subtotal'] as num?)?.toDouble() ?? total,
+      discounts: (hub['discounts'] as num?)?.toDouble() ?? 0,
       serviceFee: 0,
-      tax: 0,
+      tax: (hub['tax'] as num?)?.toDouble() ?? 0,
       total: total,
       createdAt: DateTime.now(),
     );
@@ -2438,6 +2446,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _lastAddItemKey = addKey;
     _lastAddItemMs = nowMs;
 
+    // Identidad de ESTE toque (20260929_0001). Viaja en el intento online, en
+    // el proxy del Hub y en la acción encolada: si el servidor ya guardó el
+    // ítem pero se perdió la respuesta, el reintento devuelve el mismo ítem en
+    // vez de crear otro. Un toque nuevo = un id nuevo = una unidad más.
+    final clientOpId = const Uuid().v4();
+
     // PRD 4: bloqueo defensivo. Si la orden activa ya fue cobrada o anulada,
     // el state está stale — no podemos agregar items a una orden cerrada.
     // Forzamos re-apertura según origin para que el próximo add vaya a una
@@ -2670,6 +2684,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                         .map((m) => m.toMap())
                         .toList(growable: false),
                     employeeId: await _resolveItemEmployeeId(),
+                    clientOpId: clientOpId,
                   );
         if (realId != null && realId.isNotEmpty) {
           if (optimisticItem != null) {
@@ -2690,16 +2705,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // Hub no respondió → respaldo local (op-log) por el catch.
         throw const _HubModeShortCircuit();
       }
-      final itemId = await ref
+      // El mesero del PIN se conoce sin red: va en la misma transacción del
+      // alta. Sin PIN se resuelve después (puede consultar al servidor).
+      final pinEmployeeId = _trustedActiveWaiter()?.employeeId;
+      final added = await ref
           .read(salesRepositoryProvider)
-          .addItemFromMenu(
+          .addItemFromMenuIdempotent(
+            clientOpId: clientOpId,
             orderId: orderId,
             menuItemId: menuItemId,
             quantity: qty,
             checkPosition: effectiveCheckPos,
             isTakeout: takeout,
             notes: notes,
+            createdByEmployeeId: pinEmployeeId,
           );
+      final itemId = added.itemId;
 
       // Registrar tmp→real: a partir de aquí la recarga post-commit puede
       // soltar el optimista (su contraparte real ya existe en el server) sin
@@ -2711,12 +2732,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Audit trail del item: ver `_resolveItemEmployeeId` arriba.
       //
       // 1) Modo multimesero: si hay `activeWaiter` (el mesero metió PIN al
-      //    entrar a la mesa), usamos su employeeId.
+      //    entrar a la mesa), ya viajó con el alta.
       // 2) Fallback: cuando un admin/cajero agrega items sin pasar por el
       //    flow de PIN (`activeWaiter == null`), resolvemos su employee_id
       //    desde el usuario autenticado de Supabase. Sin esto, todos los
       //    items que mete el cajero quedaban como "Sin asignar".
-      if (itemId.isNotEmpty) {
+      if (itemId.isNotEmpty && pinEmployeeId == null && added.itemExists) {
         final employeeId = await _resolveItemEmployeeId();
         if (employeeId != null) {
           try {
@@ -2731,15 +2752,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
-      if (selectedModifiers.isNotEmpty) {
-        await ref
-            .read(salesRepositoryProvider)
-            .addOrderItemModifiers(
-              itemId: itemId,
-              modifiers: selectedModifiers
-                  .map((modifier) => modifier.toMap())
-                  .toList(growable: false),
-            );
+      if (selectedModifiers.isNotEmpty && added.itemExists) {
+        final modifiers = selectedModifiers
+            .map((modifier) => modifier.toMap())
+            .toList(growable: false);
+        final repo = ref.read(salesRepositoryProvider);
+        // Un alta repetida pudo haber guardado ya los extras: reemplazar deja
+        // exactamente los elegidos, sin duplicarlos.
+        if (added.replayed) {
+          await repo.replaceOrderItemModifiers(
+            itemId: itemId,
+            modifiers: modifiers,
+          );
+        } else {
+          await repo.addOrderItemModifiers(
+            itemId: itemId,
+            modifiers: modifiers,
+          );
+        }
       }
 
       // Bypassear el debounce para que la respuesta sea instantánea
@@ -2774,6 +2804,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'origin': state.origin,
             'order_id': orderId,
             'item_id': optimisticItem.id,
+            // Mismo id que el intento que acaba de fallar: si en realidad
+            // hizo commit, el replay no crea un segundo ítem.
+            'client_op_id': clientOpId,
             'menu_item_id': menuItemId,
             'qty': qty,
             'check_pos': effectiveCheckPos,
@@ -2781,6 +2814,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'notes': notes,
             'product_name': productName,
             'product_price': productPrice,
+            'item_snapshot': OrderItemSnapshot.encode(optimisticItem),
             // Snapshot de modifiers seleccionados. Al sincronizar el replay
             // los re-aplica vía addOrderItemModifiers contra el item ya
             // creado en el server. Antes esto se perdía y los extras nunca
@@ -2979,7 +3013,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     // UN solo viaje: fn_add_offer_deal inserta la línea a precio original con el
-    // descuento del deal.
+    // descuento del deal. El client_op_id evita una segunda línea si la
+    // respuesta se pierde y el alta se repite (20260929_0001).
+    final clientOpId = const Uuid().v4();
     try {
       await ref
           .read(salesRepositoryProvider)
@@ -2991,6 +3027,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             name: name,
             promotionId: promotionId,
             checkPosition: effectiveCheckPos,
+            clientOpId: clientOpId,
+            createdByEmployeeId: _trustedActiveWaiter()?.employeeId,
           );
       await _loadOrderDetail(orderId, caller: 'addOfferDeal');
     } catch (e) {
@@ -3003,6 +3041,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       } else {
         state = state.copyWith(error: 'No se pudo agregar la oferta: $e');
       }
+      // Error de red: el servidor pudo haber guardado la línea igual. Recargar
+      // muestra la verdad en vez de invitar a tocar otra vez (= duplicado).
+      if (OfflinePosService.isTransportError(e)) refreshOrder();
     }
   }
 
@@ -3120,6 +3161,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         break;
       }
     }
+    if (targetItem == null) {
+      state = state.copyWith(
+        error: 'No se elimino el producto: ya no pertenece a esta orden.',
+      );
+      return;
+    }
 
     // 1. Snapshot for rollback
     final previousItems = state.items;
@@ -3167,11 +3214,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Fase 1 Toast redesign: si el item borrado era el último de un
       // sub-check, cerrar ese check automáticamente. El principal (C1) y los
       // checks con items restantes se quedan como estaban.
-      final deletedCheckId = targetItem?.checkId;
+      final deletedCheckId = targetItem.checkId;
       if (deletedCheckId != null && deletedCheckId.isNotEmpty) {
-        await ref
-            .read(salesRepositoryProvider)
-            .closeEmptyCheckIfApplicable(deletedCheckId);
+        try {
+          await ref
+              .read(salesRepositoryProvider)
+              .closeEmptyCheckIfApplicable(deletedCheckId);
+        } catch (checkError) {
+          // El producto YA se borro. Fallar esta limpieza no puede restaurarlo
+          // en pantalla ni encolar una segunda eliminacion.
+          debugPrint(
+            'No se pudo cerrar el check vacio $deletedCheckId: $checkError',
+          );
+        }
       }
 
       refreshOrder();
@@ -3186,27 +3241,45 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
-        await _offlinePos.enqueueAction(
-          businessId: businessId,
-          action: {
-            'type': 'delete_item',
-            'origin': state.origin,
-            'order_id': orderId,
-            'item_id': itemId,
-            'product_id': targetItem?.productId,
-            'product_name': targetItem?.productName,
-            'notes': targetItem?.notes,
-            'is_takeout': targetItem?.isTakeout,
-            // Para anotar el motivo al sincronizar (sin red no se puede
-            // consultar el empleado: solo lo que ya está en el dispositivo).
-            'reason': reason,
-            'reason_code': reasonCode,
-            'is_waste': isWaste,
-            'employee_id':
-                _trustedActiveWaiter()?.employeeId ?? _cachedAuthEmployeeId,
-          },
-        );
-        await _persistCurrentState(localOnly: true);
+        try {
+          await _offlinePos.enqueueAction(
+            businessId: businessId,
+            action: {
+              'type': 'delete_item',
+              'origin': state.origin,
+              'order_id': orderId,
+              'item_id': itemId,
+              'product_id': targetItem.productId,
+              'product_name': targetItem.productName,
+              'notes': targetItem.notes,
+              'is_takeout': targetItem.isTakeout,
+              // El replay necesita el motivo y el operador del momento.
+              'reason': reason,
+              'reason_code': reasonCode,
+              'is_waste': isWaste,
+              'employee_id':
+                  _trustedActiveWaiter()?.employeeId ?? _cachedAuthEmployeeId,
+            },
+          );
+        } catch (queueError) {
+          _pendingDeletedItemIds.remove(itemId);
+          state = state.copyWith(
+            items: previousItems,
+            order: previousOrder,
+            error: 'No se guardo la eliminacion offline: $queueError',
+          );
+          return;
+        }
+        try {
+          await _persistCurrentState(localOnly: true);
+        } catch (snapshotError) {
+          state = state.copyWith(
+            error:
+                'Eliminacion en cola, pero fallo la copia local: '
+                '$snapshotError. No cierre este equipo hasta sincronizar.',
+          );
+          return;
+        }
         state = state.copyWith(
           error: 'Producto eliminado en local. Pendiente de sincronizar.',
         );
@@ -3221,6 +3294,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         error: 'Error al eliminar: $e',
       );
     }
+  }
+
+  List<OrderItemTaxLine> _taxLinesAtSubtotal(OrderItem item, double subtotal) {
+    if (item.subtotal <= 0) return item.taxLines;
+    final ratio = subtotal / item.subtotal;
+    return item.taxLines
+        .map(
+          (line) => OrderItemTaxLine(
+            id: line.id,
+            orderItemId: line.orderItemId,
+            taxId: line.taxId,
+            taxName: line.taxName,
+            taxRate: line.taxRate,
+            amount: _roundMoney(line.amount * ratio),
+            createdAt: line.createdAt,
+          ),
+        )
+        .toList(growable: false);
   }
 
   Future<void> updateItemQuantity(String itemId, double quantity) async {
@@ -3252,7 +3343,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           ? (targetItem.tax / targetItem.subtotal)
           : 0.0;
       final optimisticAmounts = _estimateOptimisticItemAmounts(
-        grossAmount: targetItem.unitPrice * quantity,
+        grossAmount:
+            (targetItem.unitPrice +
+                targetItem.modifiers.fold<double>(
+                  0,
+                  (sum, modifier) => sum + modifier.price * modifier.qty,
+                )) *
+            quantity,
         taxMode: targetItem.taxMode,
         taxRate: taxRate,
         serviceRate: 0.0,
@@ -3266,7 +3363,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     quantity: quantity,
                     subtotal: optimisticAmounts.subtotal,
                     tax: optimisticAmounts.tax,
-                    total: optimisticAmounts.total,
+                    total: (optimisticAmounts.total - item.discounts)
+                        .clamp(0, double.infinity)
+                        .toDouble(),
+                    taxLines: _taxLinesAtSubtotal(
+                      item,
+                      optimisticAmounts.subtotal,
+                    ),
                   ),
           )
           .toList(growable: false);
@@ -3322,7 +3425,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                   ? (item.tax / item.subtotal)
                   : 0.0;
               final optimisticAmounts = _estimateOptimisticItemAmounts(
-                grossAmount: item.unitPrice * quantity,
+                grossAmount:
+                    (item.unitPrice +
+                        item.modifiers.fold<double>(
+                          0,
+                          (sum, modifier) =>
+                              sum + modifier.price * modifier.qty,
+                        )) *
+                    quantity,
                 taxMode: item.taxMode,
                 taxRate: taxRate,
                 serviceRate: 0.0,
@@ -3332,7 +3442,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 quantity: quantity,
                 subtotal: optimisticAmounts.subtotal,
                 tax: optimisticAmounts.tax,
-                total: optimisticAmounts.total,
+                total: (optimisticAmounts.total - item.discounts)
+                    .clamp(0, double.infinity)
+                    .toDouble(),
+                taxLines: _taxLinesAtSubtotal(item, optimisticAmounts.subtotal),
               );
             })
             .toList(growable: false);
@@ -3356,6 +3469,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'order_id': orderId,
             'item_id': itemId,
             'quantity': quantity,
+            'item_snapshot': _snapshotForItem(itemId),
             'product_id': targetItem?.productId,
             'product_name': targetItem?.productName,
             'notes': targetItem?.notes,
@@ -3499,6 +3613,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'order_id': orderId,
             'item_id': itemId,
             'is_takeout': isTakeout,
+            'item_snapshot': _snapshotForItem(itemId),
             'product_id': targetItem?.productId,
             'product_name': targetItem?.productName,
             'notes': targetItem?.notes,

@@ -41,7 +41,10 @@ class LocalPrintService {
   LocalPrintService({String? apiToken}) : _apiToken = apiToken;
 
   /// Publish the agent URL to the DB so remote devices (tablets) can find it.
-  static Future<void> publishAgentUrl(String agentUrl, String businessId) async {
+  static Future<void> publishAgentUrl(
+    String agentUrl,
+    String businessId,
+  ) async {
     try {
       await Supabase.instance.client
           .from('business_settings')
@@ -63,7 +66,8 @@ class LocalPrintService {
   static Future<String?> _fetchDbAgentUrl() async {
     if (_dbAgentUrl != null &&
         _dbAgentUrlAt != null &&
-        DateTime.now().difference(_dbAgentUrlAt!) < const Duration(minutes: 5)) {
+        DateTime.now().difference(_dbAgentUrlAt!) <
+            const Duration(minutes: 5)) {
       return _dbAgentUrl;
     }
     try {
@@ -335,6 +339,19 @@ class LocalPrintService {
       return prefsCached;
     }
 
+    // A local Windows USB spooler does not depend on WAN or membership lookup.
+    // Keep an explicitly remembered remote agent first for shared printers.
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux)) {
+      for (final candidate in _baseUrls) {
+        if (await _isHealthy(candidate)) {
+          _rememberResolvedBaseUrl(candidate);
+          return candidate;
+        }
+      }
+    }
+
     // Try DB-stored agent URL (enables tablets to find remote agent). En
     // offline `_fetchDbAgentUrl` corta solo con timeout corto — no bloquea.
     final dbUrl = await _fetchDbAgentUrl();
@@ -499,7 +516,10 @@ class LocalPrintService {
       }
 
       final normalizedPayload = {
+        if (jobData['id'] != null) 'id': jobData['id'],
         'printerId': printerId,
+        if (printer != null) 'printer': Map<String, dynamic>.from(printer),
+        if (jobData['meta'] != null) 'meta': jobData['meta'],
         'type': type,
         'content': content,
       };
@@ -531,10 +551,10 @@ class LocalPrintService {
         body: json.encode(payload),
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 202) {
         final data = json.decode(response.body);
         _log('Agent accepted print job -> response=${response.body}');
-        return data['success'] == true;
+        return acceptsPrintResponse(data);
       }
 
       String errorMsg = 'Error ${response.statusCode}';
@@ -556,6 +576,26 @@ class LocalPrintService {
     }
   }
 
+  /// Queue acceptance is not proof of paper delivery. A duplicate is accepted
+  /// only while pending or already done, never after a failed/cancelled job.
+  @visibleForTesting
+  static bool acceptsPrintResponse(dynamic data) {
+    if (data is! Map) return false;
+    final status = data['status'];
+    if (const ['failed', 'cancelled', 'error'].contains(status)) return false;
+    if (data['success'] == false) return false;
+    if (data['success'] == true) return true;
+    return data['duplicate'] == true &&
+        (data['job_id'] != null || data['jobId'] != null) &&
+        const [
+          'queued',
+          'printing',
+          'retrying',
+          'pending',
+          'done',
+        ].contains(status);
+  }
+
   Future<bool> testPrint({required String ip, int port = 9100}) async {
     try {
       final baseUrl = await _resolveBaseUrl();
@@ -570,10 +610,10 @@ class LocalPrintService {
         body: json.encode({'printerId': printerId}),
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 202) {
         final data = json.decode(response.body);
         _log('Agent accepted test print -> response=${response.body}');
-        return data['success'] == true;
+        return acceptsPrintResponse(data);
       }
 
       String errorMsg = 'Error ${response.statusCode}';
@@ -663,10 +703,10 @@ class LocalPrintService {
         body: json.encode(payload),
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 202) {
         final data = json.decode(response.body);
         _log('Agent accepted raw print -> response=${response.body}');
-        return data['success'] == true;
+        return acceptsPrintResponse(data);
       } else {
         String errorMsg = 'Error ${response.statusCode}';
         try {

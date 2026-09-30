@@ -1,3 +1,5 @@
+import '../../../core/utils/app_time.dart';
+
 class InventoryWarehouse {
   final String id;
   final String name;
@@ -445,9 +447,10 @@ class InventoryMovementEntry {
       quantity: toDouble(map['quantity']),
       notes: map['notes']?.toString() ?? '',
       referenceType: map['reference_type']?.toString() ?? '',
+      // Hora de pared de RD: el servidor manda UTC y, formateado tal cual,
+      // una salida de las 9:15 PM salía como del día siguiente a las 1:15.
       createdAt:
-          DateTime.tryParse(map['created_at']?.toString() ?? '') ??
-          DateTime.now(),
+          AppTime.tryParseServerToAst(map['created_at']) ?? AppTime.nowAst(),
     );
   }
 }

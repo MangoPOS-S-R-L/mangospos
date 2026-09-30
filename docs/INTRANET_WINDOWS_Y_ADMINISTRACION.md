@@ -1,6 +1,6 @@
 # Intranet Windows: estado y trabajo pendiente
 
-Fecha: 2026-09-28. Configuracion solicitada: caja Windows como Hub y equipos
+Actualizado: 2026-09-29. Configuracion solicitada: caja Windows como Hub y equipos
 Windows para meseros. El alcance final incluye operacion y administracion.
 
 ## Topologia
@@ -50,9 +50,13 @@ internet**. No se ha desplegado ni validado en los equipos Windows del local.
    privado por negocio; no degradan al secreto compartido de versiones viejas.
 3. Actualizar caja y meseros a la misma version. El descubrimiento nuevo exige
    `business_id` en `/hub/health`; un Hub viejo debe actualizarse primero.
-4. En Ajustes / Red local, seleccionar politica Hub. En la caja, rol Hub; en
-   meseros, rol caja/cliente y la IP estable de la caja. En Windows el servidor
-   Dart utiliza 4100 y el agente de impresion utiliza 4000.
+4. La preparacion y el descubrimiento del Hub son automaticos: no se requiere
+   seleccionar politica, rol ni IP. La caja elegible solicita la concesion de
+   Hub mientras tiene internet; debe estar disponible la migracion de leases.
+   Un cajero de escritorio es elegible; un administrador/supervisor requiere
+   una sesion de caja abierta del mismo negocio y dispositivo. No se elige un
+   Hub nuevo a ciegas durante una caida ni se desplaza al titular existente.
+   En Windows el servidor Dart utiliza 4100 y el agente de impresion 4000.
 5. Mantener el perfil de red privado/dominio. En instalaciones existentes sin
    reinstalar, agregar la regla equivalente TCP 4100 para MangoPOS. No desactivar
    el firewall. Los cambios de instaladores requieren compilacion en Windows.
@@ -111,7 +115,8 @@ una red no confiable.
 
 ## Verificacion
 
-- 349 pruebas Flutter de offline, auth, Hub, continuidad de pedidos y UI pasaron.
+- Regresion ampliada: 873 pruebas Flutter pasaron y una quedo omitida. Incluye
+  offline, auth, Hub, ventas, pagos, preparacion offline y vinculacion.
 - Prueba HTTP real en loopback: cliente descarga PIN y datos de consulta;
   rechaza otro negocio, credenciales legacy, permisos vencidos y rol no-Hub.
 - `supabase/tests/session_offline_roster_local_test.sh`: verifica migracion
@@ -123,3 +128,69 @@ una red no confiable.
 
 Referencia del instalador MSI:
 [WiX FirewallException](https://docs.firegiant.com/wix/schema/firewall/firewallexception/).
+
+## Revision adicional de items offline
+
+- Una identidad temporal sin mapping ya no selecciona otro producto por
+  aproximacion ni el ultimo item del pedido: conserva un error recuperable.
+- Una accion fallida bloquea acciones posteriores con el mismo order_id,
+  incluido el cobro; otros pedidos pueden continuar sincronizando.
+- Reintentar modificadores reutiliza el item cuyo mapping ya se guardo.
+  Borrar un item parcialmente sincronizado no elimina su alta pendiente.
+- El estado de cocina usa kds_status, separado del estado de la cola. Los
+  errores de transporte permanecen pendientes en lugar de marcarse completados.
+- El fallback de insercion de modificadores solo reintenta errores de columnas
+  incompatibles, no timeouts o errores de permisos.
+
+Riesgos pendientes antes de certificar cobros por LAN:
+
+1. Los items nuevos y la captura de baseline ahora transportan modificadores,
+   impuestos y descuentos de linea. Las copias antiguas sin ese detalle no
+   pueden reconstruirlo por si solas. Sigue pendiente el estado completo de
+   subcuentas, abonos y ajustes a nivel de orden; no equivale aun a certificar
+   todos los escenarios de cobro compartido.
+2. Falta idempotencia transaccional de alta de items en servidor: si confirma
+   la insercion pero se pierde la respuesta antes de guardar el mapping local,
+   un reintento aun puede duplicar. Reemplazar modificadores tampoco es atomico.
+3. El bloqueo de dependencias usa order_id; falta cubrir expresamente acciones
+   que mezclen el identificador local y el remoto de una misma orden.
+4. Faltan pruebas fisicas Windows de concurrencia, cierre abrupto entre escritura
+   y confirmacion, perdida de LAN y recuperacion. Las pruebas automatizadas no
+   sustituyen estas verificaciones ni garantizan ausencia total de fallos.
+
+## Correcciones de conexion e impresion (2026-09-29)
+
+- El barrido comprueba JSON de `/hub/health` y prioriza 4100. Un agente de
+  impresion en 4000 o una pagina que devuelve HTTP 200 ya no se presenta como
+  evidencia de Hub. El selector solo conecta con un Hub validado del negocio.
+- El servidor Windows intenta habilitar su regla de firewall para TCP 4100,
+  limitada a subred local y perfiles privado/dominio. Instalaciones antiguas
+  podian tener unicamente la regla del agente de impresion. Windows puede
+  solicitar elevacion; denegar el permiso no se sortea ni desactiva el firewall.
+- La outbox persiste antes de enviar, reintenta al recuperar el Hub sin exigir
+  WAN y conserva el mismo identificador ante una respuesta perdida. No se
+  compacta una operacion que ya pudo llegar al Hub ni se reproduce en nube por
+  separado. Ordenes parcialmente subidas a nube no se migran a ciegas de
+  autoridad: requieren conciliacion, sin bloquear ordenes nuevas independientes.
+- La apertura de mesa consulta al Hub antes de preferir una copia local vieja,
+  salvo que esta tenga cambios pendientes. Cuando el Hub ya detecto perdida
+  de WAN, sus proxies responden inmediatamente sin esperar RPCs de Supabase.
+- Impresion: HTTP 202 significa trabajo aceptado en cola, no error. Los
+  duplicados ya aceptados no se rechazan por omitir `success`; un trabajo
+  fallido/cancelado no se anuncia como aceptado. Aceptacion no prueba salida
+  fisica de papel. Se conserva la configuracion inline de la impresora y se
+  prueba el agente local Windows/Linux antes de consultar la nube si no existe
+  un agente remoto recordado que responda.
+- Persistencia de items: se conservan modificadores, lineas fiscales, tasas,
+  area y empleado en disco y en las operaciones LAN. Cambiar cantidad incluye
+  el precio de los extras y actualiza las lineas de impuesto locales.
+
+Verificacion ampliada: 873 pruebas aprobadas y una omitida; analisis de los 18
+archivos revisados sin errores ni warnings (cuatro avisos de estilo). Incluye
+pruebas de outbox, respuesta perdida, persistencia de
+items, proyeccion de importes, contrato HTTP de impresion y servidor HTTP local
+sin WAN. No se ha compilado ni instalado esta version en Windows desde macOS.
+Para la prueba fisica, ambos equipos deben usar la misma version, conservar
+router/LAN y haber completado la preparacion inicial con internet. Una impresora
+USB conectada a esa PC puede operar sin LAN; una impresora de red o USB de otra
+PC necesita conservar la conexion local, aunque no haya internet.

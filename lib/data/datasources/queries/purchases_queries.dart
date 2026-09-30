@@ -19,4 +19,9 @@ class PurchasesQueries {
   /// transacción, con ajuste del inventario cuando la mercancía ya entró.
   /// Migración 20260923_0002.
   static const rpcPurchaseOrderUpdate = 'fn_purchase_order_update';
+
+  /// Anulación de una compra registrada: devuelve al almacén lo que entró,
+  /// cancela conduces y la cuenta por pagar sin abonos. Con `p_preview`
+  /// solo describe lo que haría. Migración 20260929_0050.
+  static const rpcPurchaseOrderCancel = 'fn_purchase_order_cancel';
 }

@@ -11,12 +11,10 @@ enum HubMode { cloud, hub, solo }
 /// detección de Hub queda desactivada y el terminal solo alterna entre
 /// `cloud` (con red) y `solo` (sin red) — exactamente el comportamiento actual.
 ///
-/// ENCENDIDO (2026-07-08) para pruebas multi-dispositivo. IMPORTANTE: encender
-/// esto NO cambia nada para los negocios con `business_settings.network_mode =
-/// 'cloud'` (el default) — `resolveTerminalMode` devuelve cloud/solo y no se
-/// sondea la LAN. Solo los negocios que pongan la política en `hub` (Ajustes →
-/// Red local) entran al ruteo LAN-first. Validar en hardware antes de un
-/// release general. Ver docs/PRD_HUB_HIBRIDO_LAN_FIRST.md.
+/// El controlador prepara y descubre el Hub automaticamente para cada negocio,
+/// incluyendo negocios con network_mode legacy 'cloud'. La preparacion inicial
+/// requiere autenticacion, token privado y concesion de Hub con internet.
+/// Validar en hardware antes de un release general.
 const bool kHubModeEnabled = true;
 
 /// Resolución PURA del modo a partir de las señales. Sin I/O, para poder

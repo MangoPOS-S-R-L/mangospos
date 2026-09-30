@@ -408,7 +408,11 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
                         _ErrorBar(
                           message: state.validationError ?? state.error!,
                           isDanger: state.error != null,
-                        ),
+                        )
+                      else if (state.resumedAttemptNotice != null)
+                        // Cobro recuperado tras cerrarse la app: queda a la
+                        // vista mientras se termina ESE mismo cobro.
+                        _ErrorBar(message: state.resumedAttemptNotice!),
                     ],
                   ),
                 ),

@@ -32,9 +32,12 @@ import '../../../data/models/kitchen_models.dart';
 class HubKitchenProjector {
   /// Dobla [ops] (en orden seq) en órdenes de cocina visibles.
   static List<KitchenOrder> project(List<Map<String, dynamic>> ops) {
-    final sorted = [...ops]..sort((a, b) =>
-        ((a['seq'] as num?)?.toInt() ?? 0)
-            .compareTo((b['seq'] as num?)?.toInt() ?? 0));
+    final sorted = [...ops]
+      ..sort(
+        (a, b) => ((a['seq'] as num?)?.toInt() ?? 0).compareTo(
+          (b['seq'] as num?)?.toInt() ?? 0,
+        ),
+      );
 
     final orders = <String, _OrderAcc>{};
 
@@ -52,7 +55,8 @@ class HubKitchenProjector {
             id: itemId,
             orderId: orderId,
             productName: op['product_name']?.toString() ?? 'Producto',
-            quantity: (op['qty'] as num?)?.toDouble() ??
+            quantity:
+                (op['qty'] as num?)?.toDouble() ??
                 (op['quantity'] as num?)?.toDouble() ??
                 1,
             notes: op['notes']?.toString(),
@@ -67,7 +71,8 @@ class HubKitchenProjector {
         case 'update_item_quantity':
           final it = orders[orderId]?.items[op['item_id']?.toString()];
           if (it != null) {
-            it.quantity = (op['quantity'] as num?)?.toDouble() ??
+            it.quantity =
+                (op['quantity'] as num?)?.toDouble() ??
                 (op['qty'] as num?)?.toDouble() ??
                 it.quantity;
           }
@@ -100,7 +105,8 @@ class HubKitchenProjector {
         case 'kds_item_status':
           final targetOrder = orderId.isEmpty ? null : orders[orderId];
           final itemId = op['item_id']?.toString();
-          final status = op['status']?.toString() ?? 'preparing';
+          final status =
+              (op['kds_status'] ?? op['status'])?.toString() ?? 'preparing';
           // Si no tenemos el order_id, buscamos el item en cualquier orden.
           final accs = targetOrder != null ? [targetOrder] : orders.values;
           for (final acc in accs) {
@@ -125,21 +131,22 @@ class HubKitchenProjector {
           .map((i) => i.toModel())
           .toList(growable: false);
       if (items.isEmpty) continue;
-      result.add(KitchenOrder(
-        orderId: acc.orderId,
-        orderNumber: _shortNumber(acc.orderId),
-        createdAt: acc.sentAt ?? items.first.createdAt,
-        items: items,
-      ));
+      result.add(
+        KitchenOrder(
+          orderId: acc.orderId,
+          orderNumber: _shortNumber(acc.orderId),
+          createdAt: acc.sentAt ?? items.first.createdAt,
+          items: items,
+        ),
+      );
     }
     result.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return result;
   }
 
   static DateTime _stamp(Map<String, dynamic> op) {
-    final raw = op['hub_received_at']?.toString() ??
-        op['queued_at']?.toString() ??
-        '';
+    final raw =
+        op['hub_received_at']?.toString() ?? op['queued_at']?.toString() ?? '';
     return DateTime.tryParse(raw) ?? DateTime.now();
   }
 
@@ -184,16 +191,16 @@ class _ItemAcc {
   DateTime? readyAt;
 
   KitchenItem toModel() => KitchenItem(
-        id: id,
-        orderId: orderId,
-        orderNumber: '',
-        productName: productName,
-        quantity: quantity,
-        notes: notes,
-        status: status,
-        createdAt: createdAt,
-        startedAt: startedAt,
-        readyAt: readyAt,
-        isTakeout: isTakeout,
-      );
+    id: id,
+    orderId: orderId,
+    orderNumber: '',
+    productName: productName,
+    quantity: quantity,
+    notes: notes,
+    status: status,
+    createdAt: createdAt,
+    startedAt: startedAt,
+    readyAt: readyAt,
+    isTakeout: isTakeout,
+  );
 }

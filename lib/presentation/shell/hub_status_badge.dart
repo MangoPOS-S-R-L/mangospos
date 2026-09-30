@@ -67,11 +67,11 @@ class HubStatusBadge extends ConsumerWidget {
     final controller = ref.watch(hubModeProvider.notifier);
     var link = hubLinkStateFor(mode);
 
-    // `cloud`/`solo` con una IP de Hub guardada = el local SÍ usa Hub y este
-    // equipo lo perdió. Sin esto el indicador desaparecería justo cuando hay
-    // que mirarlo, que es el momento en que la tablet se quedó sola.
+    // Automatic setup must remain visible even before the first discovery.
     if (link == null) {
-      if (controller.configuredHubUrl == null) return const SizedBox.shrink();
+      if (ref.watch(sessionProvider).activeBusinessId == null) {
+        return const SizedBox.shrink();
+      }
       link = HubLinkState.disconnected;
     }
 
@@ -210,8 +210,8 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
           'La caja respondió, pero el equipo todavía no la tomó. Vuelve a '
               'probar en unos segundos.',
         HubProbeResult.notHub =>
-          'Ese equipo responde, pero NO está configurado como la caja. En ÉL: '
-              'Ajustes → Red local → rol «Hub».',
+          'Ese equipo responde, pero no es la caja principal. Abre MangoPOS '
+              'en la caja y revisa el estado de preparacion de intranet.',
         HubProbeResult.otherBusiness =>
           'Ese equipo es la caja de OTRO negocio. Elige el de este local.',
         HubProbeResult.unreachable =>
@@ -237,7 +237,7 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
         setState(() => _busy = false);
         return;
       }
-      _ipCtrl.text = chosen.ip ?? chosen.host;
+      _ipCtrl.text = chosen.baseUrl;
       await _save(_ipCtrl.text, announce: true);
     } catch (e) {
       if (!mounted) return;
@@ -267,7 +267,7 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
           _messageIsError = false;
           _message = 'La caja respondió en $url.';
         });
-        await ref.read(hubModeProvider.notifier).refresh();
+        await _save(url, announce: false);
       } else {
         await _explainFailure(_ipCtrl.text.trim());
       }
@@ -298,6 +298,13 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _statusTile(link, controller.reachableHubUrl),
+            if (controller.preparationStatus != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                controller.preparationStatus!,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
             if (!isHub) ...[
               const SizedBox(height: 16),
               TextField(
@@ -419,10 +426,7 @@ class _HubPickerDialogState extends ConsumerState<_HubPickerDialog> {
               children: [
                 Text(
                   title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: color,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w700, color: color),
                 ),
                 const SizedBox(height: 3),
                 Text(

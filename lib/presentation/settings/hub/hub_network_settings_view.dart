@@ -793,7 +793,7 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
     final nuevos = <DiscoveredAgent>[];
     for (final a in agents) {
       final key = a.ip ?? a.host;
-      if (!_byKey.containsKey(key)) nuevos.add(a);
+      if (_byKey[key]?.port != a.port) nuevos.add(a);
       _byKey[key] = a;
     }
     if (mounted) {
@@ -808,16 +808,19 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
   /// y se etiqueta cuando contesta.
   Future<void> _probe(DiscoveredAgent a) async {
     final key = a.ip ?? a.host;
+    final client = HubClient();
     try {
-      final r = await HubClient().probeCandidate(
+      final r = await client.probeCandidate(
         a.baseUrl,
         businessId: widget.businessId,
       );
-      if (!mounted) return;
+      if (!mounted || _byKey[key] != a) return;
       setState(() => _probed[key] = r);
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || _byKey[key] != a) return;
       setState(() => _probed[key] = HubProbeResult.unreachable);
+    } finally {
+      client.dispose();
     }
   }
 
@@ -828,6 +831,7 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
       _sweepDone = 0;
       _sweepTotal = 0;
       _byKey.clear();
+      _probed.clear();
     });
 
     // Dos fuentes en paralelo, igual que la búsqueda de impresoras:
@@ -849,8 +853,9 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
     }();
 
     final sweep = () async {
+      final scanner = HubLanScanner();
       try {
-        final agents = await HubLanScanner().scan(
+        final agents = await scanner.scan(
           onProgress: (done, total) {
             if (!mounted) return;
             setState(() {
@@ -862,6 +867,8 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
         _merge(agents);
       } catch (_) {
         /* mDNS cubre el fallo del barrido */
+      } finally {
+        scanner.dispose();
       }
     }();
 
@@ -983,13 +990,9 @@ class _DeviceDiscoverySheetState extends State<_DeviceDiscoverySheet> {
   }
 }
 
-
 /// Fila de un equipo encontrado, etiquetada con lo que resultó ser.
 ///
-/// Un equipo que no es el Hub se deja TOCABLE a propósito: puede ser la caja
-/// correcta a la que todavía no le pusieron el rol, y el mesero necesita poder
-/// guardarla para cuando la configuren. Lo que cambia es que ya no miente
-/// sobre lo que es.
+/// Solo permite elegir un Hub validado del negocio activo.
 class _AgentTile extends StatelessWidget {
   const _AgentTile({
     required this.agent,
@@ -1035,7 +1038,7 @@ class _AgentTile extends StatelessWidget {
       ),
       subtitle: Text('$address · $label', style: TextStyle(color: color)),
       trailing: const Icon(Icons.chevron_right),
-      onTap: onTap,
+      onTap: probe == HubProbeResult.hub ? onTap : null,
     );
   }
 }

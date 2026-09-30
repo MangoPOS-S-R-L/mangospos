@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../presentation/purchases/state/goods_receipt.dart';
@@ -720,6 +721,111 @@ class PurchasesRepository {
     return 'No se pudo guardar la corrección: ${e.message}';
   }
 
+  /// Qué haría anular la compra, SIN escribir nada: lo que se devolvería de
+  /// cada almacén (con la existencia antes/después), los conduces y la cuenta
+  /// por pagar. `fn_purchase_order_cancel(p_preview := true)`, 20260929_0050.
+  Future<PurchaseOrderCancelPreview> previewCancelPurchaseOrder(
+    String orderId,
+  ) async {
+    try {
+      final result = await _client.rpc(
+        PurchasesQueries.rpcPurchaseOrderCancel,
+        params: {'p_order_id': orderId, 'p_preview': true},
+      );
+      return PurchaseOrderCancelPreview.fromMap(
+        Map<String, dynamic>.from(result as Map),
+      );
+    } on PostgrestException catch (e) {
+      throw Exception(cancelErrorMessage(e));
+    }
+  }
+
+  /// Anula una compra registrada en UNA transacción del servidor: devuelve
+  /// al almacén lo que entró (neto de recepciones y correcciones), restaura
+  /// el costo maestro si esta compra lo había fijado, anula los conduces y
+  /// la cuenta por pagar sin abonos, y deja bitácora.
+  ///
+  /// Igual que la edición, NADA de esto se hace desde la app: una red que se
+  /// cae a mitad dejaría la compra anulada con el stock a medio devolver.
+  /// Un doble toque es inofensivo: el servidor responde `replayed`.
+  Future<PurchaseOrderCancelResult> cancelPurchaseOrder({
+    required String orderId,
+    required String reason,
+    required String idempotencyKey,
+  }) async {
+    try {
+      final result = await _client.rpc(
+        PurchasesQueries.rpcPurchaseOrderCancel,
+        params: {
+          'p_order_id': orderId,
+          'p_reason': reason,
+          'p_idempotency_key': idempotencyKey,
+          'p_preview': false,
+        },
+      );
+      return PurchaseOrderCancelResult.fromMap(
+        Map<String, dynamic>.from(result as Map),
+      );
+    } on PostgrestException catch (e) {
+      throw Exception(cancelErrorMessage(e));
+    }
+  }
+
+  /// Traduce el contrato de errores de `fn_purchase_order_cancel` a español.
+  @visibleForTesting
+  static String cancelErrorMessage(PostgrestException e) {
+    final raw = '${e.message} ${e.details ?? ''}';
+
+    // Sin la migración no hay camino viejo: devolver el stock a mano desde
+    // la app es justo lo que la función evita.
+    if (e.code == 'PGRST202' || e.code == '42883') {
+      return 'Este servidor todavía no tiene habilitada la anulación de '
+          'compras. Aplica la migración 20260929_0050_purchase_order_cancel.sql '
+          'y vuelve a intentar.';
+    }
+    if (raw.contains('PURCHASE_ORDER_PAYABLE_HAS_PAYMENTS')) {
+      return 'Esta compra fue a crédito y su cuenta por pagar ya tiene '
+          'abonos, así que no se puede anular. Resuelve la cuenta en '
+          'Créditos → Cuentas por Pagar y vuelve a intentar.';
+    }
+    if (raw.contains('PURCHASE_ORDER_CANCEL_DENIED')) {
+      return 'No tienes permiso para anular compras.';
+    }
+    if (raw.contains('PURCHASE_ORDER_CANCEL_REASON_REQUIRED')) {
+      return 'Escribe el motivo de la anulación (al menos 3 letras).';
+    }
+    if (raw.contains('PURCHASE_ORDER_NOT_FOUND')) {
+      return 'Esta compra ya no existe.';
+    }
+    if (raw.contains('AUTH_REQUIRED')) {
+      return 'Tu sesión expiró. Vuelve a iniciar sesión e intenta de nuevo.';
+    }
+    return 'No se pudo anular la compra: ${e.message}';
+  }
+
+  /// Quién, cuándo y por qué se anuló. Best-effort: una base sin la
+  /// migración 20260929_0050 no tiene las columnas, y el detalle se tiene que
+  /// ver igual.
+  Future<({DateTime? at, String byName, String reason})> _cancellationInfo(
+    String orderId,
+  ) async {
+    try {
+      final row = await _client
+          .from(PurchasesQueries.tablePurchaseOrders)
+          .select('cancelled_at, cancelled_by, cancel_reason')
+          .eq('id', orderId)
+          .maybeSingle();
+      if (row == null) return (at: null, byName: '', reason: '');
+      return (
+        at: DateTime.tryParse(row['cancelled_at']?.toString() ?? '')?.toLocal(),
+        byName: await _employeeName(row['cancelled_by']?.toString()),
+        reason: row['cancel_reason']?.toString().trim() ?? '',
+      );
+    } catch (_) {
+      return (at: null, byName: '', reason: '');
+    }
+  }
+
   /// §6.4 — La compra se guardó a crédito pero la CxP no llegó a nacer.
   ///
   /// Mientras orden y CxP no sean una sola operación atómica, ese estado
@@ -853,6 +959,9 @@ class PurchasesRepository {
       row['warehouse_id']?.toString(),
     );
     final lines = await getOrderLines(orderId);
+    final cancellation = row['status']?.toString() == 'cancelled'
+        ? await _cancellationInfo(orderId)
+        : (at: null, byName: '', reason: '');
 
     return PurchaseOrderDetail(
       order: PurchaseOrderSummary.fromMap(
@@ -865,6 +974,9 @@ class PurchasesRepository {
       discount: toDouble(row['discount']),
       lines: lines,
       createdByName: await _employeeName(row['created_by']?.toString()),
+      cancelledAt: cancellation.at,
+      cancelledByName: cancellation.byName,
+      cancelReason: cancellation.reason,
     );
   }
 

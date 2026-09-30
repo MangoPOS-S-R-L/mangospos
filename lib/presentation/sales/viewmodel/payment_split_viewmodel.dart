@@ -11,8 +11,10 @@ import '../../../core/fiscal/payment_stage.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
+import '../../../core/offline/payment_intent_journal.dart';
 import '../../../core/utils/device_utils.dart';
 import '../../../data/models/bank_account.dart';
+import '../../../data/models/payment_attempt_lease.dart';
 import '../../../data/models/sales_models.dart';
 
 import '../../../data/repositories/cashier_repository.dart';
@@ -40,6 +42,9 @@ const Object _bankSentinel = Object();
 /// nada" de "ponlo en null", y el estado final del segundo cobro mostraria el
 /// comprobante del primero.
 const Object _ncfSentinel = Object();
+
+/// Igual para el aviso de cobro recuperado: poder limpiarlo al terminar.
+const Object _noticeSentinel = Object();
 
 class PaymentTransaction {
   final String id;
@@ -144,6 +149,11 @@ class PaymentSplitState {
   /// es de mesa). El método "Saldo de mesa" solo aparece cuando hay saldo.
   final TableDepositAccount? tableDeposit;
 
+  /// Aviso de que se recuperó (o se encontró) un cobro que quedó a medias al
+  /// cerrarse la app. A diferencia de `error`, no se borra en cada cambio de
+  /// estado: el cajero tiene que verlo mientras termina ese cobro.
+  final String? resumedAttemptNotice;
+
   const PaymentSplitState({
     this.totalAmount = 0,
     this.transactions = const [],
@@ -165,6 +175,7 @@ class PaymentSplitState {
     this.salesNoteSelected = false,
     this.emittedSalesNote,
     this.tableDeposit,
+    this.resumedAttemptNotice,
   });
 
   PaymentSplitState copyWith({
@@ -188,6 +199,7 @@ class PaymentSplitState {
     bool? salesNoteSelected,
     String? emittedSalesNote,
     TableDepositAccount? tableDeposit,
+    Object? resumedAttemptNotice = _noticeSentinel,
   }) {
     return PaymentSplitState(
       totalAmount: totalAmount ?? this.totalAmount,
@@ -216,6 +228,9 @@ class PaymentSplitState {
       salesNoteSelected: salesNoteSelected ?? this.salesNoteSelected,
       emittedSalesNote: emittedSalesNote ?? this.emittedSalesNote,
       tableDeposit: tableDeposit ?? this.tableDeposit,
+      resumedAttemptNotice: identical(resumedAttemptNotice, _noticeSentinel)
+          ? this.resumedAttemptNotice
+          : resumedAttemptNotice as String?,
     );
   }
 
@@ -265,6 +280,14 @@ class PaymentSplitState {
 // 🧠 VIEW MODEL
 // ==============================================================================
 
+class _PaymentIntentPersistenceException implements Exception {
+  const _PaymentIntentPersistenceException({
+    required this.hasConfirmedPayments,
+  });
+
+  final bool hasConfirmedPayments;
+}
+
 class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   final SalesRepositoryImproved _salesRepo;
   final ConnectivityService _connectivity = ConnectivityService();
@@ -299,12 +322,48 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   bool _paymentConfirmed = false;
   bool _offlineAttempt = false;
   final Map<int, Payment> _recordedPayments = {};
-  final String _attemptId = const Uuid().v4();
+  // No final: al recuperar un cobro interrumpido se retoma SU id, del que
+  // salen los ids de la cola offline (`payment-<attemptId>-<índice>`).
+  String _attemptId = const Uuid().v4();
   DateTime? _attemptPaidAt;
   bool _offlineNcfResolved = false;
   String? _attemptOfflineNcf;
 
-  bool get _canEdit => !state.isBusy && !_attemptLocked && !_paymentConfirmed;
+  /// Diario durable del intento (ver [PaymentIntentJournal]).
+  final PaymentIntentJournal _intentJournal;
+
+  /// Lectura del diario al abrir el modal. `confirmPayment` la espera la
+  /// primera vez para no arrancar un cobro nuevo encima de uno interrumpido.
+  Future<void>? _intentRestore;
+
+  /// Intento interrumpido encontrado cuando el cajero ya había empezado a
+  /// armar otro plan: se aplica al confirmar en vez de cobrar el plan nuevo.
+  PaymentIntent? _pendingIntent;
+
+  /// Lo último guardado en el diario para este intento.
+  PaymentIntent? _journalIntent;
+
+  /// El intento vino del diario (cobro interrumpido): su plan no se toca.
+  bool _resumedFromJournal = false;
+
+  // --- Candado de cobro por cuenta (20260929_0002) ---
+  /// `split_sequence` del abono 0: el primero libre según el servidor, para no
+  /// chocar con abonos de un cobro anterior. Fijo durante todo el intento.
+  int _splitSequenceBase = 0;
+  bool _splitSequenceBaseFixed = false;
+
+  /// Lo que otro intento ya había cobrado en esta cuenta y este intento ya
+  /// descontó del total (cobro anterior a medias).
+  double _paidBeforeAttempt = 0;
+
+  // `_localProcessing` también bloquea: la primera confirmación espera la
+  // lectura del diario antes de marcar `isProcessing`, y en esa ventana el
+  // plan ya no se puede cambiar.
+  bool get _canEdit =>
+      !_localProcessing &&
+      !state.isBusy &&
+      !_attemptLocked &&
+      !_paymentConfirmed;
 
   PaymentSplitViewModel(
     this._salesRepo,
@@ -325,7 +384,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     })?
     enqueuePayment,
     bool Function()? connectionStatus,
-  }) : _checkId = checkId,
+    PaymentIntentJournal intentJournal = const PaymentIntentJournal(),
+  }) : _intentJournal = intentJournal,
+       _checkId = checkId,
        _customerId = customerId,
        _customerRnc = customerRnc,
        _fiscalType = fiscalType,
@@ -359,6 +420,249 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         ],
       );
     }
+    _intentRestore = _restoreInterruptedIntent();
+  }
+
+  // --- DIARIO DURABLE DEL INTENTO ---
+
+  /// Busca un cobro de ESTA cuenta que quedó a medias (la app se cerró o se
+  /// reinició durante el cobro) y lo retoma tal cual. Nunca lanza.
+  Future<void> _restoreInterruptedIntent() async {
+    final intent = await _intentJournal.load(_orderId, _checkId);
+    if (intent == null || !mounted) return;
+    final untouched =
+        !_attemptLocked &&
+        !_paymentConfirmed &&
+        state.transactions.every((t) => t.amount.abs() < 0.001);
+    if (untouched) {
+      _applyIntent(intent);
+    } else {
+      _pendingIntent = intent;
+    }
+  }
+
+  void _applyIntent(PaymentIntent intent) {
+    _pendingIntent = null;
+    final registered = intent.recordedPayments.length;
+    final planTotal = intent.lines.fold<double>(0, (s, l) => s + l.amount);
+    // El intento pudo cobrar solo el restante de un cobro anterior: el total
+    // de la cuenta es lo de ese intento más lo que ya estaba cobrado.
+    if ((intent.totalAmount + intent.paidBeforeAttempt - state.totalAmount)
+            .abs() >
+        0.01) {
+      // La cuenta cambió desde el cobro interrumpido: retomarlo cobraría otro
+      // monto. Solo se avisa; el cajero decide con el historial de pagos.
+      state = state.copyWith(
+        resumedAttemptNotice:
+            'Hay un cobro que quedó a medias en esta cuenta por '
+            '${intent.totalAmount.toStringAsFixed(2)} '
+            '($registered de ${intent.lines.length} pagos ya registrados). '
+            'La cuenta ahora suma ${state.totalAmount.toStringAsFixed(2)}. '
+            'Revisa el historial de pagos antes de cobrar.',
+      );
+      return;
+    }
+    _attemptId = intent.attemptId;
+    _attemptPaidAt = intent.paidAt;
+    _attemptOfflineNcf = intent.offlineNcf;
+    _offlineNcfResolved = intent.offlineNcfResolved;
+    _offlineAttempt = intent.offline;
+    _recordedPayments
+      ..clear()
+      ..addAll(intent.recordedPayments);
+    _attemptLocked = true;
+    _journalIntent = intent;
+    _resumedFromJournal = true;
+    _splitSequenceBase = intent.splitSequenceBase;
+    _splitSequenceBaseFixed = true;
+    _paidBeforeAttempt = intent.paidBeforeAttempt;
+    state = state.copyWith(
+      totalAmount: intent.totalAmount,
+      transactions: [
+        for (final line in intent.lines)
+          PaymentTransaction(
+            id: const Uuid().v4(),
+            method: PaymentMethodType.values.firstWhere(
+              (m) => m.name == line.method,
+              orElse: () => PaymentMethodType.other,
+            ),
+            amount: line.amount,
+            timestamp: intent.paidAt.toLocal(),
+            reference: line.reference,
+            bankAccount: line.bankAccount,
+          ),
+      ],
+      salesNoteSelected: intent.salesNoteSelected,
+      offlineNcf: intent.offlineNcf,
+      currentInput: '',
+      resumedAttemptNotice:
+          'Se recuperó un cobro que quedó a medias: '
+          '${intent.lines.length} pagos por ${planTotal.toStringAsFixed(2)} '
+          '($registered ya registrados). Confirma para terminar ESTE mismo '
+          'cobro; no se puede cambiar.',
+    );
+  }
+
+  PaymentIntent _buildIntent() => PaymentIntent(
+    attemptId: _attemptId,
+    orderId: _orderId,
+    checkId: _checkId,
+    businessId: _activeBusinessIdOrNull(),
+    totalAmount: state.totalAmount,
+    lines: [
+      for (final tx in state.transactions)
+        PaymentIntentLine(
+          method: tx.method.name,
+          amount: tx.amount,
+          reference: tx.reference,
+          bankAccount: tx.bankAccount,
+        ),
+    ],
+    paidAt: _attemptPaidAt ?? DateTime.now().toUtc(),
+    createdAt: _journalIntent?.createdAt ?? DateTime.now().toUtc(),
+    offline: _offlineAttempt,
+    offlineNcf: _attemptOfflineNcf,
+    offlineNcfResolved: _offlineNcfResolved,
+    salesNoteSelected: state.salesNoteSelected,
+    recordedPayments: Map<int, Payment>.from(_recordedPayments),
+    splitSequenceBase: _splitSequenceBase,
+    paidBeforeAttempt: _paidBeforeAttempt,
+  );
+
+  /// Solo para poder limpiar los intentos de un negocio; no es crítico. Se lee
+  /// únicamente si la sesión ya está viva (en la app siempre lo está): leerla
+  /// en frío la construiría solo para esto.
+  String? _activeBusinessIdOrNull() {
+    try {
+      if (!_ref.exists(sessionProvider)) return null;
+      return _ref.read(sessionProvider).activeBusinessId;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Guarda el estado ACTUAL del intento. Falla abierto: sin disco el cobro
+  /// sigue (mismo comportamiento que antes del diario), solo se registra.
+  Future<void> _saveIntent() async {
+    final intent = _buildIntent();
+    if (!await _intentJournal.save(intent)) {
+      throw _PaymentIntentPersistenceException(
+        hasConfirmedPayments: _recordedPayments.isNotEmpty,
+      );
+    }
+    _journalIntent = intent;
+  }
+
+  String? _holderLabelOrNull() {
+    try {
+      if (!_ref.exists(sessionProvider)) return null;
+      final name = _ref.read(sessionProvider).userName?.trim();
+      return (name == null || name.isEmpty) ? null : name;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _deviceIdOrNull() async {
+    try {
+      return await DeviceUtils.getDeviceId();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Candado de cobro de la cuenta, compartido entre TODOS los equipos
+  /// (20260929_0002). `true` = seguir; `false` = no cobrar (el estado ya dice
+  /// por qué, y aquí no se grabó nada). Un error de red sube: el caller decide
+  /// ir offline. Sin la migración aplicada sigue como antes.
+  Future<bool> _acquirePaymentLock() async {
+    PaymentAttemptLease? lease;
+    try {
+      lease = await _salesRepo.acquirePaymentAttempt(
+        orderId: _orderId,
+        checkId: _checkId,
+        attemptId: _attemptId,
+        deviceId: await _deviceIdOrNull(),
+        holderLabel: _holderLabelOrNull(),
+      );
+    } catch (e) {
+      if (OfflinePosService.isTransportError(e)) rethrow;
+      state = state.copyWith(
+        error:
+            'No se pudo verificar el candado de esta cuenta. '
+            'Aquí no se cobró nada. Detalle: $e',
+      );
+      return false;
+    }
+    if (lease == null) return false;
+
+    if (!lease.acquired) {
+      final holder = lease.holderLabel;
+      state = state.copyWith(
+        error: lease.accountClosed
+            ? 'Esta cuenta ya fue cobrada. Refresca la mesa para ver el '
+                  'comprobante.'
+            : 'Otro equipo${holder == null ? '' : ' ($holder)'} está cobrando '
+                  'esta cuenta en este momento. Espera a que termine: aquí no '
+                  'se cobró nada.',
+      );
+      return false;
+    }
+
+    if (!_splitSequenceBaseFixed) {
+      _splitSequenceBase = lease.nextSplitSequence;
+      _splitSequenceBaseFixed = true;
+    }
+
+    // Cobros de OTRO intento en esta cuenta que este todavía no descontó.
+    final newlyPaid = lease.paidByOthers - _paidBeforeAttempt;
+    if (newlyPaid <= 0.009) return true;
+
+    unawaited(
+      _salesRepo.releasePaymentAttempt(
+        orderId: _orderId,
+        attemptId: _attemptId,
+      ),
+    );
+    final paid = lease.paidByOthers.toStringAsFixed(2);
+    if (_resumedFromJournal || _recordedPayments.isNotEmpty) {
+      // Plan bloqueado (pudo haber cobrado ya): no se puede recortar a ciegas.
+      state = state.copyWith(
+        error:
+            'Otro cobro registró $paid en esta cuenta mientras este cobro '
+            'estaba pendiente. Revisa el historial de pagos antes de continuar.',
+      );
+      return false;
+    }
+    final remaining =
+        state.totalAmount + _paidBeforeAttempt - lease.paidByOthers;
+    if (remaining <= 0.01) {
+      state = state.copyWith(
+        error:
+            'Esta cuenta ya tiene $paid cobrados de un cobro anterior que no '
+            'terminó y no queda saldo. Revisa el historial de pagos.',
+      );
+      return false;
+    }
+    // Cobro anterior a medias (p. ej. en otra caja que se apagó): se cobra
+    // SOLO el restante. Nada se grabó todavía en este intento.
+    _paidBeforeAttempt = lease.paidByOthers;
+    state = state.copyWith(
+      totalAmount: remaining,
+      transactions: const [],
+      currentInput: '',
+      resumedAttemptNotice:
+          'Esta cuenta ya tiene $paid cobrados de un cobro anterior que no '
+          'terminó. Se cobra solo el restante: ${remaining.toStringAsFixed(2)}. '
+          'Carga el pago y confirma.',
+    );
+    return false;
+  }
+
+  Future<void> _finishIntent() async {
+    _journalIntent = null;
+    await _intentJournal.clear(_orderId, _checkId);
+    state = state.copyWith(resumedAttemptNotice: null);
   }
 
   String _friendlyPaymentError(Object error) {
@@ -385,6 +689,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     if (raw.contains('CASH_SESSION_REQUIRED') ||
         raw.contains('CASH_SESSION_NOT_OPEN')) {
       return 'Debes abrir una caja antes de procesar el cobro.';
+    }
+
+    if (raw.contains(SalesRepositoryImproved.paymentLockedCode)) {
+      return 'Otro equipo está cobrando esta cuenta en este momento. Espera a '
+          'que termine; este abono no se cobró.';
     }
 
     if (raw.startsWith('Exception: ')) {
@@ -895,6 +1204,24 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         _offlineNcfResolved = true;
       }
       final offlineNcf = _attemptOfflineNcf;
+      // El camino offline y el NCF de papel ya asignado van al diario: tras un
+      // reinicio se retoma offline con ESE número (pedir otro al Hub dejaría
+      // un hueco en la numeración fiscal).
+      await _saveIntent();
+
+      // Abonos de este intento que ya están en la cola (la app se cerró entre
+      // encolar y anotar en el diario): no se encolan otra vez.
+      final alreadyQueued = <String>{};
+      if (_enqueuePayment == null) {
+        try {
+          for (final action in await _offlinePos.unsettledActions(businessId)) {
+            final id = action['id']?.toString();
+            if (id != null) alreadyQueued.add(id);
+          }
+        } catch (e) {
+          debugPrint('[split-offline] no se pudo leer la cola: $e');
+        }
+      }
 
       final localPayments = <Payment>[];
       for (int i = 0; i < state.transactions.length; i++) {
@@ -905,6 +1232,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         }
         final tx = state.transactions[i];
         final isLast = i == state.transactions.length - 1;
+        final actionId = 'payment-$_attemptId-$i';
 
         String methodId;
         switch (tx.method) {
@@ -921,46 +1249,49 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
             methodId = 'cash';
         }
 
-        await (_enqueuePayment ?? _offlinePos.enqueueAction)(
-          businessId: businessId,
-          action: {
-            'id': 'payment-$_attemptId-$i',
-            'type': 'process_payment',
-            'origin': _orderId.startsWith('local-order-')
-                ? 'offline'
-                : 'remote',
-            'order_id': _orderId,
-            'check_id': _checkId,
-            'payment_method_id': methodId,
-            'payment_method_code': methodId,
-            'payment_method_name': tx.methodLabel,
-            'amount': tx.amount,
-            'reference': tx.reference,
-            'customer_id': _customerId,
-            'customer_rnc': isLast ? customerRnc : null,
-            'cashier_session_id': cashierSessionId,
-            'change_amount': isLast ? state.change : 0,
-            'split_sequence': i,
-            'close_order': isLast && _checkId == null,
-            'close_check': isLast && _checkId != null,
-            'paid_at': paidAtIso,
-            // F4: el NCF asignado offline viaja SOLO en la primera transacción
-            // (un comprobante por cobro). El server lo usa al sincronizar.
-            if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf,
-            'requested_ncf_type': state.salesNoteSelected ? null : ncfType,
-            // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
-            // el replay la ponga antes de reproducir el cobro. Si llega
-            // después, el cierre ya emitió NCF. Viaja el valor elegido
-            // (incluido `false`) para que el replay no herede una marca vieja.
-            if (i == 0 && state.salesNoteAvailable)
-              'is_sales_note': state.salesNoteSelected,
-            // Bank account se asocia post-RPC en el flujo online vía un
-            // UPDATE puntual. Offline guardamos solo el id; el replay
-            // queda pendiente de hacer ese UPDATE — para esta primera
-            // versión el cajero re-asocia manualmente si hace falta.
-            if (tx.bankAccount != null) 'bank_account_id': tx.bankAccount!.id,
-          },
-        );
+        if (!alreadyQueued.contains(actionId)) {
+          await (_enqueuePayment ?? _offlinePos.enqueueAction)(
+            businessId: businessId,
+            action: {
+              'id': actionId,
+              'type': 'process_payment',
+              'origin': _orderId.startsWith('local-order-')
+                  ? 'offline'
+                  : 'remote',
+              'order_id': _orderId,
+              'check_id': _checkId,
+              'payment_method_id': methodId,
+              'payment_method_code': methodId,
+              'payment_method_name': tx.methodLabel,
+              'amount': tx.amount,
+              'reference': tx.reference,
+              'customer_id': _customerId,
+              'customer_rnc': isLast ? customerRnc : null,
+              'cashier_session_id': cashierSessionId,
+              'change_amount': isLast ? state.change : 0,
+              // Base del intento: no choca con abonos de un cobro anterior.
+              'split_sequence': _splitSequenceBase + i,
+              'close_order': isLast && _checkId == null,
+              'close_check': isLast && _checkId != null,
+              'paid_at': paidAtIso,
+              // F4: el NCF asignado offline viaja SOLO en la primera transacción
+              // (un comprobante por cobro). El server lo usa al sincronizar.
+              if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf,
+              'requested_ncf_type': state.salesNoteSelected ? null : ncfType,
+              // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
+              // el replay la ponga antes de reproducir el cobro. Si llega
+              // después, el cierre ya emitió NCF. Viaja el valor elegido
+              // (incluido `false`) para que el replay no herede una marca vieja.
+              if (i == 0 && state.salesNoteAvailable)
+                'is_sales_note': state.salesNoteSelected,
+              // Bank account se asocia post-RPC en el flujo online vía un
+              // UPDATE puntual. Offline guardamos solo el id; el replay
+              // queda pendiente de hacer ese UPDATE — para esta primera
+              // versión el cajero re-asocia manualmente si hace falta.
+              if (tx.bankAccount != null) 'bank_account_id': tx.bankAccount!.id,
+            },
+          );
+        }
 
         localPayments.add(
           Payment(
@@ -981,12 +1312,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           ),
         );
         _recordedPayments[i] = localPayments.last;
+        await _saveIntent();
       }
       // F4: dejamos el NCF en el estado para que el caller imprima el
       // comprobante con su número en el acto (en vez de la precuenta).
       if (offlineNcf != null) {
         state = state.copyWith(offlineNcf: offlineNcf);
       }
+      // Todo el intento quedó en la cola durable (ids estables por índice):
+      // el diario ya no hace falta.
+      await _finishIntent();
       return localPayments;
     } catch (e, s) {
       debugPrint('❌ Error encolando pago offline: $e\n$s');
@@ -1001,6 +1336,25 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
 
   Future<List<Payment>?> confirmPayment(BuildContext context) async {
     if (_localProcessing || state.isBusy || _paymentConfirmed) return null;
+    // Primera confirmación: esperar la lectura del diario (disco local, rápida)
+    // con el guard puesto, para no arrancar un cobro NUEVO encima de uno que
+    // quedó a medias. Si apareció mientras el cajero armaba otro plan, se
+    // muestra el interrumpido y NO se cobra lo que estaba en pantalla.
+    final restore = _intentRestore;
+    if (restore != null) {
+      _localProcessing = true;
+      try {
+        await restore;
+      } finally {
+        _localProcessing = false;
+        _intentRestore = null;
+      }
+      final pending = _pendingIntent;
+      if (pending != null) {
+        _applyIntent(pending);
+        return null;
+      }
+    }
     if (state.transactions.isEmpty) {
       state = state.copyWith(
         validationError: 'Agrega al menos un pago antes de confirmar.',
@@ -1114,6 +1468,37 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // construimos payments locales con status='pending'. Una vez en
       // sync, el RPC fn_process_payment_v3 los replayará preservando la
       // fecha (ver 20260522_0003_paid_at_offline_sync.sql).
+      //
+      // Candado de la cuenta entre equipos, antes de grabar nada. Si no hay
+      // red para tomarlo y este intento todavía no grabó nada, se cobra
+      // offline como cualquier otro corte.
+      if (!useOffline) {
+        bool proceed;
+        try {
+          proceed = await _acquirePaymentLock();
+        } catch (e) {
+          if (!OfflinePosService.isTransportError(e) ||
+              _recordedPayments.isNotEmpty) {
+            rethrow;
+          }
+          useOffline = true;
+          proceed = true;
+        }
+        if (!proceed) {
+          state = state.copyWith(
+            isProcessing: false,
+            stage: PaymentStage.idle,
+            error: state.error,
+          );
+          return null;
+        }
+      }
+
+      // Diario ANTES del primer envío: desde aquí el resultado puede quedar
+      // incierto, así que el plan (y su fecha) tiene que sobrevivir a un
+      // cierre de la app para retomarse con los mismos índices.
+      _attemptPaidAt ??= DateTime.now().toUtc();
+      await _saveIntent();
       if (useOffline) {
         final offlineResult = await _confirmPaymentOffline(
           cashierSessionId: cashierSessionId,
@@ -1194,8 +1579,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           fiscalType: state.salesNoteSelected ? null : _fiscalType,
           cashierSessionId: sessionId,
           reference: tx.reference,
-          splitSequence: i,
+          splitSequence: _splitSequenceBase + i,
           paidAt: _attemptPaidAt,
+          attemptId: _attemptId,
         );
 
         Payment payment;
@@ -1281,6 +1667,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           paymentMethodName: tx.methodLabel,
         );
         _recordedPayments[i] = enrichedPayment;
+        // Abono confirmado por el servidor: al diario ya, antes de cualquier
+        // otra espera (cuenta bancaria, e-CF, impresión).
+        await _saveIntent();
         final bankAccount = tx.bankAccount;
         if (bankAccount != null) {
           try {
@@ -1302,6 +1691,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         _recordedPayments[i] = enrichedPayment;
       }
       _paymentConfirmed = true;
+      // Todos los abonos confirmados: ya no hay nada que retomar.
+      await _finishIntent();
 
       // Para e-CF (Norma DGII 01-2020): invocamos emit-document SYNC despues
       // del processPayment para que cuando el caller imprima el ticket, el
@@ -1426,6 +1817,20 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       return createdPayments;
     } catch (e, stack) {
       debugPrint('❌ Fatal Error in confirmPayment: $e\n$stack');
+      if (e is _PaymentIntentPersistenceException) {
+        state = state.copyWith(
+          isProcessing: false,
+          stage: PaymentStage.idle,
+          error: e.hasConfirmedPayments
+              ? 'Hay pagos registrados, pero no se pudo guardar su progreso. '
+                    'No cobres de nuevo: revisa el historial y libera espacio '
+                    'o repara el almacenamiento antes de continuar.'
+              : 'No se pudo guardar el intento de cobro en este equipo. '
+                    'No se envió ningún pago. Revisa el almacenamiento e '
+                    'intenta otra vez.',
+        );
+        return null;
+      }
       if (_paymentConfirmed) {
         state = state.copyWith(
           isProcessing: false,

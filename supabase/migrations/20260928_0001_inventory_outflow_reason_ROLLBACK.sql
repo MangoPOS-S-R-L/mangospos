@@ -7,6 +7,10 @@
 begin;
 
 drop function if exists public.fn_inventory_record_outflow(
+  uuid, uuid, uuid, numeric, text, text, numeric, uuid
+);
+-- La primera versión (7 parámetros), por si quedó de antes.
+drop function if exists public.fn_inventory_record_outflow(
   uuid, uuid, uuid, numeric, text, text, numeric
 );
 

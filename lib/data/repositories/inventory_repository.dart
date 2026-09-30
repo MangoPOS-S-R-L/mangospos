@@ -1245,35 +1245,36 @@ class InventoryRepository {
     String? warehouseId,
     String? itemId,
     int limit = 60,
+    /// Solo un tipo (p. ej. `waste` para el conduce A4 de Salidas).
+    String? movementType,
+    /// Rango `[fromUtc, toUtc)` en UTC. Para "hoy" usar
+    /// `AppTime.todayRangeUtc()`: el día del negocio es el de RD, no el UTC.
+    DateTime? fromUtc,
+    DateTime? toUtc,
   }) async {
-    final movementsResponse = warehouseId != null && warehouseId.isNotEmpty
-        ? await _client
-              .from(InventoryQueries.tableInventoryMovements)
-              .select(
-                'id, item_id, warehouse_id, movement_type, quantity, notes, reference_type, created_at',
-              )
-              .eq('business_id', businessId)
-              .eq('warehouse_id', warehouseId)
-              .order('created_at', ascending: false)
-              .limit(limit)
-        : itemId != null && itemId.isNotEmpty
-        ? await _client
-              .from(InventoryQueries.tableInventoryMovements)
-              .select(
-                'id, item_id, warehouse_id, movement_type, quantity, notes, reference_type, created_at',
-              )
-              .eq('business_id', businessId)
-              .eq('item_id', itemId)
-              .order('created_at', ascending: false)
-              .limit(limit)
-        : await _client
-              .from(InventoryQueries.tableInventoryMovements)
-              .select(
-                'id, item_id, warehouse_id, movement_type, quantity, notes, reference_type, created_at',
-              )
-              .eq('business_id', businessId)
-              .order('created_at', ascending: false)
-              .limit(limit);
+    var query = _client
+        .from(InventoryQueries.tableInventoryMovements)
+        .select(
+          'id, item_id, warehouse_id, movement_type, quantity, notes, reference_type, created_at',
+        )
+        .eq('business_id', businessId);
+    if (warehouseId != null && warehouseId.isNotEmpty) {
+      query = query.eq('warehouse_id', warehouseId);
+    } else if (itemId != null && itemId.isNotEmpty) {
+      query = query.eq('item_id', itemId);
+    }
+    if (movementType != null && movementType.isNotEmpty) {
+      query = query.eq('movement_type', movementType);
+    }
+    if (fromUtc != null) {
+      query = query.gte('created_at', fromUtc.toUtc().toIso8601String());
+    }
+    if (toUtc != null) {
+      query = query.lt('created_at', toUtc.toUtc().toIso8601String());
+    }
+    final movementsResponse = await query
+        .order('created_at', ascending: false)
+        .limit(limit);
     final movementsRaw = List<Map<String, dynamic>>.from(movementsResponse);
 
     final itemIds = movementsRaw
@@ -1942,6 +1943,11 @@ class InventoryRepository {
     double? costPerUnit,
     String? notes,
     String? referenceType,
+    /// Llave de la operación (uuid). Viaja como `reference_id` del movimiento.
+    String? referenceId,
+    /// Solo para la cola offline: el motivo de una salida que se encola aquí
+    /// porque la función de salidas no existe en el servidor.
+    String? reasonCode,
     bool queueOnNetworkFailure = true,
   }) async {
     try {
@@ -1956,6 +1962,7 @@ class InventoryRepository {
           'p_cost_per_unit': costPerUnit,
           'p_notes': notes,
           'p_reference_type': referenceType,
+          'p_reference_id': ?referenceId,
         },
       );
     } catch (e) {
@@ -1970,6 +1977,8 @@ class InventoryRepository {
           costPerUnit: costPerUnit,
           notes: notes,
           referenceType: referenceType,
+          referenceId: referenceId,
+          reasonCode: reasonCode,
         );
         return;
       }
@@ -1985,8 +1994,15 @@ class InventoryRepository {
   ///
   /// El motivo viaja DOS veces: como `reason_code` (reportes por causa) y como
   /// prefijo de la nota (`Vencido — …`), para que se lea aunque la función
-  /// nueva no esté desplegada. Sin la función, o sin red, cae a
-  /// [recordMovement] — que además encola offline.
+  /// nueva no esté desplegada. Con [reasonLabel] vacío, [notes] se manda tal
+  /// cual (la réplica de la cola ya trae la nota armada).
+  ///
+  /// [operationId] es la llave de ESTA salida (una por diálogo, la misma en
+  /// cada reintento): el servidor la guarda como `reference_id` y, si le
+  /// llega otra vez, devuelve la salida que ya quedó en vez de restar dos
+  /// veces. Por eso, ante un error de RED no se intenta otro camino en línea:
+  /// el guardado pudo haber quedado y solo se perdió la respuesta. Se encola
+  /// con la misma llave y la réplica lo resuelve sin duplicar.
   Future<void> recordOutflow({
     required String businessId,
     required String warehouseId,
@@ -1996,9 +2012,14 @@ class InventoryRepository {
     required String reasonLabel,
     String? notes,
     double? costPerUnit,
+    String? operationId,
+    bool queueOnNetworkFailure = true,
   }) async {
     final detail = notes?.trim() ?? '';
-    final fullNotes = detail.isEmpty ? reasonLabel : '$reasonLabel — $detail';
+    final label = reasonLabel.trim();
+    final fullNotes = label.isEmpty
+        ? detail
+        : (detail.isEmpty ? label : '$label — $detail');
     try {
       await _client.rpc(
         InventoryQueries.rpcRecordOutflow,
@@ -2010,24 +2031,47 @@ class InventoryRepository {
           'p_reason_code': reasonCode,
           'p_notes': fullNotes,
           'p_cost_per_unit': costPerUnit,
+          'p_reference_id': ?operationId,
         },
       );
     } catch (e) {
       final missing = e is PostgrestException &&
           (e.code == 'PGRST202' || e.code == '42883');
-      if (!missing && !_isConnectivityError(e) && _connectivity.isConnected) {
-        rethrow;
+      if (missing) {
+        // Servidor sin la función: el `waste` de siempre, con la misma llave
+        // y el motivo en la nota.
+        await recordMovement(
+          businessId: businessId,
+          warehouseId: warehouseId,
+          itemId: itemId,
+          movementType: 'waste',
+          quantity: quantity,
+          costPerUnit: costPerUnit,
+          notes: fullNotes,
+          referenceType: 'manual_outflow',
+          referenceId: operationId,
+          reasonCode: reasonCode,
+          queueOnNetworkFailure: queueOnNetworkFailure,
+        );
+        return;
       }
-      await recordMovement(
-        businessId: businessId,
-        warehouseId: warehouseId,
-        itemId: itemId,
-        movementType: 'waste',
-        quantity: quantity,
-        costPerUnit: costPerUnit,
-        notes: fullNotes,
-        referenceType: 'manual_outflow',
-      );
+      if (!queueOnNetworkFailure) rethrow;
+      if (!_connectivity.isConnected || _isConnectivityError(e)) {
+        await _enqueueMovementOffline(
+          businessId: businessId,
+          warehouseId: warehouseId,
+          itemId: itemId,
+          movementType: 'waste',
+          quantity: quantity,
+          costPerUnit: costPerUnit,
+          notes: fullNotes,
+          referenceType: 'manual_outflow',
+          referenceId: operationId,
+          reasonCode: reasonCode,
+        );
+        return;
+      }
+      rethrow;
     }
   }
 
@@ -2063,6 +2107,8 @@ class InventoryRepository {
     double? costPerUnit,
     String? notes,
     String? referenceType,
+    String? referenceId,
+    String? reasonCode,
   }) async {
     final occurredAt = DateTime.now().toUtc();
     await _offlinePos.enqueueAction(
@@ -2076,6 +2122,8 @@ class InventoryRepository {
         'cost_per_unit': costPerUnit,
         'notes': notes,
         'reference_type': referenceType,
+        'reference_id': ?referenceId,
+        'reason_code': ?reasonCode,
         'occurred_at': occurredAt.toIso8601String(),
       },
     );

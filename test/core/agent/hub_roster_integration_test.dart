@@ -37,6 +37,7 @@ void main() {
   late MobilePrintAgent agent;
   late HubClient client;
   late _Auth auth;
+  var cloudAvailable = true;
   const url = 'http://127.0.0.1:47312';
 
   setUpAll(() async {
@@ -47,6 +48,7 @@ void main() {
     agent = MobilePrintAgent(
       hubTokens: HubLanTokenService(readToken: (_) async => token),
       offlineAuth: auth,
+      cloudAvailable: () => cloudAvailable,
     );
     expect(await agent.start(port: 47312), isNotNull);
     client = HubClient(businessToken: (_) async => token);
@@ -56,11 +58,41 @@ void main() {
     await storage.write(StorageKeys.activeBusinessId, 'b');
     await HubConfigService().setDeviceRole('b', HubDeviceRole.hub);
     auth.stale = false;
+    cloudAvailable = true;
   });
   tearDownAll(() async {
     client.dispose();
     await agent.stop();
   });
+
+  test(
+    'known WAN outage rejects cloud proxies without a cloud dependency',
+    () async {
+      cloudAvailable = false;
+      for (final path in ['open-table', 'add-item']) {
+        final response = await http.post(
+          Uri.parse('$url/hub/proxy/$path'),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'table_id': 't',
+            'order_id': 'o',
+            'menu_item_id': 'p',
+          }),
+        );
+        expect(response.statusCode, 503);
+        expect(response.body, contains('HUB_WAN_OFFLINE'));
+      }
+      // Local discovery and cached data remain available despite WAN failure.
+      expect(
+        await client.findReachableHub(businessId: 'b', configuredUrl: url),
+        url,
+      );
+      expect(await client.getRoster(url, businessId: 'b'), isNotNull);
+    },
+  );
 
   test(
     'client downloads PINs from the real local server without cloud calls',

@@ -91,6 +91,7 @@ class OfflineCachePruner {
     'hub_oplog_', // op-log del Hub (legacy en SP)
     'mp_offline_roster_', // roster: sin él no hay login offline
     'retail_carts_index_',
+    'offline_payment_intent_', // cobro a medias: retomarlo evita cobrar doble
   ];
 
   /// Borra los caches de lectura de todos los negocios menos [activeBusinessId].

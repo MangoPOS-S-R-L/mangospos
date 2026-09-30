@@ -132,6 +132,16 @@ class SalesQueries {
   /// Agregar item del menú
   static const String rpcAddItemFromMenu = 'fn_add_item_from_menu';
 
+  /// Alta idempotente por client_op_id (20260929_0001).
+  static const String rpcAddItemFromMenuIdempotent =
+      'fn_add_item_from_menu_idempotent';
+  static const String rpcAddOfferDealIdempotent =
+      'fn_add_offer_deal_idempotent';
+
+  /// Reemplazo atómico de los extras de un ítem (20260929_0001).
+  static const String rpcReplaceOrderItemModifiers =
+      'fn_replace_order_item_modifiers';
+
   /// Actualizar cantidad de item
   static const String rpcUpdateItemQty = 'fn_update_item_qty';
 
@@ -187,6 +197,12 @@ class SalesQueries {
 
   /// Procesar pago
   static const String rpcProcessPayment = 'fn_process_payment_v3';
+
+  /// Candado de cobro por cuenta entre equipos (20260929_0002).
+  static const String rpcProcessPaymentAttempt =
+      'fn_process_payment_v3_attempt';
+  static const String rpcPaymentAttemptAcquire = 'fn_payment_attempt_acquire';
+  static const String rpcPaymentAttemptRelease = 'fn_payment_attempt_release';
 
   /// Generar NCF
   static const String rpcGenerateNCF = 'generate_ncf';

@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'order_item_snapshot.dart';
+import 'payment_intent_journal.dart';
 
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
@@ -159,8 +160,7 @@ class OfflinePosService {
   /// ese item se reportan como conflicto visible al cashier.
   static bool _isItemMissingError(Object e) {
     final msg = e.toString().toLowerCase();
-    return msg.contains('no se pudo resolver el item') ||
-        msg.contains('pgrst116') ||
+    return msg.contains('pgrst116') ||
         msg.contains('no rows') ||
         msg.contains('not found');
   }
@@ -197,6 +197,18 @@ class OfflinePosService {
   /// mostrándose al usuario en vez de encolarse a ciegas.
   static bool isTransportError(Object e) => _isConnectivityError(e);
 
+  /// client_op_id del alta de ítem (20260929_0001). Las acciones nuevas lo
+  /// traen desde el toque: es el mismo que usó el intento online o el proxy
+  /// del Hub. Las encoladas por builds anteriores no lo tienen: se deriva uno
+  /// DETERMINISTA del id de la acción, así dos replays de la misma acción (la
+  /// app murió entre la RPC y el guardado del mapping) no crean dos ítems.
+  static String addItemClientOpId(Map<String, dynamic> action) {
+    final explicit = action['client_op_id']?.toString();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final actionId = action['op_id'] ?? action['id'];
+    return _uuid.v5(Namespace.url.value, 'mangopos:add_item:$actionId');
+  }
+
   Future<StorageService> get _storage async => StorageService.getInstance();
 
   /// Cifrado en reposo para snapshots de órdenes (datos sensibles: montos,
@@ -206,11 +218,11 @@ class OfflinePosService {
   /// Seam del Hub Local (F3b-3). Cuando el terminal está en modo `hub`,
   /// `HubModeController` setea este uploader (un closure que hace
   /// `HubClient.postOp` contra el Hub alcanzable). Si está seteado,
-  /// `enqueueAction` envía la op al Hub en vez de a la cola local; si el Hub
-  /// no responde (devuelve null o lanza), cae a la cola local — el
-  /// comportamiento de siempre. Null en modo cloud/solo → cero cambio.
+  /// `enqueueAction` persiste primero en la cola local y dispara el reenvio
+  /// al Hub. Sin confirmacion conserva el mismo ID para el siguiente intento.
+  /// Null en modo cloud/solo desactiva el reenvio por LAN.
   Future<int?> Function(String businessId, Map<String, dynamic> op)?
-      _hubUploader;
+  _hubUploader;
 
   /// Op-log del Hub (F3b-3b). Cuando ESTE dispositivo es el Hub, el uplink
   /// drena este log a Supabase. Misma key/SP que el agente, así que comparten
@@ -247,8 +259,7 @@ class OfflinePosService {
   /// Activa/desactiva el enrutado al Hub. Lo llama HubModeController según el
   /// modo. Pasar null vuelve al encolado local puro.
   void setHubUploader(
-    Future<int?> Function(String businessId, Map<String, dynamic> op)?
-        uploader,
+    Future<int?> Function(String businessId, Map<String, dynamic> op)? uploader,
   ) {
     _hubUploader = uploader;
   }
@@ -258,7 +269,7 @@ class OfflinePosService {
   /// clientes suscritos igual que las que llegan por POST /hub/ops → las cajas
   /// cliente ven en vivo también las mesas que abre el propio Hub.
   void Function(String businessId, Map<String, dynamic> opWithSeq)?
-      _hubBroadcaster;
+  _hubBroadcaster;
 
   void setHubBroadcaster(
     void Function(String businessId, Map<String, dynamic> opWithSeq)? cb,
@@ -296,9 +307,8 @@ class OfflinePosService {
 
   /// Manda una op ya aplicada al Hub de respaldo configurado, si lo hay.
   ///
-  /// Es lo que evita que una venta viva en un solo disco: cuando el Hub acepta
-  /// una op, el terminal NO la encola local (ver [enqueueAction]). Si ese
-  /// equipo se rompe antes de subir a Supabase, se pierde y de todas las cajas.
+  /// Conserva una segunda copia activa del log. La outbox del terminal retiene
+  /// su confirmacion, pero no es una autoridad de recuperacion del Hub.
   ///
   /// El respaldo GUARDA pero no sube nada mientras esté pasivo, así que el
   /// uplink sigue teniendo un solo dueño. Eso es lo que hace segura la
@@ -331,10 +341,7 @@ class OfflinePosService {
   /// vuelve a subir a Supabase (evita doble escritura). Se normaliza para que
   /// lleve `id`/`fingerprint` (dedup). Best-effort: nunca lanza — el espejo al
   /// Hub jamás debe afectar la mutación real del cajero.
-  Future<void> publishHostOp(
-    String businessId,
-    Map<String, dynamic> op,
-  ) async {
+  Future<void> publishHostOp(String businessId, Map<String, dynamic> op) async {
     try {
       final normalized = _normalizeAction({...op, 'hub_applied': true});
       await appendToLocalHubOpLog(businessId, normalized);
@@ -423,7 +430,7 @@ class OfflinePosService {
           await storage.readList(_completedOpsKey(businessId)) ?? const [];
       final legacyFps =
           await storage.readList(_completedFingerprintsKey(businessId)) ??
-              const [];
+          const [];
       if (legacyQueue.isEmpty && legacyOps.isEmpty && legacyFps.isEmpty) {
         return;
       }
@@ -604,7 +611,7 @@ class OfflinePosService {
   /// entrada corrupta se ignora. Devuelve tableId + conteo de ítems + total
   /// del borrador para pintar la tarjeta.
   Future<List<({String tableId, int itemsCount, double total})>>
-      listPendingTableDrafts(String businessId) async {
+  listPendingTableDrafts(String businessId) async {
     final storage = await _storage;
     final prefix = 'offline_snapshot_${businessId}_';
     final keys = await storage.getKeysByPrefix(prefix);
@@ -661,11 +668,7 @@ class OfflinePosService {
         if (!isLocalDraft && !hasPendingContent) continue;
         final items = (state['items'] as List?) ?? const [];
         final total = (order['total'] as num?)?.toDouble() ?? 0;
-        result.add((
-          tableId: tableId,
-          itemsCount: items.length,
-          total: total,
-        ));
+        result.add((tableId: tableId, itemsCount: items.length, total: total));
       } catch (_) {
         // best-effort: ignorar snapshots corruptos.
       }
@@ -696,7 +699,7 @@ class OfflinePosService {
 
   /// Lee el índice de carritos retail. Null si no existe o el descifrado falla.
   Future<({List<Map<String, dynamic>> carts, String? activeSlotId})?>
-      loadRetailCartsIndex({required String businessId}) async {
+  loadRetailCartsIndex({required String businessId}) async {
     final storage = await _storage;
     final raw = await storage.read(_retailCartsIndexKey(businessId));
     if (raw == null || raw.isEmpty) return null;
@@ -799,26 +802,100 @@ class OfflinePosService {
     // fingerprint tanto para la cola local como para la idempotencia del Hub.
     final normalized = _normalizeAction(enriched);
 
-    // F3b-3: en modo hub, enrutamos la op al Hub Local en vez de a la cola
-    // local. Si el Hub la acepta (seq != null), terminamos: el Hub es ahora
-    // el dueño de esa op y su uplink la subirá a Supabase. Si el Hub no
-    // responde, caemos a la cola local — exactamente el comportamiento de
-    // modo solo. El uploader es null en cloud/solo → este bloque no corre.
-    final uploader = _hubUploader;
-    if (uploader != null) {
-      try {
-        final seq = await uploader(businessId, normalized);
-        if (seq != null) return;
-      } catch (_) {
-        // Hub inalcanzable o error → fallback a cola local.
-      }
-    }
-
+    // Persist before network I/O: a lost acknowledgement must retain the same
+    // operation ID, and a crash must not erase an accepted user action.
     await _withQueueMutation(businessId, () async {
       final current = await _readQueue(businessId);
       current.add(normalized);
       await _writeQueue(businessId, _compactQueue(current));
     });
+    if (_hubUploader != null) {
+      unawaited(
+        flushPendingToHub(businessId).then<void>(
+          (_) {},
+          onError: (Object e, StackTrace _) {
+            debugPrint('[HubOutbox] reenvio pendiente: $e');
+          },
+        ),
+      );
+    }
+  }
+
+  /// LAN-only drain, sharing the cloud replay lock. Never move an operation
+  /// already attempted against cloud to another replay authority.
+  Future<OfflineQueueSyncResult> flushPendingToHub(String businessId) {
+    final active = _queueSyncInFlight[businessId];
+    if (active != null) return active;
+    final run = _flushPendingToHubOnce(businessId).whenComplete(() {
+      _queueSyncInFlight.remove(businessId);
+    });
+    _queueSyncInFlight[businessId] = run;
+    return run;
+  }
+
+  Future<OfflineQueueSyncResult> _flushPendingToHubOnce(
+    String businessId,
+  ) async {
+    final uploader = _hubUploader;
+    if (uploader == null) return const OfflineQueueSyncResult();
+    final queue = await _readQueue(businessId);
+    var completed = 0;
+    String? error;
+    final cloudOwnedOrders = queue
+        .where(
+          (action) =>
+              ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
+              (action['status'] == _statusProcessing &&
+                  action['hub_delivery_started'] != true),
+        )
+        .map((action) => action['order_id']?.toString())
+        .whereType<String>()
+        .toSet();
+    for (final action in queue) {
+      if (_isCompleted(action)) continue;
+      if (!identical(uploader, _hubUploader)) break;
+      // Do not transfer a partially replayed order to a different authority.
+      // Independent new orders can still operate through LAN.
+      if (_isDead(action) ||
+          cloudOwnedOrders.contains(action['order_id']?.toString()) ||
+          ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
+          (action['status'] == _statusProcessing &&
+              action['hub_delivery_started'] != true)) {
+        error = 'Hay operaciones previas de nube pendientes de conciliar.';
+        continue;
+      }
+      final claimed = await _withQueueMutation(businessId, () async {
+        final current = await _readQueue(businessId);
+        final index = current.indexWhere((a) => a['id'] == action['id']);
+        if (index < 0 || _isCompleted(current[index])) return null;
+        final next = _normalizeAction(current[index])
+          ..['hub_delivery_started'] = true
+          ..['status'] = _statusPending;
+        await _upsertActionUnlocked(businessId, next);
+        return next;
+      });
+      if (claimed == null) continue;
+      try {
+        final seq = await uploader(businessId, claimed);
+        if (seq == null) break;
+        await _upsertAction(businessId, {
+          ...claimed,
+          'status': _statusCompleted,
+          'hub_seq': seq,
+          'completed_at': DateTime.now().toIso8601String(),
+        });
+        completed++;
+      } catch (e) {
+        error = FriendlyError.from(e);
+        break;
+      }
+    }
+    return OfflineQueueSyncResult(
+      completed: completed,
+      processed: completed,
+      pending: await pendingActionsCount(businessId),
+      lastError: error,
+    );
   }
 
   Future<void> enqueuePrintJob({
@@ -866,7 +943,9 @@ class OfflinePosService {
     final voidedOrders = <String>{};
 
     for (final action in queue) {
-      if (_isSettled(action)) continue; // ya sincronizada → ya está en el snapshot
+      if (_isSettled(action)) {
+        continue; // ya sincronizada → ya está en el snapshot
+      }
 
       final when = _actionLocalTime(action);
       if (when == null || when.isBefore(dayStart) || !when.isBefore(dayEnd)) {
@@ -886,7 +965,8 @@ class OfflinePosService {
           }
           break;
         case 'add_item':
-          itemsSold += (action['qty'] as num?)?.toDouble() ??
+          itemsSold +=
+              (action['qty'] as num?)?.toDouble() ??
               (action['quantity'] as num?)?.toDouble() ??
               0;
           if (orderId != null && orderId.isNotEmpty) touchedOrders.add(orderId);
@@ -941,9 +1021,7 @@ class OfflinePosService {
   /// Lista TODAS las acciones no-completadas (pending/processing/failed/
   /// dead) en orden FIFO para el visor de la cola en la UI: tipo, payload,
   /// intentos, `last_error` y estado. Copias inmutables.
-  Future<List<Map<String, dynamic>>> unsettledActions(
-    String businessId,
-  ) async {
+  Future<List<Map<String, dynamic>>> unsettledActions(String businessId) async {
     final queue = await _readQueue(businessId);
     return queue
         .where((a) => !_isCompleted(a))
@@ -959,18 +1037,20 @@ class OfflinePosService {
     if (businessId.isEmpty) return 0;
     final queue = await _readQueue(businessId);
     var revived = 0;
-    final next = queue.map((action) {
-      if (!_isDead(action)) return action;
-      revived++;
-      final reset = Map<String, dynamic>.from(action)
-        ..['status'] = _statusPending
-        ..['attempts'] = 0
-        ..['last_error'] = null;
-      reset.remove('next_retry_at');
-      reset.remove('dead_at');
-      reset.remove('failed_at');
-      return reset;
-    }).toList(growable: false);
+    final next = queue
+        .map((action) {
+          if (!_isDead(action)) return action;
+          revived++;
+          final reset = Map<String, dynamic>.from(action)
+            ..['status'] = _statusPending
+            ..['attempts'] = 0
+            ..['last_error'] = null;
+          reset.remove('next_retry_at');
+          reset.remove('dead_at');
+          reset.remove('failed_at');
+          return reset;
+        })
+        .toList(growable: false);
     if (revived > 0) {
       await _writeQueue(businessId, next);
     }
@@ -985,8 +1065,7 @@ class OfflinePosService {
   Future<int> clearDeadActions(String businessId) async {
     if (businessId.isEmpty) return 0;
     final queue = await _readQueue(businessId);
-    final survivors =
-        queue.where((a) => !_isDead(a)).toList(growable: false);
+    final survivors = queue.where((a) => !_isDead(a)).toList(growable: false);
     final removed = queue.length - survivors.length;
     if (removed > 0) {
       await _writeQueue(businessId, survivors);
@@ -1030,10 +1109,12 @@ class OfflinePosService {
     // Cola: fuera todas las acciones pendientes/failed/dead de esa orden.
     try {
       final queue = await _readQueue(businessId);
-      final survivors = queue.where((a) {
-        if (_isCompleted(a)) return true;
-        return a['order_id']?.toString() != localOrderId;
-      }).toList(growable: false);
+      final survivors = queue
+          .where((a) {
+            if (_isCompleted(a)) return true;
+            return a['order_id']?.toString() != localOrderId;
+          })
+          .toList(growable: false);
       if (survivors.length != queue.length) {
         await _writeQueue(businessId, survivors);
       }
@@ -1050,10 +1131,10 @@ class OfflinePosService {
         try {
           final payload = await _readSnapshot(storage, key);
           if (payload == null) continue;
-          final state =
-              Map<String, dynamic>.from(payload['state'] as Map? ?? {});
-          final order =
-              Map<String, dynamic>.from(state['order'] as Map? ?? {});
+          final state = Map<String, dynamic>.from(
+            payload['state'] as Map? ?? {},
+          );
+          final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
           if (order['id']?.toString() != localOrderId) continue;
           await storage.delete(key);
         } catch (_) {
@@ -1136,6 +1217,8 @@ class OfflinePosService {
 
     // 2. Snapshots de órdenes activas (montos, items, cuentas).
     await storage.deleteByPrefix('offline_snapshot_${businessId}_');
+    // 2b. Cobros divididos a medias (montos, métodos, NCF offline).
+    await const PaymentIntentJournal().deleteForBusiness(businessId);
 
     // 3. Mappings local→remoto y cola de impresión.
     await storage.delete(_orderMapKey(businessId));
@@ -1189,6 +1272,7 @@ class OfflinePosService {
     required CashierRepository cashierRepository,
     required bool force,
   }) async {
+    if (_hubUploader != null) return _flushPendingToHubOnce(businessId);
     final queue = await _readQueue(businessId);
     if (queue.isEmpty) {
       // Sin acciones pendientes → toda comanda offline ya se re-despachó
@@ -1206,11 +1290,12 @@ class OfflinePosService {
     final conflicts = <OfflineSyncConflict>[];
 
     final completedOps = await _readCompletedOps(businessId);
-    final completedFingerprints =
-        await _readCompletedFingerprints(businessId);
+    final completedFingerprints = await _readCompletedFingerprints(businessId);
+    final blockedOrders = <String>{};
 
     for (var i = 0; i < queue.length; i++) {
       final action = queue[i];
+      final orderId = action['order_id']?.toString();
       final actionId = action['id']?.toString();
       final fingerprint = action['fingerprint']?.toString();
       // Las completadas nunca se reprocesan. Las dead-letter no reintentan
@@ -1218,7 +1303,17 @@ class OfflinePosService {
       // "Sincronizar ahora") se les da otra oportunidad: el cajero pidió
       // sincronizar la cola completa, no solo lo pendiente.
       if (_isCompleted(action)) continue;
-      if (!force && _isDead(action)) continue;
+      // The Hub may have committed despite a lost reply. Only resend there,
+      // never replay this operation independently against the cloud.
+      if (action['hub_delivery_started'] == true) {
+        if (orderId != null) blockedOrders.add(orderId);
+        skipped++;
+        continue;
+      }
+      if (!force && _isDead(action)) {
+        if (orderId != null) blockedOrders.add(orderId);
+        continue;
+      }
       if ((actionId != null && completedOps.contains(actionId)) ||
           (_fingerprintWasCompleted(fingerprint, completedFingerprints))) {
         queue[i] = Map<String, dynamic>.from(action)
@@ -1229,6 +1324,11 @@ class OfflinePosService {
         continue;
       }
       if (!force && !_isReadyToRetry(action)) {
+        if (orderId != null) blockedOrders.add(orderId);
+        skipped++;
+        continue;
+      }
+      if (orderId != null && blockedOrders.contains(orderId)) {
         skipped++;
         continue;
       }
@@ -1239,9 +1339,10 @@ class OfflinePosService {
         final current = await _readQueue(businessId);
         final index = current.indexWhere((a) => a['id'] == actionId);
         if (index < 0 || _isCompleted(current[index])) return null;
-        final claimed = Map<String, dynamic>.from(current[index])
-          ..['status'] = _statusProcessing
-          ..['processing_started_at'] = DateTime.now().toIso8601String();
+        final claimed =
+            _normalizeAction(Map<String, dynamic>.from(current[index]))
+              ..['status'] = _statusProcessing
+              ..['processing_started_at'] = DateTime.now().toIso8601String();
         await _upsertActionUnlocked(businessId, claimed);
         return claimed;
       });
@@ -1273,10 +1374,7 @@ class OfflinePosService {
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
-          await _markOpCompleted(
-            businessId: businessId,
-            opId: actionId,
-          );
+          await _markOpCompleted(businessId: businessId, opId: actionId);
         }
         final fingerprint = processing['fingerprint']?.toString();
         if (fingerprint != null && fingerprint.isNotEmpty) {
@@ -1291,11 +1389,13 @@ class OfflinePosService {
         // Tratamos como completed (idempotente — el estado deseado ya
         // existe o la accion no tiene sentido) pero anotamos el conflicto
         // para que el cashier lo vea en el snackbar post-sync.
-        conflicts.add(OfflineSyncConflict(
-          actionType: processing['type']?.toString() ?? 'unknown',
-          actionId: actionId,
-          reason: skip.reason,
-        ));
+        conflicts.add(
+          OfflineSyncConflict(
+            actionType: processing['type']?.toString() ?? 'unknown',
+            actionId: actionId,
+            reason: skip.reason,
+          ),
+        );
         final done = Map<String, dynamic>.from(processing)
           ..['status'] = _statusCompleted
           ..['completed_at'] = DateTime.now().toIso8601String()
@@ -1304,10 +1404,7 @@ class OfflinePosService {
         queue[i] = done;
         completed++;
         if (actionId != null && actionId.isNotEmpty) {
-          await _markOpCompleted(
-            businessId: businessId,
-            opId: actionId,
-          );
+          await _markOpCompleted(businessId: businessId, opId: actionId);
         }
         final fingerprint = processing['fingerprint']?.toString();
         if (fingerprint != null && fingerprint.isNotEmpty) {
@@ -1344,6 +1441,7 @@ class OfflinePosService {
         }
         queue[i] = updated;
         failed++;
+        if (orderId != null) blockedOrders.add(orderId);
         // Solo cortar si fue por conectividad — todas las siguientes
         // van a fallar por lo mismo. Errores logicos (constraint, RPC
         // reject, item ya borrado por otro terminal) los saltamos para
@@ -1466,9 +1564,7 @@ class OfflinePosService {
         case HubUplinkDecision.skipRetryLater:
           return const OfflineQueueSyncResult();
         case HubUplinkDecision.stepDown:
-          return OfflineQueueSyncResult(
-            leaseLostToDeviceId: gate.holder ?? '',
-          );
+          return OfflineQueueSyncResult(leaseLostToDeviceId: gate.holder ?? '');
       }
     }
 
@@ -1479,6 +1575,7 @@ class OfflinePosService {
     String? lastError;
     final conflicts = <OfflineSyncConflict>[];
 
+    final blockedOrders = <String>{};
     for (final op in ops) {
       final opId = op['op_id']?.toString() ?? op['id']?.toString();
       final fingerprint = op['fingerprint']?.toString();
@@ -1495,6 +1592,8 @@ class OfflinePosService {
         completed++;
         continue;
       }
+      final orderId = op['order_id']?.toString();
+      if (orderId != null && blockedOrders.contains(orderId)) continue;
       processed++;
       try {
         final mapped = await _replayAction(
@@ -1513,22 +1612,27 @@ class OfflinePosService {
         }
         if (fingerprint != null && fingerprint.isNotEmpty) {
           await _markFingerprintCompleted(
-              businessId: businessId, fingerprint: fingerprint);
+            businessId: businessId,
+            fingerprint: fingerprint,
+          );
         }
       } on _OfflineSyncSkip catch (skip) {
         // Conflicto cross-terminal: la op ya no aplica (item borrado, etc.).
         // Idempotente: la marcamos completada y reportamos.
-        conflicts.add(OfflineSyncConflict(
-          actionType: op['type']?.toString() ?? 'unknown',
-          actionId: opId,
-          reason: skip.reason,
-        ));
+        conflicts.add(
+          OfflineSyncConflict(
+            actionType: op['type']?.toString() ?? 'unknown',
+            actionId: opId,
+            reason: skip.reason,
+          ),
+        );
         completed++;
         if (opId != null && opId.isNotEmpty) {
           await _markOpCompleted(businessId: businessId, opId: opId);
         }
       } catch (e) {
         failed++;
+        if (orderId != null) blockedOrders.add(orderId);
         lastError = FriendlyError.from(e);
         // Si volvió a caer la red, cortamos: el resto fallaría igual y se
         // reintenta en el próximo uplink (los completados se saltan).
@@ -1576,7 +1680,8 @@ class OfflinePosService {
     // Se manda cuando algo cambió, y al menos cada minuto aunque no: si un ack
     // se perdió (respaldo apagado un rato), la poda del siguiente lo corrige.
     final now = DateTime.now();
-    final ackDue = _lastBackupAckAt == null ||
+    final ackDue =
+        _lastBackupAckAt == null ||
         now.difference(_lastBackupAckAt!) >= _backupAckEvery;
     if (ackedOpIds.isNotEmpty && (processed > 0 || pruned || ackDue)) {
       _lastBackupAckAt = now;
@@ -1812,7 +1917,7 @@ class OfflinePosService {
       final storage = await _storage;
       final raw =
           await storage.readList(_completedFingerprintsKey(businessId)) ??
-              const [];
+          const [];
       return raw.map((e) => e.toString()).toSet();
     }
     return _queueDao!.readCompletedFingerprints(businessId);
@@ -1882,8 +1987,14 @@ class OfflinePosService {
       'queued_at': action['queued_at'] ?? DateTime.now().toIso8601String(),
       ...action,
     };
+    if (action['type'] == 'kds_item_status' &&
+        const {'preparing', 'ready', 'served'}.contains(action['status'])) {
+      normalized['kds_status'] = action['kds_status'] ?? action['status'];
+      normalized['status'] = _statusPending;
+    }
     normalized['fingerprint'] =
-        action['fingerprint']?.toString() ?? _buildActionFingerprint(normalized);
+        action['fingerprint']?.toString() ??
+        _buildActionFingerprint(normalized);
     return normalized;
   }
 
@@ -1909,7 +2020,9 @@ class OfflinePosService {
       // están en proceso: no se fusionan ni se cancelan con acciones
       // nuevas. Una dead-letter no debe absorber un add nuevo del mismo
       // item temporal.
-      if (_isSettled(action) || action['status'] == _statusProcessing) {
+      if (_isSettled(action) ||
+          action['status'] == _statusProcessing ||
+          action['hub_delivery_started'] == true) {
         result.add(action);
         continue;
       }
@@ -1923,6 +2036,9 @@ class OfflinePosService {
           (entry) =>
               !_isSettled(entry) &&
               entry['status'] != _statusProcessing &&
+              entry['hub_delivery_started'] != true &&
+              entry['item_snapshot'] == null &&
+              ((entry['attempts'] as num?)?.toInt() ?? 0) == 0 &&
               entry['type'] == 'add_item' &&
               entry['item_id']?.toString() == itemId,
         );
@@ -1957,24 +2073,30 @@ class OfflinePosService {
       }
 
       int existingIndex = -1;
-      if (type == 'mark_order_takeout' && orderId != null && orderId.isNotEmpty) {
+      if (type == 'mark_order_takeout' &&
+          orderId != null &&
+          orderId.isNotEmpty) {
         existingIndex = result.lastIndexWhere(
           (entry) =>
               !_isSettled(entry) &&
               entry['status'] != _statusProcessing &&
+              entry['hub_delivery_started'] != true &&
               entry['type'] == 'mark_order_takeout' &&
               entry['order_id']?.toString() == orderId,
         );
       } else if ({
-        'update_item_quantity',
-        'update_item_notes',
-        'toggle_item_takeout',
-        'move_item_to_check',
-      }.contains(type) && itemId != null && itemId.isNotEmpty) {
+            'update_item_quantity',
+            'update_item_notes',
+            'toggle_item_takeout',
+            'move_item_to_check',
+          }.contains(type) &&
+          itemId != null &&
+          itemId.isNotEmpty) {
         existingIndex = result.lastIndexWhere(
           (entry) =>
               !_isSettled(entry) &&
               entry['status'] != _statusProcessing &&
+              entry['hub_delivery_started'] != true &&
               entry['type'] == type &&
               entry['item_id']?.toString() == itemId,
         );
@@ -2142,8 +2264,8 @@ class OfflinePosService {
           businessId: businessId,
           warehouseId: action['warehouse_id']?.toString() ?? '',
           itemId: action['item_id']?.toString() ?? '',
-          countedQuantity:
-              ((action['counted_quantity'] ?? 0) as num).toDouble(),
+          countedQuantity: ((action['counted_quantity'] ?? 0) as num)
+              .toDouble(),
           reasonCode: action['reason_code']?.toString() ?? 'other',
           notes: action['notes']?.toString(),
           costPerUnit: action['cost_per_unit'] == null
@@ -2152,6 +2274,32 @@ class OfflinePosService {
         );
         return null;
       case 'inventory_movement':
+        final movementCost = action['cost_per_unit'] == null
+            ? null
+            : (action['cost_per_unit'] as num).toDouble();
+        final outflowReason = action['reason_code']?.toString();
+        final operationId = action['reference_id']?.toString();
+        if (action['reference_type']?.toString() == 'manual_outflow' &&
+            outflowReason != null &&
+            outflowReason.isNotEmpty) {
+          // Salida / merma: por la función de salidas, con su motivo y su
+          // llave. Si la réplica ya había llegado y solo se perdió la
+          // respuesta, el servidor la reconoce y no resta dos veces.
+          await inventoryRepository.recordOutflow(
+            queueOnNetworkFailure: false,
+            businessId: businessId,
+            warehouseId: action['warehouse_id']?.toString() ?? '',
+            itemId: action['item_id']?.toString() ?? '',
+            quantity: ((action['quantity'] ?? 0) as num).toDouble(),
+            reasonCode: outflowReason,
+            // La nota ya viene armada ("Vencido — …").
+            reasonLabel: '',
+            notes: action['notes']?.toString(),
+            costPerUnit: movementCost,
+            operationId: operationId,
+          );
+          return null;
+        }
         await inventoryRepository.recordMovement(
           queueOnNetworkFailure: false,
           businessId: businessId,
@@ -2159,11 +2307,10 @@ class OfflinePosService {
           itemId: action['item_id']?.toString() ?? '',
           movementType: action['movement_type']?.toString() ?? 'adjustment_out',
           quantity: ((action['quantity'] ?? 0) as num).toDouble(),
-          costPerUnit: action['cost_per_unit'] == null
-              ? null
-              : (action['cost_per_unit'] as num).toDouble(),
+          costPerUnit: movementCost,
           notes: action['notes']?.toString(),
           referenceType: action['reference_type']?.toString(),
+          referenceId: operationId,
         );
         return null;
       case 'open_table':
@@ -2190,25 +2337,27 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          final rawStatus = action['status']?.toString() ?? 'preparing';
-          final status = rawStatus == 'served' ? 'ready' : rawStatus;
-          final updates = <String, dynamic>{'status': status};
-          // toUtc: sin él, Dart manda hora local SIN offset y Postgres la
-          // interpreta como UTC → el timestamp queda 4h en el pasado (RD) y
-          // "Completados hoy" (día local de ready_at) pierde el ítem.
-          if (status == 'preparing') {
-            updates['started_at'] = DateTime.now().toUtc().toIso8601String();
-          } else if (status == 'ready') {
-            updates['ready_at'] = DateTime.now().toUtc().toIso8601String();
+          final rawStatus = (action['kds_status'] ?? action['status'])
+              ?.toString();
+          if (!const {'preparing', 'ready', 'served'}.contains(rawStatus)) {
+            throw StateError(
+              'OFFLINE_KDS_STATUS_REQUIRED: falta el estado de cocina.',
+            );
           }
-          await Supabase.instance.client
-              .from('order_items')
-              .update(updates)
-              .eq('id', kdsItemId);
+          final status = rawStatus == 'served' ? 'ready' : rawStatus;
+          await salesRepository.updateOfflineKitchenItemStatus(
+            itemId: kdsItemId,
+            status: status!,
+            at: DateTime.tryParse('${action['queued_at']}') ?? DateTime.now(),
+          );
           return kdsItemId;
         } catch (e) {
-          debugPrint('[sync] kds_item_status replay falló (ignorado): $e');
-          return null;
+          if (_isItemMissingError(e)) {
+            throw _OfflineSyncSkip(
+              'El item de cocina ya no existe en el servidor.',
+            );
+          }
+          rethrow;
         }
       case 'add_item':
         final resolvedOrderId = await _resolveOrderIdForAction(
@@ -2216,15 +2365,33 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
-        final createdItemId = await salesRepository.addItemFromMenu(
-          orderId: resolvedOrderId,
-          menuItemId: action['menu_item_id']?.toString() ?? '',
-          quantity: ((action['qty'] ?? 1) as num).toDouble(),
-          checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
-          isTakeout: action['takeout'] == true,
-          notes: action['notes']?.toString(),
-        );
         final localItemId = action['item_id']?.toString();
+        final itemMap = await _readItemMap(businessId);
+        final existingItemId = itemMap[localItemId]?.toString();
+        var itemExists = true;
+        final String createdItemId;
+        if (existingItemId != null && existingItemId.isNotEmpty) {
+          createdItemId = existingItemId;
+        } else {
+          // Mismo client_op_id que el intento online / proxy del Hub: si ese
+          // intento sí hizo commit (respuesta perdida), el servidor devuelve
+          // el MISMO ítem en vez de crear otro (20260929_0001).
+          final snapshot = action['item_snapshot'];
+          final added = await salesRepository.addItemFromMenuIdempotent(
+            clientOpId: addItemClientOpId(action),
+            orderId: resolvedOrderId,
+            menuItemId: action['menu_item_id']?.toString() ?? '',
+            quantity: ((action['qty'] ?? 1) as num).toDouble(),
+            checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
+            isTakeout: action['takeout'] == true,
+            notes: action['notes']?.toString(),
+            createdByEmployeeId: snapshot is Map
+                ? snapshot['created_by_employee_id']?.toString()
+                : null,
+          );
+          createdItemId = added.itemId;
+          itemExists = added.itemExists;
+        }
         if (localItemId != null && localItemId.isNotEmpty) {
           await _saveItemMapping(
             businessId: businessId,
@@ -2243,37 +2410,40 @@ class OfflinePosService {
         // (List<{name, qty, price, menu_item_id?, modifier_id?}>). Antes esto se
         // perdía: la orden offline
         // llegaba al server SIN modifiers, dejando totales inconsistentes.
+        // Ítem creado y después borrado (el op ya se aplicó una vez): sus
+        // extras no se re-aplican; el alta queda saldada tal cual.
         final rawModifiers = action['selected_modifiers'];
-        if (rawModifiers is List && rawModifiers.isNotEmpty) {
+        if (itemExists && rawModifiers is List && rawModifiers.isNotEmpty) {
           final modifiers = rawModifiers
               .whereType<Map>()
-              .map<Map<String, dynamic>>(
-                (m) => Map<String, dynamic>.from(m),
-              )
+              .map<Map<String, dynamic>>((m) => Map<String, dynamic>.from(m))
               .toList(growable: false);
           if (modifiers.isNotEmpty) {
             try {
-              await salesRepository.addOrderItemModifiers(
+              // Retry the initial snapshot on the SAME mapped item, rather
+              // than inserting the item or its modifiers a second time.
+              await salesRepository.replaceOrderItemModifiers(
                 itemId: createdItemId,
                 modifiers: modifiers,
               );
             } catch (e) {
-              // No abortamos el sync por un fallo de modifiers — el item
-              // ya está en el server. Pero ahora SI lo reportamos como
-              // conflicto para que el cashier sepa que el total puede
-              // estar diferente de lo que pidio offline (precio del
-              // modificador cambio, o ya no existe, etc).
+              // Keep the action pending and block dependent operations. A
+              // partial item must not be treated as a fully synchronized sale.
               debugPrint(
                 'Offline sync: error agregando modifiers a $createdItemId: $e',
               );
               final productName =
                   action['product_name']?.toString().trim() ?? 'un item';
-              conflicts.add(OfflineSyncConflict(
-                actionType: 'add_item_modifier',
-                actionId: action['id']?.toString(),
-                reason:
-                    'Los modificadores de "$productName" no se pudieron aplicar (cambiaron de precio o ya no existen). Revisa el total.',
-              ));
+              conflicts.add(
+                OfflineSyncConflict(
+                  actionType: 'add_item_modifier',
+                  actionId: action['id']?.toString(),
+                  reason:
+                      'Los modificadores de "$productName" siguen pendientes. '
+                      'No se sincronizara el cobro de esta orden hasta resolverlos.',
+                ),
+              );
+              rethrow;
             }
           }
         }
@@ -2474,7 +2644,9 @@ class OfflinePosService {
               orderId: voidOrderId,
               reason: voidReason,
               userName: action['void_by']?.toString(),
-              voidedAt: DateTime.tryParse(action['voided_at']?.toString() ?? ''),
+              voidedAt: DateTime.tryParse(
+                action['voided_at']?.toString() ?? '',
+              ),
               businessId: businessId,
             );
           } catch (e) {
@@ -2665,7 +2837,9 @@ class OfflinePosService {
 
     final origin = action['origin']?.toString();
     if (origin == null || origin.isEmpty) {
-      throw Exception('No se puede recrear automáticamente una orden local sin origen');
+      throw Exception(
+        'No se puede recrear automáticamente una orden local sin origen',
+      );
     }
 
     Map<String, dynamic> created;
@@ -2675,7 +2849,9 @@ class OfflinePosService {
         action: action,
       );
       if (tableId == null || tableId.isEmpty) {
-        throw Exception('No se pudo resolver la mesa para sincronizar la orden local');
+        throw Exception(
+          'No se pudo resolver la mesa para sincronizar la orden local',
+        );
       }
       created = await salesRepository.openTable(
         tableId: tableId,
@@ -2766,7 +2942,9 @@ class OfflinePosService {
     required SalesRepository salesRepository,
   }) async {
     final rawItemId = action['item_id']?.toString();
-    if (rawItemId != null && rawItemId.isNotEmpty && !rawItemId.startsWith('tmp_')) {
+    if (rawItemId != null &&
+        rawItemId.isNotEmpty &&
+        !rawItemId.startsWith('tmp_')) {
       return rawItemId;
     }
 
@@ -2778,56 +2956,12 @@ class OfflinePosService {
       }
     }
 
-    final resolvedOrderId = await _resolveOrderIdForAction(
-      businessId: businessId,
-      action: action,
-      salesRepository: salesRepository,
+    // Matching by product/name (or the last row) can edit a different round
+    // of the same product. Missing identity is a dependency, not a deletion.
+    throw StateError(
+      'OFFLINE_ITEM_MAPPING_REQUIRED: falta sincronizar '
+      'la identidad del item $rawItemId. No se modifico otro producto.',
     );
-
-    final items = await salesRepository.getOrderItems(
-      resolvedOrderId,
-      includeModifiers: true,
-      onlyOpen: true,
-    );
-
-    final productId = action['product_id']?.toString();
-    final productName = action['product_name']?.toString().trim().toLowerCase();
-    final notes = action['notes']?.toString().trim();
-    final isTakeout = action['is_takeout'] == true || action['takeout'] == true;
-
-    OrderItem? matched;
-    for (final item in items.reversed) {
-      final sameProductId =
-          productId != null && productId.isNotEmpty && item.productId == productId;
-      final sameName =
-          productName != null && productName.isNotEmpty && item.productName.trim().toLowerCase() == productName;
-      final sameNotes = notes == null || notes.isEmpty || (item.notes?.trim() ?? '') == notes;
-      final sameTakeout = item.isTakeout == isTakeout;
-      if ((sameProductId || sameName) && sameNotes && sameTakeout) {
-        matched = item;
-        break;
-      }
-    }
-
-    matched ??= items.isNotEmpty ? items.last : null;
-    if (matched == null) {
-      throw Exception('No se pudo resolver el item offline para sincronizar');
-    }
-
-    if (rawItemId != null && rawItemId.isNotEmpty) {
-      await _saveItemMapping(
-        businessId: businessId,
-        localItemId: rawItemId,
-        remoteItemId: matched.id,
-      );
-      await remapSnapshotItemId(
-        businessId: businessId,
-        localItemId: rawItemId,
-        remoteItemId: matched.id,
-      );
-    }
-
-    return matched.id;
   }
 
   Future<void> remapSnapshotItemId({
@@ -2844,13 +2978,15 @@ class OfflinePosService {
         final payload = await _readSnapshot(storage, key);
         if (payload == null) continue;
         final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
-        final items = ((state['items'] as List?) ?? const []).map((entry) {
-          final item = Map<String, dynamic>.from(entry as Map);
-          if (item['id']?.toString() == localItemId) {
-            item['id'] = remoteItemId;
-          }
-          return item;
-        }).toList(growable: false);
+        final items = ((state['items'] as List?) ?? const [])
+            .map((entry) {
+              final item = Map<String, dynamic>.from(entry as Map);
+              if (item['id']?.toString() == localItemId) {
+                item['id'] = remoteItemId;
+              }
+              return item;
+            })
+            .toList(growable: false);
         state['items'] = items;
         payload['state'] = state;
         await _writeSnapshot(storage, key, payload);
@@ -2872,7 +3008,9 @@ class OfflinePosService {
     if (rawOrder is Map) {
       final order = Map<String, dynamic>.from(rawOrder);
       final orderId = order['id']?.toString();
-      final mappedOrderId = orderId == null ? null : orderMap[orderId]?.toString();
+      final mappedOrderId = orderId == null
+          ? null
+          : orderMap[orderId]?.toString();
       if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
         order['id'] = mappedOrderId;
         reconciled['order'] = order;
@@ -2880,31 +3018,41 @@ class OfflinePosService {
     }
 
     final rawItems = (reconciled['items'] as List?) ?? const [];
-    reconciled['items'] = rawItems.map((entry) {
-      final item = Map<String, dynamic>.from(entry as Map);
-      final itemId = item['id']?.toString();
-      final mappedItemId = itemId == null ? null : itemMap[itemId]?.toString();
-      if (mappedItemId != null && mappedItemId.isNotEmpty) {
-        item['id'] = mappedItemId;
-      }
-      final orderId = item['order_id']?.toString();
-      final mappedOrderId = orderId == null ? null : orderMap[orderId]?.toString();
-      if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
-        item['order_id'] = mappedOrderId;
-      }
-      return item;
-    }).toList(growable: false);
+    reconciled['items'] = rawItems
+        .map((entry) {
+          final item = Map<String, dynamic>.from(entry as Map);
+          final itemId = item['id']?.toString();
+          final mappedItemId = itemId == null
+              ? null
+              : itemMap[itemId]?.toString();
+          if (mappedItemId != null && mappedItemId.isNotEmpty) {
+            item['id'] = mappedItemId;
+          }
+          final orderId = item['order_id']?.toString();
+          final mappedOrderId = orderId == null
+              ? null
+              : orderMap[orderId]?.toString();
+          if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
+            item['order_id'] = mappedOrderId;
+          }
+          return item;
+        })
+        .toList(growable: false);
 
     final rawChecks = (reconciled['checks'] as List?) ?? const [];
-    reconciled['checks'] = rawChecks.map((entry) {
-      final check = Map<String, dynamic>.from(entry as Map);
-      final orderId = check['order_id']?.toString();
-      final mappedOrderId = orderId == null ? null : orderMap[orderId]?.toString();
-      if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
-        check['order_id'] = mappedOrderId;
-      }
-      return check;
-    }).toList(growable: false);
+    reconciled['checks'] = rawChecks
+        .map((entry) {
+          final check = Map<String, dynamic>.from(entry as Map);
+          final orderId = check['order_id']?.toString();
+          final mappedOrderId = orderId == null
+              ? null
+              : orderMap[orderId]?.toString();
+          if (mappedOrderId != null && mappedOrderId.isNotEmpty) {
+            check['order_id'] = mappedOrderId;
+          }
+          return check;
+        })
+        .toList(growable: false);
 
     return reconciled;
   }
@@ -3009,10 +3157,16 @@ class OfflinePosService {
     required String localItemId,
     required String remoteItemId,
   }) async {
-    final storage = await _storage;
-    final current = await _readItemMap(businessId);
-    current[localItemId] = remoteItemId;
-    await storage.writeJson(_itemMapKey(businessId), current);
+    await _withQueueMutation(businessId, () async {
+      final storage = await _storage;
+      final current = await _readItemMap(businessId);
+      current[localItemId] = remoteItemId;
+      if (!await storage.writeJson(_itemMapKey(businessId), current)) {
+        throw StateError(
+          'No se pudo guardar la identidad del item sincronizado.',
+        );
+      }
+    });
   }
 
   Map<String, dynamic> _encodeState(CurrentOrderState state) {
@@ -3026,7 +3180,9 @@ class OfflinePosService {
       'customer_name': state.customerName,
       'session_note': state.sessionNote,
       'order': state.order == null ? null : _encodeOrder(state.order!),
-      'items': state.items.map(_encodeOrderItem).toList(growable: false),
+      'items': state.items
+          .map(OrderItemSnapshot.encode)
+          .toList(growable: false),
       'checks': state.checks.map(_encodeOrderCheck).toList(growable: false),
     };
   }
@@ -3045,7 +3201,10 @@ class OfflinePosService {
           ? Order.fromMap(Map<String, dynamic>.from(map['order'] as Map))
           : null,
       items: ((map['items'] as List?) ?? const [])
-          .map((e) => OrderItem.fromMap(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) =>
+                OrderItemSnapshot.decode(Map<String, dynamic>.from(e as Map)),
+          )
           .toList(growable: false),
       checks: ((map['checks'] as List?) ?? const [])
           .map((e) => OrderCheck.fromMap(Map<String, dynamic>.from(e as Map)))
@@ -3055,26 +3214,6 @@ class OfflinePosService {
 
   Map<String, dynamic> _encodeOrder(Order order) => order.toMap();
 
-  Map<String, dynamic> _encodeOrderItem(OrderItem item) => {
-    'id': item.id,
-    'order_id': item.orderId,
-    'product_id': item.productId,
-    'product_name': item.productName,
-    'sku': item.sku,
-    'qty': item.quantity,
-    'quantity': item.quantity,
-    'unit_price': item.unitPrice,
-    'subtotal': item.subtotal,
-    'discounts': item.discounts,
-    'tax': item.tax,
-    'total': item.total,
-    'check_id': item.checkId,
-    'is_takeout': item.isTakeout,
-    'status': item.status,
-    'notes': item.notes,
-    'created_at': item.createdAt.toIso8601String(),
-  };
-
   Map<String, dynamic> _encodeOrderCheck(OrderCheck check) => {
     'id': check.id,
     'order_id': check.orderId,
@@ -3083,7 +3222,12 @@ class OfflinePosService {
     'is_closed': check.isClosed,
     'subtotal': check.subtotal,
     'discounts': check.discounts,
+    'service_fee': check.serviceFee,
     'tax': check.tax,
     'total': check.total,
+    'customer_id': check.customerId,
+    'customer_name': check.customerName,
+    'customer_rnc': check.customerRnc,
+    'requested_ncf_type': check.requestedNcfType,
   };
 }

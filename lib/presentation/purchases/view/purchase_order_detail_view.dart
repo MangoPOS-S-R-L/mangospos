@@ -23,6 +23,7 @@ import '../utils/purchase_status.dart';
 import '../viewmodel/purchases_viewmodel.dart';
 import '../utils/goods_receipt_printing.dart';
 import 'goods_receipt_dialog.dart';
+import 'purchase_cancel_dialog.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
 class PurchaseOrderDetailView extends ConsumerStatefulWidget {
@@ -157,6 +158,33 @@ class _PurchaseOrderDetailViewState
     }
   }
 
+  Future<void> _openCancelDialog(PurchaseOrderSummary order) async {
+    final result = await showPurchaseCancelDialog(context, order: order);
+    if (!mounted || result == null) return;
+    final parts = <String>[
+      result.movementsCreated == 0
+          ? 'sin mover inventario'
+          : result.movementsCreated == 1
+          ? '1 insumo devuelto del inventario'
+          : '${result.movementsCreated} insumos devueltos del inventario',
+      if (result.payableCancelled) 'cuenta por pagar cancelada',
+      if (result.costsRestored > 0)
+        result.costsRestored == 1
+            ? '1 costo restaurado'
+            : '${result.costsRestored} costos restaurados',
+    ];
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result.replayed
+              ? 'Esta compra ya estaba anulada.'
+              : 'Compra ${order.orderNumber} anulada: ${parts.join(' · ')}.',
+        ),
+      ),
+    );
+    await _load();
+  }
+
   Future<void> _openReceiveDialog(PurchaseOrderSummary order) async {
     await showPurchaseReceiveFlow(context, ref, order);
     if (!mounted) return;
@@ -235,6 +263,7 @@ class _PurchaseOrderDetailViewState
     final sessionCtrl = ref.watch(sessionProvider.notifier);
     final canReceive = sessionCtrl.hasPermission('compras.ordenes.recibir');
     final canEdit = sessionCtrl.hasPermission('compras.ordenes.editar');
+    final canCancel = sessionCtrl.hasPermission('compras.ordenes.anular');
     final receivable =
         order != null &&
         order.status != 'received' &&
@@ -302,6 +331,19 @@ class _PurchaseOrderDetailViewState
                   icon: const Icon(Icons.edit_outlined, size: 18),
                   label: const Text('Editar compra'),
                 ),
+              if (canCancel && editable)
+                OutlinedButton.icon(
+                  key: const Key('purchase-cancel-button'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.destructive,
+                    side: BorderSide(
+                      color: AppColors.destructive.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  onPressed: () => _openCancelDialog(order),
+                  icon: const Icon(Icons.block, size: 18),
+                  label: const Text('Anular compra'),
+                ),
               if (canReceive && receivable)
                 FilledButton.icon(
                   onPressed: () => _openReceiveDialog(order),
@@ -315,6 +357,26 @@ class _PurchaseOrderDetailViewState
         ],
       ],
     );
+  }
+
+  /// «Anulada el 29/09/2026 por Ana Pérez. Motivo: …». Las compras
+  /// canceladas antes de existir la anulación no guardaron quién ni por qué.
+  String _cancellationText(PurchaseOrderDetail detail) {
+    final at = detail.cancelledAt;
+    final who = detail.cancelledByName.trim();
+    final reason = detail.cancelReason.trim().replaceFirst(
+      RegExp(r'[.\s]+$'),
+      '',
+    );
+    final head = StringBuffer('Compra anulada');
+    if (at != null) head.write(' el ${_dateFormat.format(at)}');
+    if (who.isNotEmpty) head.write(' por $who');
+    head.write('.');
+    if (reason.isNotEmpty) head.write(' Motivo: $reason.');
+    if (at != null) {
+      head.write(' Lo que había entrado se devolvió del inventario.');
+    }
+    return head.toString();
   }
 
   String _invoiceCaption(PurchaseOrderSummary order) {
@@ -376,7 +438,16 @@ class _PurchaseOrderDetailViewState
               ),
             ],
           ),
-          if (order.payablePending) ...[
+          if (order.status == 'cancelled') ...[
+            const SizedBox(height: 12),
+            _noticeBox(
+              color: AppColors.destructive,
+              background: const Color(0xFFFEF2F2),
+              icon: Icons.block,
+              text: _cancellationText(detail),
+            ),
+          ],
+          if (order.payablePending && order.status != 'cancelled') ...[
             const SizedBox(height: 12),
             _noticeBox(
               color: AppColors.destructive,

@@ -3439,15 +3439,16 @@ class _CartView extends ConsumerWidget {
         }
       }
     }
-    await ref
-        .read(salesRepositoryProvider)
-        .addItemFromMenu(
-          orderId: orderId,
-          menuItemId: source.productId!,
-          quantity: qty,
-          checkPosition: checkPosition,
-          isTakeout: isTakeout,
-        );
+    await ref.read(currentOrderProvider.notifier).addItem(
+      menuItemId: source.productId!,
+      qty: qty,
+      checkPos: checkPosition,
+      takeout: isTakeout,
+      productName: source.productName,
+      productPrice: source.unitPrice,
+      productTaxMode: source.taxMode,
+      productTaxRate: source.taxRate,
+    );
   }
 
   void _openProductDetailModal(

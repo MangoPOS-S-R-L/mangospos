@@ -7,6 +7,7 @@ import '../offline/hub/hub_config.dart'
     show HubDeviceRole, NetworkPolicy, TerminalMode, kHubPortAlt;
 import '../offline/hub/hub_mode_controller.dart' show hubModeProvider;
 import 'mobile_print_agent.dart';
+import 'windows_firewall.dart';
 
 /// ¿Este equipo tiene que levantar el servidor Dart dedicado de `/hub/*`?
 ///
@@ -69,9 +70,11 @@ class HubServerController {
   Timer? _timer;
   MobilePrintAgent? _server;
   bool _busy = false;
+  bool _disposed = false;
+  bool _firewallChecked = false;
 
   Future<void> _evaluate() async {
-    if (_busy) return; // el próximo tic lo vuelve a intentar
+    if (_busy || _disposed) return; // el próximo tic lo vuelve a intentar
     _busy = true;
     try {
       final controller = _ref.read(hubModeProvider.notifier);
@@ -87,6 +90,8 @@ class HubServerController {
       } else {
         await _ensureStopped();
       }
+    } catch (e) {
+      debugPrint('[HubServer] inicio pendiente: $e');
     } finally {
       _busy = false;
     }
@@ -96,9 +101,27 @@ class HubServerController {
     if (_server != null) return;
     final agent = MobilePrintAgent();
     final url = await agent.start(port: kHubPortAlt);
+    if (_disposed) {
+      await agent.stop();
+      return;
+    }
     if (url != null) {
       _server = agent;
       debugPrint('[HubServer] Servidor Hub dedicado activo en $url');
+      if (!_firewallChecked) {
+        _firewallChecked = true;
+        // Do not delay the listener on a UAC prompt. Old installations may
+        // have only the print-agent rule on 4000, not the Hub rule on 4100.
+        unawaited(
+          WindowsFirewall.ensureHubRule().then((allowed) {
+            if (!allowed) {
+              debugPrint(
+                '[HubServer] Windows no permitio habilitar el acceso LAN.',
+              );
+            }
+          }),
+        );
+      }
     }
   }
 
@@ -112,6 +135,7 @@ class HubServerController {
   }
 
   void dispose() {
+    _disposed = true;
     _sub?.close();
     _timer?.cancel();
     _timer = null;

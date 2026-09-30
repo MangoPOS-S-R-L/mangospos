@@ -357,6 +357,13 @@ class PurchaseOrderDetail {
   /// sale igual, con la raya en blanco.
   final String createdByName;
 
+  /// Anulación (20260929_0050): cuándo, quién y por qué. `null`/vacío en una
+  /// compra viva, y también en una cancelada antes de existir la anulación
+  /// (esas no guardaron el dato).
+  final DateTime? cancelledAt;
+  final String cancelledByName;
+  final String cancelReason;
+
   const PurchaseOrderDetail({
     required this.order,
     required this.subtotal,
@@ -364,6 +371,9 @@ class PurchaseOrderDetail {
     required this.discount,
     required this.lines,
     this.createdByName = '',
+    this.cancelledAt,
+    this.cancelledByName = '',
+    this.cancelReason = '',
   });
 
   /// Suma de los descuentos POR LÍNEA (informativo: los costos ya vienen
@@ -538,6 +548,134 @@ class PurchasesState {
       orders: orders ?? this.orders,
       ordersHasMore: ordersHasMore ?? this.ordersHasMore,
       totalsByStatus: totalsByStatus ?? this.totalsByStatus,
+    );
+  }
+}
+
+double _cancelNum(dynamic v) {
+  if (v is num) return v.toDouble();
+  return double.tryParse(v?.toString() ?? '') ?? 0;
+}
+
+int _cancelInt(dynamic v) => int.tryParse(v?.toString() ?? '') ?? 0;
+
+/// Un insumo que la anulación devuelve del almacén, con la existencia antes y
+/// después para poder avisar cuando queda en negativo (la mercancía ya se
+/// vendió o se consumió).
+class PurchaseCancelLine {
+  final String itemName;
+  final String warehouseName;
+  final String unit;
+  final double quantity;
+  final double stockBefore;
+  final double stockAfter;
+
+  const PurchaseCancelLine({
+    required this.itemName,
+    required this.warehouseName,
+    required this.unit,
+    required this.quantity,
+    required this.stockBefore,
+    required this.stockAfter,
+  });
+
+  bool get goesNegative => stockAfter < -0.000001;
+
+  factory PurchaseCancelLine.fromMap(Map<String, dynamic> map) {
+    return PurchaseCancelLine(
+      itemName: map['item_name']?.toString() ?? 'Insumo',
+      warehouseName: map['warehouse_name']?.toString() ?? 'Almacén',
+      unit: map['unit']?.toString() ?? '',
+      quantity: _cancelNum(map['quantity']),
+      stockBefore: _cancelNum(map['stock_before']),
+      stockAfter: _cancelNum(map['stock_after']),
+    );
+  }
+}
+
+List<PurchaseCancelLine> _cancelLines(dynamic raw) {
+  if (raw is! List) return const [];
+  return raw
+      .whereType<Map>()
+      .map((m) => PurchaseCancelLine.fromMap(Map<String, dynamic>.from(m)))
+      .toList(growable: false);
+}
+
+/// Lo que haría la anulación, calculado por el servidor SIN escribir nada
+/// (`fn_purchase_order_cancel(p_preview := true)`). La pantalla lo muestra
+/// antes de pedir el motivo y la confirmación.
+class PurchaseOrderCancelPreview {
+  final List<PurchaseCancelLine> lines;
+  final int negativeItems;
+  final int receptionsToCancel;
+  final bool hasPayable;
+  final double payableAmount;
+  final double payablePaid;
+
+  /// Código del bloqueo (hoy solo `PURCHASE_ORDER_PAYABLE_HAS_PAYMENTS`), o
+  /// `null` si se puede anular.
+  final String? blockedReason;
+
+  /// La orden ya estaba anulada (otra persona se adelantó).
+  final bool alreadyCancelled;
+
+  const PurchaseOrderCancelPreview({
+    required this.lines,
+    required this.negativeItems,
+    required this.receptionsToCancel,
+    required this.hasPayable,
+    required this.payableAmount,
+    required this.payablePaid,
+    required this.blockedReason,
+    required this.alreadyCancelled,
+  });
+
+  bool get blocked => blockedReason != null;
+
+  factory PurchaseOrderCancelPreview.fromMap(Map<String, dynamic> map) {
+    final blocked = map['blocked_reason']?.toString();
+    return PurchaseOrderCancelPreview(
+      lines: _cancelLines(map['lines']),
+      negativeItems: _cancelInt(map['negative_items']),
+      receptionsToCancel: _cancelInt(map['receptions_to_cancel']),
+      hasPayable: map['has_payable'] == true,
+      payableAmount: _cancelNum(map['payable_amount']),
+      payablePaid: _cancelNum(map['payable_paid']),
+      blockedReason: (blocked == null || blocked.isEmpty) ? null : blocked,
+      alreadyCancelled:
+          map['replayed'] == true || map['status']?.toString() == 'cancelled',
+    );
+  }
+}
+
+/// Lo que hizo el servidor al anular.
+class PurchaseOrderCancelResult {
+  final int movementsCreated;
+  final int costsRestored;
+  final int receptionsCancelled;
+  final bool payableCancelled;
+  final int negativeItems;
+
+  /// La orden ya estaba anulada: no se hizo nada (doble toque, reintento).
+  final bool replayed;
+
+  const PurchaseOrderCancelResult({
+    required this.movementsCreated,
+    required this.costsRestored,
+    required this.receptionsCancelled,
+    required this.payableCancelled,
+    required this.negativeItems,
+    required this.replayed,
+  });
+
+  factory PurchaseOrderCancelResult.fromMap(Map<String, dynamic> map) {
+    return PurchaseOrderCancelResult(
+      movementsCreated: _cancelInt(map['movements_created']),
+      costsRestored: _cancelInt(map['costs_restored']),
+      receptionsCancelled: _cancelInt(map['receptions_cancelled']),
+      payableCancelled: map['payable_cancelled'] == true,
+      negativeItems: _cancelInt(map['negative_items']),
+      replayed: map['replayed'] == true,
     );
   }
 }

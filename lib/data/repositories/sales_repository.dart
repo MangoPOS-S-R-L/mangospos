@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/sales_queries.dart';
@@ -1260,6 +1261,12 @@ class SalesRepository {
   /// motor la ignora) + promotion_id. Si la RPC no está aplicada
   /// (20260605_0005), inserta el producto y fija nombre/descuento con update
   /// directo (los triggers recomputan los totales).
+  ///
+  /// [clientOpId] identifica el toque (20260929_0001): un reintento con el
+  /// mismo id no crea una segunda línea. Solo se cae al alta normal cuando el
+  /// SERVIDOR respondió con error (su transacción se revirtió entera); ante un
+  /// error de red el resultado es desconocido y se propaga — antes el respaldo
+  /// atrapaba cualquier error y podía duplicar la oferta.
   Future<void> addOfferDealItem({
     required String orderId,
     required String menuItemId,
@@ -1268,42 +1275,101 @@ class SalesRepository {
     required String name,
     String? promotionId,
     int checkPosition = 1,
+    String? clientOpId,
+    String? createdByEmployeeId,
   }) async {
-    try {
-      await _client.rpc(
-        'fn_add_offer_deal',
-        params: {
-          'p_order_id': orderId,
-          'p_menu_item_id': menuItemId,
-          'p_qty': quantity,
-          'p_discount': discount,
-          'p_name': name,
-          'p_promotion_id': promotionId,
-          'p_check_position': checkPosition,
-        },
+    final opId = clientOpId ?? const Uuid().v4();
+    Future<void> viaMenuItem() => _addOfferDealViaMenuItem(
+      clientOpId: opId,
+      orderId: orderId,
+      menuItemId: menuItemId,
+      quantity: quantity,
+      discount: discount,
+      name: name,
+      promotionId: promotionId,
+      checkPosition: checkPosition,
+      createdByEmployeeId: createdByEmployeeId,
+    );
+
+    final missingAt = _idempotentDealMissingAt;
+    final skipIdempotent =
+        missingAt != null &&
+        DateTime.now().difference(missingAt) < _idempotentAddRecheck;
+    if (skipIdempotent) {
+      throw StateError(
+        'Falta aplicar la migración de alta idempotente de ítems.',
       );
-    } catch (_) {
-      // Degradado SIN la RPC: insertar y fijar nombre + descuento + marcador.
-      final id = await addItemFromMenu(
-        orderId: orderId,
-        menuItemId: menuItemId,
-        quantity: quantity,
-        checkPosition: checkPosition,
-      );
-      if (id.isEmpty) return;
-      final marker = promotionId != null ? '[DEAL:$promotionId]' : '[DEAL:]';
-      final payload = <String, dynamic>{
-        'product_name': name,
-        'discounts': discount,
-        'notes': marker,
-      };
-      if (promotionId != null) payload['promotion_id'] = promotionId;
+    }
+    if (!skipIdempotent) {
       try {
-        await _client.from('order_items').update(payload).eq('id', id);
-      } catch (_) {
-        payload.remove('promotion_id');
-        await _client.from('order_items').update(payload).eq('id', id);
+        await _client.rpc(
+          SalesQueries.rpcAddOfferDealIdempotent,
+          params: {
+            'p_client_op_id': opId,
+            'p_order_id': orderId,
+            'p_menu_item_id': menuItemId,
+            'p_qty': quantity,
+            'p_discount': discount,
+            'p_name': name,
+            'p_promotion_id': promotionId,
+            'p_check_position': checkPosition,
+            'p_created_by_employee_id': createdByEmployeeId,
+          },
+        );
+        _idempotentDealMissingAt = null;
+        return;
+      } on PostgrestException catch (e) {
+        if (e.code != 'PGRST202') {
+          final friendly = closedOrderErrorMessage(e);
+          if (friendly != null) throw Exception(friendly);
+          // La oferta viva falló en el servidor y no dejó nada: alta normal
+          // con el MISMO id (la bitácora quedó libre).
+          await viaMenuItem();
+          return;
+        }
+        _idempotentDealMissingAt = DateTime.now();
+        throw StateError(
+          'Falta aplicar la migración de alta idempotente de ítems.',
+        );
       }
+    }
+  }
+
+  static DateTime? _idempotentDealMissingAt;
+
+  Future<void> _addOfferDealViaMenuItem({
+    required String clientOpId,
+    required String orderId,
+    required String menuItemId,
+    required double quantity,
+    required double discount,
+    required String name,
+    required String? promotionId,
+    required int checkPosition,
+    required String? createdByEmployeeId,
+  }) async {
+    final added = await addItemFromMenuIdempotent(
+      clientOpId: clientOpId,
+      orderId: orderId,
+      menuItemId: menuItemId,
+      quantity: quantity,
+      checkPosition: checkPosition,
+      createdByEmployeeId: createdByEmployeeId,
+    );
+    if (added.itemId.isEmpty || !added.itemExists) return;
+    final id = added.itemId;
+    final marker = promotionId != null ? '[DEAL:$promotionId]' : '[DEAL:]';
+    final payload = <String, dynamic>{
+      'product_name': name,
+      'discounts': discount,
+      'notes': marker,
+    };
+    if (promotionId != null) payload['promotion_id'] = promotionId;
+    try {
+      await _client.from('order_items').update(payload).eq('id', id);
+    } catch (_) {
+      payload.remove('promotion_id');
+      await _client.from('order_items').update(payload).eq('id', id);
     }
   }
 
@@ -1321,6 +1387,7 @@ class SalesRepository {
     String? notes,
     List<Map<String, dynamic>> modifiers = const [],
     String? employeeId,
+    String? clientOpId,
   }) {
     return HubClient().proxyAddItem(
       hubBaseUrl,
@@ -1332,7 +1399,90 @@ class SalesRepository {
       notes: notes,
       modifiers: modifiers,
       employeeId: employeeId,
+      clientOpId: clientOpId,
     );
+  }
+
+  /// Cuándo se vio por última vez que `fn_add_item_from_menu_idempotent` no
+  /// existe (migración 20260929_0001 sin aplicar). Mientras sea reciente se
+  /// bloquea el alta; pasado [_idempotentAddRecheck] se vuelve a probar.
+  static DateTime? _idempotentAddMissingAt;
+  static const _idempotentAddRecheck = Duration(minutes: 5);
+
+  @visibleForTesting
+  static void debugResetIdempotentAddProbe() {
+    _idempotentAddMissingAt = null;
+    _idempotentDealMissingAt = null;
+    _atomicModifiersMissingAt = null;
+  }
+
+  /// Alta de ítem con UN solo efecto por [clientOpId]: un reintento con el
+  /// mismo id (respuesta perdida, replay de la cola, proxy del Hub) devuelve
+  /// el ítem ya creado en vez de crear otro. `itemExists=false` = el ítem se
+  /// creó y después se borró; no hay que tocarlo (ni sus modificadores).
+  ///
+  /// Si la migración no está aplicada se bloquea el alta: degradar a la RPC
+  /// vieja haría posible cobrar dos veces tras una respuesta perdida.
+  Future<({String itemId, bool replayed, bool itemExists})>
+  addItemFromMenuIdempotent({
+    required String clientOpId,
+    required String orderId,
+    required String menuItemId,
+    double quantity = 1,
+    int checkPosition = 1,
+    bool isTakeout = false,
+    String? notes,
+    String? createdByEmployeeId,
+  }) async {
+    final missingAt = _idempotentAddMissingAt;
+    final skipRpc =
+        missingAt != null &&
+        DateTime.now().difference(missingAt) < _idempotentAddRecheck;
+    if (skipRpc) {
+      throw StateError(
+        'Falta aplicar la migración de alta idempotente de ítems.',
+      );
+    }
+    try {
+      final response = await _client.rpc(
+        SalesQueries.rpcAddItemFromMenuIdempotent,
+        params: {
+          'p_client_op_id': clientOpId,
+          'p_order_id': orderId,
+          'p_menu_item_id': menuItemId,
+          'p_qty': quantity,
+          'p_check_position': checkPosition,
+          'p_is_takeout': isTakeout,
+          'p_notes': notes,
+          'p_created_by_employee_id': createdByEmployeeId,
+        },
+      );
+      _idempotentAddMissingAt = null;
+      final map = Map<String, dynamic>.from(response as Map);
+      final itemId = map['item_id']?.toString() ?? '';
+      if (itemId.isEmpty) {
+        throw StateError('fn_add_item_from_menu_idempotent sin item_id');
+      }
+      return (
+        itemId: itemId,
+        replayed: map['replayed'] == true,
+        itemExists: map['item_exists'] != false,
+      );
+    } on PostgrestException catch (e) {
+      if (e.code != 'PGRST202') {
+        final friendly = closedOrderErrorMessage(e);
+        if (friendly != null) throw Exception(friendly);
+        throw Exception('Error al agregar item: $e');
+      }
+      _idempotentAddMissingAt = DateTime.now();
+      throw StateError(
+        'Falta aplicar la migración de alta idempotente de ítems.',
+      );
+    } catch (e) {
+      final friendly = closedOrderErrorMessage(e);
+      if (friendly != null) throw Exception(friendly);
+      throw Exception('Error al agregar item: $e');
+    }
   }
 
   Future<String> addItemFromMenu({
@@ -1570,15 +1720,47 @@ class SalesRepository {
         return;
       } catch (e) {
         firstError ??= e;
+        // Only a missing column justifies an older schema shape. A lost
+        // response may already have committed the insert: never insert again.
+        if (e is! PostgrestException ||
+            (e.code != '42703' && e.code != 'PGRST204')) {
+          rethrow;
+        }
       }
     }
     throw Exception('Error al guardar modificadores del item: $firstError');
   }
 
+  static DateTime? _atomicModifiersMissingAt;
+
+  /// Deja EXACTAMENTE [modifiers] en el ítem. Con la migración 20260929_0001 es
+  /// una sola transacción (antes: DELETE y luego INSERT; un corte entre ambos
+  /// dejaba el ítem sin extras). Repetirlo con la misma lista no duplica.
   Future<void> replaceOrderItemModifiers({
     required String itemId,
     required List<Map<String, dynamic>> modifiers,
   }) async {
+    final missingAt = _atomicModifiersMissingAt;
+    final skipRpc =
+        missingAt != null &&
+        DateTime.now().difference(missingAt) < _idempotentAddRecheck;
+    if (!skipRpc) {
+      try {
+        await _client.rpc(
+          SalesQueries.rpcReplaceOrderItemModifiers,
+          params: {'p_item_id': itemId, 'p_modifiers': modifiers},
+        );
+        _atomicModifiersMissingAt = null;
+        return;
+      } on PostgrestException catch (e) {
+        if (e.code != 'PGRST202') {
+          throw Exception('Error al reemplazar modificadores del item: $e');
+        }
+        _atomicModifiersMissingAt = DateTime.now();
+      } catch (e) {
+        throw Exception('Error al reemplazar modificadores del item: $e');
+      }
+    }
     try {
       await _client.from('order_item_modifiers').delete().eq('item_id', itemId);
       if (modifiers.isEmpty) return;
@@ -1586,6 +1768,24 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al reemplazar modificadores del item: $e');
     }
+  }
+
+  Future<void> updateOfflineKitchenItemStatus({
+    required String itemId,
+    required String status,
+    required DateTime at,
+  }) async {
+    if (status != 'preparing' && status != 'ready') {
+      throw ArgumentError.value(status, 'status');
+    }
+    await _client
+        .from('order_items')
+        .update({
+          'status': status,
+          if (status == 'preparing') 'started_at': at.toUtc().toIso8601String(),
+          if (status == 'ready') 'ready_at': at.toUtc().toIso8601String(),
+        })
+        .eq('id', itemId);
   }
 
   /// Actualizar cantidad de item
@@ -1798,7 +1998,15 @@ class SalesRepository {
   Future<void> deleteItem({required String itemId}) async {
     try {
       // Intentar directo primero para rapidez y evitar timeout de funcion compleja
-      await _client.from('order_items').delete().eq('id', itemId);
+      final deleted = await _client
+          .from('order_items')
+          .delete()
+          .eq('id', itemId)
+          .select('id');
+      if (deleted.isNotEmpty) return;
+      // Un DELETE de cero filas también puede ser RLS. No lo tratamos como
+      // éxito: el RPC distingue permisos de un ítem realmente inexistente.
+      throw StateError('ITEM_NOT_FOUND: no se elimino el producto $itemId');
     } catch (e) {
       // El candado de cuentas facturadas (MP404) NO es un fallo transitorio:
       // es una negativa deliberada. Si cayéramos al RPC de respaldo lo

@@ -315,6 +315,43 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
+  /// Vista previa de la anulación: no escribe nada ni toca el estado de la
+  /// pantalla (el diálogo maneja su propio "cargando").
+  Future<PurchaseOrderCancelPreview> previewCancelPurchaseOrder(
+    String orderId,
+  ) {
+    return _repository.previewCancelPurchaseOrder(orderId);
+  }
+
+  /// Anula una compra registrada y recarga el listado (el estado, los totales
+  /// por estado y los pendientes de CxP cambian).
+  Future<PurchaseOrderCancelResult> cancelPurchaseOrder({
+    required String orderId,
+    required String reason,
+    required String idempotencyKey,
+  }) async {
+    _state = _state.copyWith(saving: true, clearError: true);
+    notifyListeners();
+
+    try {
+      final result = await _repository.cancelPurchaseOrder(
+        orderId: orderId,
+        reason: reason,
+        idempotencyKey: idempotencyKey,
+      );
+      _state = _state.copyWith(saving: false);
+      await refresh();
+      return result;
+    } catch (e) {
+      _state = _state.copyWith(
+        saving: false,
+        error: FriendlyError.humanize('$e'),
+      );
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   /// Resuelve un código de barras (o SKU) contra el catálogo de insumos.
   /// Devuelve todas las coincidencias: la vista toma la primera y avisa si
   /// hay más de una. Lanza si no hay conexión — la vista lo informa.

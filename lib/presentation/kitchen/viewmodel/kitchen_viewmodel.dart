@@ -152,7 +152,7 @@ class KitchenViewModel extends ChangeNotifier {
         action: {
           'type': 'kds_item_status',
           'item_id': itemId,
-          'status': status,
+          'kds_status': status,
         },
       );
     } else {

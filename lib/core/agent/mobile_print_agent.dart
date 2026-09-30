@@ -39,6 +39,7 @@ import '../offline/offline_pos_service.dart';
 import '../../data/repositories/sales_repository.dart';
 import '../offline/ncf_offline_allocator.dart';
 import '../storage/storage_service.dart';
+import '../network/connectivity_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent configuration
@@ -57,11 +58,15 @@ class MobilePrintAgent {
   MobilePrintAgent({
     HubLanTokenService? hubTokens,
     OfflineAuthService? offlineAuth,
+    bool Function()? cloudAvailable,
   }) : _hubTokens = hubTokens ?? HubLanTokenService.instance,
-       _offlineAuth = offlineAuth ?? OfflineAuthService();
+       _offlineAuth = offlineAuth ?? OfflineAuthService(),
+       _cloudAvailable =
+           cloudAvailable ?? (() => ConnectivityService().isConnected);
 
   final HubLanTokenService _hubTokens;
   final OfflineAuthService _offlineAuth;
+  final bool Function() _cloudAvailable;
   HttpServer? _server;
   int _port = _defaultPort;
   final List<Map<String, dynamic>> _jobHistory = [];
@@ -363,8 +368,7 @@ class MobilePrintAgent {
       // grababa únicamente la pantalla de elegir negocio, que un usuario con
       // un solo negocio nunca ve). Reportado en tablet 2026-09-28.
       if (businessId.isEmpty) {
-        businessId =
-            request.url.queryParameters['business_id']?.trim() ?? '';
+        businessId = request.url.queryParameters['business_id']?.trim() ?? '';
       }
       if (businessId.isNotEmpty) {
         role = hubDeviceRoleToString(
@@ -613,6 +617,7 @@ class MobilePrintAgent {
   /// cliente lo parsea igual que el camino directo, así obtiene la orden real
   /// (con items, modifiers, tax_lines) sin depender de su propio WAN.
   Future<shelf.Response> _handleHubProxyOpenTable(shelf.Request request) async {
+    if (!_cloudAvailable()) return _jsonError('HUB_WAN_OFFLINE', 503);
     final body = await _readJson(request);
     if (body == null) return _jsonError('Invalid JSON body', 400);
     final tableId = body['table_id']?.toString() ?? '';
@@ -639,6 +644,7 @@ class MobilePrintAgent {
   /// cliente lo adopta (tmp→real) sin refetch. Así el ítem queda en el servidor
   /// al instante y el cobro sale correcto.
   Future<shelf.Response> _handleHubProxyAddItem(shelf.Request request) async {
+    if (!_cloudAvailable()) return _jsonError('HUB_WAN_OFFLINE', 503);
     final body = await _readJson(request);
     if (body == null) return _jsonError('Invalid JSON body', 400);
     final orderId = body['order_id']?.toString() ?? '';
@@ -648,35 +654,39 @@ class MobilePrintAgent {
     }
     try {
       final repo = SalesRepository(Supabase.instance.client);
-      final itemId = await repo.addItemFromMenu(
+      final empId = body['employee_id']?.toString();
+      final mods = body['modifiers'];
+      final modifiers = mods is List
+          ? mods
+                .whereType<Map>()
+                .map((m) => Map<String, dynamic>.from(m))
+                .toList(growable: false)
+          : const <Map<String, dynamic>>[];
+      final clientOpId = body['client_op_id']?.toString();
+      if (clientOpId == null || clientOpId.isEmpty) {
+        return _jsonError('CLIENT_OP_ID_REQUIRED', 400);
+      }
+      // La caja corta a los 5 s y reenvía la MISMA alta por el op-log: con
+      // el client_op_id el reintento devuelve este ítem en vez de duplicarlo.
+      final added = await repo.addItemFromMenuIdempotent(
+        clientOpId: clientOpId,
         orderId: orderId,
         menuItemId: menuItemId,
         quantity: (body['quantity'] as num?)?.toDouble() ?? 1,
         checkPosition: (body['check_position'] as num?)?.toInt() ?? 1,
         isTakeout: body['is_takeout'] == true,
         notes: body['notes']?.toString(),
+        createdByEmployeeId: (empId == null || empId.isEmpty) ? null : empId,
       );
-      if (itemId.isEmpty) return _jsonError('add-item failed', 502);
-      final mods = body['modifiers'];
-      if (mods is List && mods.isNotEmpty) {
-        await repo.addOrderItemModifiers(
-          itemId: itemId,
-          modifiers: mods
-              .whereType<Map>()
-              .map((m) => Map<String, dynamic>.from(m))
-              .toList(growable: false),
+      // Reemplazar (no insertar) deja los extras exactos aunque este POST
+      // sea un reintento de uno que ya los había guardado.
+      if (modifiers.isNotEmpty && added.itemExists) {
+        await repo.replaceOrderItemModifiers(
+          itemId: added.itemId,
+          modifiers: modifiers,
         );
       }
-      final empId = body['employee_id']?.toString();
-      if (empId != null && empId.isNotEmpty) {
-        try {
-          await Supabase.instance.client
-              .from('order_items')
-              .update({'created_by_employee_id': empId})
-              .eq('id', itemId);
-        } catch (_) {}
-      }
-      return _jsonOk({'item_id': itemId});
+      return _jsonOk({'item_id': added.itemId});
     } catch (e) {
       return _jsonError('Hub add-item error: $e', 502);
     }

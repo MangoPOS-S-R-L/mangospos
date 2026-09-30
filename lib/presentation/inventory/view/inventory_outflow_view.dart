@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 
 import '../services/inventory_scan.dart';
 import '../state/adjust_reasons.dart';
@@ -9,6 +10,7 @@ import '../utils/waste_exit_printing.dart';
 import '../viewmodel/inventory_viewmodel.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/inventory/unit_conversion.dart';
 import '../../../core/theme/app_shadows.dart';
 import 'widgets/inventory_back_button.dart';
@@ -71,6 +73,21 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
   Widget build(BuildContext context) {
     final vm = ref.watch(inventoryViewModelProvider);
     final state = vm.state;
+    // El servidor solo deja a dueño/admin/gerente, pero un rol con permisos
+    // a la medida puede no tenerlos: el catálogo dice que las salidas son de
+    // `inventario.ajustes.crear` y el alta/edición de insumos de
+    // `inventario.productos.crear_editar` (igual que en Insumos).
+    final session = ref.watch(sessionProvider.notifier);
+    ref.watch(sessionProvider);
+    final canOutflow = session.hasPermission('inventario.ajustes.crear');
+    final canEditItems = session.hasPermission(
+      'inventario.productos.crear_editar',
+    );
+    // La bodega virtual de tránsito no es un almacén donde se pueda mermar:
+    // sacar de ahí rompe la recepción de la transferencia.
+    final warehouses = state.warehouses
+        .where((w) => w.name != '__IN_TRANSIT__')
+        .toList(growable: false);
     final filteredItems = _filter(state.items);
     final visibleItems = filteredItems.length > _visibleCount
         ? filteredItems.sublist(0, _visibleCount)
@@ -137,7 +154,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             label: const Text('Imprimir A4'),
                           ),
                           OutlinedButton.icon(
-                            onPressed: state.saving
+                            onPressed: state.saving || !canEditItems
                                 ? null
                                 : () => _showCreateItemDialog(context),
                             icon: const Icon(Icons.add_box_outlined),
@@ -148,12 +165,13 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             ),
                           ),
                           FilledButton.icon(
-                            onPressed: state.items.isEmpty || state.saving
+                            key: const Key('outflow-open'),
+                            onPressed:
+                                state.items.isEmpty ||
+                                    state.saving ||
+                                    !canOutflow
                                 ? null
-                                : () => _showOutflowDialog(
-                                    context,
-                                    initialItem: state.items.first,
-                                  ),
+                                : () => _showOutflowDialog(context),
                             icon: const Icon(Icons.logout_rounded),
                             label: const Text('Registrar salida'),
                             style: FilledButton.styleFrom(
@@ -209,7 +227,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                           isExpanded: true,
                           // Solo si está en la lista: un id que no está en
                           // `items` tumba el DropdownButton con un assert.
-                          initialValue: state.warehouses.any(
+                          initialValue: warehouses.any(
                                   (w) => w.id == state.selectedWarehouseId)
                               ? state.selectedWarehouseId
                               : null,
@@ -221,7 +239,7 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                             filled: true,
                             fillColor: AppColors.card,
                           ),
-                          items: state.warehouses
+                          items: warehouses
                               .map(
                                 (warehouse) => DropdownMenuItem(
                                   value: warehouse.id,
@@ -439,7 +457,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                         children: [
                                           IconButton(
                                             tooltip: 'Editar insumo',
-                                            onPressed: state.saving
+                                            onPressed:
+                                                state.saving || !canEditItems
                                                 ? null
                                                 : () => _showEditItemDialog(
                                                     context,
@@ -451,7 +470,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                           ),
                                           IconButton(
                                             tooltip: 'Eliminar insumo',
-                                            onPressed: state.saving
+                                            onPressed:
+                                                state.saving || !canEditItems
                                                 ? null
                                                 : () => _showDeleteItemDialog(
                                                     context,
@@ -463,7 +483,8 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
                                             ),
                                           ),
                                           FilledButton.tonal(
-                                            onPressed: state.saving
+                                            onPressed:
+                                                state.saving || !canOutflow
                                                 ? null
                                                 : () => _showOutflowDialog(
                                                     context,
@@ -597,20 +618,26 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
   }
 
   /// Mermas de HOY de la bodega seleccionada, en una hoja A4 para firmar.
+  ///
+  /// Se piden al servidor: la lista de la pantalla son los últimos 60
+  /// movimientos de TODOS los tipos (en una bodega con ventas, las salidas de
+  /// la mañana ya no están ahí al mediodía), y "hoy" es el día de RD.
   Future<void> _printTodayA4(BuildContext context) async {
-    final now = DateTime.now();
-    final today = ref
-        .read(inventoryViewModelProvider)
-        .state
-        .movements
-        .where(
-          (m) =>
-              m.movementType == 'waste' &&
-              m.createdAt.year == now.year &&
-              m.createdAt.month == now.month &&
-              m.createdAt.day == now.day,
-        )
-        .toList(growable: false);
+    List<InventoryMovementEntry> today;
+    try {
+      today = await ref.read(inventoryViewModelProvider).loadTodayOutflows();
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudieron leer las salidas de hoy. Revisa la conexión.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!context.mounted) return;
     if (today.isEmpty) {
       ScaffoldMessenger.of(context).showAppSnackBar(
         const SnackBar(content: Text('No hay salidas registradas hoy.')),
@@ -778,65 +805,61 @@ class _InventoryOutflowViewState extends ConsumerState<InventoryOutflowView> {
 
   Future<void> _showOutflowDialog(
     BuildContext context, {
-    required InventoryItemSummary initialItem,
+    InventoryItemSummary? initialItem,
   }) async {
-    final pageContext = context;
-    await showDialog<void>(
+    final state = ref.read(inventoryViewModelProvider).state;
+    // Se leen ANTES de guardar: son los datos del conduce.
+    var warehouseName = 'Bodega';
+    for (final w in state.warehouses) {
+      if (w.id == state.selectedWarehouseId) warehouseName = w.name;
+    }
+    final businessId = state.businessId;
+
+    final saved = await showDialog<_SavedOutflow>(
       context: context,
+      barrierDismissible: false,
       builder: (_) => _InventoryOutflowDialog(
-        items: ref.read(inventoryViewModelProvider).state.items,
-        initialItemId: initialItem.id,
-        onSubmit: (itemId, quantity, reason, notes) async {
-          final vm = ref.read(inventoryViewModelProvider);
-          final state = vm.state;
-          // Se leen ANTES de guardar: son los números del conduce, y después
-          // de la salida el stock del estado ya es el nuevo.
-          InventoryItemSummary? item;
-          for (final i in state.items) {
-            if (i.id == itemId) item = i;
-          }
-          var warehouseName = 'Bodega';
-          for (final w in state.warehouses) {
-            if (w.id == state.selectedWarehouseId) warehouseName = w.name;
-          }
-          final businessId = state.businessId;
-          final antes = item?.stock ?? 0;
-
-          await vm.registerOutflow(
-            itemId: itemId,
-            quantity: quantity,
-            reasonCode: reason.code,
-            reasonLabel: reason.label,
-            notes: notes,
-          );
-
-          // EL CONDUCE, igual que el ajuste de Insumos: DESPUÉS de guardar
-          // (una impresora caída no puede impedir que la merma quede) y
-          // siempre, porque todo lo que sale por esta pantalla es mercancía
-          // que se fue. `WasteExitPrinting` no lanza.
-          if (businessId == null || item == null || !pageContext.mounted) {
-            return;
-          }
-          final session = ref.read(sessionProvider);
-          final negocio = (session.activeBusinessName ?? '').trim();
-          await WasteExitPrinting.print(
-            pageContext,
-            ref,
-            businessId: businessId,
-            businessName: negocio.isEmpty ? 'MangoPOS' : negocio,
-            itemName: item.name,
-            quantity: quantity,
-            unit: item.unit,
-            reasonLabel: reason.label,
-            warehouseName: warehouseName,
-            notes: notes,
-            operatorName: session.userName,
-            stockBefore: antes,
-            stockAfter: antes - quantity,
-            costPerUnit: item.cost,
-          );
-        },
+        items: state.items,
+        // Desde el encabezado NO se preselecciona nada: antes quedaba marcado
+        // el primer insumo de la lista y, si la persona buscaba otro sin
+        // tocar la fila, se descontaba (e imprimía) el equivocado.
+        initialItemId: initialItem?.id,
+        onSubmit: (item, quantity, reason, notes, operationId) => ref
+            .read(inventoryViewModelProvider)
+            .registerOutflow(
+              itemId: item.id,
+              quantity: quantity,
+              reasonCode: reason.code,
+              reasonLabel: reason.label,
+              notes: notes,
+              operationId: operationId,
+              costPerUnit: item.cost,
+            ),
       ),
+    );
+
+    // EL CONDUCE, igual que el ajuste de Insumos: DESPUÉS de guardar (una
+    // impresora caída no puede impedir que la merma quede) y con el diálogo
+    // YA cerrado — antes se quedaba en «Guardando…» mientras se resolvía la
+    // impresora. `WasteExitPrinting` no lanza.
+    if (saved == null || businessId == null || !context.mounted) return;
+    final session = ref.read(sessionProvider);
+    final negocio = (session.activeBusinessName ?? '').trim();
+    await WasteExitPrinting.print(
+      context,
+      ref,
+      businessId: businessId,
+      businessName: negocio.isEmpty ? 'MangoPOS' : negocio,
+      itemName: saved.item.name,
+      quantity: saved.quantity,
+      unit: saved.item.unit,
+      reasonLabel: saved.reason.label,
+      warehouseName: warehouseName,
+      notes: saved.notes,
+      operatorName: session.userName,
+      stockBefore: saved.item.stock,
+      stockAfter: saved.item.stock - saved.quantity,
+      costPerUnit: saved.item.cost,
     );
   }
 }
@@ -1502,14 +1525,32 @@ class _InventoryItemDialogState extends State<_InventoryItemDialog> {
   }
 }
 
+/// Lo que quedó registrado, para imprimir el conduce con el diálogo cerrado.
+typedef _SavedOutflow = ({
+  InventoryItemSummary item,
+  double quantity,
+  AdjustReason reason,
+  String? notes,
+});
+
+/// Cantidad sin ceros de relleno: 12 → «12», 1.5 → «1.5».
+String _fmtOutflowQty(double v) {
+  final s = v.toStringAsFixed(2);
+  return s.replaceFirst(RegExp(r'\.?0+$'), '');
+}
+
 class _InventoryOutflowDialog extends StatefulWidget {
   final List<InventoryItemSummary> items;
-  final String initialItemId;
+  final String? initialItemId;
+
+  /// [quantity] ya en unidad BASE. [operationId] es la llave de esta salida:
+  /// la misma en cada reintento del diálogo.
   final Future<void> Function(
-    String itemId,
+    InventoryItemSummary item,
     double quantity,
     AdjustReason reason,
     String? notes,
+    String operationId,
   )
   onSubmit;
 
@@ -1525,13 +1566,22 @@ class _InventoryOutflowDialog extends StatefulWidget {
 }
 
 class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
-  late String _selectedItemId;
+  String? _selectedItemId;
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _notesController = TextEditingController();
   bool _saving = false;
   AdjustReason? _reason;
   String? _error;
+
+  /// La cantidad se digita en la unidad de COMPRA (botella, caja) en vez de
+  /// la base (ml, unidad). Solo se ofrece si el insumo tiene empaque.
+  bool _inPack = false;
+
+  /// Llave de ESTA salida. Si el guardado queda pero se pierde la respuesta
+  /// y la persona reintenta, el servidor reconoce la llave y no resta dos
+  /// veces.
+  final String _operationId = const Uuid().v4();
 
   /// Solo los motivos que son SALIDA (rotura, vencido, limpieza, faltante,
   /// donación). Un conteo o una corrección se hacen desde el ajuste de
@@ -1544,6 +1594,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
   void initState() {
     super.initState();
     _selectedItemId = widget.initialItemId;
+    _quantityController.addListener(() => setState(() {}));
   }
 
   @override
@@ -1554,6 +1605,18 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
     super.dispose();
   }
 
+  InventoryItemSummary? get _selectedItem {
+    final id = _selectedItemId;
+    if (id == null) return null;
+    for (final i in widget.items) {
+      if (i.id == id) return i;
+    }
+    return null;
+  }
+
+  bool _hasPack(InventoryItemSummary item) =>
+      hasPack(item.packSize, item.purchaseUnit, baseUnit: item.unit);
+
   List<InventoryItemSummary> get _filteredItems {
     final q = _searchController.text.trim().toLowerCase();
     if (q.isEmpty) return widget.items;
@@ -1562,23 +1625,61 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
           (i) =>
               i.name.toLowerCase().contains(q) ||
               i.sku.toLowerCase().contains(q) ||
-              i.description.toLowerCase().contains(q),
+              i.description.toLowerCase().contains(q) ||
+              i.barcode.toLowerCase().contains(q),
         )
         .toList(growable: false);
+  }
+
+  void _select(InventoryItemSummary item) {
+    if (item.id != _selectedItemId) {
+      _selectedItemId = item.id;
+      _inPack = false;
+    }
+    _error = null;
+  }
+
+  /// La selección sigue a la búsqueda: un solo resultado queda elegido, y un
+  /// insumo que la búsqueda escondió deja de estarlo (nadie descuenta lo que
+  /// no está viendo).
+  void _onSearchChanged() {
+    final filtered = _filteredItems;
+    setState(() {
+      if (filtered.length == 1) {
+        _select(filtered.first);
+      } else if (_selectedItemId != null &&
+          !filtered.any((i) => i.id == _selectedItemId)) {
+        _selectedItemId = null;
+        _inPack = false;
+      }
+    });
+  }
+
+  double? get _typedQuantity {
+    final raw = _quantityController.text.trim().replaceAll(',', '.');
+    return double.tryParse(raw);
+  }
+
+  /// Cantidad en unidad BASE (lo que se resta del stock).
+  double? _baseQuantity(InventoryItemSummary item) {
+    final typed = _typedQuantity;
+    if (typed == null) return null;
+    return _inPack ? packToBase(typed, item.packSize) : typed;
   }
 
   @override
   Widget build(BuildContext context) {
     final filtered = _filteredItems;
+    final item = _selectedItem;
     return InventoryScanListener(
       enabled: true,
       items: widget.items,
       // En una salida, escanear elige el insumo y lo deja visible: la
       // cantidad y el motivo los pone la persona, que es el punto de
       // registrar una merma.
-      onItem: (item) {
-        _searchController.text = item.name;
-        setState(() => _selectedItemId = item.id);
+      onItem: (scanned) {
+        _searchController.text = scanned.name;
+        setState(() => _select(scanned));
       },
       child: AlertDialog(
       title: const Text('Registrar salida de inventario'),
@@ -1590,7 +1691,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
           children: [
             TextField(
               controller: _searchController,
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) => _onSearchChanged(),
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search_rounded, size: 20),
                 hintText: 'Buscar insumo...',
@@ -1604,7 +1705,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
                         icon: const Icon(Icons.close, size: 18),
                         onPressed: () {
                           _searchController.clear();
-                          setState(() {});
+                          _onSearchChanged();
                         },
                       ),
               ),
@@ -1626,15 +1727,15 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
                   : ListView.builder(
                       itemCount: filtered.length,
                       itemBuilder: (context, index) {
-                        final item = filtered[index];
-                        final selected = item.id == _selectedItemId;
+                        final row = filtered[index];
+                        final selected = row.id == _selectedItemId;
                         return ListTile(
                           dense: true,
                           selected: selected,
                           selectedTileColor:
                               AppColors.primary.withValues(alpha: 0.08),
                           title: Text(
-                            item.name,
+                            row.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -1643,8 +1744,8 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
                           ),
                           subtitle: Text(
                             [
-                              if (item.sku.isNotEmpty) item.sku,
-                              'Stock: ${item.stock.toStringAsFixed(2)} ${item.unit}',
+                              if (row.sku.isNotEmpty) row.sku,
+                              'Stock: ${_fmtOutflowQty(row.stock)} ${row.unit}',
                             ].join(' · '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -1658,21 +1759,47 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
                               : null,
                           onTap: _saving
                               ? null
-                              : () => setState(
-                                    () => _selectedItemId = item.id,
-                                  ),
+                              : () => setState(() => _select(row)),
                         );
                       },
                     ),
             ),
+            const SizedBox(height: 10),
+            _selectedBanner(item),
             const SizedBox(height: 12),
+            if (item != null && _hasPack(item)) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<bool>(
+                  segments: [
+                    ButtonSegment(value: false, label: Text(item.unit)),
+                    ButtonSegment(
+                      value: true,
+                      label: Text(item.purchaseUnit.trim()),
+                    ),
+                  ],
+                  selected: {_inPack},
+                  showSelectedIcon: false,
+                  onSelectionChanged: _saving
+                      ? null
+                      : (v) => setState(() => _inPack = v.first),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             TextField(
+              key: const Key('outflow-quantity'),
               controller: _quantityController,
+              enabled: !_saving,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
               decoration: InputDecoration(
                 labelText: 'Cantidad',
+                suffixText: item == null
+                    ? null
+                    : (_inPack ? item.purchaseUnit.trim() : item.unit),
+                helperText: _packHelper(item),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(AppRadius.card),
                 ),
@@ -1731,6 +1858,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _notesController,
+              enabled: !_saving,
               maxLines: 2,
               decoration: InputDecoration(
                 labelText: 'Notas (opcional)',
@@ -1763,6 +1891,7 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
+          key: const Key('outflow-submit'),
           onPressed: _saving ? null : _submit,
           child: Text(_saving ? 'Guardando...' : 'Registrar'),
         ),
@@ -1771,8 +1900,87 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
     );
   }
 
+  /// Qué insumo se va a descontar, siempre a la vista.
+  Widget _selectedBanner(InventoryItemSummary? item) {
+    final none = item == null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: none
+            ? AppColors.muted
+            : AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(
+          color: none
+              ? AppColors.border
+              : AppColors.primary.withValues(alpha: 0.35),
+        ),
+      ),
+      child: Text(
+        none
+            ? 'Toca en la lista el insumo que salió.'
+            : 'Insumo: ${item.name} · existencia '
+                  '${_fmtOutflowQty(item.stock)} ${item.unit}',
+        key: const Key('outflow-selected'),
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: none ? FontWeight.w500 : FontWeight.w700,
+          color: none ? AppColors.mutedForeground : AppColors.foreground,
+        ),
+      ),
+    );
+  }
+
+  String? _packHelper(InventoryItemSummary? item) {
+    if (item == null || !_inPack) return null;
+    final base = _baseQuantity(item);
+    if (base == null) {
+      return '1 ${item.purchaseUnit.trim()} = '
+          '${_fmtOutflowQty(item.packSize)} ${item.unit}';
+    }
+    return '= ${_fmtOutflowQty(base)} ${item.unit}';
+  }
+
+  Future<bool> _confirmOverStock(
+    InventoryItemSummary item,
+    double quantity,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('La salida es mayor que la existencia'),
+        content: Text(
+          'Vas a sacar ${_fmtOutflowQty(quantity)} ${item.unit} de '
+          '${item.name}, pero hay ${_fmtOutflowQty(item.stock)} ${item.unit}. '
+          'Quedará en ${_fmtOutflowQty(item.stock - quantity)} ${item.unit}.\n\n'
+          'Revisa la cantidad. ¿Registrar igual?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Revisar'),
+          ),
+          FilledButton(
+            key: const Key('outflow-overstock-confirm'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Registrar igual'),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
   Future<void> _submit() async {
-    final quantity = double.tryParse(_quantityController.text.trim()) ?? 0;
+    // Un segundo toque antes del rebuild no manda otra salida.
+    if (_saving) return;
+    final item = _selectedItem;
+    if (item == null) {
+      setState(() => _error = 'Elige en la lista el insumo que salió');
+      return;
+    }
+    final quantity = _baseQuantity(item) ?? 0;
     if (quantity <= 0) {
       setState(() => _error = 'Ingresa la cantidad que salió');
       return;
@@ -1782,25 +1990,37 @@ class _InventoryOutflowDialogState extends State<_InventoryOutflowDialog> {
       setState(() => _error = 'Selecciona el motivo de la salida');
       return;
     }
+    if (quantity > item.stock + 0.000001) {
+      final go = await _confirmOverStock(item, quantity);
+      if (!go || !mounted) return;
+    }
 
+    final notes = _notesController.text.trim().isEmpty
+        ? null
+        : _notesController.text.trim();
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await widget.onSubmit(
-        _selectedItemId,
-        quantity,
-        reason,
-        _notesController.text.trim().isEmpty
-            ? null
-            : _notesController.text.trim(),
-      );
+      await widget.onSubmit(item, quantity, reason, notes, _operationId);
       if (!mounted) return;
-      Navigator.of(context).pop();
-    } catch (_) {
+      Navigator.of(context).pop<_SavedOutflow>((
+        item: item,
+        quantity: quantity,
+        reason: reason,
+        notes: notes,
+      ));
+    } catch (e) {
       if (mounted) {
-        setState(() => _error = 'No se pudo registrar la salida. Intenta de nuevo.');
+        final raw = '$e';
+        setState(
+          () => _error = raw.contains('INVENTORY_ACCESS_DENIED')
+              ? 'Tu rol no puede registrar salidas: solo dueño, '
+                    'administrador o gerente.'
+              : 'No se pudo registrar la salida. Puedes reintentar: no se '
+                    'descontará dos veces.',
+        );
       }
     } finally {
       if (mounted) {

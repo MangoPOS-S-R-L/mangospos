@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mangopos/core/fiscal/payment_stage.dart';
+import 'package:mangopos/data/models/payment_attempt_lease.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/sales_repository_improved.dart';
 import 'package:mangopos/presentation/sales/viewmodel/payment_split_viewmodel.dart';
@@ -21,6 +22,15 @@ class _Sales extends SalesRepositoryImproved {
   final dates = <DateTime?>[];
   bool failSecond = false;
   Completer<void>? gate;
+
+  @override
+  Future<PaymentAttemptLease?> acquirePaymentAttempt({
+    required String orderId,
+    String? checkId,
+    required String attemptId,
+    String? deviceId,
+    String? holderLabel,
+  }) async => const PaymentAttemptLease(acquired: true);
 
   @override
   Future<Payment> processPayment({
@@ -38,6 +48,7 @@ class _Sales extends SalesRepositoryImproved {
     int splitSequence = 0,
     bool closeCheck = true,
     DateTime? paidAt,
+    String? attemptId,
   }) async {
     calls.add(splitSequence);
     dates.add(paidAt);

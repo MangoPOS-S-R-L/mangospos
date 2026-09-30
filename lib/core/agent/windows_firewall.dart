@@ -29,6 +29,10 @@ class WindowsFirewall {
   static const String defaultRuleName = 'MangoPOS Print Agent';
   static const int defaultPort = 4000;
 
+  /// Restricted rule for the in-process Windows Hub, separate from Node.
+  static Future<bool> ensureHubRule() =>
+      ensureRule(name: 'MangoPOS Hub LAN', port: 4100, localSubnetOnly: true);
+
   // Se setea a true tras el primer addRule fallido en la sesion para evitar
   // spam de UAC si el usuario dice "No". Reset al reiniciar la app — nuevo
   // arranque, nueva chance.
@@ -70,6 +74,7 @@ class WindowsFirewall {
   static Future<bool> addRule({
     String name = defaultRuleName,
     int port = defaultPort,
+    bool localSubnetOnly = false,
   }) async {
     if (kIsWeb || !Platform.isWindows) return true;
 
@@ -85,18 +90,22 @@ class WindowsFirewall {
         'try { '
         'Start-Process netsh -ArgumentList '
         '"advfirewall firewall add rule name=`"$name`" '
-        'dir=in action=allow protocol=TCP localport=$port" '
+        'dir=in action=allow protocol=TCP localport=$port'
+        '${localSubnetOnly ? ' remoteip=LocalSubnet profile=private,domain' : ''}" '
         '-Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop; '
         'exit 0 '
         '} catch { exit 1 }';
 
     try {
-      _log('intentando agregar regla "$name" puerto $port (UAC se va a abrir)…');
-      final r = await Process.run(
-        'powershell',
-        ['-NoProfile', '-NonInteractive', '-Command', psCommand],
-        runInShell: true,
+      _log(
+        'intentando agregar regla "$name" puerto $port (UAC se va a abrir)…',
       );
+      final r = await Process.run('powershell', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        psCommand,
+      ], runInShell: true);
       if (r.exitCode != 0) {
         _log(
           'powershell exit=${r.exitCode}. Probable: usuario cancelo UAC. '
@@ -130,6 +139,7 @@ class WindowsFirewall {
   static Future<bool> ensureRule({
     String name = defaultRuleName,
     int port = defaultPort,
+    bool localSubnetOnly = false,
   }) async {
     if (kIsWeb || !Platform.isWindows) return true;
 
@@ -146,6 +156,10 @@ class WindowsFirewall {
       return false;
     }
 
-    return await addRule(name: name, port: port);
+    return await addRule(
+      name: name,
+      port: port,
+      localSubnetOnly: localSubnetOnly,
+    );
   }
 }

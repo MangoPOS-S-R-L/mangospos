@@ -10,6 +10,7 @@ import '../../../data/repositories/suppliers_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
 import '../state/inventory_warehouse_scope.dart';
+import '../../../core/utils/app_time.dart';
 
 final inventoryRepositoryProvider = Provider<InventoryRepository>((ref) {
   return InventoryRepository(Supabase.instance.client);
@@ -290,11 +291,16 @@ class InventoryViewModel extends ChangeNotifier {
     }
   }
 
+  /// [operationId] = llave de ESTA salida (una por diálogo, la misma en cada
+  /// reintento): el servidor no la resta dos veces. [costPerUnit] = costo del
+  /// insumo, para que el kardex valore la merma igual que el conduce impreso.
   Future<void> registerOutflow({
     required String itemId,
     required double quantity,
     required String reasonCode,
     required String reasonLabel,
+    required String operationId,
+    double? costPerUnit,
     String? notes,
   }) async {
     final businessId = _state.businessId;
@@ -315,6 +321,8 @@ class InventoryViewModel extends ChangeNotifier {
         reasonCode: reasonCode,
         reasonLabel: reasonLabel,
         notes: notes,
+        costPerUnit: costPerUnit,
+        operationId: operationId,
       );
       _state = _state.copyWith(saving: false);
       // La recarga NO se espera: el diálogo cierra e imprime el conduce ya,
@@ -435,6 +443,25 @@ class InventoryViewModel extends ChangeNotifier {
     }
   }
 
+  /// Salidas (`waste`) de HOY en la bodega seleccionada, para el conduce A4.
+  /// Consulta propia: la lista de la pantalla son los últimos 60 movimientos
+  /// de TODOS los tipos, y en una bodega con ventas las salidas de la mañana
+  /// ya no están ahí al mediodía. "Hoy" es el día de RD, no el UTC.
+  Future<List<InventoryMovementEntry>> loadTodayOutflows() async {
+    final businessId = _state.businessId;
+    final warehouseId = _state.selectedWarehouseId;
+    if (businessId == null || warehouseId == null) return const [];
+    final range = AppTime.todayRangeUtc();
+    return _repository.getMovements(
+      businessId: businessId,
+      warehouseId: warehouseId,
+      movementType: 'waste',
+      fromUtc: range.fromUtc,
+      toUtc: range.toUtc,
+      limit: 500,
+    );
+  }
+
   Future<void> _reloadLists() async {
     final businessId = _state.businessId;
     final warehouseId = _state.selectedWarehouseId;
@@ -455,10 +482,14 @@ class InventoryViewModel extends ChangeNotifier {
       warehouseId: warehouseId,
       query: _state.searchQuery,
     );
-    final movementsFuture = _repository.getMovements(
-      businessId: businessId,
-      warehouseId: warehouseId,
-    );
+    // Sin red, los movimientos no tienen copia local: se conservan los que ya
+    // había en pantalla en vez de tumbar toda la recarga. Antes, una salida
+    // encolada offline terminaba en «Error refrescando inventario» justo
+    // después de guardarse, y la gente la volvía a registrar.
+    final previousMovements = _state.movements;
+    final movementsFuture = _repository
+        .getMovements(businessId: businessId, warehouseId: warehouseId)
+        .catchError((Object _) => previousMovements);
     final results = await Future.wait<Object>([itemsFuture, movementsFuture]);
     final items = results[0] as List<InventoryItemSummary>;
     final movements = results[1] as List<InventoryMovementEntry>;

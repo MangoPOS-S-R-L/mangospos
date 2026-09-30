@@ -1405,7 +1405,11 @@ class ReportsRepository {
           .eq('is_active', true),
     );
 
+    // Una compra ANULADA (20260929_0050) no es compra: se ve en el desglose
+    // por estado, pero no suma al total, al promedio ni al ranking de
+    // proveedores.
     final supplierIds = orders
+        .where((row) => row['status']?.toString() != 'cancelled')
         .map((row) => row['supplier_id']?.toString())
         .whereType<String>()
         .toSet()
@@ -1416,6 +1420,8 @@ class ReportsRepository {
         row['id']?.toString() ?? '': row['name']?.toString() ?? 'Proveedor',
     };
 
+    int liveCount = 0;
+    int cancelledCount = 0;
     double totalOrdered = 0;
     double totalReceived = 0;
     int receivedCount = 0;
@@ -1428,7 +1434,6 @@ class ReportsRepository {
       final total = _toDouble(order['total']);
       final status = order['status']?.toString() ?? 'draft';
       final supplierId = order['supplier_id']?.toString() ?? '';
-      totalOrdered += total;
 
       final statusBucket = statusBuckets.putIfAbsent(
         status,
@@ -1440,6 +1445,13 @@ class ReportsRepository {
       );
       statusBucket['amount'] = _toDouble(statusBucket['amount']) + total;
       statusBucket['count'] = (statusBucket['count'] as int) + 1;
+
+      if (status == 'cancelled') {
+        cancelledCount += 1;
+        continue;
+      }
+      liveCount += 1;
+      totalOrdered += total;
 
       final supplierLabel =
           suppliersById[supplierId] ?? 'Proveedor no asignado';
@@ -1464,7 +1476,7 @@ class ReportsRepository {
       }
     }
 
-    final avgOrder = orders.isEmpty ? 0.0 : totalOrdered / orders.length;
+    final avgOrder = liveCount == 0 ? 0.0 : totalOrdered / liveCount;
     final supplierRows = supplierBuckets.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
@@ -1475,7 +1487,8 @@ class ReportsRepository {
     return {
       'from': fromIso,
       'to': toIso,
-      'orders_count': orders.length,
+      'orders_count': liveCount,
+      'cancelled_count': cancelledCount,
       'suppliers_count': suppliers.length,
       'suppliers_with_orders_count': supplierIds.length,
       'total_ordered': totalOrdered,

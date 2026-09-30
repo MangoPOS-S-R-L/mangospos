@@ -200,9 +200,8 @@ class HubBaselineService {
       final rows = await _client
           .from('order_items')
           .select(
-            'id, order_id, product_name, qty, quantity, unit_price, '
-            'check_id, is_takeout, notes, status, created_at, '
-            'started_at, ready_at',
+            '*, modifiers:order_item_modifiers(*), '
+            'tax_lines:order_item_tax_lines(*)',
           )
           .inFilter('order_id', chunk)
           .inFilter('status', _liveItemStatuses);
@@ -243,6 +242,7 @@ class HubBaselineService {
         'order_id': orderId,
         'table_id': tableId,
         'item_id': itemId,
+        'item_snapshot': item,
         'product_name': item['product_name']?.toString() ?? 'Producto',
         'qty': (item['qty'] as num?) ?? (item['quantity'] as num?) ?? 1,
         'unit_price': (item['unit_price'] as num?) ?? 0,

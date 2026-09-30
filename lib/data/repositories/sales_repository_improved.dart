@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/sales_queries.dart';
+import '../models/payment_attempt_lease.dart';
 import '../models/sales_models.dart';
 import '../utils/payment_recovery.dart';
 import '../utils/business_id_resolver.dart';
@@ -356,29 +357,31 @@ class SalesRepositoryImproved {
     int splitSequence = 0,
     bool closeCheck = true,
     DateTime? paidAt,
+    // Intento del modal (20260929_0002): cobra bajo el candado de la cuenta,
+    // que impide que otro equipo cobre la misma cuenta a la vez.
+    String? attemptId,
   }) async {
     try {
-      final response = await _client
-          .rpc(
-            SalesQueries.rpcProcessPayment,
-            params: {
-              'p_order_id': orderId,
-              'p_check_id': checkId,
-              'p_payment_method_id': paymentMethodId,
-              'p_amount': amount,
-              'p_reference': reference,
-              'p_change_amount': changeAmount,
-              'p_customer_id': customerId,
-              'p_customer_rnc': customerRnc,
-              'p_requested_ncf_type': fiscalType,
-              'p_cashier_session_id': cashierSessionId,
-              'p_close_order': closeOrder,
-              'p_split_sequence': splitSequence,
-              'p_close_check': closeCheck,
-              if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
-            },
-          )
-          .timeout(const Duration(seconds: 12));
+      final params = <String, dynamic>{
+        'p_order_id': orderId,
+        'p_check_id': checkId,
+        'p_payment_method_id': paymentMethodId,
+        'p_amount': amount,
+        'p_reference': reference,
+        'p_change_amount': changeAmount,
+        'p_customer_id': customerId,
+        'p_customer_rnc': customerRnc,
+        'p_requested_ncf_type': fiscalType,
+        'p_cashier_session_id': cashierSessionId,
+        'p_close_order': closeOrder,
+        'p_split_sequence': splitSequence,
+        'p_close_check': closeCheck,
+        if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
+      };
+      final response = await _rpcProcessPayment(
+        params,
+        attemptId,
+      ).timeout(const Duration(seconds: 12));
 
       debugPrint('Rpc Response Type: ${response.runtimeType}');
       if (response is! Map) {
@@ -398,9 +401,25 @@ class SalesRepositoryImproved {
     } catch (e, s) {
       debugPrint('⚠️ Error en RPC processPayment: $e\nStack: $s');
       final msg = e.toString();
+      if (e is StateError && msg.contains('migración del candado')) {
+        rethrow;
+      }
+      if (msg.contains('PAYMENT_ATTEMPT_EXPIRED')) {
+        throw StateError(
+          'El candado de cobro venció. No se registró este abono. '
+          'Revisa el saldo actualizado y reintenta el mismo cobro.',
+        );
+      }
       if (msg.contains('CASH_SESSION_REQUIRED') ||
           msg.contains('CASH_SESSION_NOT_OPEN')) {
         rethrow;
+      }
+      // Otro equipo tiene el candado de la cuenta: el servidor rechazó ANTES
+      // de grabar nada, así que aquí no se cobró.
+      if (msg.contains(paymentLockedCode)) {
+        throw Exception(
+          '$paymentLockedCode: otro equipo está cobrando esta cuenta.',
+        );
       }
       if (msg.contains('Demasiadas colisiones de NCF')) {
         final recovered = await _recoverCompletedPaymentAfterNcfCollision(
@@ -440,6 +459,109 @@ class SalesRepositoryImproved {
       throw Exception(
         'No se pudo confirmar el resultado del pago. No asumas que fue cancelado: $e',
       );
+    }
+  }
+
+  // ============================================================
+  // 🔒 CANDADO DE COBRO POR CUENTA (20260929_0002)
+  // ============================================================
+
+  static const paymentLockedCode = 'PAYMENT_LOCKED_BY_OTHER_DEVICE';
+
+  /// Cuándo se vio que el candado no existe en esta base (migración sin
+  /// aplicar). Mientras sea reciente no se vuelve a probar en cada cobro.
+  static DateTime? _attemptLockMissingAt;
+  static const _attemptLockRecheck = Duration(minutes: 5);
+
+  @visibleForTesting
+  static void debugResetAttemptLockProbe() => _attemptLockMissingAt = null;
+
+  static bool _isMissingFunction(Object e) =>
+      e is PostgrestException && e.code == 'PGRST202';
+
+  bool get _attemptLockKnownMissing {
+    final at = _attemptLockMissingAt;
+    return at != null && DateTime.now().difference(at) < _attemptLockRecheck;
+  }
+
+  Future<dynamic> _rpcProcessPayment(
+    Map<String, dynamic> params,
+    String? attemptId,
+  ) async {
+    if (attemptId != null && attemptId.isNotEmpty) {
+      if (_attemptLockKnownMissing) {
+        throw StateError('Falta aplicar la migración del candado de cobros.');
+      }
+      try {
+        final response = await _client.rpc(
+          SalesQueries.rpcProcessPaymentAttempt,
+          params: {'p_attempt_id': attemptId, ...params},
+        );
+        _attemptLockMissingAt = null;
+        return response;
+      } catch (e) {
+        // Sin el envoltorio no se debe cobrar por la RPC sin candado.
+        if (!_isMissingFunction(e)) rethrow;
+        _attemptLockMissingAt = DateTime.now();
+        throw StateError('Falta aplicar la migración del candado de cobros.');
+      }
+    }
+    return _client.rpc(SalesQueries.rpcProcessPayment, params: params);
+  }
+
+  /// Toma el candado de cobro. Si la migración falta, bloquea el cobro online.
+  Future<PaymentAttemptLease?> acquirePaymentAttempt({
+    required String orderId,
+    String? checkId,
+    required String attemptId,
+    String? deviceId,
+    String? holderLabel,
+  }) async {
+    if (_attemptLockKnownMissing) {
+      throw StateError('Falta aplicar la migración del candado de cobros.');
+    }
+    try {
+      final response = await _client
+          .rpc(
+            SalesQueries.rpcPaymentAttemptAcquire,
+            params: {
+              'p_order_id': orderId,
+              'p_attempt_id': attemptId,
+              'p_check_id': checkId,
+              'p_device_id': deviceId,
+              'p_holder_label': holderLabel,
+            },
+          )
+          .timeout(const Duration(seconds: 6));
+      _attemptLockMissingAt = null;
+      return PaymentAttemptLease.fromMap(
+        Map<String, dynamic>.from(response as Map),
+      );
+    } catch (e) {
+      if (_isMissingFunction(e)) {
+        _attemptLockMissingAt = DateTime.now();
+        throw StateError('Falta aplicar la migración del candado de cobros.');
+      }
+      rethrow;
+    }
+  }
+
+  /// Suelta el candado (cobro abortado antes de grabar). Nunca lanza: si no
+  /// llega, vence solo.
+  Future<void> releasePaymentAttempt({
+    required String orderId,
+    required String attemptId,
+  }) async {
+    if (_attemptLockKnownMissing) return;
+    try {
+      await _client
+          .rpc(
+            SalesQueries.rpcPaymentAttemptRelease,
+            params: {'p_order_id': orderId, 'p_attempt_id': attemptId},
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('[payment-lock] no se pudo soltar el candado: $e');
     }
   }
 

@@ -130,18 +130,83 @@ void main() {
       },
     );
 
-    test('delete_item reduce el conteo; si quedan 0 la mesa se libera', () {
+    test(
+      'delete_item no libera una mesa abierta aunque el conteo llegue a 0',
+      () {
+        final ops = [
+          _op(1, 'add_item', {
+            'order_id': 'o1',
+            'table_id': 't1',
+            'item_id': 'i1',
+            'product_price': 100,
+            'qty': 1,
+          }),
+          _op(2, 'delete_item', {'order_id': 'o1', 'item_id': 'i1'}),
+        ];
+        final salon = HubOrderProjector.projectSalon(ops);
+        expect(salon, hasLength(1));
+        expect(salon.single.orderId, 'o1');
+        expect(salon.single.itemsCount, 0);
+        expect(HubOrderProjector.projectOrder(ops, tableId: 't1'), isNotNull);
+      },
+    );
+
+    test('open_table sin items permanece visible hasta cierre explícito', () {
       final ops = [
-        _op(1, 'add_item', {
-          'order_id': 'o1',
-          'table_id': 't1',
+        _op(1, 'open_table', {'order_id': 'o1', 'table_id': 't1'}),
+      ];
+      expect(HubOrderProjector.projectSalon(ops).single.itemsCount, 0);
+      ops.add(_op(2, 'void_order', {'order_id': 'o1'}));
+      expect(HubOrderProjector.projectSalon(ops), isEmpty);
+    });
+
+    test('orden anulada antigua no oculta la nueva orden de la misma mesa', () {
+      final ops = [
+        _op(1, 'open_table', {'order_id': 'old', 'table_id': 't1'}),
+        _op(2, 'void_order', {'order_id': 'old'}),
+        _op(3, 'open_table', {'order_id': 'new', 'table_id': 't1'}),
+        _op(4, 'add_item', {
+          'order_id': 'new',
           'item_id': 'i1',
           'product_price': 100,
           'qty': 1,
         }),
-        _op(2, 'delete_item', {'order_id': 'o1', 'item_id': 'i1'}),
       ];
-      expect(HubOrderProjector.projectSalon(ops), isEmpty);
+      expect(
+        HubOrderProjector.projectOrder(ops, tableId: 't1')?.orderId,
+        'new',
+      );
+      expect(HubOrderProjector.projectOrder(ops, orderId: 'old'), isNull);
+      expect(HubOrderProjector.projectSalon(ops).single.orderId, 'new');
+    });
+
+    test('orden nueva vacía no tapa otra abierta con productos', () {
+      final ops = [
+        _op(1, 'open_table', {'order_id': 'with-items', 'table_id': 't1'}),
+        _op(2, 'add_item', {
+          'order_id': 'with-items',
+          'item_id': 'i1',
+          'product_price': 100,
+          'qty': 1,
+        }),
+        _op(3, 'open_table', {'order_id': 'empty', 'table_id': 't1'}),
+      ];
+      expect(
+        HubOrderProjector.projectOrder(ops, tableId: 't1')?.orderId,
+        'with-items',
+      );
+      expect(HubOrderProjector.projectSalon(ops).single.orderId, 'with-items');
+    });
+
+    test('sin ID de orden ni de mesa no devuelve una venta rapida', () {
+      final ops = [
+        _op(1, 'add_item', {
+          'order_id': 'quick',
+          'item_id': 'i1',
+          'product_price': 100,
+        }),
+      ];
+      expect(HubOrderProjector.projectOrder(ops), isNull);
     });
 
     test('void_order libera la mesa', () {
@@ -339,9 +404,9 @@ void main() {
         }),
         _op(3, 'delete_item', {'order_id': 'o1', 'item_id': 'i1'}),
       ];
-      // projectSalon la oculta (0 ítems) pero sus ops se conservan para que un
-      // add_item posterior siga asociando la mesa.
-      expect(HubOrderProjector.projectSalon(ops), isEmpty);
+      // Una proyección vacía no equivale a una anulación: la mesa y sus ops
+      // siguen visibles para que un add_item posterior no quede huérfano.
+      expect(HubOrderProjector.projectSalon(ops).single.itemsCount, 0);
       expect(HubOrderProjector.openOrderIds(ops), {'o1'});
     });
 

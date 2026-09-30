@@ -36,39 +36,49 @@ class HubOrderProjector {
     String? tableId,
   }) {
     final byOrder = _fold(ops);
-    for (final acc in byOrder.values) {
-      final matchesOrder = orderId != null && acc.orderId == orderId;
-      final matchesTable = tableId != null && acc.tableId == tableId;
-      if (matchesOrder || matchesTable) {
-        if (acc.voided) return null;
-        return acc.toOrderState();
+    if (orderId != null) {
+      final acc = byOrder[orderId];
+      return acc == null || acc.voided || acc.closed
+          ? null
+          : acc.toOrderState();
+    }
+    if (tableId == null) return null;
+    // Una mesa puede tener una orden anterior en el baseline y otra nueva en
+    // el log. Una orden vacía nueva no debe tapar otra con productos vivos.
+    HubOrderState? emptyOrder;
+    for (final acc in byOrder.values.toList().reversed) {
+      if (acc.tableId == tableId && !acc.voided && !acc.closed) {
+        if (acc.items.isNotEmpty) return acc.toOrderState();
+        emptyOrder ??= acc.toOrderState();
       }
     }
-    return null;
+    return emptyOrder;
   }
 
-  /// Estado del salón: una entrada por mesa OCUPADA (orden abierta con ítems,
-  /// no anulada ni totalmente pagada). Es el equivalente LAN de
+  /// Estado del salón: una entrada por mesa con orden abierta, aunque su
+  /// proyección todavía no tenga ítems. Solo un cierre explícito la libera.
+  /// Es el equivalente LAN de
   /// `v_zone_table_status` para el grid.
   static List<HubTableState> projectSalon(List<Map<String, dynamic>> ops) {
     final byOrder = _fold(ops);
-    final result = <HubTableState>[];
+    final byTable = <String, HubTableState>{};
     for (final acc in byOrder.values) {
       if (acc.tableId == null) continue; // solo mesas (no venta rápida/manual)
       if (acc.voided || acc.closed) continue;
       final liveItems = acc.items.values.toList(growable: false);
-      if (liveItems.isEmpty) continue;
-      result.add(
-        HubTableState(
-          tableId: acc.tableId!,
-          orderId: acc.orderId,
-          itemsCount: liveItems.length,
-          total: acc.total,
-          sentToKitchen: acc.sent,
-        ),
+      final existing = byTable[acc.tableId!];
+      if (existing != null && existing.itemsCount > 0 && liveItems.isEmpty) {
+        continue;
+      }
+      byTable[acc.tableId!] = HubTableState(
+        tableId: acc.tableId!,
+        orderId: acc.orderId,
+        itemsCount: liveItems.length,
+        total: acc.total,
+        sentToKitchen: acc.sent,
       );
     }
-    return result;
+    return byTable.values.toList(growable: false);
   }
 
   /// IDs de las órdenes AÚN ABIERTAS en [ops] (existen y no están cerradas por
@@ -117,20 +127,32 @@ class HubOrderProjector {
           final acc = accFor(orderId, op);
           final itemId = op['item_id']?.toString() ?? '';
           if (itemId.isEmpty) break;
+          final snapshot = op['item_snapshot'] is Map
+              ? Map<String, dynamic>.from(op['item_snapshot'] as Map)
+              : <String, dynamic>{};
           acc.items[itemId] = _ItemAcc(
             id: itemId,
-            productName: op['product_name']?.toString() ?? 'Producto',
+            productName:
+                op['product_name']?.toString() ??
+                snapshot['product_name']?.toString() ??
+                'Producto',
             quantity:
                 (op['qty'] as num?)?.toDouble() ??
                 (op['quantity'] as num?)?.toDouble() ??
+                (snapshot['qty'] as num?)?.toDouble() ??
                 1,
             unitPrice:
                 (op['product_price'] as num?)?.toDouble() ??
                 (op['unit_price'] as num?)?.toDouble() ??
+                (snapshot['unit_price'] as num?)?.toDouble() ??
                 0,
-            checkPos: op['check_pos']?.toString(),
-            notes: op['notes']?.toString(),
-            takeout: op['takeout'] == true || op['is_takeout'] == true,
+            checkPos:
+                op['check_pos']?.toString() ?? snapshot['check_id']?.toString(),
+            notes: op['notes']?.toString() ?? snapshot['notes']?.toString(),
+            takeout:
+                (op['takeout'] ?? op['is_takeout'] ?? snapshot['is_takeout']) ==
+                true,
+            snapshot: snapshot,
           );
           break;
         case 'delete_item':
@@ -139,10 +161,12 @@ class HubOrderProjector {
         case 'update_item_quantity':
           final it = orders[orderId]?.items[op['item_id']?.toString()];
           if (it != null) {
+            final oldQuantity = it.quantity;
             it.quantity =
                 (op['quantity'] as num?)?.toDouble() ??
                 (op['qty'] as num?)?.toDouble() ??
                 it.quantity;
+            it.updateSnapshot(op, previousQuantity: oldQuantity);
           }
           break;
         case 'update_item_notes':
@@ -151,7 +175,10 @@ class HubOrderProjector {
           break;
         case 'toggle_item_takeout':
           final it = orders[orderId]?.items[op['item_id']?.toString()];
-          if (it != null) it.takeout = op['is_takeout'] == true;
+          if (it != null) {
+            it.takeout = op['is_takeout'] == true;
+            it.updateSnapshot(op);
+          }
           break;
         case 'move_item_to_check':
           final it = orders[orderId]?.items[op['item_id']?.toString()];
@@ -228,6 +255,7 @@ class HubOrderItemState {
     this.checkPos,
     this.notes,
     this.takeout = false,
+    this.snapshot = const {},
   });
 
   final String id;
@@ -237,15 +265,30 @@ class HubOrderItemState {
   final String? checkPos;
   final String? notes;
   final bool takeout;
+  final Map<String, dynamic> snapshot;
+
+  double get subtotal =>
+      (snapshot['subtotal'] as num?)?.toDouble() ?? quantity * unitPrice;
+  double get tax => (snapshot['tax'] as num?)?.toDouble() ?? 0;
+  double get discounts => (snapshot['discounts'] as num?)?.toDouble() ?? 0;
+  double get total =>
+      (snapshot['total'] as num?)?.toDouble() ?? subtotal + tax - discounts;
 
   Map<String, dynamic> toJson() => {
+    ...snapshot,
     'id': id,
     'product_name': productName,
     'quantity': quantity,
+    'qty': quantity,
     'unit_price': unitPrice,
     if (checkPos != null) 'check_pos': checkPos,
-    if (notes != null) 'notes': notes,
     'takeout': takeout,
+    'is_takeout': takeout,
+    'notes': notes,
+    'subtotal': subtotal,
+    'tax': tax,
+    'discounts': discounts,
+    'total': total,
   };
 }
 
@@ -270,6 +313,9 @@ class HubOrderState {
     'items': items.map((i) => i.toJson()).toList(growable: false),
     'total': total,
     'sent_to_kitchen': sentToKitchen,
+    'subtotal': items.fold<double>(0, (sum, item) => sum + item.subtotal),
+    'tax': items.fold<double>(0, (sum, item) => sum + item.tax),
+    'discounts': items.fold<double>(0, (sum, item) => sum + item.discounts),
   };
 }
 
@@ -285,7 +331,7 @@ class _OrderAcc {
   double get total {
     var t = 0.0;
     for (final it in items.values) {
-      t += it.quantity * it.unitPrice;
+      t += it.toState().total;
     }
     return t;
   }
@@ -308,6 +354,7 @@ class _ItemAcc {
     this.checkPos,
     this.notes,
     this.takeout = false,
+    this.snapshot = const {},
   });
 
   final String id;
@@ -317,6 +364,39 @@ class _ItemAcc {
   String? checkPos;
   String? notes;
   bool takeout;
+  Map<String, dynamic> snapshot;
+
+  void updateSnapshot(Map<String, dynamic> op, {double? previousQuantity}) {
+    final supplied = op['item_snapshot'];
+    if (supplied is Map && supplied['id'] == id) {
+      snapshot = Map<String, dynamic>.from(supplied);
+      return;
+    }
+    // Old clients send quantity only. Preserve their captured unit amounts
+    // rather than silently dropping extras and taxes from the line.
+    if (snapshot.isEmpty || previousQuantity == null || previousQuantity <= 0) {
+      return;
+    }
+    final ratio = quantity / previousQuantity;
+    snapshot = {...snapshot};
+    for (final field in ['subtotal', 'tax', 'discounts', 'total']) {
+      final amount = snapshot[field];
+      if (amount is num) {
+        snapshot[field] = double.parse((amount * ratio).toStringAsFixed(2));
+      }
+    }
+    snapshot['tax_lines'] = ((snapshot['tax_lines'] as List?) ?? const [])
+        .whereType<Map>()
+        .map(
+          (line) => {
+            ...line,
+            'amount': double.parse(
+              (((line['amount'] as num?) ?? 0) * ratio).toStringAsFixed(2),
+            ),
+          },
+        )
+        .toList(growable: false);
+  }
 
   HubOrderItemState toState() => HubOrderItemState(
     id: id,
@@ -326,5 +406,6 @@ class _ItemAcc {
     checkPos: checkPos,
     notes: notes,
     takeout: takeout,
+    snapshot: snapshot,
   );
 }

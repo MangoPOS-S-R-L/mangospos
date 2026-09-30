@@ -574,6 +574,9 @@ class HubClient {
     String? notes,
     List<Map<String, dynamic>> modifiers = const [],
     String? employeeId,
+    // Mismo id que lleva la op de respaldo si este POST no responde: el Hub y
+    // el replay de la op deduplican contra él (20260929_0001).
+    String? clientOpId,
   }) async {
     try {
       final resp = await _http
@@ -589,6 +592,7 @@ class HubClient {
               if (notes != null) 'notes': notes,
               if (modifiers.isNotEmpty) 'modifiers': modifiers,
               if (employeeId != null) 'employee_id': employeeId,
+              'client_op_id': ?clientOpId,
             }),
           )
           .timeout(_opTimeout);
