@@ -9,6 +9,7 @@
 /// Funciones puras.
 library;
 
+import 'item_classification.dart';
 import 'suggested_order.dart';
 
 const double _eps = 1e-9;
@@ -170,13 +171,7 @@ const minStockExportHeaders = [
 /// Columnas que llegan a Excel como número.
 const minStockExportNumericColumns = [6, 7, 8, 9, 10, 11];
 
-String _classificationLabel(String value) => switch (value) {
-      'raw_material' => 'Materia prima',
-      'finished_product' => 'Producto terminado',
-      'combo' => 'Combo',
-      'service' => 'Servicio',
-      _ => 'Simple',
-    };
+String _classificationLabel(String value) => itemClassificationLabel(value);
 
 String _qty(double value) {
   if (value == value.roundToDouble()) return value.toStringAsFixed(0);

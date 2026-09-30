@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -65,6 +69,55 @@ void main() {
     sales.scheduleEmptyTableRelease('order-1', tableId: 'mesa-9');
 
     expect(SalesRepository.pendingEmptyTableReleaseCount, 1);
+  });
+
+  test('dispose no pierde el callback del cierre confirmado', () async {
+    final confirmed = Completer<bool>();
+    final repository = SalesRepository(
+      SupabaseClient(
+        'http://localhost:54321',
+        'test-anon-key',
+        httpClient: MockClient(
+          (request) async => http.Response(
+            '{"released":true}',
+            200,
+            headers: {'content-type': 'application/json'},
+            request: request,
+          ),
+        ),
+      ),
+    );
+
+    repository.scheduleEmptyTableRelease(
+      'order-result',
+      tableId: 'mesa-result',
+      onResult: confirmed.complete,
+    );
+    repository.scheduleEmptyTableRelease(
+      'order-result',
+      tableId: 'mesa-result',
+    );
+
+    expect(await confirmed.future.timeout(const Duration(seconds: 2)), isTrue);
+    expect(SalesRepository.pendingEmptyTableReleaseCount, 0);
+  });
+
+  test('la liberacion LAN usa la accion durable programada', () async {
+    final completed = Completer<bool>();
+    var calls = 0;
+    sales.scheduleEmptyTableRelease(
+      'order-lan',
+      tableId: 'mesa-lan',
+      release: () async {
+        calls++;
+        return true;
+      },
+      onResult: completed.complete,
+    );
+    sales.scheduleEmptyTableRelease('order-lan', tableId: 'mesa-lan');
+
+    expect(await completed.future.timeout(const Duration(seconds: 2)), isTrue);
+    expect(calls, 1);
   });
 
   test('mesas distintas no se pisan', () {

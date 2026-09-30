@@ -1,6 +1,7 @@
 import 'package:mangopos/core/tax/tax_engine.dart';
 
 import '../models/sales_models.dart';
+import 'loyalty_reward_utils.dart' show loyaltyMarkerPrefix;
 
 double _r(double v) => double.parse(v.toStringAsFixed(2));
 
@@ -16,17 +17,24 @@ bool _notesHasDealMarker(String? notes) {
 }
 
 /// Convierte las notas internas de un item en texto legible (UI y tickets):
-/// oculta los marcadores técnicos ([DEAL:...], [PROMO_AUTO:...], [CORTESIA:...])
-/// y, si era una línea de OFERTA sin otra nota, muestra "Oferta aplicada".
+/// oculta los marcadores técnicos ([DEAL:...], [PROMO_AUTO:...], [CORTESIA:...],
+/// [LOYALTY:...]) y, si era una línea de OFERTA sin otra nota, muestra
+/// "Oferta aplicada". El premio de la tarjeta de sellos se nombra SIEMPRE
+/// ("Premio de fidelidad"): el cajero tiene que ver qué línea es la gratis.
 /// Devuelve '' cuando no queda nada visible (el caller no debe imprimir "NOTA:").
 String cleanOrderItemNote(String? raw) {
   if (raw == null || raw.trim().isEmpty) return '';
   var isDeal = false;
+  var isLoyaltyReward = false;
   final visible = <String>[];
   for (final line in raw.split('\n').map((l) => l.trim())) {
     if (line.isEmpty) continue;
     if (line.startsWith('[DEAL') && line.endsWith(']')) {
       isDeal = true;
+      continue;
+    }
+    if (line.startsWith(loyaltyMarkerPrefix) && line.endsWith(']')) {
+      isLoyaltyReward = true;
       continue;
     }
     if ((line.startsWith('[PROMO_AUTO:') || line.startsWith('[CORTESIA:')) &&
@@ -35,6 +43,7 @@ String cleanOrderItemNote(String? raw) {
     }
     visible.add(line);
   }
+  if (isLoyaltyReward) visible.add('Premio de fidelidad');
   if (isDeal && visible.isEmpty) return 'Oferta aplicada';
   return visible.join(' · ');
 }

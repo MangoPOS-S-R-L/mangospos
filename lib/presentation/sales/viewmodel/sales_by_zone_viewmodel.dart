@@ -25,6 +25,22 @@ final byZoneVmProvider = NotifierProvider<ByZoneViewModel, ByZoneState>(
   ByZoneViewModel.new,
 );
 
+/// Un snapshot fresco de Supabase sin sesión desmiente una orden con ID del
+/// servidor que el Hub todavía proyecta: esa op es stale tras el autocierre.
+/// Las órdenes locales sí se conservan, porque aún no existen en Supabase.
+bool shouldOverlayHubTable(
+  TableStatus row,
+  Map<String, dynamic> hubTable, {
+  required bool freshServerStatus,
+}) {
+  if (row.sessionId != null) return false;
+  if (!freshServerStatus) return true;
+  final orderId = hubTable['order_id']?.toString() ?? '';
+  return orderId.startsWith('local-order-') ||
+      ((hubTable['items_count'] as num?)?.toInt() ?? 0) > 0 ||
+      ((hubTable['items'] as List?)?.isNotEmpty ?? false);
+}
+
 class ByZoneViewModel extends Notifier<ByZoneState> {
   late final SupabaseClient sb;
   RealtimeChannel? _rt;
@@ -207,14 +223,19 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       final hubTables = await _fetchHubTablesByTableId(businessId: bizId);
 
       final statusByZone = <String, List<TableStatus>>{};
-      await Future.wait(zones.map((zone) async {
-        final snap = await repo.loadCachedZoneStatus(zone.id);
-        if (snap == null) return;
-        final rows = List.of(snap.rows)
-          ..sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
-        statusByZone[zone.id] =
-            _applyHubOverlay(_applyDraftOverlay(rows, drafts), hubTables);
-      }));
+      await Future.wait(
+        zones.map((zone) async {
+          final snap = await repo.loadCachedZoneStatus(zone.id);
+          if (snap == null) return;
+          final rows = List.of(snap.rows)
+            ..sort((a, b) => SortingUtils.naturalCompare(a.code, b.code));
+          statusByZone[zone.id] = _applyHubOverlay(
+            _applyDraftOverlay(rows, drafts),
+            hubTables,
+            freshServerStatus: false,
+          );
+        }),
+      );
 
       // Si otra carga concurrente ya llenó el estado, no pisar lo fresco.
       if (state.zones.isNotEmpty) return;
@@ -250,6 +271,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       final overlaid = _applyHubOverlay(
         _applyDraftOverlay(rows, drafts),
         hubTables,
+        freshServerStatus: true,
       );
       updatedStatus[zoneId] = overlaid;
       updatedErrors[zoneId] = null;
@@ -302,7 +324,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       // H4c: en modo Hub, overlayamos también las mesas que el HUB conoce (las
       // que abrió OTRA caja) para que sean visibles en este equipo. Es lo que
       // hace aparecer la mesa del mesero en la caja principal.
-      final hubRows = await _overlayHubSalon(overlaidRows);
+      final hubRows = await _overlayHubSalon(
+        overlaidRows,
+        freshServerStatus: !result.fromCache,
+      );
 
       state = state.copyWith(
         statusByZone: {...state.statusByZone, zoneId: hubRows},
@@ -321,8 +346,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       // las mesas de la zona (incluidas las cuentas abiertas) desaparecían
       // del grid justo al caerse la red. Solo si nunca hubo datos dejamos
       // la lista vacía para que la zona salga del skeleton.
-      final previousRows =
-          state.statusByZone[zoneId] ?? const <TableStatus>[];
+      final previousRows = state.statusByZone[zoneId] ?? const <TableStatus>[];
       if (emitError) {
         state = state.copyWith(
           statusByZone: {...state.statusByZone, zoneId: previousRows},
@@ -356,7 +380,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   /// (pintado cache-first en arranque frío). Best-effort: ante fallo devuelve
   /// mapa vacío (sin overlay).
   Future<Map<String, ({String tableId, int itemsCount, double total})>>
-      _fetchDraftsByTable({String? businessId}) async {
+  _fetchDraftsByTable({String? businessId}) async {
     final bizId = businessId ?? state.businessId;
     if (bizId == null || bizId.isEmpty) return const {};
     try {
@@ -410,8 +434,15 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   /// muestra libres (las que abrió OTRA caja y no llegaron a Supabase). No pisa
   /// una fila ya marcada (sesión real o borrador local de este equipo).
   /// Best-effort: ante cualquier fallo devuelve las filas sin tocar.
-  Future<List<TableStatus>> _overlayHubSalon(List<TableStatus> rows) async {
-    return _applyHubOverlay(rows, await _fetchHubTablesByTableId());
+  Future<List<TableStatus>> _overlayHubSalon(
+    List<TableStatus> rows, {
+    required bool freshServerStatus,
+  }) async {
+    return _applyHubOverlay(
+      rows,
+      await _fetchHubTablesByTableId(),
+      freshServerStatus: freshServerStatus,
+    );
   }
 
   /// Lee el salón del Hub UNA vez, indexado por tableId. [businessId] permite
@@ -448,12 +479,16 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
   List<TableStatus> _applyHubOverlay(
     List<TableStatus> rows,
-    Map<String, Map<String, dynamic>> byTable,
-  ) {
+    Map<String, Map<String, dynamic>> byTable, {
+    required bool freshServerStatus,
+  }) {
     if (byTable.isEmpty) return rows;
     return rows.map((r) {
       final t = byTable[r.tableId];
-      if (t == null || r.sessionId != null) return r;
+      if (t == null ||
+          !shouldOverlayHubTable(r, t, freshServerStatus: freshServerStatus)) {
+        return r;
+      }
       final itemsCount = (t['items_count'] as num?)?.toInt() ?? 1;
       final total = (t['total'] as num?)?.toDouble() ?? 0;
       return TableStatus(

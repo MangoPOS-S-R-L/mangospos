@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/inventory/item_classification.dart';
 import '../../presentation/settings/more settings/menus/recipes/state/recipes_state.dart';
 
 class RecipesRepository {
@@ -82,6 +83,9 @@ class RecipesRepository {
           .select(columns)
           .eq('business_id', businessId)
           .eq('is_active', true)
+          // El menaje (copas, ollas) no se consume: en una receta, cada venta
+          // descontaría piezas que siguen en el estante.
+          .neq('item_classification', ItemClassification.smallware)
           .order('name'),
     );
 

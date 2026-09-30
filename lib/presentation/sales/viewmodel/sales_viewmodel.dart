@@ -24,6 +24,7 @@ import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/tax/tax_exceptions.dart';
 import 'package:mangopos/data/utils/bogo_promo_allocator.dart';
+import 'package:mangopos/data/utils/loyalty_reward_utils.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
@@ -3872,12 +3873,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       await Future.wait(
         targetItems.map((item) {
-          final base = (item.subtotal + item.tax)
-              .clamp(0, double.infinity)
-              .toDouble();
-          final discount = (base * (clampedPercent / 100))
-              .clamp(0, base)
-              .toDouble();
+          // Una línea con premio de la tarjeta de sellos conserva su unidad
+          // gratis: el porcentaje va sobre lo que el cliente sí paga. Sin
+          // premio es exactamente base × %.
+          final discount = discountKeepingLoyaltyReward(
+            subtotal: item.subtotal,
+            tax: item.tax,
+            quantity: item.quantity,
+            notes: item.notes,
+            manualOnRest: (rest) => rest * (clampedPercent / 100),
+          );
           discountByItemId[item.id] = discount;
           final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
           return ref
@@ -3944,11 +3949,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         .toList(growable: false);
     if (targetItems.isEmpty) return;
 
+    // Base descontable: lo que NO cubre un premio de la tarjeta de sellos
+    // (sin premio, subtotal + impuesto como siempre).
     final baseByItemId = <String, double>{
       for (final item in targetItems)
-        item.id: (item.subtotal + item.tax)
-            .clamp(0, double.infinity)
-            .toDouble(),
+        item.id: loyaltyDiscountableBase(
+          subtotal: item.subtotal,
+          tax: item.tax,
+          quantity: item.quantity,
+          notes: item.notes,
+        ),
     };
     final totalBase = baseByItemId.values.fold<double>(0, (s, b) => s + b);
     if (totalBase <= 0) return;
@@ -3973,8 +3983,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ).clamp(0, base).toDouble();
       }
       share = double.parse(share.toStringAsFixed(2));
-      discountByItemId[item.id] = share;
       assigned += share;
+      // El premio (si lo hay) se suma encima de su parte del monto.
+      discountByItemId[item.id] = discountKeepingLoyaltyReward(
+        subtotal: item.subtotal,
+        tax: item.tax,
+        quantity: item.quantity,
+        notes: item.notes,
+        manualOnRest: (_) => share,
+      );
     }
 
     state = state.copyWith(loading: true, error: null);
@@ -4226,8 +4243,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = const CurrentOrderState();
   }
 
-  Future<void> cancelCurrentOrder({String? reason}) async {
+  Future<void> cancelCurrentOrder({
+    String? reason,
+    bool releaseOnlyIfEmpty = false,
+    String? expectedOrderId,
+  }) async {
     final orderId = state.order?.id;
+    if (expectedOrderId != null && expectedOrderId != orderId) return;
+    if (releaseOnlyIfEmpty && state.items.isNotEmpty) return;
     if (orderId == null) {
       _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState();
@@ -4254,13 +4277,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     Future<void> enqueueVoidOffline() async {
-      if (businessId == null || businessId.isEmpty) return;
+      if (businessId == null || businessId.isEmpty) {
+        throw StateError('No se puede cerrar la orden sin negocio activo.');
+      }
       if (orderId.startsWith('local-order-')) {
         final mappedRemoteId = await _offlinePos.mappedRemoteOrderId(
           businessId: businessId,
           localOrderId: orderId,
         );
-        if (mappedRemoteId == null) {
+        final terminalMode = ref.read(hubModeProvider);
+        final hubKnowsOrder =
+            terminalMode == TerminalMode.hubClient ||
+            terminalMode == TerminalMode.hubHost ||
+            await _offlinePos.mayExistRemotely(
+              businessId: businessId,
+              orderId: orderId,
+            );
+        if (mappedRemoteId == null && !hubKnowsOrder) {
           // La orden nunca llegó al server: purgamos sus acciones encoladas
           // y snapshots. Antes solo se reseteaba la UI y la cola recreaba la
           // mesa al reconectar (mesa fantasma) mientras el overlay del salón
@@ -4279,7 +4312,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await _offlinePos.enqueueAction(
         businessId: businessId,
         action: <String, dynamic>{
-          'type': 'void_order',
+          'type': releaseOnlyIfEmpty ? 'release_empty_order' : 'void_order',
           'order_id': orderId,
           if (trimmedReason != null && trimmedReason.isNotEmpty) ...{
             'reason': trimmedReason,
@@ -4290,6 +4323,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           },
         },
       );
+      if (releaseOnlyIfEmpty &&
+          (ref.read(hubModeProvider) == TerminalMode.hubClient ||
+              ref.read(hubModeProvider) == TerminalMode.hubHost)) {
+        // enqueueAction starts this drain asynchronously; await that same
+        // flight so the salon refresh sees the Hub acknowledgement promptly.
+        await _offlinePos.flushPendingToHub(businessId);
+      }
+      if (orderId.startsWith('local-order-')) {
+        await _offlinePos.removeOrderSnapshots(
+          businessId: businessId,
+          orderId: orderId,
+        );
+        _tableCache.removeWhere((_, s) => s.order?.id == orderId);
+      }
+    }
+
+    // Local IDs are not valid for the online close RPC. Route them through
+    // the durable queue even if the connectivity probe still reports online.
+    if (orderId.startsWith('local-order-')) {
+      await enqueueVoidOffline();
+      _hasManualFiscalTypeSelection = false;
+      state = const CurrentOrderState();
+      return;
     }
 
     // Caso 1: ya estamos offline declarado. No intentamos online, encolamos
@@ -5409,7 +5465,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           (line) =>
               !(line.startsWith(_courtesyPrefix) && line.endsWith(']')) &&
               !(line.startsWith(_promoPrefix) && line.endsWith(']')) &&
-              !(line.startsWith(_dealPrefix) && line.endsWith(']')),
+              !(line.startsWith(_dealPrefix) && line.endsWith(']')) &&
+              // Premio de la tarjeta de sellos: una cortesía lo reemplaza
+              // (la línea queda gratis entera) y los sellos vuelven solos.
+              !(line.startsWith(loyaltyMarkerPrefix) && line.endsWith(']')),
         )
         .toList(growable: false);
 

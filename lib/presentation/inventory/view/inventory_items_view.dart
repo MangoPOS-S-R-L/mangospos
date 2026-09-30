@@ -1537,6 +1537,8 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
           ('', 'Todas'),
           ('raw_material', 'Materia prima'),
           ('finished_product', 'Producto terminado'),
+          ('supply', 'Gastable'),
+          ('smallware', 'Menaje / utensilio'),
           ('combo', 'Combo'),
           ('service', 'Servicio'),
           ('simple', 'Simple'),
@@ -2716,7 +2718,10 @@ class _InventoryItemsViewState extends ConsumerState<InventoryItemsView> {
     final when = last.createdAt;
     final ago = when == null ? '' : ' ${_relativeDay(when)}';
     final signed = (last.quantity > 0 ? '+' : '') + fmt.format(last.quantity);
-    return '${_movementLabel(last.movementType)}$ago · $signed';
+    final label = last.isInternalUse
+        ? 'Consumo interno'
+        : _movementLabel(last.movementType);
+    return '$label$ago · $signed';
   }
 
   static String _relativeDay(DateTime when) {
@@ -3341,6 +3346,8 @@ class _ClassificationChip extends StatelessWidget {
       'finished_product' => ('TERMINADO', AppColors.success),
       'combo' => ('COMBO', AppColors.primary),
       'service' => ('SERVICIO', AppColors.mutedForeground),
+      'supply' => ('GASTABLE', AppColors.warning),
+      'smallware' => ('MENAJE', AppColors.reserved),
       _ => ('SIMPLE', AppColors.mutedForeground),
     };
     return _Pill(text: label, color: color);

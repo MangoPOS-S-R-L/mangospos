@@ -685,6 +685,34 @@ almacén principal» —, que fue el pedido explícito del dueño.
 - Recetas de empaque con la casilla de "también en el local".
 - Consumo automático por `is_takeout`.
 
+**F5a — Gastables y menaje de la operación (2026-09-30, sin commit).** El
+dueño pidió «papel higiénico, cristalería, artículos de cocina». Decisiones:
+tres tipos de cosa — **gastable** (se usa y se acaba), **menaje** (se reutiliza,
+por cantidad, sale por rotura o pérdida) y **activo fijo** (uno por uno, F7) —;
+el gastable se da por consumido **al salir del almacén**; los de para llevar
+automáticos (las recetas de empaque de arriba) siguen pendientes porque tocan
+el motor de consumo de ventas. Corrige §5.7: la vajilla NO es activo fijo, es
+menaje por cantidad.
+
+- `20260930_0051_supplies_and_smallware.sql` (+ROLLBACK generado por script),
+  **sin aplicar**. Clases `supply` / `smallware` en `item_classification`;
+  motivo `internal_use` («Consumo interno») y columna
+  `inventory_movements.destination` (área); `fn_inventory_record_outflow` con
+  `p_destination` (9 parámetros, la app vieja sigue llamando con 8);
+  `fn_inventory_yield_analysis` sin gastables ni menaje y con el consumo
+  interno como consumo (no merma); `fn_inventory_supplies_overview` para el
+  panel. Los CHECK se amplían NOT VALID y se validan aparte (no bloquea
+  ventas) y se reconstruyen desde el vivo. Prueba local:
+  `supabase/tests/supplies_smallware_local_test.sh`.
+- Reusa todo el motor de insumos (compras, bodegas, transferencias,
+  requisición, conteo): el «par» del menaje es el mínimo que ya existía.
+- App: `Inventario → Gastables y menaje` (`/inventory/supplies`), clasificación
+  en lote, «Consumo interno» con área en Salidas (el motivo lo propone la
+  clase), el menaje fuera de los selectores de receta y modificadores.
+
+### F5b — Gastables para llevar (pendiente)
+- Las recetas de empaque de F5, cuando se decida tocar el consumo de ventas.
+
 ### F6 — Recetarios
 - Sub-recetas anidadas (los datos ya existen), con control de recursión.
 - Costo por porción, margen y alerta cuando el costo sube.
@@ -693,6 +721,23 @@ almacén principal» —, que fue el pedido explícito del dueño.
 
 ### F7 — Activos fijos
 - Catálogo, asignación, estados, historial de movimientos.
+
+**F7 IMPLEMENTADA (2026-09-30, sin commit).** Solo equipos y mobiliario, uno
+por uno (la vajilla es menaje, F5a). `20260930_0052_fixed_assets.sql`
+(+ROLLBACK), **sin aplicar**: `fixed_assets` (código AF-00001 por negocio bajo
+candado, estado active/needs_repair/in_repair/damaged/lost/retired, sin
+depreciación) + `fixed_asset_movements` (historia con nombres como foto). RLS
+solo lectura; toda escritura por `fn_fixed_asset_create/update/move/set_status`,
+que validan negocio, permiso y referencias. Permisos
+`inventario.activos.acceso` / `inventario.activos.gestionar` en la BD, en el
+catálogo de Flutter y en la grilla de Roles y permisos. Prueba local:
+`supabase/tests/fixed_assets_local_test.sh`. App: `Inventario → Activos fijos`
+(`/inventory/fixed-assets`), ficha con historia, traslado/reasignación, baja
+con motivo, inventario A4 por ubicación y acta de asignación.
+
+Antes de aplicar, confirmar en la BD viva que existen
+`user_has_business_permission(uuid,text)`, `user_has_business_access`,
+`user_business_role` y `profiles`.
 
 ### F8 — Préstamos
 - Salida con devolución pendiente, comprobantes y vista de saldo.

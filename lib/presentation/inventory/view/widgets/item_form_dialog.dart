@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/inventory/item_classification.dart';
 import '../../../../core/inventory/unit_conversion.dart';
 import '../../../../core/theme/app_colors.dart';
 import 'unit_dropdown.dart';
@@ -190,12 +191,9 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
     }
   }
 
-  static const _classificationOptions = <String, String>{
-    'simple': 'Simple (default)',
-    'raw_material': 'Materia prima',
-    'finished_product': 'Producto terminado',
-    'combo': 'Combo',
-    'service': 'Servicio',
+  static final _classificationOptions = <String, String>{
+    for (final c in ItemClassification.all)
+      c: itemClassificationLabel(c, simpleLabel: 'Simple (default)'),
   };
 
   static String _normalizeClassification(String? raw) {
@@ -209,27 +207,6 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
     if (s.endsWith('.00')) return s.substring(0, s.length - 3);
     if (s.endsWith('0')) return s.substring(0, s.length - 1);
     return s;
-  }
-
-  static String _classificationHint(String value) {
-    switch (value) {
-      case 'raw_material':
-        return 'Materia prima: entra por compras y sale al producir productos '
-            'terminados o al venderse como insumo.';
-      case 'finished_product':
-        return 'Producto terminado: se genera por órdenes de producción a '
-            'partir de materias primas.';
-      case 'combo':
-        return 'Combo: paquete compuesto por otros items. No requiere '
-            'transformación física.';
-      case 'service':
-        return 'Servicio: no afecta el stock físico (ej. delivery, '
-            'instalación, asesoría).';
-      case 'simple':
-      default:
-        return 'Item genérico — no participa en flujos de producción. '
-            'Comportamiento legacy.';
-    }
   }
 
   @override
@@ -672,8 +649,13 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
                   Expanded(
                     child: TextField(
                       controller: _minStockCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Stock mínimo',
+                      // En el menaje el mínimo es el PAR: cuántas copas debe
+                      // haber. Mismo campo, el nombre que usa el salón.
+                      decoration: InputDecoration(
+                        labelText:
+                            _itemClassification == ItemClassification.smallware
+                            ? 'Par (cuántas debe haber)'
+                            : 'Stock mínimo',
                       ),
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
@@ -725,7 +707,7 @@ class _ItemFormDialogState extends State<ItemFormDialog> {
               ),
               const SizedBox(height: 6),
               Text(
-                _classificationHint(_itemClassification),
+                itemClassificationHint(_itemClassification),
                 style: TextStyle(
                   fontSize: 11,
                   color: AppColors.mutedForeground,

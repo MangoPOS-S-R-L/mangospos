@@ -34,6 +34,40 @@ import 'hub_lan_token.dart';
 /// Mientras [kHubModeEnabled] sea `false`, NUNCA hay Hub: el modo alterna solo
 /// entre `cloud` (con red) y `solo` (sin red) y el uploader queda nulo — es
 /// decir, el comportamiento actual, sin tocar nada.
+/// ¿Este equipo (de escritorio) puede pedir ser la caja principal (Hub)?
+///
+/// Solo el equipo que tiene la CAJA ABIERTA de este negocio, y con un rol de
+/// caja (cajero, administrador o supervisor). La concesión del Hub es
+/// permanente y la toma el primero que la pida: sin exigir la caja abierta,
+/// una PC de mesero que entrara con un usuario de cajero se la quedaba para
+/// siempre y la caja de verdad nunca llegaba a ser el Hub.
+///
+/// Las sesiones que se leen del servidor NO traen `business_id` (la tabla no
+/// tiene esa columna; se une por `cash_registers`), así que el negocio se toma
+/// del ViewModel de caja cuando la sesión no lo trae. Antes se exigía
+/// `business_id` en la sesión y un dueño/administrador en caja nunca calificaba.
+@visibleForTesting
+bool canHostHub({
+  required PosRole? role,
+  required Map<String, dynamic>? cashSession,
+  required String? cashierBusinessId,
+  required String businessId,
+  required String deviceId,
+}) {
+  if (role != PosRole.cajero &&
+      role != PosRole.administrador &&
+      role != PosRole.supervisor) {
+    return false;
+  }
+  final cash = cashSession;
+  if (cash == null) return false;
+  final sessionBusiness = cash['business_id']?.toString() ?? cashierBusinessId;
+  return cash['status'] == 'open' &&
+      cash['closed_at'] == null &&
+      sessionBusiness == businessId &&
+      cash['device_id']?.toString() == deviceId;
+}
+
 class HubModeController extends StateNotifier<TerminalMode> {
   HubModeController(this._ref) : super(TerminalMode.cloud) {
     _init();
@@ -148,17 +182,14 @@ class HubModeController extends StateNotifier<TerminalMode> {
         (defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux ||
             defaultTargetPlatform == TargetPlatform.macOS)) {
-      final role = _ref.read(sessionProvider).activeRole;
-      canHost = role == PosRole.cajero;
-      if (!canHost &&
-          (role == PosRole.administrador || role == PosRole.supervisor)) {
-        final cash = _ref.read(cashierViewModelProvider).lastSession;
-        canHost =
-            cash?['status'] == 'open' &&
-            cash?['business_id'] == businessId &&
-            cash?['closed_at'] == null &&
-            cash?['device_id'] == await DeviceUtils.getDeviceId();
-      }
+      final cashier = _ref.read(cashierViewModelProvider);
+      canHost = canHostHub(
+        role: _ref.read(sessionProvider).activeRole,
+        cashSession: cashier.lastSession,
+        cashierBusinessId: cashier.businessId,
+        businessId: businessId,
+        deviceId: await DeviceUtils.getDeviceId(),
+      );
     }
     _role = await _autoSetup.prepare(
       businessId,

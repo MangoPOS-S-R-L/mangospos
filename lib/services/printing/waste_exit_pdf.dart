@@ -12,9 +12,9 @@ import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 
 import '../../core/currency/business_currency.dart';
+import '../../core/printing/os_print_dialog.dart';
 
 /// Una salida del conduce.
 class WasteExitPdfLine {
@@ -26,6 +26,9 @@ class WasteExitPdfLine {
   final String notes;
   final double costPerUnit;
 
+  /// Área de un consumo interno (Baños, Cocina…). Vacía en las demás.
+  final String destination;
+
   const WasteExitPdfLine({
     required this.date,
     required this.itemName,
@@ -34,9 +37,17 @@ class WasteExitPdfLine {
     required this.reason,
     this.notes = '',
     this.costPerUnit = 0,
+    this.destination = '',
   });
 
   double get totalCost => quantity * costPerUnit;
+
+  /// La columna de notas, con el área delante si la hay.
+  String get notesWithDestination {
+    final area = destination.trim();
+    if (area.isEmpty) return notes;
+    return notes.trim().isEmpty ? 'Para $area' : 'Para $area · $notes';
+  }
 }
 
 class WasteExitPdf {
@@ -139,7 +150,7 @@ class WasteExitPdf {
     BusinessCurrency? currency,
   }) async {
     final now = DateTime.now();
-    await Printing.layoutPdf(
+    await printWithOsDialog(
       format: PdfPageFormat.a4,
       name: fileName(now),
       onLayout: (format) => build(
@@ -208,7 +219,7 @@ class WasteExitPdf {
               td(_safe(l.itemName)),
               td('${_qty(l.quantity)} ${l.unit}', right: true),
               td(_safe(l.reason)),
-              td(_safe(l.notes)),
+              td(_safe(l.notesWithDestination)),
               td(money.formatAmount(l.totalCost), right: true),
             ],
           ),

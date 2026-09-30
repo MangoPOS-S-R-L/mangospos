@@ -42,6 +42,8 @@ const _classificationOptions = [
   ('', 'Todas'),
   ('raw_material', 'Materia prima'),
   ('finished_product', 'Producto terminado'),
+  ('supply', 'Gastable'),
+  ('smallware', 'Menaje / utensilio'),
   ('simple', 'Simple'),
 ];
 

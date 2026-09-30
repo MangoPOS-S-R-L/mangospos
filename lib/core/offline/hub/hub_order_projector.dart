@@ -127,6 +127,12 @@ class HubOrderProjector {
           final acc = accFor(orderId, op);
           final itemId = op['item_id']?.toString() ?? '';
           if (itemId.isEmpty) break;
+          // A concurrent add after a tentative empty release wins locally;
+          // the server RPC still performs the definitive locked check.
+          if (acc.autoReleased) {
+            acc.voided = false;
+            acc.autoReleased = false;
+          }
           final snapshot = op['item_snapshot'] is Map
               ? Map<String, dynamic>.from(op['item_snapshot'] as Map)
               : <String, dynamic>{};
@@ -198,6 +204,13 @@ class HubOrderProjector {
           break;
         case 'void_order':
           orders[orderId]?.voided = true;
+          break;
+        case 'release_empty_order':
+          final acc = orders[orderId];
+          if (acc != null && acc.items.isEmpty) {
+            acc.voided = true;
+            acc.autoReleased = true;
+          }
           break;
         case 'process_payment':
           final acc = orders[orderId];
@@ -325,6 +338,7 @@ class _OrderAcc {
   String? tableId;
   bool sent = false;
   bool voided = false;
+  bool autoReleased = false;
   bool closed = false;
   final Map<String, _ItemAcc> items = {};
 

@@ -740,6 +740,7 @@ class _AdjustDialogState extends ConsumerState<_AdjustDialog> {
                   hintText: 'Selecciona un motivo',
                 ),
                 items: kAdjustReasons
+                    .where((r) => r.adjustable)
                     .map(
                       (r) => DropdownMenuItem(
                         value: r,

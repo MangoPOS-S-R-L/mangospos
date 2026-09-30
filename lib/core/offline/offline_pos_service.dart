@@ -632,7 +632,7 @@ class OfflinePosService {
         final orderId = action['order_id']?.toString();
         if (type == null || orderId == null || orderId.isEmpty) continue;
         final mapped = orderMap[orderId]?.toString();
-        if (type == 'void_order') {
+        if (type == 'void_order' || type == 'release_empty_order') {
           voidedOrderIds.add(orderId);
           if (mapped != null && mapped.isNotEmpty) voidedOrderIds.add(mapped);
           continue;
@@ -917,6 +917,26 @@ class OfflinePosService {
     return queue.where((item) => !_isSettled(item)).length;
   }
 
+  /// Lightweight badge counts. Native SQLite reads only indexed metadata;
+  /// web falls back to a single queue read for both numbers.
+  Future<({int pending, int dead})> queueStatusCounts(String businessId) async {
+    if (!kIsWeb) {
+      await _ensureMigratedFromSp(businessId);
+      return _queueDao!.statusCounts(businessId);
+    }
+    final queue = await _readQueue(businessId);
+    var pending = 0;
+    var dead = 0;
+    for (final action in queue) {
+      if (_isDead(action)) {
+        dead++;
+      } else if (!_isCompleted(action)) {
+        pending++;
+      }
+    }
+    return (pending: pending, dead: dead);
+  }
+
   /// Suma las ventas del día que viven SOLO en la cola local (offline, aún no
   /// sincronizadas) para el dashboard sin conexión. Se calcula sobre el último
   /// snapshot online; por eso solo cuenta acciones NO settled (las settled ya
@@ -1090,6 +1110,45 @@ class OfflinePosService {
     }
   }
 
+  /// A transport attempt can have succeeded even when its acknowledgement was
+  /// lost. Never discard such an order merely because its mapping is absent.
+  Future<bool> mayExistRemotely({
+    required String businessId,
+    required String orderId,
+  }) async {
+    final queue = await _readQueue(businessId);
+    return queue.any(
+      (action) =>
+          action['order_id']?.toString() == orderId &&
+          (action['hub_delivery_started'] == true ||
+              ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
+              action['status'] == _statusProcessing),
+    );
+  }
+
+  /// Hide a cancelled local draft without deleting its durable operation log.
+  Future<void> removeOrderSnapshots({
+    required String businessId,
+    required String orderId,
+  }) async {
+    final storage = await _storage;
+    final keys = await storage.getKeysByPrefix(
+      'offline_snapshot_${businessId}_',
+    );
+    for (final key in keys) {
+      try {
+        final payload = await _readSnapshot(storage, key);
+        final state = Map<String, dynamic>.from(
+          payload?['state'] as Map? ?? {},
+        );
+        final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
+        if (order['id']?.toString() == orderId) await storage.delete(key);
+      } catch (e) {
+        debugPrint('OfflinePosService.removeOrderSnapshots: $e');
+      }
+    }
+  }
+
   /// Descarta por completo una orden LOCAL que el cajero anuló antes de que
   /// sincronizara: elimina sus acciones no-completadas de la cola (open_table,
   /// add_item, …) y borra sus snapshots. Sin esto, la cola recreaba la mesa
@@ -1121,26 +1180,8 @@ class OfflinePosService {
     } catch (e) {
       debugPrint('OfflinePosService.discardLocalOrder cola: $e');
     }
-    // Snapshots: cualquier slot (tableId o legacy sessionId) cuya orden sea
-    // la descartada. Con esto el overlay del salón libera la mesa.
     try {
-      final storage = await _storage;
-      final prefix = 'offline_snapshot_${businessId}_';
-      final keys = await storage.getKeysByPrefix(prefix);
-      for (final key in keys) {
-        try {
-          final payload = await _readSnapshot(storage, key);
-          if (payload == null) continue;
-          final state = Map<String, dynamic>.from(
-            payload['state'] as Map? ?? {},
-          );
-          final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
-          if (order['id']?.toString() != localOrderId) continue;
-          await storage.delete(key);
-        } catch (_) {
-          // snapshot corrupto → seguimos con el siguiente.
-        }
-      }
+      await removeOrderSnapshots(businessId: businessId, orderId: localOrderId);
     } catch (e) {
       debugPrint('OfflinePosService.discardLocalOrder snapshots: $e');
     }
@@ -2297,6 +2338,7 @@ class OfflinePosService {
             notes: action['notes']?.toString(),
             costPerUnit: movementCost,
             operationId: operationId,
+            destination: action['destination']?.toString(),
           );
           return null;
         }
@@ -2657,6 +2699,17 @@ class OfflinePosService {
           }
         }
         return voidOrderId;
+      case 'release_empty_order':
+        final releaseOrderId = await _resolveOrderIdForAction(
+          businessId: businessId,
+          action: action,
+          salesRepository: salesRepository,
+        );
+        await salesRepository.releaseEmptyTableIfNeeded(
+          releaseOrderId,
+          businessId: businessId,
+        );
+        return releaseOrderId;
       case 'send_to_kitchen':
       case 'confirm_local_order':
         final resolvedOrderId = await _resolveOrderIdForAction(

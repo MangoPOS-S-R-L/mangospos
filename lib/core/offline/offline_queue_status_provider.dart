@@ -11,11 +11,7 @@ import 'offline_pos_service.dart';
 /// completed; `lastResult` se rellena cuando termina un sync para que la
 /// UI pueda mostrar el resultado.
 class OfflineQueueStatus {
-  const OfflineQueueStatus({
-    this.pending = 0,
-    this.dead = 0,
-    this.lastResult,
-  });
+  const OfflineQueueStatus({this.pending = 0, this.dead = 0, this.lastResult});
 
   final int pending;
 
@@ -29,12 +25,11 @@ class OfflineQueueStatus {
     int? pending,
     int? dead,
     OfflineQueueSyncResult? lastResult,
-  }) =>
-      OfflineQueueStatus(
-        pending: pending ?? this.pending,
-        dead: dead ?? this.dead,
-        lastResult: lastResult ?? this.lastResult,
-      );
+  }) => OfflineQueueStatus(
+    pending: pending ?? this.pending,
+    dead: dead ?? this.dead,
+    lastResult: lastResult ?? this.lastResult,
+  );
 }
 
 /// Notifier que polea `pendingActionsCount` periódicamente y permite a
@@ -42,25 +37,28 @@ class OfflineQueueStatus {
 /// inmediato. El polling vive porque el resto del código encola sin
 /// pasar por aquí — un Stream sería más limpio pero requiere refactor
 /// invasivo del OfflinePosService.
-class OfflineQueueStatusController
-    extends StateNotifier<OfflineQueueStatus> {
-  OfflineQueueStatusController(this._ref)
-      : super(const OfflineQueueStatus()) {
+class OfflineQueueStatusController extends StateNotifier<OfflineQueueStatus> {
+  OfflineQueueStatusController(this._ref) : super(const OfflineQueueStatus()) {
     _start();
   }
 
   final Ref _ref;
   final OfflinePosService _offlinePos = OfflinePosService();
   Timer? _timer;
+  final Map<String, Future<void>> _refreshes = {};
+  final Set<String> _refreshAgain = {};
 
   static const Duration _pollInterval = Duration(seconds: 5);
 
   void _start() {
     unawaited(refreshNow());
-    _timer = Timer.periodic(_pollInterval, (_) => refreshNow());
+    _timer = Timer.periodic(
+      _pollInterval,
+      (_) => unawaited(refreshNow(periodic: true)),
+    );
   }
 
-  Future<void> refreshNow() async {
+  Future<void> refreshNow({bool periodic = false}) async {
     final businessId = _ref.read(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
       if (state.pending != 0 || state.dead != 0) {
@@ -68,11 +66,37 @@ class OfflineQueueStatusController
       }
       return;
     }
+    final inFlight = _refreshes[businessId];
+    if (inFlight != null) {
+      if (periodic) return inFlight;
+      _refreshAgain.add(businessId);
+      await inFlight;
+      await _refreshes[businessId];
+      return;
+    }
+    final refresh = _refreshBusiness(businessId);
+    _refreshes[businessId] = refresh;
     try {
-      final count = await _offlinePos.pendingActionsCount(businessId);
-      final deadCount = await _offlinePos.deadActionsCount(businessId);
-      if (count != state.pending || deadCount != state.dead) {
-        state = state.copyWith(pending: count, dead: deadCount);
+      await refresh;
+    } finally {
+      if (identical(_refreshes[businessId], refresh)) {
+        _refreshes.remove(businessId);
+      }
+      if (_refreshAgain.remove(businessId) && mounted) {
+        unawaited(refreshNow(periodic: true));
+      }
+    }
+  }
+
+  Future<void> _refreshBusiness(String businessId) async {
+    try {
+      final counts = await _offlinePos.queueStatusCounts(businessId);
+      if (!mounted ||
+          _ref.read(sessionProvider).activeBusinessId != businessId) {
+        return;
+      }
+      if (counts.pending != state.pending || counts.dead != state.dead) {
+        state = state.copyWith(pending: counts.pending, dead: counts.dead);
       }
     } catch (_) {
       // Falla silenciosa: si no podemos contar la cola, dejamos el
@@ -97,7 +121,7 @@ class OfflineQueueStatusController
   }
 }
 
-final offlineQueueStatusProvider = StateNotifierProvider<
-    OfflineQueueStatusController, OfflineQueueStatus>(
-  (ref) => OfflineQueueStatusController(ref),
-);
+final offlineQueueStatusProvider =
+    StateNotifierProvider<OfflineQueueStatusController, OfflineQueueStatus>(
+      (ref) => OfflineQueueStatusController(ref),
+    );

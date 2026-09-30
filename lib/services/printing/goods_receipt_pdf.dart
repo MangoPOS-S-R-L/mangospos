@@ -18,6 +18,7 @@ import 'package:printing/printing.dart';
 
 import '../../core/currency/business_currency.dart';
 import '../../presentation/purchases/state/goods_receipt.dart';
+import '../../core/printing/os_print_dialog.dart';
 
 class GoodsReceiptPdf {
   const GoodsReceiptPdf._();
@@ -103,7 +104,7 @@ class GoodsReceiptPdf {
     BusinessCurrency? currency,
     bool isReprint = false,
   }) async {
-    await Printing.layoutPdf(
+    await printWithOsDialog(
       onLayout: (format) => build(
         receipt: receipt,
         businessName: businessName,

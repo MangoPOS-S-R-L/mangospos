@@ -62,6 +62,9 @@ const Map<String, String> routePermissions = <String, String>{
   '/inventory/physical-count': 'inventario.conteo.acceso',
   '/inventory/reorder': 'inventario.acceso',
   '/inventory/min-stock': 'inventario.acceso',
+  // Activos fijos: permiso propio (un rol puede ver el inventario sin ver
+  // el registro de equipos, o al revés). 20260930_0052.
+  '/inventory/fixed-assets': 'inventario.activos.acceso',
   '/settings/inventory-kardex': 'inventario.acceso',
   '/settings/inventory-requirements': 'inventario.acceso',
   '/settings/inventory-outflow': 'inventario.acceso',
@@ -70,6 +73,7 @@ const Map<String, String> routePermissions = <String, String>{
   '/settings/inventory-lots': 'inventario.acceso',
   '/settings/inventory-valuation': 'inventario.acceso',
   '/settings/inventory-rotation': 'inventario.acceso',
+  '/settings/inventory-yield': 'inventario.acceso',
 
   // --- Compras ---
   '/settings/purchases': 'compras.acceso',
@@ -91,6 +95,8 @@ const Map<String, String> routePermissions = <String, String>{
 
   // --- Promos / descuentos ---
   '/settings/promos': 'settings.descuentos_propinas.gestionar',
+  // Tarjetas de sellos: mismo permiso que ofertas (y lo que exige el RLS).
+  '/settings/loyalty-cards': 'settings.descuentos_propinas.gestionar',
 
   // --- Settings sensibles ---
   '/settings/users': 'settings.usuarios.acceso',

@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http; // ✅ check internet
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mangopos/core/auth/device_session_reporter.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/agent/hub_server_controller.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/presentation/shell/hub_host_uplink.dart';
@@ -825,6 +825,8 @@ class _OfflineQueueActionRow extends StatelessWidget {
         return 'Cobro';
       case 'void_order':
         return 'Anular orden';
+      case 'release_empty_order':
+        return 'Liberar mesa vacia';
       case 'send_to_kitchen':
         return 'Enviar a cocina';
       case 'confirm_local_order':
@@ -1279,36 +1281,23 @@ class _ConnectionIndicator extends StatefulWidget {
 }
 
 class _ConnectionIndicatorState extends State<_ConnectionIndicator> {
-  bool _online = true;
-  Timer? _timer;
+  final ConnectivityService _connectivity = ConnectivityService();
+  late bool _online;
+  StreamSubscription<bool>? _subscription;
 
   @override
   void initState() {
     super.initState();
-    _checkNow();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _checkNow());
+    _online = _connectivity.isConnected;
+    _subscription = _connectivity.connectionStream.listen((online) {
+      if (mounted && online != _online) setState(() => _online = online);
+    });
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _subscription?.cancel();
     super.dispose();
-  }
-
-  Future<void> _checkNow() async {
-    final ok = await _hasInternet();
-    if (mounted && ok != _online) setState(() => _online = ok);
-  }
-
-  Future<bool> _hasInternet() async {
-    try {
-      final res = await http
-          .head(Uri.parse('https://www.gstatic.com/generate_204'))
-          .timeout(const Duration(seconds: 2));
-      return res.statusCode == 204 || res.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
   }
 
   @override

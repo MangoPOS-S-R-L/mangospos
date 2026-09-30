@@ -313,9 +313,10 @@ class InventoryItemSummary {
   final String barcode;
   // Sprint 4 lotes — opt-in para tracking de lote / vencimiento.
   final bool tracksLots;
-  // PRD inventario avanzado: clasificación.
-  // Valores válidos: 'simple', 'raw_material', 'finished_product',
-  // 'combo', 'service'. Default 'simple' = comportamiento legacy.
+  // PRD inventario avanzado: clasificación. Valores válidos en
+  // `ItemClassification` (core/inventory/item_classification.dart), incluidos
+  // gastable ('supply') y menaje ('smallware'). Default 'simple' =
+  // comportamiento legacy.
   final String itemClassification;
 
   const InventoryItemSummary({
@@ -412,6 +413,16 @@ class InventoryMovementEntry {
   final String referenceType;
   final DateTime createdAt;
 
+  /// Costo con que quedó el movimiento (el de ESE momento, no el de hoy).
+  /// `null` en movimientos viejos que no lo guardaron.
+  final double? costPerUnit;
+
+  /// Motivo guardado (`reason_code`), cuando la consulta lo pidió.
+  final String? reasonCode;
+
+  /// Área a la que fue un consumo interno (Baños, Cocina…), si se anotó.
+  final String? destination;
+
   const InventoryMovementEntry({
     required this.id,
     required this.itemId,
@@ -423,6 +434,9 @@ class InventoryMovementEntry {
     required this.notes,
     required this.referenceType,
     required this.createdAt,
+    this.costPerUnit,
+    this.reasonCode,
+    this.destination,
   });
 
   bool get isOutflow => quantity < 0;
@@ -451,6 +465,14 @@ class InventoryMovementEntry {
       // una salida de las 9:15 PM salía como del día siguiente a las 1:15.
       createdAt:
           AppTime.tryParseServerToAst(map['created_at']) ?? AppTime.nowAst(),
+      costPerUnit: map['cost_per_unit'] == null
+          ? null
+          : toDouble(map['cost_per_unit']),
+      reasonCode: map['reason_code']?.toString(),
+      destination: switch (map['destination']?.toString().trim()) {
+        final String d when d.isNotEmpty => d,
+        _ => null,
+      },
     );
   }
 }

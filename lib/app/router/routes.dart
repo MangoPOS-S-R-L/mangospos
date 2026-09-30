@@ -66,6 +66,8 @@ class AppRoutes {
   static String purchasesOrderEditPath(String orderId) =>
       '$purchasesList/order/$orderId/edit';
   static const promosCenter = '$settings/promos';
+  /// Tarjetas de sellos (cliente frecuente: cada N compras, 1 gratis).
+  static const loyaltyCards = '$settings/loyalty-cards';
   static const settingsUsers = '$settings/users';
   static const settingsWaiters = '$settings/waiters';
   static const settingsRoles = '$settings/roles';
@@ -127,6 +129,8 @@ class AppRoutes {
   static const inventoryLots = '$settings/inventory-lots';
   static const inventoryValuation = '$settings/inventory-valuation';
   static const inventoryRotation = '$settings/inventory-rotation';
+  /// Rendimiento y mermas por insumo (compra vs producción vs merma).
+  static const inventoryYield = '$settings/inventory-yield';
 
   // ---- Módulo Inventario (PRD 9) ----
   static const inventoryHome = '/inventory';
@@ -149,6 +153,14 @@ class AppRoutes {
   static const inventoryPhysicalCount = '$inventoryHome/physical-count';
   static const inventoryReorder = '$inventoryHome/reorder';
   static const inventoryMinStock = '$inventoryHome/min-stock';
+
+  /// Gastables (papel, cloro) y menaje (copas, ollas): lo que se compra y no
+  /// se vende (20260930_0051).
+  static const inventorySupplies = '$inventoryHome/supplies';
+
+  /// Activos fijos (horno, nevera, mobiliario): uno por uno, con código,
+  /// ubicación, responsable e historia (20260930_0052).
+  static const inventoryFixedAssets = '$inventoryHome/fixed-assets';
   static const inventoryConsolidated = '$inventoryHome/consolidated';
   static const printingBase = '$settings/printing';
 

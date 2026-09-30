@@ -66,13 +66,7 @@ void main() {
         'Código de barras',
         'Costo unitario (DOP)',
       ]);
-      expect(data.rows.single.take(5), [
-        'ART-001',
-        'Ron',
-        '',
-        '0759',
-        '12.50',
-      ]);
+      expect(data.rows.single.take(5), ['ART-001', 'Ron', '', '0759', '12.50']);
     });
 
     test('el código de barras NO va como número (conserva el cero)', () {
@@ -163,7 +157,10 @@ void main() {
 
     test('cada fila tiene tantas celdas como encabezados', () {
       final data = InventoryMasterExport.build(
-        items: [_item(), _item(id: 'i2', sku: 'SKU-2', maxStock: 10)],
+        items: [
+          _item(),
+          _item(id: 'i2', sku: 'SKU-2', maxStock: 10),
+        ],
         warehouses: const [_bar, _cocina],
         matrix: const InventoryStockMatrix(items: [], byWarehouse: {}),
       );
@@ -174,18 +171,20 @@ void main() {
       expect(data.headers.last, 'ID interno');
     });
 
-    test('el código de la moneda del negocio titula las columnas de dinero',
-        () {
-      final data = InventoryMasterExport.build(
-        items: const [],
-        warehouses: const [],
-        matrix: const InventoryStockMatrix(items: [], byWarehouse: {}),
-        currencyCode: 'USD',
-      );
+    test(
+      'el código de la moneda del negocio titula las columnas de dinero',
+      () {
+        final data = InventoryMasterExport.build(
+          items: const [],
+          warehouses: const [],
+          matrix: const InventoryStockMatrix(items: [], byWarehouse: {}),
+          currencyCode: 'USD',
+        );
 
-      expect(data.headers[4], 'Costo unitario (USD)');
-      expect(data.headers[10], 'Valor existencia (USD)');
-    });
+        expect(data.headers[4], 'Costo unitario (USD)');
+        expect(data.headers[10], 'Valor existencia (USD)');
+      },
+    );
 
     test('las etiquetas salen en español, no en el valor de la BD', () {
       final data = InventoryMasterExport.build(

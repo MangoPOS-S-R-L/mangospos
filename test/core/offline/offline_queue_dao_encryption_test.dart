@@ -1,4 +1,5 @@
 import 'package:drift/native.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_dao.dart';
@@ -10,32 +11,31 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   // Mock del canal de flutter_secure_storage (clave del SecureBlobCipher).
-  const channel =
-      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  const channel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
   final secureStore = <String, String>{};
   setUpAll(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      final args = (call.arguments as Map?) ?? const {};
-      switch (call.method) {
-        case 'write':
-          secureStore[args['key'] as String] = args['value'] as String;
+          final args = (call.arguments as Map?) ?? const {};
+          switch (call.method) {
+            case 'write':
+              secureStore[args['key'] as String] = args['value'] as String;
+              return null;
+            case 'read':
+              return secureStore[args['key'] as String];
+            case 'delete':
+              secureStore.remove(args['key']);
+              return null;
+            case 'containsKey':
+              return secureStore.containsKey(args['key']);
+            case 'readAll':
+              return Map<String, String>.from(secureStore);
+            case 'deleteAll':
+              secureStore.clear();
+              return null;
+          }
           return null;
-        case 'read':
-          return secureStore[args['key'] as String];
-        case 'delete':
-          secureStore.remove(args['key']);
-          return null;
-        case 'containsKey':
-          return secureStore.containsKey(args['key']);
-        case 'readAll':
-          return Map<String, String>.from(secureStore);
-        case 'deleteAll':
-          secureStore.clear();
-          return null;
-      }
-      return null;
-    });
+        });
   });
 
   late OfflineQueueDb db;
@@ -47,8 +47,7 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  test('payload se cifra en disco y el round-trip preserva los datos',
-      () async {
+  test('payload se cifra en disco y el round-trip preserva los datos', () async {
     await dao.upsertAction('biz-1', {
       'id': 'op1',
       'type': 'process_payment',
@@ -73,20 +72,41 @@ void main() {
     expect(row.type, 'process_payment'); // estructurada en claro
   });
 
-  test('lee filas legacy con payload en texto plano (migración perezosa)',
-      () async {
-    // Insert directo con payload en texto plano (como pre-G9b).
-    await db.into(db.queueActions).insert(
+  test(
+    'lee filas legacy con payload en texto plano (migración perezosa)',
+    () async {
+      // Insert directo con payload en texto plano (como pre-G9b).
+      await db
+          .into(db.queueActions)
+          .insert(
+            QueueActionsCompanion.insert(
+              id: 'legacy1',
+              businessId: 'biz-1',
+              type: 'add_item',
+              payloadJson: '{"order_id":"oLegacy","qty":3}',
+              queuedAt: DateTime.parse('2026-06-01T00:00:00.000Z'),
+            ),
+          );
+      final back = await dao.readQueue('biz-1');
+      expect(back.single['order_id'], 'oLegacy');
+      expect(back.single['qty'], 3);
+    },
+  );
+
+  test('conteos usan metadatos aunque el payload no se pueda leer', () async {
+    await db
+        .into(db.queueActions)
+        .insert(
           QueueActionsCompanion.insert(
-            id: 'legacy1',
+            id: 'damaged-payload',
             businessId: 'biz-1',
             type: 'add_item',
-            payloadJson: '{"order_id":"oLegacy","qty":3}',
+            payloadJson: 'not-valid-json-or-ciphertext',
+            status: const Value('dead'),
             queuedAt: DateTime.parse('2026-06-01T00:00:00.000Z'),
           ),
         );
-    final back = await dao.readQueue('biz-1');
-    expect(back.single['order_id'], 'oLegacy');
-    expect(back.single['qty'], 3);
+    expect(await dao.statusCounts('biz-1'), (pending: 0, dead: 1));
+    expect(await dao.statusCounts('biz-2'), (pending: 0, dead: 0));
   });
 }

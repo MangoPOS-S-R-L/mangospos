@@ -61,16 +61,18 @@ void main() {
       expect(error, isNull);
     });
 
-    test('sí bloquea el artículo en negativo cuando ES el que se transfiere',
-        () {
-      final error = validateTransferLines(
-        items: [ajo, arroz],
-        quantities: const {'ajo': 2},
-      );
-      expect(error, isNotNull);
-      expect(error, contains('Ajo molido'));
-      expect(error, contains('no hay existencia'));
-    });
+    test(
+      'sí bloquea el artículo en negativo cuando ES el que se transfiere',
+      () {
+        final error = validateTransferLines(
+          items: [ajo, arroz],
+          quantities: const {'ajo': 2},
+        );
+        expect(error, isNotNull);
+        expect(error, contains('Ajo molido'));
+        expect(error, contains('no hay existencia'));
+      },
+    );
 
     test('stock en cero se bloquea con el mismo mensaje', () {
       final error = validateTransferLines(

@@ -17,6 +17,7 @@ import 'package:printing/printing.dart';
 
 import '../../../data/models/printing.dart' show PrintTicket;
 import 'package:mangopos/core/utils/app_snackbar.dart';
+import '../../../core/printing/os_print_dialog.dart';
 
 /// Muestra [ticket] en pantalla. No-op silencioso si el ticket no trae
 /// texto plano (caso de tickets 100% gráficos), para no dejar al cajero
@@ -253,7 +254,7 @@ class _TicketPreviewDialogState extends State<_TicketPreviewDialog> {
     setState(() => _busy = true);
     try {
       final bytes = await buildTicketPdf(widget.plainText);
-      await Printing.layoutPdf(
+      await printWithOsDialog(
         onLayout: (_) async => bytes,
         name: _fileName,
       );

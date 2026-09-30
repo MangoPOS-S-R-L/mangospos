@@ -34,6 +34,16 @@ typedef OpenTableResult = ({
   bundle,
 });
 
+class _PendingEmptyTableRelease {
+  _PendingEmptyTableRelease(this.orderId);
+
+  final String orderId;
+  late final Timer timer;
+  Future<bool> Function()? release;
+  void Function(bool released)? onResult;
+  void Function()? onReleased;
+}
+
 /// Excepción tipada para señalizar que la orden consultada no pertenece
 /// al `businessId` activo. Los métodos de lectura la atrapan y devuelven
 /// resultados vacíos en lugar de propagar el error a la UI.
@@ -1000,7 +1010,8 @@ class SalesRepository {
   // Static porque el `dispose()` de la pantalla de mesa construye su propio
   // SalesRepository (no puede tocar `ref` durante el teardown), así que la
   // cancelación tiene que vivir fuera de cualquier instancia.
-  static final Map<String, Timer> _pendingEmptyTableReleases = {};
+  static final Map<String, _PendingEmptyTableRelease>
+  _pendingEmptyTableReleases = {};
 
   /// Gracia antes de liberar una mesa vacía.
   ///
@@ -1033,20 +1044,47 @@ class SalesRepository {
     String? tableId,
     String? businessId,
     void Function()? onReleased,
+    void Function(bool released)? onResult,
+    Future<bool> Function()? release,
   }) {
     if (orderId.isEmpty || orderId.startsWith('local-order-')) return;
 
     final key = (tableId != null && tableId.isNotEmpty) ? tableId : orderId;
-    _pendingEmptyTableReleases.remove(key)?.cancel();
-    _pendingEmptyTableReleases[key] = Timer(emptyTableReleaseDelay, () async {
-      _pendingEmptyTableReleases.remove(key);
+    final existing = _pendingEmptyTableReleases[key];
+    if (existing?.orderId == orderId) {
+      // _handleBack programa con callback; dispose llega un frame despues sin
+      // callback. No reemplazarlo o el Hub y el salon nunca se enteran.
+      existing!.onReleased = onReleased ?? existing.onReleased;
+      existing.onResult = onResult ?? existing.onResult;
+      existing.release ??= release;
+      return;
+    }
+    existing?.timer.cancel();
+    final pending = _PendingEmptyTableRelease(orderId)
+      ..onReleased = onReleased
+      ..onResult = onResult
+      ..release = release;
+    _pendingEmptyTableReleases[key] = pending;
+    pending.timer = Timer(emptyTableReleaseDelay, () async {
+      if (identical(_pendingEmptyTableReleases[key], pending)) {
+        _pendingEmptyTableReleases.remove(key);
+      }
+      var released = false;
       try {
-        await releaseEmptyTableIfNeeded(orderId, businessId: businessId);
-      } catch (_) {
+        released =
+            await (pending.release?.call() ??
+                releaseEmptyTableIfNeeded(orderId, businessId: businessId));
+      } catch (error) {
         // Best-effort: si falla, el barrido de fn_release_empty_tables la
         // recoge más tarde. Nunca debe tumbar la navegación.
+        debugPrint('No se pudo liberar la mesa vacia $key: $error');
       }
-      onReleased?.call();
+      try {
+        pending.onResult?.call(released);
+      } catch (error) {
+        debugPrint('No se pudo notificar el cierre de $key: $error');
+      }
+      pending.onReleased?.call();
     });
   }
 
@@ -1056,7 +1094,7 @@ class SalesRepository {
   /// limpieza de la visita anterior ya no aplica.
   static void cancelPendingEmptyTableRelease(String? key) {
     if (key == null || key.isEmpty) return;
-    _pendingEmptyTableReleases.remove(key)?.cancel();
+    _pendingEmptyTableReleases.remove(key)?.timer.cancel();
   }
 
   /// Liberaciones de mesa pendientes. Solo para tests: es lo único observable

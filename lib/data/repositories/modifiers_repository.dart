@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/inventory/item_classification.dart';
 import '../../presentation/settings/more settings/menus/modifiers/state/modifiers_state.dart';
 
 class ModifiersRepository {
@@ -290,6 +291,8 @@ class ModifiersRepository {
           .select(columns)
           .eq('business_id', businessId)
           .eq('is_active', true)
+          // El menaje no se consume con la venta (ver recipes_repository).
+          .neq('item_classification', ItemClassification.smallware)
           .order('name'),
     );
 

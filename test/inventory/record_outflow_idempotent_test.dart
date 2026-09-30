@@ -5,6 +5,11 @@
 // línea y también encolaba — el mismo pote de leche se restaba dos veces.
 // Ahora cada salida lleva su llave (`p_reference_id`), un error de red no
 // dispara un segundo intento en línea y la cola reenvía con la misma llave.
+//
+// Gastables (20260930_0051): el consumo interno lleva el ÁREA a la que fue.
+// Viaja como `p_destination` solo si la hay; un servidor sin la 0051 no conoce
+// ni el parámetro ni el motivo, y la salida cae al `waste` de siempre con el
+// área en la nota — nunca se queda sin registrar.
 
 import 'dart:async';
 import 'dart:convert';
@@ -122,9 +127,115 @@ void main() {
       expect(call.body['p_cost_per_unit'], 50);
       expect(call.body['p_reason_code'], 'expiration');
       expect(call.body['p_notes'], 'Vencido — nevera 2');
+      // Sin área no se manda el parámetro: un servidor viejo no lo conoce.
+      expect(call.body.containsKey('p_destination'), isFalse);
     } finally {
       await rpc.client.dispose();
     }
+  });
+
+  Future<void> internalUse(
+    InventoryRepository repo, {
+    required String businessId,
+    required String operationId,
+  }) => repo.recordOutflow(
+    businessId: businessId,
+    warehouseId: 'wh-1',
+    itemId: 'item-papel',
+    quantity: 12,
+    reasonCode: 'internal_use',
+    reasonLabel: 'Consumo interno',
+    notes: 'planta alta',
+    costPerUnit: 20,
+    operationId: operationId,
+    destination: '  Baños ',
+  );
+
+  test('el consumo interno manda el área, recortada', () async {
+    final rpc = _Rpc((fn, _) async => _json({'id': 'mov-9', 'replayed': false}));
+    try {
+      await internalUse(
+        InventoryRepository(rpc.client),
+        businessId: 'biz-area',
+        operationId: 'op-9',
+      );
+      final body = rpc.calls.single.body;
+      expect(body['p_reason_code'], 'internal_use');
+      expect(body['p_destination'], 'Baños');
+      expect(body['p_notes'], 'Consumo interno — planta alta');
+    } finally {
+      await rpc.client.dispose();
+    }
+  });
+
+  test('servidor sin la 0051: el motivo nuevo cae al waste de siempre, con el '
+      'área en la nota y la MISMA llave', () async {
+    final rpc = _Rpc((fn, _) async {
+      if (fn == 'fn_inventory_record_outflow') {
+        return _json({
+          'code': 'P0001',
+          'message': 'INVALID_OUTFLOW_REASON: internal_use',
+          'details': null,
+          'hint': null,
+        }, 400);
+      }
+      return _json({'id': 'mov-10'});
+    });
+    try {
+      await internalUse(
+        InventoryRepository(rpc.client),
+        businessId: 'biz-old-server',
+        operationId: 'op-10',
+      );
+      expect(rpc.calls.map((c) => c.fn), [
+        'fn_inventory_record_outflow',
+        'fn_inventory_record_movement',
+      ]);
+      final legacy = rpc.calls.last.body;
+      expect(legacy['p_reference_id'], 'op-10');
+      expect(legacy['p_movement_type'], 'waste');
+      expect(legacy['p_notes'], 'Consumo interno — Para Baños · planta alta');
+    } finally {
+      await rpc.client.dispose();
+    }
+  });
+
+  test('un timeout encola el consumo interno CON el área', () async {
+    const biz = 'biz-area-timeout';
+    final rpc = _Rpc((fn, _) async {
+      throw TimeoutException('respuesta perdida tras 30 s');
+    });
+    try {
+      await internalUse(
+        InventoryRepository(rpc.client),
+        businessId: biz,
+        operationId: 'op-11',
+      );
+      final action = (await service.unsettledActions(biz)).single;
+      expect(action['reason_code'], 'internal_use');
+      expect(action['destination'], 'Baños');
+      expect(action['notes'], 'Consumo interno — planta alta');
+    } finally {
+      await rpc.client.dispose();
+    }
+  });
+
+  test('la nota de respaldo pone el área después del motivo', () {
+    expect(
+      InventoryRepository.notesWithDestination('Consumo interno', 'Baños'),
+      'Consumo interno — Para Baños',
+    );
+    expect(
+      InventoryRepository.notesWithDestination(
+        'Consumo interno — planta alta',
+        'Baños',
+      ),
+      'Consumo interno — Para Baños · planta alta',
+    );
+    expect(
+      InventoryRepository.notesWithDestination('Vencido — nevera', ''),
+      'Vencido — nevera',
+    );
   });
 
   test('sin la función en el servidor cae al waste de siempre con la MISMA '
@@ -229,6 +340,48 @@ void main() {
         rpc.calls.where((c) => c.fn == 'fn_inventory_record_movement'),
         isEmpty,
       );
+    } finally {
+      await rpc.client.dispose();
+    }
+  });
+
+  test('la cola reenvía el área de un consumo interno', () async {
+    const biz = 'biz-replay-area';
+    await service.enqueueAction(
+      businessId: biz,
+      action: {
+        'id': 'queued-internal-use',
+        'type': 'inventory_movement',
+        'warehouse_id': 'wh-1',
+        'item_id': 'item-papel',
+        'movement_type': 'waste',
+        'quantity': 12,
+        'cost_per_unit': 20,
+        'notes': 'Consumo interno — planta alta',
+        'reference_type': 'manual_outflow',
+        'reference_id': 'op-12',
+        'reason_code': 'internal_use',
+        'destination': 'Baños',
+      },
+    );
+    final rpc = _Rpc((fn, _) async => _json({'id': 'mov-12'}));
+    try {
+      final result = await service.syncPendingActions(
+        businessId: biz,
+        salesRepository: SalesRepository(rpc.client),
+        printingService: PrintingService(rpc.client),
+        inventoryRepository: InventoryRepository(rpc.client),
+        cashierRepository: CashierRepository(rpc.client),
+        force: true,
+      );
+      expect(result.completed, 1);
+      final body = rpc.calls
+          .singleWhere((c) => c.fn == 'fn_inventory_record_outflow')
+          .body;
+      expect(body['p_reference_id'], 'op-12');
+      expect(body['p_reason_code'], 'internal_use');
+      expect(body['p_destination'], 'Baños');
+      expect(body['p_notes'], 'Consumo interno — planta alta');
     } finally {
       await rpc.client.dispose();
     }

@@ -111,7 +111,9 @@ class _InventoryKardexViewState extends ConsumerState<InventoryKardexView> {
               m.createdAt != null ? dateFmt.format(m.createdAt!.toLocal()) : '—',
               m.itemName,
               m.warehouseName,
-              _movementTypeLabel(m.movementType),
+              m.isInternalUse
+                  ? 'Consumo interno'
+                  : _movementTypeLabel(m.movementType),
               '${m.quantity > 0 ? '+' : ''}${qtyFmt.format(m.quantity)} ${m.itemUnit}',
               if (_valued) ...[
                 m.costPerUnit != null
@@ -699,7 +701,9 @@ class _MovementCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          _movementTypeLabel(movement.movementType),
+                          movement.isInternalUse
+                              ? 'Consumo interno'
+                              : _movementTypeLabel(movement.movementType),
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,

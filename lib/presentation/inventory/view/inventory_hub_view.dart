@@ -168,6 +168,31 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
               ],
             ),
             const SizedBox(height: 24),
+            const _SectionTitle('Lo que no se vende'),
+            const SizedBox(height: 12),
+            _HubGrid(
+              children: [
+                _HubCard(
+                  icon: Icons.wine_bar_outlined,
+                  title: 'Gastables y menaje',
+                  subtitle:
+                      'Papel, cloro, copas y ollas: cuánto se usa, cuánto se '
+                      'rompe y qué reponer',
+                  route: AppRoutes.inventorySupplies,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.kitchen_outlined,
+                  title: 'Activos fijos',
+                  subtitle:
+                      'Hornos, neveras y mobiliario: dónde están, quién '
+                      'responde y su historia',
+                  route: AppRoutes.inventoryFixedAssets,
+                  available: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
             const _SectionTitle('Operaciones'),
             const SizedBox(height: 12),
             _HubGrid(
@@ -281,6 +306,14 @@ class _InventoryHubViewState extends ConsumerState<InventoryHubView> {
                   title: 'Análisis de Rotación',
                   subtitle: 'Velocidad de consumo, estrellas y estancados',
                   route: AppRoutes.inventoryRotation,
+                  available: true,
+                ),
+                _HubCard(
+                  icon: Icons.donut_large_outlined,
+                  title: 'Rendimiento y mermas',
+                  subtitle:
+                      'Cuánto de lo comprado va a producción y cuánto se pierde',
+                  route: AppRoutes.inventoryYield,
                   available: true,
                 ),
               ],

@@ -18,7 +18,7 @@ import 'offline_queue_db.dart';
 
 class OfflineQueueDao {
   OfflineQueueDao(this._db, {SecureBlobCipher? cipher})
-      : _cipher = cipher ?? SecureBlobCipher.instance;
+    : _cipher = cipher ?? SecureBlobCipher.instance;
 
   final OfflineQueueDb _db;
 
@@ -44,6 +44,30 @@ class OfflineQueueDao {
     return Future.wait(rows.map(_rowToActionMap));
   }
 
+  /// Count queue states without reading or decrypting operation payloads.
+  Future<({int pending, int dead})> statusCounts(String businessId) async {
+    final status = _db.queueActions.status;
+    final total = _db.queueActions.id.count();
+    final query = _db.selectOnly(_db.queueActions)
+      ..addColumns([status, total])
+      ..where(_db.queueActions.businessId.equals(businessId))
+      ..groupBy([status]);
+    var pending = 0;
+    var dead = 0;
+    for (final row in await query.get()) {
+      final count = row.read(total) ?? 0;
+      switch (row.read(status)) {
+        case 'completed':
+          break;
+        case 'dead':
+          dead += count;
+        default:
+          pending += count;
+      }
+    }
+    return (pending: pending, dead: dead);
+  }
+
   /// Reemplaza la cola completa (transacción atómica DELETE + INSERT).
   /// Reemplaza `storage.writeList(offline_queue_{businessId}, list)`.
   /// La semántica espejo del SP write es: la lista nueva es la verdad
@@ -60,7 +84,9 @@ class OfflineQueueDao {
   ) async {
     final id = action['id']?.toString();
     if (id == null || id.isEmpty) return;
-    await _db.into(_db.queueActions).insertOnConflictUpdate(
+    await _db
+        .into(_db.queueActions)
+        .insertOnConflictUpdate(
           await _actionMapToCompanion(businessId, action),
         );
   }
@@ -72,9 +98,9 @@ class OfflineQueueDao {
   /// operaciones bloqueadas por bugs anteriores o conflictos irresolubles.
   /// Devuelve cuantas filas se borraron.
   Future<int> deleteAllPending(String businessId) async {
-    final deleted = await (_db.delete(_db.queueActions)
-          ..where((t) => t.businessId.equals(businessId)))
-        .go();
+    final deleted = await (_db.delete(
+      _db.queueActions,
+    )..where((t) => t.businessId.equals(businessId))).go();
     return deleted;
   }
 
@@ -82,10 +108,13 @@ class OfflineQueueDao {
   /// NO sincronizadas (pending/processing/failed/dead). Se usa en logout para
   /// no perder operaciones offline sin subir. Devuelve cuántas se borraron.
   Future<int> deleteCompletedActions(String businessId) async {
-    final deleted = await (_db.delete(_db.queueActions)
-          ..where((t) =>
-              t.businessId.equals(businessId) & t.status.equals('completed')))
-        .go();
+    final deleted =
+        await (_db.delete(_db.queueActions)..where(
+              (t) =>
+                  t.businessId.equals(businessId) &
+                  t.status.equals('completed'),
+            ))
+            .go();
     return deleted;
   }
 
@@ -101,11 +130,13 @@ class OfflineQueueDao {
         .where((a) => (a['id']?.toString() ?? '').isNotEmpty)
         .toList(growable: false);
     await _db.transaction(() async {
-      await (_db.delete(_db.queueActions)
-            ..where((t) => t.businessId.equals(businessId)))
-          .go();
+      await (_db.delete(
+        _db.queueActions,
+      )..where((t) => t.businessId.equals(businessId))).go();
       for (final action in safeActions) {
-        await _db.into(_db.queueActions).insertOnConflictUpdate(
+        await _db
+            .into(_db.queueActions)
+            .insertOnConflictUpdate(
               await _actionMapToCompanion(businessId, action),
             );
       }
@@ -125,7 +156,9 @@ class OfflineQueueDao {
     required String businessId,
     required String opId,
   }) async {
-    await _db.into(_db.completedOps).insertOnConflictUpdate(
+    await _db
+        .into(_db.completedOps)
+        .insertOnConflictUpdate(
           CompletedOpsCompanion.insert(
             opId: opId,
             businessId: businessId,
@@ -145,7 +178,9 @@ class OfflineQueueDao {
     required String businessId,
     required String fingerprint,
   }) async {
-    await _db.into(_db.completedFingerprints).insertOnConflictUpdate(
+    await _db
+        .into(_db.completedFingerprints)
+        .insertOnConflictUpdate(
           CompletedFingerprintsCompanion.insert(
             fingerprint: fingerprint,
             businessId: businessId,
@@ -160,12 +195,12 @@ class OfflineQueueDao {
   Future<void> pruneCompletedOlderThan(Duration olderThan) async {
     final cutoff = DateTime.now().subtract(olderThan);
     await _db.transaction(() async {
-      await (_db.delete(_db.completedOps)
-            ..where((t) => t.completedAt.isSmallerThanValue(cutoff)))
-          .go();
-      await (_db.delete(_db.completedFingerprints)
-            ..where((t) => t.completedAt.isSmallerThanValue(cutoff)))
-          .go();
+      await (_db.delete(
+        _db.completedOps,
+      )..where((t) => t.completedAt.isSmallerThanValue(cutoff))).go();
+      await (_db.delete(
+        _db.completedFingerprints,
+      )..where((t) => t.completedAt.isSmallerThanValue(cutoff))).go();
     });
   }
 
@@ -237,8 +272,7 @@ class OfflineQueueDao {
       type: action['type']?.toString() ?? 'unknown',
       payloadJson: await _cipher.sealDurable(jsonEncode(payloadExtras)),
       status: Value(action['status']?.toString() ?? 'pending'),
-      attempts:
-          Value((action['attempts'] as num?)?.toInt() ?? 0),
+      attempts: Value((action['attempts'] as num?)?.toInt() ?? 0),
       queuedAt: _parseDate(action['queued_at']) ?? DateTime.now(),
       completedAt: Value(_parseDate(action['completed_at'])),
       fingerprint: Value(action['fingerprint']?.toString()),

@@ -6,6 +6,7 @@ import 'package:mangopos/core/theme/app_breakpoints.dart';
 import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
+import '../../../../data/utils/loyalty_reward_utils.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
@@ -89,6 +90,14 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   // romper la detección de oferta del motor de precios.
   String? _dealMarker;
 
+  // Marcador del premio de la tarjeta de sellos ([LOYALTY:canje:unidades]):
+  // se oculta del campo de notas y se re-añade al guardar. Mientras esté, el
+  // descuento de la línea queda BLOQUEADO: es la unidad gratis ya canjeada.
+  // Sin el bloqueo, una línea 1/1 gratis se leería como cortesía y subir la
+  // cantidad a 2 regalaría las dos.
+  String? _loyaltyMarker;
+  bool get _hasLoyaltyReward => _loyaltyMarker != null;
+
   late double _quantity;
   late bool _isTakeout;
   late bool _isCourtesy;
@@ -106,6 +115,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     super.initState();
     final parsedNotes = _splitStoredNotes(widget.item.notes);
     _dealMarker = parsedNotes.dealMarker;
+    _loyaltyMarker = parsedNotes.loyaltyMarker;
     _notesController = TextEditingController(text: parsedNotes.notes);
     _courtesyReasonController = TextEditingController(
       text: parsedNotes.courtesyReason ?? '',
@@ -121,8 +131,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     final fullAmount = _fullAmountForQuantity(widget.item.quantity);
     _isCourtesy =
         parsedNotes.courtesyReason != null ||
-        widget.item.total.abs() < 0.01 ||
-        widget.item.discounts >= (fullAmount - 0.01);
+        (!_hasLoyaltyReward &&
+            (widget.item.total.abs() < 0.01 ||
+                widget.item.discounts >= (fullAmount - 0.01)));
     _initialCourtesy = _isCourtesy;
     _initialManualDiscountValue = _initialManualDiscount();
   }
@@ -247,6 +258,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
     if (baseNotes.isNotEmpty) {
       noteParts.add(baseNotes);
+    }
+    // Y el del premio de la tarjeta de sellos: sin él, el canje dejaría de
+    // valer y los sellos volverían aunque la línea siga gratis.
+    if (_loyaltyMarker != null && _loyaltyMarker!.isNotEmpty) {
+      noteParts.add(_loyaltyMarker!);
     }
     if (_isCourtesy && _courtesyReasonController.text.isNotEmpty) {
       noteParts.add('$_courtesyPrefix$courtesyReason]');
@@ -660,6 +676,43 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           ),
                         ),
                       ],
+                      if (_hasLoyaltyReward) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8F8EE),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFBBE5C8)),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.card_giftcard_rounded,
+                                size: 16,
+                                color: Color(0xFF16A34A),
+                              ),
+                              SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  'Premio de fidelidad: el descuento no se '
+                                  'edita aquí. Para quitarlo usa la tarjeta '
+                                  'del cliente.',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF166534),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       TextField(
                         controller: _notesController,
@@ -892,9 +945,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                   const SizedBox(width: 12),
                   Switch(
                     value: _isCourtesy,
-                    onChanged: (val) {
-                      setState(() => _isCourtesy = val);
-                    },
+                    onChanged: _hasLoyaltyReward
+                        ? null
+                        : (val) {
+                            setState(() => _isCourtesy = val);
+                          },
                     activeThumbColor: Colors.white,
                     activeTrackColor: kPrimary,
                     inactiveTrackColor: const Color(0xFFD1D5DB),
@@ -934,6 +989,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                     width: 220,
                     child: TextField(
                       controller: _discountController,
+                      enabled: !_hasLoyaltyReward,
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
@@ -1237,16 +1293,34 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   }
 
   double _effectiveDiscount() {
+    // Premio de la tarjeta: el descuento es la unidad gratis ya canjeada y no
+    // se edita aquí (se quita desde la tarjeta del cliente en el carrito).
+    // Cambiar la cantidad no regala más unidades.
+    if (_hasLoyaltyReward) {
+      return widget.item.discounts
+          .clamp(0, _fullAmountForQuantity(_quantity))
+          .toDouble();
+    }
     if (_isCourtesy) {
       return _fullAmountForQuantity(_quantity);
     }
     return _enteredDiscount().clamp(0, _fullAmountForQuantity(_quantity));
   }
 
-  ({String notes, String? courtesyReason, String? dealMarker})
+  ({
+    String notes,
+    String? courtesyReason,
+    String? dealMarker,
+    String? loyaltyMarker,
+  })
   _splitStoredNotes(String? rawNotes) {
     if (rawNotes == null || rawNotes.trim().isEmpty) {
-      return (notes: '', courtesyReason: null, dealMarker: null);
+      return (
+        notes: '',
+        courtesyReason: null,
+        dealMarker: null,
+        loyaltyMarker: null,
+      );
     }
 
     final lines = rawNotes
@@ -1257,6 +1331,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
 
     String? courtesyReason;
     String? dealMarker;
+    final loyaltyMarker = loyaltyMarkerLine(rawNotes);
     final visibleNotes = <String>[];
 
     for (final line in lines) {
@@ -1267,6 +1342,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       } else if (line.startsWith('[DEAL:') && line.endsWith(']')) {
         // Marcador de oferta: no es nota humana, se oculta del campo editable.
         dealMarker = line;
+      } else if (line == loyaltyMarker) {
+        // Premio de la tarjeta de sellos: tampoco es nota humana.
+        continue;
       } else {
         visibleNotes.add(line);
       }
@@ -1276,6 +1354,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       notes: visibleNotes.join('\n'),
       courtesyReason: courtesyReason,
       dealMarker: dealMarker,
+      loyaltyMarker: loyaltyMarker,
     );
   }
 }

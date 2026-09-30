@@ -9,6 +9,7 @@ import '../../../data/repositories/inventory_repository.dart';
 import '../../../data/repositories/suppliers_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/inventory_state.dart';
+import '../state/outflow_reasons.dart';
 import '../state/inventory_warehouse_scope.dart';
 import '../../../core/utils/app_time.dart';
 
@@ -302,6 +303,8 @@ class InventoryViewModel extends ChangeNotifier {
     required String operationId,
     double? costPerUnit,
     String? notes,
+    /// Área de un consumo interno (Baños, Cocina…).
+    String? destination,
   }) async {
     final businessId = _state.businessId;
     final warehouseId = _state.selectedWarehouseId;
@@ -323,6 +326,7 @@ class InventoryViewModel extends ChangeNotifier {
         notes: notes,
         costPerUnit: costPerUnit,
         operationId: operationId,
+        destination: destination,
       );
       _state = _state.copyWith(saving: false);
       // La recarga NO se espera: el diálogo cierra e imprime el conduce ya,
@@ -456,10 +460,58 @@ class InventoryViewModel extends ChangeNotifier {
       businessId: businessId,
       warehouseId: warehouseId,
       movementType: 'waste',
+      // El motivo y el área de un consumo interno salen en el A4.
+      includeReasonCode: true,
       fromUtc: range.fromUtc,
       toUtc: range.toUtc,
       limit: 500,
     );
+  }
+
+  /// Salidas (`waste`) de UN insumo en la bodega seleccionada, de los
+  /// últimos [days] días de RD (1 = solo hoy). Para la ficha del insumo, desde
+  /// donde cada salida se reimprime por separado.
+  Future<List<InventoryMovementEntry>> loadItemOutflows(
+    String itemId, {
+    int days = 30,
+  }) async {
+    final businessId = _state.businessId;
+    final warehouseId = _state.selectedWarehouseId;
+    if (businessId == null || warehouseId == null) return const [];
+    final today = AppTime.todayAstDate();
+    final from = today.subtract(Duration(days: days < 1 ? 0 : days - 1));
+    return _repository.getMovements(
+      businessId: businessId,
+      warehouseId: warehouseId,
+      itemId: itemId,
+      movementType: 'waste',
+      includeReasonCode: true,
+      fromUtc: AppTime.astDayRangeUtc(from).fromUtc,
+      toUtc: AppTime.todayRangeUtc().toUtc,
+      limit: 300,
+    );
+  }
+
+  /// Historial de salidas / mermas de la bodega seleccionada: los últimos
+  /// [days] días de RD (1 = hoy). Trae las mermas y los ajustes que restan
+  /// con motivo de salida, con su motivo, para filtrarlas por razón.
+  Future<List<InventoryMovementEntry>> loadOutflowHistory({int days = 7}) async {
+    final businessId = _state.businessId;
+    final warehouseId = _state.selectedWarehouseId;
+    if (businessId == null || warehouseId == null) return const [];
+    final today = AppTime.todayAstDate();
+    final from = today.subtract(Duration(days: days < 1 ? 0 : days - 1));
+    final rows = await _repository.getMovements(
+      businessId: businessId,
+      warehouseId: warehouseId,
+      movementTypes: const ['waste', 'adjustment'],
+      negativeOnly: true,
+      includeReasonCode: true,
+      fromUtc: AppTime.astDayRangeUtc(from).fromUtc,
+      toUtc: AppTime.todayRangeUtc().toUtc,
+      limit: 500,
+    );
+    return rows.where((m) => m.isRegisteredOutflow).toList(growable: false);
   }
 
   Future<void> _reloadLists() async {

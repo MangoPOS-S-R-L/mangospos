@@ -23,12 +23,18 @@ class AdjustReason {
   /// físico o una corrección de tecleo no son salidas: no hay nada que firmar.
   final bool isExit;
 
+  /// `false` cuando el motivo solo existe como SALIDA relativa (Salidas /
+  /// Mermas) y no se ofrece en el ajuste que fija la existencia a un número.
+  /// Un consumo interno es «saqué 12 rollos», no «quedan 40».
+  final bool adjustable;
+
   const AdjustReason(
     this.code,
     this.label,
     this.description,
     this.icon, {
     this.isExit = false,
+    this.adjustable = true,
   });
 }
 
@@ -38,6 +44,17 @@ const List<AdjustReason> kAdjustReasons = [
     'Conteo físico',
     'Cuadrar con la realidad de la bodega',
     Icons.fact_check_rounded,
+  ),
+  // Gastables (20260930_0051): el papel higiénico que se entrega a los baños
+  // no se perdió — se usó. Va primero porque es la salida más frecuente de un
+  // gastable; en los reportes cuenta como CONSUMO, no como merma.
+  AdjustReason(
+    'internal_use',
+    'Consumo interno',
+    'Gastable entregado para usarse en el negocio',
+    Icons.move_down_rounded,
+    isExit: true,
+    adjustable: false,
   ),
   AdjustReason(
     'breakage',
@@ -87,6 +104,9 @@ const List<AdjustReason> kAdjustReasons = [
     Icons.more_horiz_rounded,
   ),
 ];
+
+/// Código del consumo interno (gastables, 20260930_0051).
+const kInternalUseReason = 'internal_use';
 
 /// Razón por código. `null` si el código no está en el catálogo.
 AdjustReason? adjustReasonByCode(String code) {

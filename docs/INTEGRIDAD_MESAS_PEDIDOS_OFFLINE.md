@@ -26,19 +26,29 @@ mostrar el conflicto al reconectar, nunca sobrescribirlas silenciosamente.
   encola una segunda eliminacion.
 - Pruebas unitarias cubren las reglas del Hub, borrado sin filas y borradores
   locales pendientes. No sustituyen una prueba de integracion Windows/LAN.
+- Al salir de una mesa vacia, la liberacion confirmada por el servidor se
+  refleja en el Hub y refresca el salon; `dispose()` ya no pierde ese callback.
+  Una orden local que llego al Hub no se descarta silenciosamente: encola
+  `release_empty_order`, que solo cierra si el Hub y el RPC la ven vacia.
+  Una orden local aun no entregada se descarta junto con su snapshot. La salida
+  por rutas distintas de Atrás aplica la misma limpieza una sola vez.
+- Si una mesa con ID de servidor se abre en un cliente Hub o pierde internet
+  durante la salida, la liberacion se guarda primero en la cola local y se
+  reenvia al Hub/servidor. No depende de una llamada WAN en ese instante.
 
 ## Pendiente critico (P0)
 
-1. **Eliminar cierres automaticos basados en una lectura incompleta.**
+1. **Conservar la liberacion automatica, pero no basarla en una lectura incompleta.**
    `table_order_screen.dart` programa `fn_release_empty_table` al salir si el
    estado local esta vacio. `sales_by_zone_viewmodel.dart` ejecuta
    `fn_release_empty_tables` con 15 minutos de gracia, y tambien puede existir
    un cron en PostgreSQL. El servidor no puede ver una comanda que sigue en la
    cola de otro Windows; por eso `COUNT(order_items)=0` no es prueba suficiente
-   para anular orden y cerrar sesion. Definir y migrar un protocolo de cierre
-   con confirmacion de todas las operaciones conocidas por Hub/equipos, o
-   desactivar la liberacion silenciosa y hacer la limpieza de vacias de forma
-   explicita y auditable. Hasta entonces NO afirmar que las mesas no desaparecen.
+   para anular orden y cerrar sesion. La preferencia operativa es que la mesa
+   se libere sola: el protocolo pendiente debe esperar la confirmacion de las
+   operaciones de todos los equipos conocidos, o mantenerla ocupada mientras
+   alguno este aislado. La funcion actual sigue siendo automatica, pero no
+   cumple esa garantia; no afirmar que las mesas no desaparecen.
 
 2. **No borrar fisicamente productos enviados a cocina.** Reemplazar
    `DELETE` por tombstone/estado `void` con `operation_id`, razon, PIN/actor,

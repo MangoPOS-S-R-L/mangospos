@@ -13,6 +13,7 @@
 
 import 'package:intl/intl.dart';
 
+import '../../../core/inventory/item_classification.dart';
 import '../state/inventory_state.dart';
 
 /// Filas listas para exportar más los índices de las columnas que tienen que
@@ -39,13 +40,8 @@ class InventoryMasterExport {
 
   static String _siNo(bool value) => value ? 'Sí' : 'No';
 
-  static String classificationLabel(String value) => switch (value) {
-    'raw_material' => 'Materia prima',
-    'finished_product' => 'Producto terminado',
-    'combo' => 'Combo',
-    'service' => 'Servicio',
-    _ => 'Simple',
-  };
+  static String classificationLabel(String value) =>
+      itemClassificationLabel(value);
 
   static String costingLabel(String value) =>
       value == 'fifo' ? 'FIFO' : 'Promedio';

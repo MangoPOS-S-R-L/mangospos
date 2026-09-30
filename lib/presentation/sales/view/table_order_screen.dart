@@ -11,6 +11,10 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
+import 'package:mangopos/core/offline/hub/hub_client.dart';
+import 'package:mangopos/core/offline/hub/hub_config.dart';
+import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
+import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/widgets/min_extent_grid_delegate.dart';
@@ -37,6 +41,8 @@ import 'package:mangopos/data/repositories/printing_repository.dart'
     show PrintOutcome;
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/utils/loyalty_reward_utils.dart';
+import 'package:mangopos/presentation/loyalty/widgets/order_loyalty_strip.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
@@ -577,6 +583,85 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   bool _activeOrderEmpty = false;
   String? _activeBusinessId;
   SalesRepository? _salesRepoRef;
+  SalesViewModel? _orderNotifierRef;
+  bool _localReleaseScheduledByBack = false;
+  TerminalMode? _terminalModeAtBuild;
+  String? _hubUrlAtBuild;
+
+  void _mirrorEmptyReleaseToHub({
+    required bool released,
+    required String orderId,
+    required String? tableId,
+    required String? businessId,
+    required TerminalMode? terminalMode,
+    required String? hubUrl,
+  }) {
+    if (!released || businessId == null || businessId.isEmpty) return;
+    final op = <String, dynamic>{
+      'type': 'release_empty_order',
+      'order_id': orderId,
+      ...?(tableId == null ? null : {'table_id': tableId}),
+      'op_id': 'auto-release-$orderId',
+      'hub_applied': true,
+    };
+    if (terminalMode == TerminalMode.hubHost) {
+      unawaited(OfflinePosService().publishHostOp(businessId, op));
+    } else if (terminalMode == TerminalMode.hubClient && hubUrl != null) {
+      unawaited(HubClient().postOp(hubUrl, {...op, 'business_id': businessId}));
+    }
+  }
+
+  Future<bool> _releaseEmptyWithFallback({
+    required SalesRepository repo,
+    required String orderId,
+    required String? tableId,
+    required String? businessId,
+    required TerminalMode? terminalMode,
+    required String? hubUrl,
+  }) async {
+    if (terminalMode != TerminalMode.hubClient &&
+        ConnectivityService().isConnected) {
+      try {
+        final released = await repo.releaseEmptyTableIfNeeded(
+          orderId,
+          businessId: businessId,
+        );
+        _mirrorEmptyReleaseToHub(
+          released: released,
+          orderId: orderId,
+          tableId: tableId,
+          businessId: businessId,
+          terminalMode: terminalMode,
+          hubUrl: hubUrl,
+        );
+        return released;
+      } catch (error) {
+        if (!OfflinePosService.isTransportError(error)) rethrow;
+      }
+    }
+
+    if (businessId == null || businessId.isEmpty) {
+      throw StateError('No se puede liberar una mesa sin negocio activo.');
+    }
+    final offline = OfflinePosService();
+    await offline.enqueueAction(
+      businessId: businessId,
+      action: {
+        'type': 'release_empty_order',
+        'order_id': orderId,
+        ...?(tableId == null ? null : {'table_id': tableId}),
+      },
+    );
+    await offline.removeOrderSnapshots(
+      businessId: businessId,
+      orderId: orderId,
+    );
+    if (terminalMode == TerminalMode.hubHost ||
+        terminalMode == TerminalMode.hubClient) {
+      await offline.flushPendingToHub(businessId);
+    }
+    return true;
+  }
 
   bool _isOpenItem(OrderItem item) {
     return item.status != 'paid' && item.status != 'void';
@@ -596,7 +681,25 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         _activeOrderId != null) {
       final repo = _salesRepoRef ?? SalesRepository(Supabase.instance.client);
       final orderId = _activeOrderId!;
+      final tableId = widget.tableId;
       final businessId = _activeBusinessId;
+      if (orderId.startsWith('local-order-')) {
+        final orderNotifier = _orderNotifierRef;
+        if (!_localReleaseScheduledByBack && orderNotifier != null) {
+          unawaited(
+            Future.microtask(
+              () => orderNotifier.cancelCurrentOrder(
+                releaseOnlyIfEmpty: true,
+                expectedOrderId: orderId,
+              ),
+            ).catchError((Object error) {
+              debugPrint('No se pudo liberar la orden local vacia: $error');
+            }),
+          );
+        }
+        super.dispose();
+        return;
+      }
       // Programada, no inmediata. Cuando la ruta se REEMPLAZA, este dispose y
       // el initState de la instancia nueva caen en frames contiguos: liberar
       // aquí mismo mataba la mesa que la pantalla entrante acababa de abrir
@@ -607,6 +710,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         orderId,
         tableId: widget.tableId,
         businessId: businessId,
+        release: () => _releaseEmptyWithFallback(
+          repo: repo,
+          orderId: orderId,
+          tableId: tableId,
+          businessId: businessId,
+          terminalMode: _terminalModeAtBuild,
+          hubUrl: _hubUrlAtBuild,
+        ),
       );
     }
     super.dispose();
@@ -636,6 +747,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final salesRepo = ref.read(salesRepositoryProvider);
     final zoneVm = ref.read(byZoneVmProvider.notifier);
     final orderNotifier = ref.read(currentOrderProvider.notifier);
+    final terminalMode = ref.read(hubModeProvider);
+    final hubUrl = ref.read(hubModeProvider.notifier).reachableHubUrl;
+    if (hasEmptyOrder && order != null && order.id.startsWith('local-order-')) {
+      _localReleaseScheduledByBack = true;
+    }
 
     // 1. Navigate IMMEDIATELY — user sees instant response.
     if (context.mounted) {
@@ -669,14 +785,19 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       }
 
       if (order.id.startsWith('local-order-')) {
-        // Offline: no hay nada que liberar en el servidor (la orden ni existe
-        // allá), así que se purga la local. Antes se llegaba aquí de rebote,
-        // porque `releaseEmptyTableIfNeeded` reventaba con el id no-uuid.
+        // Una orden local puede existir ya en el Hub aunque todavía no tenga
+        // mapping a la nube. La liberación condicional decide si descartar el
+        // borrador o enviar el cierre durable al Hub.
         unawaited(
           Future.microtask(() async {
             try {
-              await orderNotifier.cancelCurrentOrder();
-            } catch (_) {}
+              await orderNotifier.cancelCurrentOrder(
+                releaseOnlyIfEmpty: true,
+                expectedOrderId: order.id,
+              );
+            } catch (error) {
+              debugPrint('No se pudo liberar la orden local vacia: $error');
+            }
             await refreshZone();
           }),
         );
@@ -690,6 +811,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           order.id,
           tableId: widget.tableId,
           businessId: businessId,
+          release: () => _releaseEmptyWithFallback(
+            repo: salesRepo,
+            orderId: order.id,
+            tableId: widget.tableId,
+            businessId: businessId,
+            terminalMode: terminalMode,
+            hubUrl: hubUrl,
+          ),
           onReleased: () => unawaited(refreshZone()),
         );
       }
@@ -1427,7 +1556,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     _activeOrderEmpty =
         orderSnapshot.order != null && orderSnapshot.items.isEmpty;
     _salesRepoRef = ref.read(salesRepositoryProvider);
+    _orderNotifierRef = ref.read(currentOrderProvider.notifier);
     _activeBusinessId = ref.read(sessionProvider).activeBusinessId;
+    _terminalModeAtBuild = ref.read(hubModeProvider);
+    _hubUrlAtBuild = ref.read(hubModeProvider.notifier).reachableHubUrl;
     // Retail: sin mesas ni zonas, el rail de herramientas (que en venta
     // rápida solo lleva "Regresar") no aplica. Se observa aquí (fuera del
     // LayoutBuilder, que corre en fase de layout) para registrar bien la
@@ -3439,16 +3571,18 @@ class _CartView extends ConsumerWidget {
         }
       }
     }
-    await ref.read(currentOrderProvider.notifier).addItem(
-      menuItemId: source.productId!,
-      qty: qty,
-      checkPos: checkPosition,
-      takeout: isTakeout,
-      productName: source.productName,
-      productPrice: source.unitPrice,
-      productTaxMode: source.taxMode,
-      productTaxRate: source.taxRate,
-    );
+    await ref
+        .read(currentOrderProvider.notifier)
+        .addItem(
+          menuItemId: source.productId!,
+          qty: qty,
+          checkPos: checkPosition,
+          takeout: isTakeout,
+          productName: source.productName,
+          productPrice: source.unitPrice,
+          productTaxMode: source.taxMode,
+          productTaxRate: source.taxRate,
+        );
   }
 
   void _openProductDetailModal(
@@ -4014,7 +4148,12 @@ class _CartView extends ConsumerWidget {
       final name = item.productName;
       final qty = item.quantity.toDouble();
       final totalItem = _uiItemDisplayAmount(orderState.order, item);
-      final groupKey = '${name.toLowerCase().trim()}|${item.isTakeout}';
+      // La línea con premio de la tarjeta de sellos va en su propia fila: el
+      // cajero ve cuál es la gratis, y editar el grupo no reparte el premio
+      // entre las demás líneas (el guardado agrupado prorratea descuentos).
+      final groupKey =
+          '${name.toLowerCase().trim()}|${item.isTakeout}'
+          '${hasLoyaltyReward(item.notes) ? '|loyalty:${item.id}' : ''}';
       if (groupedSent.containsKey(groupKey)) {
         groupedSent[groupKey] = groupedSent[groupKey]!.copyWith(
           qty: groupedSent[groupKey]!.qty + qty,
@@ -4715,6 +4854,11 @@ class _CartView extends ConsumerWidget {
 
         if (!isStacked && !hasChecks)
           Container(height: 1, color: _salesDivider),
+
+        // Tarjeta de sellos del cliente asignado (subcuenta > mesa): marcas,
+        // premios disponibles y «Canjear». Sin cliente o sin tarjetas activas
+        // no ocupa lugar.
+        const OrderLoyaltyStrip(),
 
         Expanded(
           child: displayedItems.isEmpty
@@ -8377,6 +8521,24 @@ class _SentLineItem extends ConsumerWidget {
                 ),
               ),
             ],
+            // Premio de la tarjeta de sellos (esta fila nunca se agrupa).
+            if (hasLoyaltyReward(auditItem?.notes)) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F8EE),
+                  borderRadius: BorderRadius.circular(7),
+                ),
+                child: const Icon(
+                  Icons.card_giftcard_rounded,
+                  size: 14,
+                  color: Color(0xFF16A34A),
+                ),
+              ),
+            ],
             const SizedBox(width: 10),
             // Nombre
             Expanded(
@@ -11560,9 +11722,18 @@ class _DiscountDialogState extends ConsumerState<_DiscountDialog> {
         : widget.items
               .where((i) => _selectedItemIds.contains(i.id))
               .toList(growable: false);
+    // Lo que cubre un premio de la tarjeta de sellos no es descontable: el
+    // viewmodel reparte el monto solo sobre lo que el cliente sí paga.
     return targets.fold<double>(
       0,
-      (s, i) => s + (i.subtotal + i.tax).clamp(0, double.infinity).toDouble(),
+      (s, i) =>
+          s +
+          loyaltyDiscountableBase(
+            subtotal: i.subtotal,
+            tax: i.tax,
+            quantity: i.quantity,
+            notes: i.notes,
+          ),
     );
   }
 

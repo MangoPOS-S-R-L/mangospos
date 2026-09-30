@@ -51,6 +51,14 @@ class KardexMovement {
   /// True si el movimiento incrementa stock (cantidad > 0).
   bool get isInbound => quantity > 0;
 
+  /// Salida de un gastable para usarse en el negocio (20260930_0051). Se
+  /// guarda como `waste`, pero no es una pérdida: no se muestra como «Merma».
+  /// Sin la columna, el motivo va de prefijo en la nota.
+  bool get isInternalUse =>
+      movementType == 'waste' &&
+      (reasonCode == 'internal_use' ||
+          (notes ?? '').startsWith('Consumo interno'));
+
   factory KardexMovement.fromMap(Map<String, dynamic> map) {
     double toDouble(dynamic v) {
       if (v == null) return 0;

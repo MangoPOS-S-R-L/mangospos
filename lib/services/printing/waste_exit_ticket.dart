@@ -30,13 +30,19 @@ class WasteExitTicket {
     required String reasonLabel,
     required String warehouseName,
     String? notes,
+    /// Área a la que fue un consumo interno (Baños, Cocina…).
+    String? destination,
     String? operatorName,
-    double stockBefore = 0,
-    double stockAfter = 0,
+    /// Existencia antes y después. `null` en una REIMPRESIÓN de una salida
+    /// vieja: esa foto no se guardó y un «0» inventado sería peor que nada.
+    double? stockBefore = 0,
+    double? stockAfter = 0,
     double costPerUnit = 0,
     String? currencySymbol,
     int paperWidth = 80,
     DateTime? occurredAt,
+    /// Copia de una salida ya registrada (desde la ficha del insumo).
+    bool reprint = false,
   }) {
     final gen = EscPosGenerator(paperWidth: paperWidth);
     final when = AppTime.astFromInstant(occurredAt ?? DateTime.now());
@@ -57,6 +63,11 @@ class WasteExitTicket {
     gen.setBold(false);
     gen.setTextSize();
     gen.textCentered(_dateTime(when));
+    if (reprint) {
+      gen.setBold(true);
+      gen.textCentered('*** REIMPRESION ***');
+      gen.setBold(false);
+    }
     gen.separator();
 
     gen.setBold(true);
@@ -84,6 +95,12 @@ class WasteExitTicket {
     gen.textCenteredWrapped(reasonLabel.toUpperCase());
     gen.setTextSize();
     gen.setBold(false);
+    final area = destination?.trim();
+    if (area != null && area.isNotEmpty) {
+      gen.setBold(true);
+      gen.textRow('PARA:', _fit(area.toUpperCase(), gen.maxChars - 6));
+      gen.setBold(false);
+    }
     final note = notes?.trim();
     if (note != null && note.isNotEmpty) {
       gen.textWrapped('Nota: $note');
@@ -92,8 +109,10 @@ class WasteExitTicket {
 
     // El antes y el después: sin esto el papel no sirve para auditar, porque
     // no se puede saber si la cantidad que dice es la que de verdad se movió.
-    gen.textRow('Stock antes:', '${_qty(stockBefore)} $unit');
-    gen.textRow('Stock después:', '${_qty(stockAfter)} $unit');
+    if (stockBefore != null && stockAfter != null) {
+      gen.textRow('Stock antes:', '${_qty(stockBefore)} $unit');
+      gen.textRow('Stock después:', '${_qty(stockAfter)} $unit');
+    }
     gen.doubleSeparator();
 
     if (operatorName != null && operatorName.trim().isNotEmpty) {

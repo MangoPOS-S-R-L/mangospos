@@ -18,36 +18,36 @@ void main() {
 
   // Mock del canal de flutter_secure_storage (clave del SecureBlobCipher que
   // cifra los snapshots).
-  const channel =
-      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  const channel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
   final secureStore = <String, String>{};
   setUpAll(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      final args = (call.arguments as Map?) ?? const {};
-      switch (call.method) {
-        case 'write':
-          secureStore[args['key'] as String] = args['value'] as String;
+          final args = (call.arguments as Map?) ?? const {};
+          switch (call.method) {
+            case 'write':
+              secureStore[args['key'] as String] = args['value'] as String;
+              return null;
+            case 'read':
+              return secureStore[args['key'] as String];
+            case 'delete':
+              secureStore.remove(args['key']);
+              return null;
+            case 'containsKey':
+              return secureStore.containsKey(args['key']);
+            case 'readAll':
+              return Map<String, String>.from(secureStore);
+            case 'deleteAll':
+              secureStore.clear();
+              return null;
+          }
           return null;
-        case 'read':
-          return secureStore[args['key'] as String];
-        case 'delete':
-          secureStore.remove(args['key']);
-          return null;
-        case 'containsKey':
-          return secureStore.containsKey(args['key']);
-        case 'readAll':
-          return Map<String, String>.from(secureStore);
-        case 'deleteAll':
-          secureStore.clear();
-          return null;
-      }
-      return null;
-    });
+        });
     // La conexión drift real necesita path_provider (no existe en tests);
     // inyectamos una DB en memoria ANTES de que el service toque la cola.
-    OfflineQueueDb.debugInstance =
-        OfflineQueueDb.inMemory(NativeDatabase.memory());
+    OfflineQueueDb.debugInstance = OfflineQueueDb.inMemory(
+      NativeDatabase.memory(),
+    );
   });
 
   setUp(() {
@@ -64,6 +64,24 @@ void main() {
     expect(await svc.listPendingTableDrafts('biz-empty'), isEmpty);
   });
 
+  test(
+    'badge cuenta estados con una sola consulta sin abrir payloads',
+    () async {
+      const biz = 'biz-status-counts';
+      for (final status in ['pending', 'failed', 'dead', 'completed']) {
+        await svc.enqueueAction(
+          businessId: biz,
+          action: {
+            'id': 'status-$status',
+            'type': 'inventory_adjust',
+            'status': status,
+          },
+        );
+      }
+      expect(await svc.queueStatusCounts(biz), (pending: 2, dead: 1));
+    },
+  );
+
   test('devuelve la mesa con borrador local sin sincronizar', () async {
     await svc.createLocalDraft(
       businessId: 'biz-a',
@@ -76,10 +94,7 @@ void main() {
   });
 
   test('excluye orígenes que no son mesa (venta rápida)', () async {
-    await svc.createLocalDraft(
-      businessId: 'biz-quick',
-      origin: 'quick',
-    );
+    await svc.createLocalDraft(businessId: 'biz-quick', origin: 'quick');
     expect(await svc.listPendingTableDrafts('biz-quick'), isEmpty);
   });
 
@@ -109,44 +124,45 @@ void main() {
     expect(await svc.listPendingTableDrafts('biz-remap'), isEmpty);
   });
 
-  test('mesa remapeada con contenido pendiente sigue en overlay (sync parcial)',
-      () async {
-    const biz = 'biz-partial';
-    final draft = await svc.createLocalDraft(
-      businessId: biz,
-      origin: 'table',
-      tableId: 'table-A',
-    );
-    final localId = draft.order!.id;
-    // add_item aún en cola con el id LOCAL (así quedan tras un sync parcial:
-    // open_table replayó, los ítems no).
-    await svc.enqueueAction(
-      businessId: biz,
-      action: {
-        'type': 'add_item',
-        'origin': 'table',
-        'order_id': localId,
-        'item_id': 'tmp_1',
-        'qty': 1,
-      },
-    );
-    // Simula el replay de open_table: mapping local→remoto + remap snapshot.
-    final storage = await StorageService.getInstance();
-    await storage.writeJson(
-      'offline_order_map_$biz',
-      {localId: 'real-uuid-456'},
-    );
-    await svc.remapSnapshotOrderId(
-      businessId: biz,
-      localOrderId: localId,
-      remoteOrderId: 'real-uuid-456',
-    );
-    // Sin el criterio de contenido pendiente, la mesa desaparecería del
-    // overlay con la sesión del server aún vacía.
-    final drafts = await svc.listPendingTableDrafts(biz);
-    expect(drafts.length, 1);
-    expect(drafts.first.tableId, 'table-A');
-  });
+  test(
+    'mesa remapeada con contenido pendiente sigue en overlay (sync parcial)',
+    () async {
+      const biz = 'biz-partial';
+      final draft = await svc.createLocalDraft(
+        businessId: biz,
+        origin: 'table',
+        tableId: 'table-A',
+      );
+      final localId = draft.order!.id;
+      // add_item aún en cola con el id LOCAL (así quedan tras un sync parcial:
+      // open_table replayó, los ítems no).
+      await svc.enqueueAction(
+        businessId: biz,
+        action: {
+          'type': 'add_item',
+          'origin': 'table',
+          'order_id': localId,
+          'item_id': 'tmp_1',
+          'qty': 1,
+        },
+      );
+      // Simula el replay de open_table: mapping local→remoto + remap snapshot.
+      final storage = await StorageService.getInstance();
+      await storage.writeJson('offline_order_map_$biz', {
+        localId: 'real-uuid-456',
+      });
+      await svc.remapSnapshotOrderId(
+        businessId: biz,
+        localOrderId: localId,
+        remoteOrderId: 'real-uuid-456',
+      );
+      // Sin el criterio de contenido pendiente, la mesa desaparecería del
+      // overlay con la sesión del server aún vacía.
+      final drafts = await svc.listPendingTableDrafts(biz);
+      expect(drafts.length, 1);
+      expect(drafts.first.tableId, 'table-A');
+    },
+  );
 
   test('void_order pendiente libera la mesa del overlay', () async {
     const biz = 'biz-void';
@@ -158,11 +174,7 @@ void main() {
     final localId = draft.order!.id;
     await svc.enqueueAction(
       businessId: biz,
-      action: {
-        'type': 'void_order',
-        'origin': 'table',
-        'order_id': localId,
-      },
+      action: {'type': 'void_order', 'origin': 'table', 'order_id': localId},
     );
     expect(await svc.listPendingTableDrafts(biz), isEmpty);
   });
@@ -202,9 +214,36 @@ void main() {
     // snapshot (el overlay suelta la mesa).
     expect(await svc.pendingActionsCount(biz), 0);
     expect(await svc.listPendingTableDrafts(biz), isEmpty);
-    expect(
-      await svc.loadSnapshot(businessId: biz, slotId: 'table-A'),
-      isNull,
-    );
+    expect(await svc.loadSnapshot(businessId: biz, slotId: 'table-A'), isNull);
   });
+
+  test(
+    'intento al Hub impide tratar la orden como borrador descartable',
+    () async {
+      const biz = 'biz-hub-attempt';
+      final draft = await svc.createLocalDraft(
+        businessId: biz,
+        origin: 'table',
+        tableId: 'table-A',
+      );
+      final orderId = draft.order!.id;
+      expect(
+        await svc.mayExistRemotely(businessId: biz, orderId: orderId),
+        isFalse,
+      );
+      await svc.enqueueAction(
+        businessId: biz,
+        action: {
+          'type': 'open_table',
+          'order_id': orderId,
+          'table_id': 'table-A',
+          'hub_delivery_started': true,
+        },
+      );
+      expect(
+        await svc.mayExistRemotely(businessId: biz, orderId: orderId),
+        isTrue,
+      );
+    },
+  );
 }

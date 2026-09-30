@@ -14,6 +14,7 @@ import 'package:intl/intl.dart';
 
 import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
+import '../../../core/inventory/item_classification.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
@@ -374,7 +375,9 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
                 spacing: 7,
                 runSpacing: 7,
                 children: [
-                  for (final reason in kAdjustReasons)
+                  for (final reason in kAdjustReasons.where(
+                    (r) => r.adjustable,
+                  ))
                     _ReasonChip(
                       reason: reason,
                       selected: _reason?.code == reason.code,
@@ -506,13 +509,8 @@ class _ItemAdjustDialogState extends ConsumerState<ItemAdjustDialog> {
     );
   }
 
-  static String _classificationLabel(String value) => switch (value) {
-    'raw_material' => 'Materia prima',
-    'finished_product' => 'Producto terminado',
-    'combo' => 'Combo',
-    'service' => 'Servicio',
-    _ => 'Insumo',
-  };
+  static String _classificationLabel(String value) =>
+      itemClassificationLabel(value, simpleLabel: 'Insumo');
 
   Widget _warehouseBanner() {
     final fmt = _fmtQty;

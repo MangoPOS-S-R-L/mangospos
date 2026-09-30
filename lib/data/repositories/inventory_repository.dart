@@ -1247,34 +1247,72 @@ class InventoryRepository {
     int limit = 60,
     /// Solo un tipo (p. ej. `waste` para el conduce A4 de Salidas).
     String? movementType,
+    /// Varios tipos a la vez (tiene prioridad sobre [movementType]).
+    List<String>? movementTypes,
+    /// Solo movimientos que RESTAN (cantidad negativa).
+    bool negativeOnly = false,
+    /// Trae `reason_code` (motivo de la salida/ajuste, 20260513_0017) y
+    /// `destination` (área de un consumo interno, 20260930_0051).
+    bool includeReasonCode = false,
     /// Rango `[fromUtc, toUtc)` en UTC. Para "hoy" usar
     /// `AppTime.todayRangeUtc()`: el día del negocio es el de RD, no el UTC.
     DateTime? fromUtc,
     DateTime? toUtc,
   }) async {
-    var query = _client
-        .from(InventoryQueries.tableInventoryMovements)
-        .select(
-          'id, item_id, warehouse_id, movement_type, quantity, notes, reference_type, created_at',
-        )
-        .eq('business_id', businessId);
-    if (warehouseId != null && warehouseId.isNotEmpty) {
-      query = query.eq('warehouse_id', warehouseId);
-    } else if (itemId != null && itemId.isNotEmpty) {
-      query = query.eq('item_id', itemId);
+    Future<List<Map<String, dynamic>>> fetch(
+      bool withReason, {
+      bool withDestination = false,
+    }) async {
+      var query = _client
+          .from(InventoryQueries.tableInventoryMovements)
+          .select(
+            'id, item_id, warehouse_id, movement_type, quantity, cost_per_unit, '
+            'notes, reference_type, created_at${withReason ? ', reason_code' : ''}'
+            '${withDestination ? ', destination' : ''}',
+          )
+          .eq('business_id', businessId);
+      // Independientes: la ficha de un insumo pide SUS salidas en ESA bodega.
+      if (warehouseId != null && warehouseId.isNotEmpty) {
+        query = query.eq('warehouse_id', warehouseId);
+      }
+      if (itemId != null && itemId.isNotEmpty) {
+        query = query.eq('item_id', itemId);
+      }
+      if (movementTypes != null && movementTypes.isNotEmpty) {
+        query = query.inFilter('movement_type', movementTypes);
+      } else if (movementType != null && movementType.isNotEmpty) {
+        query = query.eq('movement_type', movementType);
+      }
+      if (negativeOnly) {
+        query = query.lt('quantity', 0);
+      }
+      if (fromUtc != null) {
+        query = query.gte('created_at', fromUtc.toUtc().toIso8601String());
+      }
+      if (toUtc != null) {
+        query = query.lt('created_at', toUtc.toUtc().toIso8601String());
+      }
+      final rows = await query.order('created_at', ascending: false).limit(limit);
+      return List<Map<String, dynamic>>.from(rows);
     }
-    if (movementType != null && movementType.isNotEmpty) {
-      query = query.eq('movement_type', movementType);
+
+    List<Map<String, dynamic>> movementsResponse;
+    try {
+      movementsResponse = await fetch(
+        includeReasonCode,
+        withDestination: includeReasonCode,
+      );
+    } on PostgrestException catch (e) {
+      if (!includeReasonCode || e.code != '42703') rethrow;
+      // Base sin `destination` (antes de 20260930_0051): el área, si la hay,
+      // viaja en la nota. Si tampoco tiene `reason_code`, el motivo también.
+      try {
+        movementsResponse = await fetch(true);
+      } on PostgrestException catch (e2) {
+        if (e2.code != '42703') rethrow;
+        movementsResponse = await fetch(false);
+      }
     }
-    if (fromUtc != null) {
-      query = query.gte('created_at', fromUtc.toUtc().toIso8601String());
-    }
-    if (toUtc != null) {
-      query = query.lt('created_at', toUtc.toUtc().toIso8601String());
-    }
-    final movementsResponse = await query
-        .order('created_at', ascending: false)
-        .limit(limit);
     final movementsRaw = List<Map<String, dynamic>>.from(movementsResponse);
 
     final itemIds = movementsRaw
@@ -1607,6 +1645,28 @@ class InventoryRepository {
       },
     );
     return List<Map<String, dynamic>>.from(response as Iterable);
+  }
+
+  /// Rendimiento por insumo de los últimos [daysBack] días de RD: compra,
+  /// producción/ventas, merma por motivo y ajustes de conteo
+  /// (`fn_inventory_yield_analysis`, 20260930_0050). [warehouseId] null =
+  /// todas las bodegas.
+  Future<Map<String, dynamic>> getYieldAnalysis({
+    required String businessId,
+    int daysBack = 30,
+    String? warehouseId,
+  }) async {
+    final response = await _client.rpc(
+      InventoryQueries.rpcYieldAnalysis,
+      params: {
+        'p_business_id': businessId,
+        'p_days_back': daysBack,
+        'p_warehouse_id': warehouseId,
+      },
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   /// Resumen agregado por insumo con clasificación ABC. Filtro opcional
@@ -1948,6 +2008,8 @@ class InventoryRepository {
     /// Solo para la cola offline: el motivo de una salida que se encola aquí
     /// porque la función de salidas no existe en el servidor.
     String? reasonCode,
+    /// Solo para la cola offline: el área de un consumo interno.
+    String? destination,
     bool queueOnNetworkFailure = true,
   }) async {
     try {
@@ -1979,6 +2041,7 @@ class InventoryRepository {
           referenceType: referenceType,
           referenceId: referenceId,
           reasonCode: reasonCode,
+          destination: destination,
         );
         return;
       }
@@ -2003,6 +2066,10 @@ class InventoryRepository {
   /// veces. Por eso, ante un error de RED no se intenta otro camino en línea:
   /// el guardado pudo haber quedado y solo se perdió la respuesta. Se encola
   /// con la misma llave y la réplica lo resuelve sin duplicar.
+  ///
+  /// [destination] es el área a la que fue un consumo interno (Baños,
+  /// Cocina…). Solo tiene sentido con `internal_use`; el servidor lo ignora
+  /// en cualquier otro motivo.
   Future<void> recordOutflow({
     required String businessId,
     required String warehouseId,
@@ -2013,6 +2080,7 @@ class InventoryRepository {
     String? notes,
     double? costPerUnit,
     String? operationId,
+    String? destination,
     bool queueOnNetworkFailure = true,
   }) async {
     final detail = notes?.trim() ?? '';
@@ -2020,6 +2088,7 @@ class InventoryRepository {
     final fullNotes = label.isEmpty
         ? detail
         : (detail.isEmpty ? label : '$label — $detail');
+    final dest = destination?.trim() ?? '';
     try {
       await _client.rpc(
         InventoryQueries.rpcRecordOutflow,
@@ -2032,14 +2101,22 @@ class InventoryRepository {
           'p_notes': fullNotes,
           'p_cost_per_unit': costPerUnit,
           'p_reference_id': ?operationId,
+          // Solo si hay: un servidor sin 20260930_0051 no conoce el parámetro.
+          if (dest.isNotEmpty) 'p_destination': dest,
         },
       );
     } catch (e) {
+      // Servidor sin la función (PGRST202/42883), o con la de ANTES de
+      // 20260930_0051: no conoce `p_destination` (PGRST202) ni el motivo
+      // «Consumo interno» (INVALID_OUTFLOW_REASON, lanzado antes de escribir
+      // nada). La salida no puede quedarse sin registrar por eso.
       final missing = e is PostgrestException &&
-          (e.code == 'PGRST202' || e.code == '42883');
+          (e.code == 'PGRST202' ||
+              e.code == '42883' ||
+              e.message.contains('INVALID_OUTFLOW_REASON'));
       if (missing) {
-        // Servidor sin la función: el `waste` de siempre, con la misma llave
-        // y el motivo en la nota.
+        // El `waste` de siempre, con la misma llave y el motivo (y el área)
+        // en la nota.
         await recordMovement(
           businessId: businessId,
           warehouseId: warehouseId,
@@ -2047,10 +2124,11 @@ class InventoryRepository {
           movementType: 'waste',
           quantity: quantity,
           costPerUnit: costPerUnit,
-          notes: fullNotes,
+          notes: notesWithDestination(fullNotes, dest),
           referenceType: 'manual_outflow',
           referenceId: operationId,
           reasonCode: reasonCode,
+          destination: dest.isEmpty ? null : dest,
           queueOnNetworkFailure: queueOnNetworkFailure,
         );
         return;
@@ -2068,11 +2146,26 @@ class InventoryRepository {
           referenceType: 'manual_outflow',
           referenceId: operationId,
           reasonCode: reasonCode,
+          destination: dest.isEmpty ? null : dest,
         );
         return;
       }
       rethrow;
     }
+  }
+
+  /// Nota de respaldo cuando el servidor no guarda el área en su columna:
+  /// «Consumo interno — Para Baños · planta alta». El motivo sigue siendo el
+  /// prefijo, que es lo que leen los reportes.
+  static String notesWithDestination(String notes, String destination) {
+    final dest = destination.trim();
+    if (dest.isEmpty) return notes;
+    final dash = notes.indexOf(' — ');
+    if (dash < 0) {
+      return notes.isEmpty ? 'Para $dest' : '$notes — Para $dest';
+    }
+    return '${notes.substring(0, dash)} — Para $dest · '
+        '${notes.substring(dash + 3)}';
   }
 
   /// Signos de los movement_type conocidos para mantener el cache local
@@ -2109,6 +2202,7 @@ class InventoryRepository {
     String? referenceType,
     String? referenceId,
     String? reasonCode,
+    String? destination,
   }) async {
     final occurredAt = DateTime.now().toUtc();
     await _offlinePos.enqueueAction(
@@ -2124,6 +2218,7 @@ class InventoryRepository {
         'reference_type': referenceType,
         'reference_id': ?referenceId,
         'reason_code': ?reasonCode,
+        'destination': ?destination,
         'occurred_at': occurredAt.toIso8601String(),
       },
     );

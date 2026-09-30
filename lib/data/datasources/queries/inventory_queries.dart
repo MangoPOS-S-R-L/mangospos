@@ -37,4 +37,6 @@ class InventoryQueries {
   static const viewValuation = 'v_inventory_valuation';
   static const viewValuationSummary = 'v_inventory_valuation_summary';
   static const rpcRotationAnalysis = 'fn_inventory_rotation_analysis';
+  /// Rendimiento por insumo: compra vs producción vs merma (20260930_0050).
+  static const rpcYieldAnalysis = 'fn_inventory_yield_analysis';
 }

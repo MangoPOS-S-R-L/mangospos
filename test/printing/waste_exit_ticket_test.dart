@@ -18,28 +18,33 @@ String _ticket({
   double stockAfter = 9.5,
   double costPerUnit = 140,
   int paperWidth = 80,
-}) => WasteExitTicket.generate(
-  businessName: 'La Penda Express',
-  itemName: item,
-  quantity: quantity,
-  unit: unit,
-  reasonLabel: reasonLabel,
-  warehouseName: warehouse,
-  notes: notes,
-  operatorName: operator_,
-  stockBefore: stockBefore,
-  stockAfter: stockAfter,
-  costPerUnit: costPerUnit,
-  paperWidth: paperWidth,
-  occurredAt: DateTime.utc(2026, 9, 23, 18, 30),
-).rawText ?? '';
+}) =>
+    WasteExitTicket.generate(
+      businessName: 'La Penda Express',
+      itemName: item,
+      quantity: quantity,
+      unit: unit,
+      reasonLabel: reasonLabel,
+      warehouseName: warehouse,
+      notes: notes,
+      operatorName: operator_,
+      stockBefore: stockBefore,
+      stockAfter: stockAfter,
+      costPerUnit: costPerUnit,
+      paperWidth: paperWidth,
+      occurredAt: DateTime.utc(2026, 9, 23, 18, 30),
+    ).rawText ??
+    '';
 
 void main() {
   group('WasteExitTicket', () {
     test('dice qué salió, de dónde y por qué', () {
       final t = _ticket();
       expect(t, contains('SALIDA DE INVENTARIO'));
-      expect(t, contains('La Penda Express'));  // tal cual, como el comprobante de eliminación
+      expect(
+        t,
+        contains('La Penda Express'),
+      ); // tal cual, como el comprobante de eliminación
       expect(t, contains('ALMACEN PRINCIPAL'));
       expect(t, contains('FILETE DE PECHUGA DE POLLO FRESCO'));
       expect(t, contains('2.5 lb'));
@@ -71,15 +76,21 @@ void main() {
     });
 
     test('la nota sale cuando hay, y no cuando no', () {
-      expect(_ticket(notes: 'Se rompió la funda'), contains('Se rompió la funda'));
+      expect(
+        _ticket(notes: 'Se rompió la funda'),
+        contains('Se rompió la funda'),
+      );
       expect(_ticket(), isNot(contains('Nota:')));
     });
 
-    test('cantidad entera sin decimales, fraccionaria sin ceros de relleno', () {
-      expect(_ticket(quantity: 3, unit: 'ud'), contains('3 ud'));
-      // una receta en onzas convertida a libras deja 0.0625
-      expect(_ticket(quantity: 0.0625, unit: 'lb'), contains('0.0625 lb'));
-    });
+    test(
+      'cantidad entera sin decimales, fraccionaria sin ceros de relleno',
+      () {
+        expect(_ticket(quantity: 3, unit: 'ud'), contains('3 ud'));
+        // una receta en onzas convertida a libras deja 0.0625
+        expect(_ticket(quantity: 0.0625, unit: 'lb'), contains('0.0625 lb'));
+      },
+    );
 
     test('a 58mm ninguna línea se sale del papel', () {
       for (final line in _ticket(paperWidth: 58).split('\n')) {
@@ -110,6 +121,34 @@ void main() {
     test('un cuadre NO es salida: no hay nada que firmar', () {
       expect(adjustReasonByCode('physical_count')!.isExit, isFalse);
       expect(adjustReasonByCode('correction')!.isExit, isFalse);
+    });
+  });
+
+  group('WasteExitTicket — reimpresión', () {
+    test('la reimpresión lo dice y NO inventa la existencia de ese día', () {
+      final t =
+          WasteExitTicket.generate(
+            businessName: 'La Penda Express',
+            itemName: 'Leche',
+            quantity: 2.5,
+            unit: 'l',
+            reasonLabel: 'Vencido',
+            warehouseName: 'Principal',
+            stockBefore: null,
+            stockAfter: null,
+            occurredAt: DateTime.utc(2026, 9, 30, 1, 15),
+            reprint: true,
+          ).rawText ??
+          '';
+      expect(t, contains('REIMPRESION'));
+      // 01:15 UTC = 21:15 del 29 en RD: la fecha de la SALIDA, no la de hoy.
+      expect(t, contains('29/09/2026  21:15'));
+      expect(t, isNot(contains('Stock antes')));
+      expect(t, isNot(contains('Stock después')));
+    });
+
+    test('el ticket normal no dice reimpresión', () {
+      expect(_ticket(), isNot(contains('REIMPRESION')));
     });
   });
 }

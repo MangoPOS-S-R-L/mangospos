@@ -1,5 +1,8 @@
 import 'package:equatable/equatable.dart';
 
+import '../utils/loyalty_reward_utils.dart'
+    show hasLoyaltyReward, stripLoyaltyMarkers;
+
 /// 🍳 Item de cocina (KDS)
 class KitchenItem extends Equatable {
   final String id;
@@ -73,7 +76,11 @@ class KitchenItem extends Equatable {
       orderNumber: map['order_number'] ?? '',
       productName: map['product_name'] ?? '',
       quantity: (map['quantity'] ?? 1).toDouble(),
-      notes: map['notes'],
+      // El premio de la tarjeta de sellos no es instrucción de cocina. Sin
+      // premio, las notas llegan tal cual (como siempre).
+      notes: hasLoyaltyReward(map['notes']?.toString())
+          ? trimOrNull(stripLoyaltyMarkers(map['notes']?.toString()))
+          : map['notes'],
       status: map['status'] ?? 'pending',
       tableName: map['table_name'],
       waiterName: map['waiter_name'],

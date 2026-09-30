@@ -166,6 +166,10 @@ class _SettingsRolesViewState extends ConsumerState<SettingsRolesView> {
           'conteo',
           'Conteo físico (freeze → contar → ajustar)',
         ),
+        _PermissionRow(
+          'activos',
+          'Activos fijos (equipos y mobiliario)',
+        ),
       ],
     ),
   ];
@@ -958,5 +962,10 @@ const Map<String, Map<String, List<String>>> _codeMap = {
     'acceso': ['inventario.conteo.acceso'],
     'graba/mod': ['inventario.conteo.crear', 'inventario.conteo.completar'],
     'anula': ['inventario.conteo.anular'],
+  },
+  // 20260930_0052. Dar de baja es un cambio de estado más: va en graba/mod.
+  'activos': {
+    'acceso': ['inventario.activos.acceso'],
+    'graba/mod': ['inventario.activos.gestionar'],
   },
 };

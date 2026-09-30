@@ -11,6 +11,35 @@ Map<String, dynamic> _op(int seq, String type, Map<String, dynamic> extra) => {
 };
 
 void main() {
+  test('auto release closes only an empty Hub order', () {
+    final ops = [
+      _op(1, 'open_table', {'order_id': 'o1', 'table_id': 't1'}),
+      _op(2, 'release_empty_order', {'order_id': 'o1'}),
+    ];
+    expect(HubOrderProjector.projectSalon(ops), isEmpty);
+    expect(HubOrderProjector.openOrderIds(ops), isEmpty);
+
+    ops.add(
+      _op(3, 'add_item', {
+        'order_id': 'o1',
+        'table_id': 't1',
+        'item_id': 'i1',
+        'qty': 1,
+      }),
+    );
+    expect(HubOrderProjector.projectSalon(ops).single.itemsCount, 1);
+    expect(HubOrderProjector.openOrderIds(ops), {'o1'});
+  });
+
+  test('auto release never closes a Hub order with live items', () {
+    final ops = [
+      _op(1, 'open_table', {'order_id': 'o1', 'table_id': 't1'}),
+      _op(2, 'add_item', {'order_id': 'o1', 'item_id': 'i1', 'qty': 1}),
+      _op(3, 'release_empty_order', {'order_id': 'o1'}),
+    ];
+    expect(HubOrderProjector.projectSalon(ops).single.itemsCount, 1);
+  });
+
   test('a partial split never releases the table or permits log pruning', () {
     final ops = [
       _op(1, 'add_item', {

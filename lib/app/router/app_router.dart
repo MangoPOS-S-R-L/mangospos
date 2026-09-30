@@ -49,6 +49,7 @@ import '../../presentation/kitchen/view/kitchen_view.dart';
 import '../../presentation/reservations/view/reservations_view.dart';
 import '../../presentation/customers/view/customers_view.dart';
 import '../../presentation/customers/view/customer_detail_view.dart';
+import '../../presentation/loyalty/view/loyalty_programs_view.dart';
 import '../../presentation/inventory/view/inventory_hub_view.dart';
 import '../../presentation/inventory/view/inventory_items_view.dart';
 import '../../presentation/inventory/view/inventory_direct_receipts_view.dart';
@@ -56,6 +57,9 @@ import '../../presentation/inventory/view/inventory_kardex_view.dart';
 import '../../presentation/inventory/view/inventory_lots_view.dart';
 import '../../presentation/inventory/view/inventory_low_stock_view.dart';
 import '../../presentation/inventory/view/inventory_rotation_view.dart';
+import '../../presentation/inventory/view/fixed_assets_view.dart';
+import '../../presentation/inventory/view/inventory_supplies_view.dart';
+import '../../presentation/inventory/view/inventory_yield_view.dart';
 import '../../presentation/inventory/view/inventory_valuation_view.dart';
 import '../../presentation/inventory/view/consolidated_inventory_view.dart';
 import '../../presentation/inventory/view/inventory_outflow_view.dart';
@@ -894,6 +898,10 @@ class AppRouter {
                 builder: (context, state) => const InventoryRotationView(),
               ),
               GoRoute(
+                path: AppRoutes.inventoryYield,
+                builder: (context, state) => const InventoryYieldView(),
+              ),
+              GoRoute(
                 path: AppRoutes.inventoryTransfers,
                 builder: (context, state) => const TransfersView(),
               ),
@@ -926,6 +934,20 @@ class AppRouter {
                 // Mínimos en lote (Compras F3). Ver o exportar pide acceso a
                 // inventario; guardar lo valida la base.
                 builder: (context, state) => const MinStockBulkView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventorySupplies,
+                // Gastables y menaje. Ver pide acceso a inventario (por
+                // prefijo de /inventory); clasificar y registrar salidas lo
+                // gatea la pantalla con los permisos de Insumos y Salidas.
+                builder: (context, state) => const InventorySuppliesView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryFixedAssets,
+                // Ver pide `inventario.activos.acceso` (route_permissions);
+                // escribir, `inventario.activos.gestionar`, que la pantalla
+                // gatea y la base vuelve a validar en cada RPC.
+                builder: (context, state) => const FixedAssetsView(),
               ),
             ],
           ),
@@ -967,6 +989,10 @@ class AppRouter {
                 builder: (context, state) => DiscountsView(
                   offersOnly: state.uri.queryParameters['offers'] == '1',
                 ),
+              ),
+              GoRoute(
+                path: AppRoutes.loyaltyCards,
+                builder: (context, state) => const LoyaltyProgramsView(),
               ),
             ],
           ),

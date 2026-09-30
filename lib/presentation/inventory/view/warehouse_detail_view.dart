@@ -1087,12 +1087,16 @@ class _WarehouseDetailViewState extends ConsumerState<WarehouseDetailView> {
             value: 'finished_product',
             child: Text('Producto terminado'),
           ),
+          PopupMenuItem(value: 'supply', child: Text('Gastables')),
+          PopupMenuItem(value: 'smallware', child: Text('Menaje')),
         ],
         child: _FilterPill(
           label: switch (_classification) {
             'simple' => 'Simples',
             'raw_material' => 'Materia prima',
             'finished_product' => 'Terminados',
+            'supply' => 'Gastables',
+            'smallware' => 'Menaje',
             _ => 'Clasificación',
           },
           selected: _classification != null,
@@ -2067,7 +2071,9 @@ class _MovementRow extends StatelessWidget {
     final inbound = movement.isInbound;
     final color = inbound ? AppColors.success : AppColors.destructive;
     final type = _types[movement.movementType];
-    final label = type?.$1 ?? movement.movementType;
+    final label = movement.isInternalUse
+        ? 'Consumo interno'
+        : (type?.$1 ?? movement.movementType);
     final icon = type?.$2 ?? Icons.swap_vert;
     final when = movement.createdAt;
 

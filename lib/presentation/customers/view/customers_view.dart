@@ -5,6 +5,7 @@ import 'package:mangopos/core/theme/app_radius.dart';
 import 'package:mangopos/core/theme/app_spacing.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/customers/viewmodel/customers_viewmodel.dart';
+import 'package:mangopos/presentation/loyalty/widgets/customer_loyalty_dialog.dart';
 import 'package:mangopos/services/dgii_lookup_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 
@@ -340,6 +341,23 @@ class _CustomersViewState extends ConsumerState<CustomersView> {
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
+                                    // Tarjetas de sellos del cliente (ver
+                                    // cómo va y pasar la tarjeta física).
+                                    IconButton(
+                                      tooltip: 'Tarjetas de sellos',
+                                      onPressed: () =>
+                                          showCustomerLoyaltyDialog(
+                                            context,
+                                            customerId: customer['id']
+                                                .toString(),
+                                            customerName: name.toString(),
+                                          ),
+                                      icon: const Icon(
+                                        Icons.card_membership_rounded,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const SizedBox(width: AppSpacing.xs),
                                     if (canEditCustomers)
                                     OutlinedButton.icon(
                                       onPressed: () {

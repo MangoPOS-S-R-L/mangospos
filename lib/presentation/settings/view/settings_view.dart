@@ -1007,10 +1007,10 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
         items: const [
           _SettingsOption(
             title: 'Tarjeta de Fidelidad',
-            subtitle: 'Programa de puntos y recompensas',
+            subtitle: 'Tarjetas de sellos: cada N compras, 1 gratis',
             icon: Icons.card_membership_rounded,
             color: Color(0xFFFFE6D5),
-            route: AppRoutes.promosCenter,
+            route: AppRoutes.loyaltyCards,
           ),
           _SettingsOption(
             title: 'Niveles de Membresías',

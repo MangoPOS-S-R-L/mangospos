@@ -101,10 +101,7 @@ void main() {
         barcode: '999',
         isActive: false,
       );
-      expect(
-        resolveScannedItem([baja], '999').outcome,
-        ScanOutcome.notFound,
-      );
+      expect(resolveScannedItem([baja], '999').outcome, ScanOutcome.notFound);
       // …salvo que la pantalla pida explícitamente incluirlos.
       expect(
         resolveScannedItem([baja], '999', onlyActive: false).isResolved,

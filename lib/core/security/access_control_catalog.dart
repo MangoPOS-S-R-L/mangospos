@@ -626,6 +626,27 @@ const accessPermissions = <AccessPermission>[
         'Cancela una sesión de conteo en draft o in_progress sin '
         'aplicar ajustes.',
   ),
+  // Activos fijos (20260930_0052): equipo y mobiliario uno por uno. Los dos
+  // códigos también están en `public.permissions`; sin esa fila el join del
+  // RPC de permisos los descarta en silencio.
+  AccessPermission(
+    code: 'inventario.activos.acceso',
+    label: 'Acceso a activos fijos',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description:
+        'Abre el registro de activos fijos (equipos y mobiliario): ver '
+        'fichas, historia e imprimir el inventario y las actas.',
+  ),
+  AccessPermission(
+    code: 'inventario.activos.gestionar',
+    label: 'Gestionar activos fijos',
+    categoryId: 'inventory',
+    categoryLabel: 'Inventario y Compras',
+    description:
+        'Da de alta, edita, traslada, reasigna, cambia el estado y da de '
+        'baja activos fijos. Cada cambio queda en la historia del activo.',
+  ),
   AccessPermission(
     code: 'compras.acceso',
     label: 'Acceso a compras',
@@ -952,6 +973,8 @@ final rolePresets = <String, RolePresetDefinition>{
       'inventario.conteo.crear',
       'inventario.conteo.completar',
       'inventario.conteo.anular',
+      'inventario.activos.acceso',
+      'inventario.activos.gestionar',
       'compras.acceso',
       'compras.proveedores.crear_editar',
       'compras.ordenes.crear',
