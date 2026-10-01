@@ -161,6 +161,17 @@ class AppRoutes {
   /// Activos fijos (horno, nevera, mobiliario): uno por uno, con código,
   /// ubicación, responsable e historia (20260930_0052).
   static const inventoryFixedAssets = '$inventoryHome/fixed-assets';
+
+  /// Verificaciones de activos (levantamiento físico por ubicación).
+  static const inventoryFixedAssetVerifications =
+      '$inventoryFixedAssets/verifications';
+
+  /// UNA verificación. `:verificationId` es el uuid.
+  static const inventoryFixedAssetVerification =
+      '$inventoryFixedAssetVerifications/:verificationId';
+
+  static String fixedAssetVerification(String id) =>
+      '$inventoryFixedAssetVerifications/$id';
   static const inventoryConsolidated = '$inventoryHome/consolidated';
   static const printingBase = '$settings/printing';
 

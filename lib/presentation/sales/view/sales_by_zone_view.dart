@@ -99,6 +99,8 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   TabController? _tabController;
   int _previousZoneCount = 0;
   Timer? _autoRefreshTimer;
+  Timer? _activeZoneRefreshTimer;
+  DateTime? _lastGlobalRefreshStartedAt;
 
   /// Una key por zona para poder desplazar la fila de pestañas hasta la
   /// activa. Sin esto, al volver desde una mesa de la zona 7 de 9 la
@@ -137,6 +139,7 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
   }
 
   void _loadData() {
+    _lastGlobalRefreshStartedAt = DateTime.now();
     // Relee los permisos del usuario logueado junto con el resto del salón.
     // El controller aplica su propio throttle, así que llamarlo en cada
     // refresco (30s) no genera tráfico extra por gesto. Sin esto, un permiso
@@ -156,16 +159,39 @@ class _SalesByZoneViewState extends ConsumerState<SalesByZoneView>
 
   void _startAutoRefresh() {
     _autoRefreshTimer?.cancel();
+    _activeZoneRefreshTimer?.cancel();
     _autoRefreshTimer = Timer.periodic(_refreshInterval, (timer) {
       if (mounted) {
         _loadData();
       }
     });
+    _activeZoneRefreshTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _refreshActiveZone(),
+    );
+  }
+
+  void _refreshActiveZone() {
+    if (!mounted) return;
+    final lastGlobal = _lastGlobalRefreshStartedAt;
+    // Evita el viaje duplicado en el mismo tick, pero permite consultar la
+    // zona si la carga global se queda esperando por una red lenta.
+    if (lastGlobal != null &&
+        DateTime.now().difference(lastGlobal) < const Duration(seconds: 3)) {
+      return;
+    }
+    final zones = ref.read(byZoneVmProvider).zones;
+    final index = _tabController?.index;
+    if (index == null || index < 0 || index >= zones.length) return;
+    unawaited(ref.read(byZoneVmProvider.notifier)
+        .loadZoneStatus(zones[index].id, emitError: false));
   }
 
   void _stopAutoRefresh() {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
+    _activeZoneRefreshTimer?.cancel();
+    _activeZoneRefreshTimer = null;
   }
 
   @override
@@ -852,41 +878,24 @@ class _ZoneGrid extends ConsumerStatefulWidget {
 }
 
 class _ZoneGridState extends ConsumerState<_ZoneGrid> {
-  Timer? _zoneRefreshTimer;
-  static const Duration _zoneRefreshInterval = Duration(seconds: 10);
-
   @override
   void initState() {
     super.initState();
-    _startZoneRefresh();
+    _loadInitialStatusIfNeeded();
   }
 
-  void _startZoneRefresh() {
-    _zoneRefreshTimer?.cancel();
-    // PERF: load() ya trae el estado de TODAS las zonas en 1 consulta
-    // business-wide. Si esa consulta viene en camino (o ya llegó), no
-    // dispares otra por zona al montar — pinta lo que hay y deja el
-    // refresh periódico. Solo consulta directo si no hay nada (p.ej. la
-    // consulta global falló).
+  void _loadInitialStatusIfNeeded() {
+    // La carga global ya trae todas las zonas; solo consulta por separado
+    // si todavía no hay datos. El sondeo periódico vive en la vista padre
+    // y se limita a la zona activa.
     final vm = ref.read(byZoneVmProvider.notifier);
     final hasData = ref
         .read(byZoneVmProvider)
         .statusByZone
         .containsKey(widget.zoneId);
     if (!hasData && !vm.isBusinessStatusFetchInFlight) {
-      vm.loadZoneStatus(widget.zoneId);
+      unawaited(vm.loadZoneStatus(widget.zoneId));
     }
-    _zoneRefreshTimer = Timer.periodic(_zoneRefreshInterval, (timer) {
-      if (mounted) {
-        ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _zoneRefreshTimer?.cancel();
-    super.dispose();
   }
 
   @override
@@ -1151,8 +1160,8 @@ class _ZoneGridState extends ConsumerState<_ZoneGrid> {
   }
 }
 
-/// Vista de floor map de una zona. Espejo de [_ZoneGrid] (mismo refresh
-/// de 10s, mismos handlers de cajero) pero dibujando las mesas en su
+/// Vista de floor map de una zona. Espejo de [_ZoneGrid] (mismo estado
+/// de la zona activa y handlers de cajero) pero dibujando las mesas en su
 /// posición física en vez de en cuadrícula. Reúsa la geometría que el
 /// viewmodel cargó en `layoutByZone` y la fusiona con el estado en vivo
 /// (`statusByZone`) por `tableId`.
@@ -1175,9 +1184,6 @@ class _ZoneFloorMapView extends ConsumerStatefulWidget {
 }
 
 class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
-  Timer? _zoneRefreshTimer;
-  static const Duration _zoneRefreshInterval = Duration(seconds: 10);
-
   @override
   void initState() {
     super.initState();
@@ -1187,32 +1193,19 @@ class _ZoneFloorMapViewState extends ConsumerState<_ZoneFloorMapView> {
           .read(byZoneVmProvider.notifier)
           .loadZoneLayout(widget.zoneId, force: true);
     });
-    _startZoneRefresh();
+    _loadInitialStatusIfNeeded();
   }
 
-  void _startZoneRefresh() {
-    _zoneRefreshTimer?.cancel();
-    // PERF: mismo criterio que _ZoneGrid — el estado ya viene (o viene en
-    // camino) en la consulta business-wide de load(); no duplicar.
+  void _loadInitialStatusIfNeeded() {
+    // Mismo criterio que _ZoneGrid: no duplicar la carga global en vuelo.
     final vm = ref.read(byZoneVmProvider.notifier);
     final hasData = ref
         .read(byZoneVmProvider)
         .statusByZone
         .containsKey(widget.zoneId);
     if (!hasData && !vm.isBusinessStatusFetchInFlight) {
-      vm.loadZoneStatus(widget.zoneId);
+      unawaited(vm.loadZoneStatus(widget.zoneId));
     }
-    _zoneRefreshTimer = Timer.periodic(_zoneRefreshInterval, (timer) {
-      if (mounted) {
-        ref.read(byZoneVmProvider.notifier).loadZoneStatus(widget.zoneId);
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _zoneRefreshTimer?.cancel();
-    super.dispose();
   }
 
   @override

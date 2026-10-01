@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/router/routes.dart';
 import '../../app/theme/mango_colors.dart';
+import '../../app/widgets/app_version_badge.dart';
 import '../../core/business/business_features_provider.dart';
 import '../../core/business/business_modules_provider.dart';
 import '../../core/offline/offline_queue_status_provider.dart';
@@ -341,13 +342,15 @@ class _MobileDrawer extends ConsumerWidget {
                       context.go(AppRoutes.login);
                     },
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                    child: Text(
-                      'versión ${const String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0')}',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF94A3B8),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 24),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: AppVersionText(
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF94A3B8),
+                        ),
                       ),
                     ),
                   ),

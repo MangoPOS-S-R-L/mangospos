@@ -4,10 +4,22 @@
 // no: la ubicación y el responsable se cambian con «Trasladar / reasignar»,
 // que deja su propio evento en la historia (quién lo movió, de dónde a
 // dónde). Si la edición los tocara, la historia diría solo «datos editados».
+//
+// 20261001_0050: los activos YA tienen etiqueta. El código se puede escribir
+// (vacío = el sistema asigna AF-00001), una ficha puede cubrir varias
+// unidades («Silla de madera ×40») y el costo pasa a ser VALOR UNITARIO, con
+// el total a la vista. Si la cantidad baja en una edición, se pide el motivo:
+// queda en la historia («se rompieron 2»).
+//
+// El mismo formulario sirve para registrar en el acto lo que aparece durante
+// una verificación: la ubicación queda fija (la de la verificación) y el
+// guardado pasa por [FixedAssetFormDialog.onCreate].
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/currency/business_currency.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/app_toast.dart';
 import '../../../core/utils/friendly_error.dart';
@@ -24,6 +36,13 @@ Future<FixedAsset?> showFixedAssetFormDialog(
   required List<FixedAssetOption> employees,
   List<String> knownCategories = const [],
   FixedAsset? asset,
+  BusinessCurrency money = BusinessCurrency.fallbackDop,
+  bool supportsQuantity = true,
+  String? initialCode,
+  FixedAssetOption? lockedWarehouse,
+  String? title,
+  Future<FixedAsset> Function(FixedAssetDraft draft, String clientRequestId)?
+  onCreate,
 }) {
   return showDialog<FixedAsset>(
     context: context,
@@ -35,6 +54,12 @@ Future<FixedAsset?> showFixedAssetFormDialog(
       employees: employees,
       knownCategories: knownCategories,
       asset: asset,
+      money: money,
+      supportsQuantity: supportsQuantity,
+      initialCode: initialCode,
+      lockedWarehouse: lockedWarehouse,
+      title: title,
+      onCreate: onCreate,
     ),
   );
 }
@@ -42,7 +67,11 @@ Future<FixedAsset?> showFixedAssetFormDialog(
 /// Mensaje para un error de guardado: el código del RPC traducido, la
 /// migración que falta, o el genérico.
 String fixedAssetSaveError(Object e) {
-  if (e is FixedAssetsMigrationMissing) return e.toString();
+  if (e is FixedAssetsMigrationMissing ||
+      e is FixedAssetVerificationMigrationMissing ||
+      e is FixedAssetVerificationNotFound) {
+    return e.toString();
+  }
   return fixedAssetErrorMessage(e) ?? FriendlyError.from(e);
 }
 
@@ -61,6 +90,12 @@ class FixedAssetFormDialog extends StatefulWidget {
     required this.employees,
     this.knownCategories = const [],
     this.asset,
+    this.money = BusinessCurrency.fallbackDop,
+    this.supportsQuantity = true,
+    this.initialCode,
+    this.lockedWarehouse,
+    this.title,
+    this.onCreate,
   });
 
   final FixedAssetsRepository repo;
@@ -69,12 +104,34 @@ class FixedAssetFormDialog extends StatefulWidget {
   final List<FixedAssetOption> employees;
   final List<String> knownCategories;
   final FixedAsset? asset;
+  final BusinessCurrency money;
+
+  /// false = la base solo tiene 0052: no hay código propio ni cantidad.
+  final bool supportsQuantity;
+
+  /// Código con el que arranca el campo (el que se escaneó y no existía).
+  final String? initialCode;
+
+  /// Ubicación fija (alta durante una verificación de esa ubicación).
+  final FixedAssetOption? lockedWarehouse;
+  final String? title;
+
+  /// Reemplaza `repo.createAsset` en el alta (p. ej. el alta en el acto de
+  /// una verificación). Recibe el id del intento para que un reintento no
+  /// duplique.
+  final Future<FixedAsset> Function(
+    FixedAssetDraft draft,
+    String clientRequestId,
+  )?
+  onCreate;
 
   @override
   State<FixedAssetFormDialog> createState() => _FixedAssetFormDialogState();
 }
 
 class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
+  late final TextEditingController _code;
+  late final TextEditingController _quantity;
   late final TextEditingController _name;
   late final TextEditingController _category;
   late final TextEditingController _brand;
@@ -84,6 +141,7 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
   late final TextEditingController _supplier;
   late final TextEditingController _location;
   late final TextEditingController _notes;
+  late final TextEditingController _changeNote;
   DateTime? _purchaseDate;
   DateTime? _warrantyUntil;
   String? _warehouseId;
@@ -101,6 +159,8 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
   void initState() {
     super.initState();
     final a = widget.asset;
+    _code = TextEditingController(text: a?.code ?? widget.initialCode ?? '');
+    _quantity = TextEditingController(text: '${a?.quantity ?? 1}');
     _name = TextEditingController(text: a?.name ?? '');
     _category = TextEditingController(text: a?.category ?? '');
     _brand = TextEditingController(text: a?.brand ?? '');
@@ -112,15 +172,18 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
     _supplier = TextEditingController(text: a?.supplierName ?? '');
     _location = TextEditingController(text: a?.locationNote ?? '');
     _notes = TextEditingController(text: a?.notes ?? '');
+    _changeNote = TextEditingController();
     _purchaseDate = a?.purchaseDate;
     _warrantyUntil = a?.warrantyUntil;
-    _warehouseId = a?.warehouseId;
+    _warehouseId = widget.lockedWarehouse?.id ?? a?.warehouseId;
     _employeeId = a?.assignedEmployeeId;
   }
 
   @override
   void dispose() {
     for (final c in [
+      _code,
+      _quantity,
       _name,
       _category,
       _brand,
@@ -130,6 +193,7 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
       _supplier,
       _location,
       _notes,
+      _changeNote,
     ]) {
       c.dispose();
     }
@@ -146,6 +210,34 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
       for (final c in [...kFixedAssetCategorySuggestions, ...widget.knownCategories])
         if (seen.add(foldFixedAssetText(c))) c,
     ];
+  }
+
+  /// Cantidad escrita (null si no es un entero).
+  int? get _typedQuantity => int.tryParse(_quantity.text.trim());
+
+  /// En la edición: ¿bajó la cantidad? Entonces el motivo es obligatorio.
+  bool get _quantityDecreased {
+    final a = widget.asset;
+    final q = _typedQuantity;
+    return a != null && q != null && q < a.quantity;
+  }
+
+  bool get _quantityChanged {
+    final a = widget.asset;
+    final q = _typedQuantity;
+    return a != null && q != null && q != a.quantity;
+  }
+
+  /// «Total: RD$100,000.00 (40 × RD$2,500.00)», o null si falta un dato.
+  String? get _totalLabel {
+    final unit = parseFixedAssetAmount(_cost.text);
+    if (unit == null || unit < 0) return null;
+    final q = widget.supportsQuantity ? (_typedQuantity ?? 0) : 1;
+    if (q < 1) return null;
+    final total = widget.money.formatAmount(unit * q);
+    return q == 1
+        ? 'Total: $total'
+        : 'Total: $total ($q × ${widget.money.formatAmount(unit)})';
   }
 
   Future<void> _pickDate({required bool warranty}) async {
@@ -168,23 +260,47 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
     });
   }
 
+  void _fail(String message) => setState(() => _error = message);
+
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = 'Escribe el nombre del activo.');
-      return;
+    if (name.isEmpty) return _fail('Escribe el nombre del activo.');
+
+    String? code;
+    int? quantity;
+    String? changeNote;
+    if (widget.supportsQuantity) {
+      code = _code.text.trim();
+      if (code.length > kFixedAssetCodeMaxLength) {
+        return _fail(
+          'El código de etiqueta no puede pasar de '
+          '$kFixedAssetCodeMaxLength caracteres.',
+        );
+      }
+      if (_isEdit && code.isEmpty) {
+        return _fail('El código no puede quedar vacío.');
+      }
+      quantity = _typedQuantity;
+      if (quantity == null || quantity < 1) {
+        return _fail(
+          'La cantidad tiene que ser un número entero de 1 en adelante.',
+        );
+      }
+      if (_quantityChanged) {
+        changeNote = _changeNote.text.trim();
+        if (_quantityDecreased && changeNote.isEmpty) {
+          return _fail(
+            'Escribe por qué baja la cantidad (por ejemplo: «se rompieron 2»).',
+          );
+        }
+      }
     }
+
     double? cost;
     if (_cost.text.trim().isNotEmpty) {
       cost = parseFixedAssetAmount(_cost.text);
-      if (cost == null) {
-        setState(() => _error = 'El costo no es un número válido.');
-        return;
-      }
-      if (cost < 0) {
-        setState(() => _error = 'El costo no puede ser negativo.');
-        return;
-      }
+      if (cost == null) return _fail('El valor unitario no es un número válido.');
+      if (cost < 0) return _fail('El valor unitario no puede ser negativo.');
     }
 
     final draft = FixedAssetDraft(
@@ -201,6 +317,9 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
       locationNote: _location.text,
       assignedEmployeeId: _employeeId,
       notes: _notes.text,
+      code: code,
+      quantity: quantity,
+      changeNote: changeNote,
     );
 
     setState(() {
@@ -208,16 +327,21 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
       _error = null;
     });
     try {
-      final saved = _isEdit
-          ? await widget.repo.updateAsset(
-              assetId: widget.asset!.id,
-              draft: draft,
-            )
-          : await widget.repo.createAsset(
-              businessId: widget.businessId,
-              draft: draft,
-              clientRequestId: _requestId,
-            );
+      final FixedAsset saved;
+      if (_isEdit) {
+        saved = await widget.repo.updateAsset(
+          assetId: widget.asset!.id,
+          draft: draft,
+        );
+      } else if (widget.onCreate != null) {
+        saved = await widget.onCreate!(draft, _requestId);
+      } else {
+        saved = await widget.repo.createAsset(
+          businessId: widget.businessId,
+          draft: draft,
+          clientRequestId: _requestId,
+        );
+      }
       if (!mounted) return;
       AppToast.success(
         context,
@@ -236,13 +360,15 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
   @override
   Widget build(BuildContext context) {
     final narrow = MediaQuery.sizeOf(context).width < 600;
+    final total = _totalLabel;
     return AlertDialog(
       insetPadding: narrow
           ? const EdgeInsets.symmetric(horizontal: 12, vertical: 24)
           : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
       contentPadding: EdgeInsets.fromLTRB(narrow ? 16 : 24, 16, narrow ? 16 : 24, 8),
       title: Text(
-        _isEdit ? 'Editar ${widget.asset!.code}' : 'Nuevo activo',
+        widget.title ??
+            (_isEdit ? 'Editar ${widget.asset!.code}' : 'Nuevo activo'),
       ),
       content: SizedBox(
         width: 620,
@@ -265,10 +391,70 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (widget.supportsQuantity) ...[
+                    pair(
+                      TextField(
+                        key: const Key('fixed-asset-form-code'),
+                        controller: _code,
+                        inputFormatters: [
+                          LengthLimitingTextInputFormatter(
+                            kFixedAssetCodeMaxLength,
+                          ),
+                        ],
+                        decoration: InputDecoration(
+                          labelText:
+                              _isEdit ? 'Código de etiqueta *' : 'Código de etiqueta',
+                          helperText: _isEdit
+                              ? null
+                              : 'Déjalo vacío y el sistema asigna AF-00001',
+                          isDense: true,
+                        ),
+                      ),
+                      TextField(
+                        key: const Key('fixed-asset-form-quantity'),
+                        controller: _quantity,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Cantidad *',
+                          helperText: 'Varias iguales con una sola etiqueta',
+                          isDense: true,
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    if (_quantityChanged) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        key: const Key('fixed-asset-form-change-note'),
+                        controller: _changeNote,
+                        decoration: InputDecoration(
+                          labelText: _quantityDecreased
+                              ? 'Por qué baja de ${widget.asset!.quantity} a '
+                                    '${_typedQuantity ?? ''} *'
+                              : 'Por qué sube la cantidad (opcional)',
+                          hintText: _quantityDecreased
+                              ? 'Ej.: se rompieron 2'
+                              : 'Ej.: se compraron 5 más',
+                          isDense: true,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                  ] else ...[
+                    const _Hint(
+                      'Código propio y cantidad: falta aplicar la migración '
+                      '20261001_0050_fixed_asset_verification.sql. Por ahora '
+                      'el sistema asigna el código y cada ficha es una unidad.',
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   TextField(
                     key: const Key('fixed-asset-form-name'),
                     controller: _name,
-                    autofocus: !_isEdit,
+                    autofocus: !_isEdit && widget.initialCode == null,
                     textCapitalization: TextCapitalization.sentences,
                     decoration: const InputDecoration(
                       labelText: 'Nombre *',
@@ -304,6 +490,33 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
                         ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('fixed-asset-form-cost'),
+                    controller: _cost,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Valor unitario',
+                      helperText: 'Lo que costó o lo que vale hoy, por unidad. '
+                          'Acepta 1,250.50 o 1250,50',
+                      helperMaxLines: 2,
+                      isDense: true,
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  if (total != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      total,
+                      key: const Key('fixed-asset-form-total'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.foreground,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   pair(
                     TextField(
@@ -354,21 +567,9 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
                       onClear: () => setState(() => _warrantyUntil = null),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    key: const Key('fixed-asset-form-cost'),
-                    controller: _cost,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Costo de compra',
-                      helperText: 'Acepta 1,250.50 o 1250,50',
-                      isDense: true,
-                    ),
-                  ),
                   const SizedBox(height: 16),
                   if (_isEdit)
-                    _Hint(
+                    const _Hint(
                       'La ubicación y el responsable se cambian con '
                       '«Trasladar / reasignar», para que quede en la historia '
                       'quién lo movió y de dónde a dónde.',
@@ -384,11 +585,25 @@ class _FixedAssetFormDialogState extends State<FixedAssetFormDialog> {
                     ),
                     const SizedBox(height: 8),
                     pair(
-                      FixedAssetWarehouseDropdown(
-                        warehouses: widget.warehouses,
-                        value: _warehouseId,
-                        onChanged: (v) => setState(() => _warehouseId = v),
-                      ),
+                      widget.lockedWarehouse != null
+                          ? InputDecorator(
+                              key: const Key('fixed-asset-locked-warehouse'),
+                              decoration: const InputDecoration(
+                                labelText: 'Bodega',
+                                helperText: 'La de la verificación',
+                                isDense: true,
+                              ),
+                              child: Text(
+                                widget.lockedWarehouse!.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            )
+                          : FixedAssetWarehouseDropdown(
+                              warehouses: widget.warehouses,
+                              value: _warehouseId,
+                              onChanged: (v) =>
+                                  setState(() => _warehouseId = v),
+                            ),
                       FixedAssetEmployeeDropdown(
                         employees: widget.employees,
                         value: _employeeId,

@@ -1,9 +1,14 @@
-// Activos fijos: el equipo y el mobiliario, UNO POR UNO (20260930_0052).
+// Activos fijos: el equipo y el mobiliario (20260930_0052).
 //
 // No es inventario: un horno no se consume ni entra en el costo de venta. Es
 // un registro paralelo de qué hay, dónde está y quién responde por él. Por
 // eso modelos propios y ningún cruce con los insumos. Sin depreciación
 // (decisión del dueño).
+//
+// 20261001_0050: una ficha puede ser un GRUPO con una sola etiqueta («Silla
+// de madera ×40») o una pieza (un horno ×1). `purchase_cost` pasó a ser el
+// VALOR UNITARIO; el valor de la ficha es cantidad × valor unitario. Contra
+// una base que solo tiene 0052, la cantidad se lee como 1.
 //
 // Acá viven los modelos, los filtros y los indicadores de la pantalla como
 // funciones puras: la vista solo los pinta.
@@ -83,7 +88,13 @@ enum FixedAssetEventType {
   reassigned('reassigned', 'Cambio de responsable', Icons.person_outline),
   statusChanged('status_changed', 'Cambio de estado', Icons.flag_outlined),
   retired('retired', 'Baja', Icons.do_not_disturb_on_outlined),
-  reactivated('reactivated', 'Reactivado', Icons.restart_alt_rounded);
+  reactivated('reactivated', 'Reactivado', Icons.restart_alt_rounded),
+  quantityChanged(
+    'quantity_changed',
+    'Cambio de cantidad',
+    Icons.format_list_numbered_rounded,
+  ),
+  verified('verified', 'Verificado', Icons.fact_check_outlined);
 
   const FixedAssetEventType(this.wire, this.label, this.icon);
 
@@ -102,13 +113,15 @@ enum FixedAssetEventType {
 /// Nombre legible de los campos que puede cambiar la edición (la columna
 /// `changes` de la historia).
 const kFixedAssetFieldLabels = <String, String>{
+  'code': 'Código',
   'name': 'Nombre',
   'category': 'Categoría',
   'brand': 'Marca',
   'model': 'Modelo',
   'serial_number': 'Serie',
   'purchase_date': 'Fecha de compra',
-  'purchase_cost': 'Costo',
+  'purchase_cost': 'Valor unitario',
+  'quantity': 'Cantidad',
   'supplier_name': 'Proveedor',
   'warranty_until': 'Garantía hasta',
   'notes': 'Notas',
@@ -118,6 +131,14 @@ double? _toDoubleOrNull(dynamic v) {
   if (v == null) return null;
   if (v is num) return v.toDouble();
   return double.tryParse(v.toString());
+}
+
+int? _toIntOrNull(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.round();
+  return int.tryParse(v.toString().trim()) ??
+      double.tryParse(v.toString().trim())?.round();
 }
 
 String? _textOrNull(dynamic v) {
@@ -168,6 +189,13 @@ class FixedAsset {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  /// Unidades que cubre la ficha (≥ 1). Sin la migración 20261001_0050, 1.
+  final int quantity;
+
+  /// Última vez que una verificación lo encontró (null = nunca).
+  final DateTime? lastVerifiedAt;
+  final String? lastVerificationId;
+
   const FixedAsset({
     required this.id,
     required this.businessId,
@@ -192,6 +220,9 @@ class FixedAsset {
     this.notes,
     this.createdAt,
     this.updatedAt,
+    this.quantity = 1,
+    this.lastVerifiedAt,
+    this.lastVerificationId,
   });
 
   factory FixedAsset.fromMap(Map<String, dynamic> map) {
@@ -220,6 +251,71 @@ class FixedAsset {
       notes: _textOrNull(map['notes']),
       createdAt: _dateOrNull(map['created_at']),
       updatedAt: _dateOrNull(map['updated_at']),
+      quantity: _positiveQuantity(map['quantity']),
+      lastVerifiedAt: _dateOrNull(map['last_verified_at']),
+      lastVerificationId: _textOrNull(map['last_verification_id']),
+    );
+  }
+
+  /// Sin columna (base con solo 0052) o con un valor raro, la ficha cubre
+  /// UNA unidad: es lo que significaba antes de existir la cantidad.
+  static int _positiveQuantity(dynamic raw) {
+    final q = _toIntOrNull(raw);
+    return (q == null || q < 1) ? 1 : q;
+  }
+
+  /// Valor de la ficha: cantidad × valor unitario. null si no tiene valor.
+  double? get totalValue {
+    final unit = purchaseCost;
+    return unit == null ? null : unit * quantity;
+  }
+
+  /// «×40» para mostrar junto al nombre. Vacío cuando es una sola pieza.
+  String get quantityLabel => quantity > 1 ? '×$quantity' : '';
+
+  /// ¿Le toca una verificación? Nunca verificado, o la última fue hace más
+  /// de [months] meses. Lo dado de baja no cuenta: ya no está en la operación.
+  bool needsVerification(DateTime now, {int months = 6}) {
+    if (status.isRetired) return false;
+    final last = lastVerifiedAt;
+    if (last == null) return true;
+    final cutoff = DateTime(now.year, now.month - months, now.day);
+    return last.toLocal().isBefore(cutoff);
+  }
+
+  FixedAsset copyWith({
+    int? quantity,
+    FixedAssetStatus? status,
+    DateTime? lastVerifiedAt,
+    String? lastVerificationId,
+  }) {
+    return FixedAsset(
+      id: id,
+      businessId: businessId,
+      code: code,
+      name: name,
+      category: category,
+      brand: brand,
+      model: model,
+      serialNumber: serialNumber,
+      purchaseDate: purchaseDate,
+      purchaseCost: purchaseCost,
+      supplierName: supplierName,
+      warrantyUntil: warrantyUntil,
+      warehouseId: warehouseId,
+      warehouseName: warehouseName,
+      locationNote: locationNote,
+      assignedEmployeeId: assignedEmployeeId,
+      employeeName: employeeName,
+      status: status ?? this.status,
+      retiredAt: retiredAt,
+      retiredReason: retiredReason,
+      notes: notes,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      quantity: quantity ?? this.quantity,
+      lastVerifiedAt: lastVerifiedAt ?? this.lastVerifiedAt,
+      lastVerificationId: lastVerificationId ?? this.lastVerificationId,
     );
   }
 
@@ -272,6 +368,15 @@ class FixedAssetMovement {
   final FixedAssetStatus? fromStatus;
   final FixedAssetStatus? toStatus;
 
+  /// `quantity_changed`: cantidad antes y después. `verified`: lo esperado
+  /// (from) y lo encontrado (to).
+  final int? fromQuantity;
+  final int? toQuantity;
+
+  /// La verificación que dejó el evento (`verified`, o un
+  /// `quantity_changed` / `status_changed` aplicado al cerrarla).
+  final String? verificationId;
+
   /// Solo en `updated`: campo → (antes, después).
   final Map<String, ({String? from, String? to})> changes;
   final String? notes;
@@ -290,6 +395,9 @@ class FixedAssetMovement {
     this.toEmployeeName,
     this.fromStatus,
     this.toStatus,
+    this.fromQuantity,
+    this.toQuantity,
+    this.verificationId,
     this.changes = const {},
     this.notes,
     this.createdByName,
@@ -327,6 +435,9 @@ class FixedAssetMovement {
       toEmployeeName: _textOrNull(map['to_employee_name']),
       fromStatus: status(map['from_status']),
       toStatus: status(map['to_status']),
+      fromQuantity: _toIntOrNull(map['from_quantity']),
+      toQuantity: _toIntOrNull(map['to_quantity']),
+      verificationId: _textOrNull(map['verification_id']),
       changes: changes,
       notes: _textOrNull(map['notes']),
       createdByName: _textOrNull(map['created_by_name']),
@@ -343,8 +454,35 @@ class FixedAssetMovement {
   }
 
   /// Una línea que cuenta qué pasó: «De Cocina a Principal · Pasillo».
-  String get description {
+  String get description => describe();
+
+  /// Lo que pinta la línea de tiempo. En `verified` el servidor ya escribe
+  /// la frase completa en la nota («Verificación #1 (Cocina): 36 de 38»).
+  String get displayDescription =>
+      eventType == FixedAssetEventType.verified && notes != null
+          ? notes!
+          : description;
+
+  /// La nota entre comillas debajo, salvo cuando ya es la descripción.
+  String? get displayNotes =>
+      eventType == FixedAssetEventType.verified ? null : notes;
+
+  /// Igual que [description], con el número de la verificación cuando se
+  /// conoce («Verificado en la verificación #3: 38 de 40»).
+  String describe({int? verificationNumber}) {
     switch (eventType) {
+      case FixedAssetEventType.quantityChanged:
+        return 'Cantidad: ${fromQuantity ?? '—'} → ${toQuantity ?? '—'}';
+      case FixedAssetEventType.verified:
+        final where = verificationNumber == null
+            ? 'Verificado'
+            : 'Verificado en la verificación #$verificationNumber';
+        final found = toQuantity;
+        if (found == null) return where;
+        final expected = fromQuantity;
+        return expected == null
+            ? '$where: $found encontrados'
+            : '$where: $found de $expected';
       case FixedAssetEventType.created:
         final where = _place(toWarehouseName, toLocationNote);
         final who = toEmployeeName;
@@ -429,19 +567,24 @@ class FixedAssetsFilter {
   /// Los dados de baja se esconden por defecto: son historia, no operación.
   final bool showRetired;
 
+  /// Solo los que nunca se verificaron o hace más de 6 meses.
+  final bool staleOnly;
+
   const FixedAssetsFilter({
     this.query = '',
     this.category,
     this.warehouseId,
     this.status,
     this.showRetired = false,
+    this.staleOnly = false,
   });
 
   bool get isFiltering =>
       query.trim().isNotEmpty ||
       category != null ||
       warehouseId != null ||
-      status != null;
+      status != null ||
+      staleOnly;
 
   FixedAssetsFilter copyWith({
     String? query,
@@ -452,6 +595,7 @@ class FixedAssetsFilter {
     FixedAssetStatus? status,
     bool clearStatus = false,
     bool? showRetired,
+    bool? staleOnly,
   }) {
     return FixedAssetsFilter(
       query: query ?? this.query,
@@ -459,10 +603,15 @@ class FixedAssetsFilter {
       warehouseId: clearWarehouse ? null : (warehouseId ?? this.warehouseId),
       status: clearStatus ? null : (status ?? this.status),
       showRetired: showRetired ?? this.showRetired,
+      staleOnly: staleOnly ?? this.staleOnly,
     );
   }
 
-  bool matches(FixedAsset a) {
+  /// [now] solo importa para [staleOnly]; las pruebas lo fijan.
+  bool matches(FixedAsset a, {DateTime? now}) {
+    if (staleOnly && !a.needsVerification(now ?? DateTime.now())) {
+      return false;
+    }
     // Pedir explícitamente «Dado de baja» los muestra aunque el interruptor
     // esté apagado: si no, el filtro devolvería siempre vacío.
     if (a.status.isRetired &&
@@ -503,8 +652,10 @@ class FixedAssetsFilter {
     return true;
   }
 
-  List<FixedAsset> apply(List<FixedAsset> assets) =>
-      assets.where(matches).toList(growable: false);
+  List<FixedAsset> apply(List<FixedAsset> assets, {DateTime? now}) {
+    final at = now ?? DateTime.now();
+    return assets.where((a) => matches(a, now: at)).toList(growable: false);
+  }
 }
 
 /// Categorías para el filtro: las sugeridas que se usan + las propias del
@@ -536,18 +687,44 @@ List<FixedAsset> sortFixedAssetsByCode(List<FixedAsset> assets) {
   return sorted;
 }
 
+/// Largo máximo del código de etiqueta (lo valida también el servidor).
+const kFixedAssetCodeMaxLength = 40;
+
+/// Normaliza un código para compararlo: sin espacios alrededor y sin
+/// distinguir mayúsculas (así lo compara también el servidor).
+String normalizeFixedAssetCode(String raw) => raw.trim().toLowerCase();
+
+/// El activo con ese código de etiqueta, o null. Es una identidad, no una
+/// búsqueda: «AF-1» no encuentra «AF-10».
+FixedAsset? findFixedAssetByCode(List<FixedAsset> assets, String raw) {
+  final code = normalizeFixedAssetCode(raw);
+  if (code.isEmpty) return null;
+  for (final a in assets) {
+    if (normalizeFixedAssetCode(a.code) == code) return a;
+  }
+  return null;
+}
+
 // ── Indicadores ────────────────────────────────────────────────────────────
 
 /// Los cuatro números de arriba. Se calculan sobre el registro COMPLETO del
 /// negocio, no sobre lo filtrado: son la foto del patrimonio.
 @immutable
 class FixedAssetsKpis {
-  /// Todo lo que no está dado de baja.
+  /// Fichas que no están dadas de baja.
   final int registered;
   final int inUse;
 
-  /// Suma del costo de compra de lo vigente (sin bajas). Sin depreciación.
+  /// Unidades de lo vigente (una ficha «×40» suma 40) y de lo que está en uso.
+  final int units;
+  final int unitsInUse;
+
+  /// Suma de cantidad × valor unitario de lo vigente (sin bajas). Sin
+  /// depreciación.
   final double purchaseValue;
+
+  /// Vigentes nunca verificados o verificados hace más de 6 meses.
+  final int needVerification;
 
   /// Vigentes sin costo cargado: el valor total se queda corto por ellos.
   final int withoutCost;
@@ -560,7 +737,10 @@ class FixedAssetsKpis {
   const FixedAssetsKpis({
     this.registered = 0,
     this.inUse = 0,
+    this.units = 0,
+    this.unitsInUse = 0,
     this.purchaseValue = 0,
+    this.needVerification = 0,
     this.withoutCost = 0,
     this.needsRepair = 0,
     this.inRepair = 0,
@@ -571,9 +751,13 @@ class FixedAssetsKpis {
 
   int get repairTotal => needsRepair + inRepair;
 
-  factory FixedAssetsKpis.from(List<FixedAsset> assets) {
+  factory FixedAssetsKpis.from(List<FixedAsset> assets, {DateTime? now}) {
+    final at = now ?? DateTime.now();
     var registered = 0;
     var inUse = 0;
+    var units = 0;
+    var unitsInUse = 0;
+    var needVerification = 0;
     var value = 0.0;
     var withoutCost = 0;
     var needsRepair = 0;
@@ -588,6 +772,7 @@ class FixedAssetsKpis {
           continue;
         case FixedAssetStatus.active:
           inUse++;
+          unitsInUse += a.quantity;
         case FixedAssetStatus.needsRepair:
           needsRepair++;
         case FixedAssetStatus.inRepair:
@@ -598,17 +783,22 @@ class FixedAssetsKpis {
           lost++;
       }
       registered++;
-      final cost = a.purchaseCost;
-      if (cost == null) {
+      units += a.quantity;
+      if (a.needsVerification(at)) needVerification++;
+      final total = a.totalValue;
+      if (total == null) {
         withoutCost++;
       } else {
-        value += cost;
+        value += total;
       }
     }
     return FixedAssetsKpis(
       registered: registered,
       inUse: inUse,
+      units: units,
+      unitsInUse: unitsInUse,
       purchaseValue: value,
+      needVerification: needVerification,
       withoutCost: withoutCost,
       needsRepair: needsRepair,
       inRepair: inRepair,
@@ -674,6 +864,16 @@ class FixedAssetDraft {
   final String? assignedEmployeeId;
   final String? notes;
 
+  /// Código de la etiqueta. null/vacío en el alta = lo asigna el servidor
+  /// (AF-00001…). null en la edición = no se toca.
+  final String? code;
+
+  /// null = no se manda (base sin la migración 20261001_0050).
+  final int? quantity;
+
+  /// Por qué cambió la cantidad (edición). Queda en la historia.
+  final String? changeNote;
+
   const FixedAssetDraft({
     required this.name,
     this.category,
@@ -688,6 +888,9 @@ class FixedAssetDraft {
     this.locationNote,
     this.assignedEmployeeId,
     this.notes,
+    this.code,
+    this.quantity,
+    this.changeNote,
   });
 
   static String? _clean(String? v) {
@@ -697,8 +900,12 @@ class FixedAssetDraft {
 
   /// Los datos de la ficha (lo que edita `fn_fixed_asset_update`). Las
   /// claves van SIEMPRE, con null para borrar: la edición manda la ficha
-  /// completa.
+  /// completa. Código, cantidad y nota del cambio solo viajan si traen
+  /// algo: un código vacío NO borra la etiqueta.
   Map<String, dynamic> dataJson() => {
+        'code': ?_clean(code),
+        'quantity': ?quantity,
+        'change_note': ?_clean(changeNote),
         'name': name.trim(),
         'category': _clean(category),
         'brand': _clean(brand),
@@ -746,7 +953,35 @@ String? fixedAssetErrorMessage(Object error) {
     return 'Escribe el motivo de la baja.';
   }
   if (texto.contains('FIXED_ASSET_RETIRED')) {
-    return 'Este activo está dado de baja. Reactívalo antes de moverlo.';
+    return 'Este activo está dado de baja. Reactívalo desde su ficha en '
+        'Activos fijos primero.';
+  }
+  if (texto.contains('FIXED_ASSET_CODE_TAKEN')) {
+    return 'Ese código de etiqueta ya lo tiene otro activo de este negocio.';
+  }
+  if (texto.contains('FIXED_ASSET_INVALID_CODE')) {
+    return 'El código de etiqueta no puede pasar de 40 caracteres.';
+  }
+  if (texto.contains('FIXED_ASSET_INVALID_QUANTITY')) {
+    return 'La cantidad no es válida: tiene que ser un número entero.';
+  }
+  if (texto.contains('FIXED_ASSET_VERIFICATION_NOT_FOUND')) {
+    return 'Esa verificación no existe o no es de este negocio.';
+  }
+  if (texto.contains('FIXED_ASSET_VERIFICATION_IS_NEW')) {
+    return 'Ese activo se registró durante esta verificación: corrígelo desde '
+        'su ficha en Activos fijos.';
+  }
+  if (texto.contains('FIXED_ASSET_VERIFICATION_REASON_REQUIRED')) {
+    return 'Escribe el motivo de la cancelación.';
+  }
+  if (texto.contains('FIXED_ASSET_VERIFICATION_NOT_OPEN')) {
+    return 'Esta verificación ya no está abierta (se cerró o se canceló). '
+        'Actualiza la pantalla.';
+  }
+  if (texto.contains('FIXED_ASSET_VERIFICATION_BAD_DECISION')) {
+    return 'Una de las decisiones ya no aplica a lo contado. Actualiza y '
+        'vuelve a cerrar.';
   }
   if (texto.contains('FIXED_ASSET_INVALID_STATUS')) {
     return 'Ese estado no es válido para este activo.';

@@ -1,10 +1,16 @@
-// Activos fijos en papel, A4. Dos documentos:
+// Activos fijos en papel, A4. Tres documentos:
 //
 //   · «Inventario de activos fijos»: lo que está en pantalla, agrupado por
 //     ubicación, con subtotales, total y las firmas de quien responde por el
 //     área y de la administración. Es la hoja que se firma en cada conteo.
 //   · «Acta de asignación»: UN activo con su responsable. La firma «Recibe»
 //     es la del empleado que desde ese día responde por el equipo.
+//   · «Acta de verificación»: lo esperado contra lo encontrado en una
+//     ubicación, con el valor de lo que falta, lo nuevo y lo que estaba fuera
+//     de lugar. Mientras la verificación sigue abierta sale como BORRADOR.
+//
+// Desde 20261001_0050 una ficha puede cubrir varias unidades: el valor que
+// se muestra y se suma es SIEMPRE cantidad × valor unitario.
 //
 // Se imprime con `printWithOsDialog` (NUNCA `Printing.layoutPdf` directo: en
 // Mac y iPad congela la app — ver os_print_dialog.dart).
@@ -15,6 +21,7 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../../../core/currency/business_currency.dart';
 import '../../../core/printing/os_print_dialog.dart';
+import '../state/fixed_asset_verification_state.dart';
 import '../state/fixed_assets_state.dart';
 
 /// La fuente base del PDF (Helvetica, WinAnsi) no tiene glifos más allá de
@@ -98,7 +105,8 @@ class FixedAssetsPdf {
     final now = printedAt ?? DateTime.now();
     final groups = groupFixedAssetsByLocation(assets);
     final kpis = FixedAssetsKpis.from(assets);
-    final total = assets.fold<double>(0, (s, a) => s + (a.purchaseCost ?? 0));
+    final total = assets.fold<double>(0, (s, a) => s + (a.totalValue ?? 0));
+    final units = assets.fold<int>(0, (s, a) => s + a.quantity);
     final doc = pw.Document();
 
     doc.addPage(
@@ -143,7 +151,8 @@ class FixedAssetsPdf {
             _inventoryTable(g.value, money),
             pw.SizedBox(height: 12),
           ],
-          if (assets.isNotEmpty) _totals(assets.length, total, kpis, money),
+          if (assets.isNotEmpty)
+            _totals(assets.length, units, total, kpis, money),
           pw.SizedBox(height: 56),
           _signatures(
             left: 'Responsable del área',
@@ -214,10 +223,20 @@ class FixedAssetsPdf {
             ('Número de serie', asset.serialNumber ?? '-'),
             ('Fecha de compra', _date(asset.purchaseDate)),
             (
-              'Costo de compra',
+              'Cantidad',
+              asset.quantity == 1 ? '1 unidad' : '${asset.quantity} unidades',
+            ),
+            (
+              'Valor unitario',
               asset.purchaseCost == null
                   ? '-'
                   : money.formatAmount(asset.purchaseCost!),
+            ),
+            (
+              'Valor total',
+              asset.totalValue == null
+                  ? '-'
+                  : money.formatAmount(asset.totalValue!),
             ),
             ('Proveedor', asset.supplierName ?? '-'),
             ('Garantía hasta', _date(asset.warrantyUntil)),
@@ -292,6 +311,358 @@ class FixedAssetsPdf {
     );
   }
 
+  // ── Acta de verificación ─────────────────────────────────────────────────
+
+  static String verificationFileName(FixedAssetVerification v) =>
+      'acta_verificacion_${v.number}.pdf';
+
+  static Future<Uint8List> buildVerificationAct({
+    required FixedAssetVerification verification,
+    required String businessName,
+    String? printedBy,
+    BusinessCurrency? currency,
+    DateTime? printedAt,
+    PdfPageFormat pageFormat = PdfPageFormat.a4,
+  }) async {
+    final money = currency ?? BusinessCurrency.fallbackDop;
+    final now = printedAt ?? DateTime.now();
+    final v = verification;
+    final draft = v.isOpen;
+    final lines = sortVerificationLines(v.lines);
+    final expected = [
+      for (final l in lines)
+        if (l.expected) l,
+    ];
+    final added = [
+      for (final l in lines)
+        if (l.isNew) l,
+    ];
+    final misplaced = [
+      for (final l in lines)
+        if (l.isMisplaced) l,
+    ];
+    final progress = VerificationProgress.from(lines);
+    // En el borrador solo cuenta como faltante lo que ya se revisó; al
+    // cerrar, lo no revisado también falta.
+    final counted = draft ? expected.where((l) => l.isChecked) : expected;
+    final missingUnits = counted.fold<int>(0, (s, l) => s + l.shortfall);
+    final missingValue = counted.fold<double>(0, (s, l) => s + l.missingValue);
+
+    final doc = pw.Document();
+    doc.addPage(
+      pw.MultiPage(
+        pageTheme: pw.PageTheme(
+          pageFormat: pageFormat,
+          margin: const pw.EdgeInsets.fromLTRB(32, 32, 32, 30),
+          // Mientras sigue abierta, el acta no es definitiva: la marca de
+          // agua evita que se archive como si lo fuera.
+          buildBackground: draft
+              ? (context) => pw.FullPage(
+                    ignoreMargins: true,
+                    child: pw.Center(
+                      child: pw.Transform.rotate(
+                        angle: 0.6,
+                        child: pw.Text(
+                          'BORRADOR',
+                          style: pw.TextStyle(
+                            fontSize: 96,
+                            color: PdfColors.grey200,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+              : null,
+        ),
+        footer: (context) => pw.Container(
+          alignment: pw.Alignment.centerRight,
+          margin: const pw.EdgeInsets.only(top: 8),
+          child: pw.Text(
+            'Página ${context.pageNumber} de ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600),
+          ),
+        ),
+        build: (context) => [
+          _header(
+            businessName: businessName,
+            title: draft
+                ? 'ACTA DE VERIFICACIÓN DE ACTIVOS — BORRADOR'
+                : 'ACTA DE VERIFICACIÓN DE ACTIVOS',
+            right: [
+              'Verificación #${v.number}',
+              v.status.label,
+              'Impreso: ${_dateTime(now)}',
+            ],
+          ),
+          _fieldGrid([
+            ('Ubicación', v.warehouseName),
+            ('Estado', draft ? 'En curso (borrador)' : v.status.label),
+            (
+              'Iniciada',
+              [
+                if (v.startedAt != null) _dateTime(v.startedAt!.toLocal()),
+                if ((v.startedByName ?? '').isNotEmpty) v.startedByName!,
+              ].join(' · '),
+            ),
+            (
+              v.status == FixedAssetVerificationStatus.cancelled
+                  ? 'Cancelada'
+                  : 'Cerrada',
+              v.closedAt == null
+                  ? '-'
+                  : [
+                      _dateTime(v.closedAt!.toLocal()),
+                      if ((v.closedByName ?? '').isNotEmpty) v.closedByName!,
+                    ].join(' · '),
+            ),
+          ]),
+          if ((v.cancelReason ?? '').isNotEmpty) ...[
+            pw.Text(
+              _s('Motivo de la cancelación: ${v.cancelReason}'),
+              style: const pw.TextStyle(fontSize: 9),
+            ),
+            pw.SizedBox(height: 6),
+          ],
+          pw.SizedBox(height: 6),
+          _sectionTitle('Lo que debía estar (${expected.length})'),
+          _verificationTable(expected, money, closed: !draft),
+          pw.SizedBox(height: 8),
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Text(
+                  _s(
+                    '${progress.checked} de ${progress.expected} revisados · '
+                    '${draft ? 'Faltan hasta ahora' : 'Faltan'} $missingUnits '
+                    '${missingUnits == 1 ? 'unidad' : 'unidades'} · '
+                    'Valor faltante ${money.formatAmount(missingValue)}',
+                  ),
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                if (v.summary != null)
+                  pw.Text(
+                    _s(
+                      '${v.summary!.okCount} en orden · '
+                      '${v.summary!.lostCount} dados por perdidos · '
+                      '${v.summary!.pendingCount} pendientes de búsqueda · '
+                      'Valor encontrado '
+                      '${money.formatAmount(v.summary!.foundValue)}',
+                    ),
+                    style: const pw.TextStyle(
+                      fontSize: 8,
+                      color: PdfColors.grey700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (added.isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            _sectionTitle('Nuevos: registrados durante la verificación'),
+            _simpleTable(
+              headers: const ['Código', 'Activo', 'Cantidad', 'Valor'],
+              flex: const [1.3, 4.5, 1.2, 1.8],
+              rightFrom: 2,
+              rows: [
+                for (final l in added)
+                  [
+                    l.assetCode,
+                    l.assetName,
+                    '${l.foundQty ?? 0}',
+                    l.unitValue == null
+                        ? '-'
+                        : money.formatAmount(l.unitValue! * (l.foundQty ?? 0)),
+                  ],
+              ],
+            ),
+          ],
+          if (misplaced.isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            _sectionTitle('Fuera de lugar: registrados en otra ubicación'),
+            _simpleTable(
+              headers: const [
+                'Código',
+                'Activo',
+                'Registrado en',
+                'Encontrado',
+                'Resultado',
+              ],
+              flex: const [1.3, 3.4, 2.2, 1.2, 1.9],
+              rightFrom: 3,
+              rows: [
+                for (final l in misplaced)
+                  [
+                    l.assetCode,
+                    l.assetName,
+                    l.registeredWarehouseName ?? 'Sin ubicación',
+                    '${l.foundQty ?? 0}',
+                    draft ? '-' : fixedAssetResolutionLabel(l.resolution),
+                  ],
+              ],
+            ),
+          ],
+          if ((v.notes ?? '').isNotEmpty) ...[
+            pw.SizedBox(height: 12),
+            _sectionTitle('Notas'),
+            pw.Text(_s(v.notes!), style: const pw.TextStyle(fontSize: 9)),
+          ],
+          pw.SizedBox(height: 56),
+          _signatureRow([
+            ('Verificado por', v.closedByName ?? v.startedByName),
+            ('Responsable del área', null),
+            ('Administración', null),
+          ]),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  static Future<void> printVerificationAct({
+    required FixedAssetVerification verification,
+    required String businessName,
+    String? printedBy,
+    BusinessCurrency? currency,
+  }) async {
+    final now = DateTime.now();
+    await printWithOsDialog(
+      format: PdfPageFormat.a4,
+      name: verificationFileName(verification),
+      onLayout: (format) => buildVerificationAct(
+        verification: verification,
+        businessName: businessName,
+        printedBy: printedBy,
+        currency: currency,
+        printedAt: now,
+        pageFormat: format,
+      ),
+    );
+  }
+
+  /// Esperado contra encontrado, línea por línea.
+  static pw.Widget _verificationTable(
+    List<FixedAssetVerificationLine> lines,
+    BusinessCurrency money, {
+    required bool closed,
+  }) {
+    String estado(FixedAssetVerificationLine l) {
+      final visto = l.observedStatus;
+      if (visto != null && visto != l.expectedStatus) {
+        return 'Visto: ${visto.label}';
+      }
+      return l.expectedStatus?.label ?? '-';
+    }
+
+    String resultado(FixedAssetVerificationLine l) {
+      if (closed) return fixedAssetResolutionLabel(l.resolution);
+      if (!l.isChecked) return 'Sin revisar';
+      return l.shortfall > 0 || l.surplus > 0 ? 'Con diferencia' : 'En orden';
+    }
+
+    String diferencia(FixedAssetVerificationLine l) {
+      if (!l.isChecked && !closed) return '-';
+      final d = l.found - (l.expectedQty ?? 0);
+      if (d == 0) return '0';
+      return d > 0 ? '+$d' : '$d';
+    }
+
+    return _simpleTable(
+      headers: const [
+        'Código',
+        'Activo',
+        'Esp.',
+        'Enc.',
+        'Dif.',
+        'Estado',
+        'Resultado',
+        'Valor faltante',
+      ],
+      flex: const [1.2, 3.0, 0.7, 0.7, 0.7, 1.6, 1.7, 1.6],
+      rightFrom: 2,
+      rightUntil: 4,
+      rightLast: true,
+      rows: [
+        for (final l in lines)
+          [
+            l.assetCode,
+            l.assetName,
+            '${l.expectedQty ?? 0}',
+            l.foundQty == null ? '-' : '${l.foundQty}',
+            diferencia(l),
+            estado(l),
+            resultado(l),
+            // Lo no revisado de un borrador todavía no «falta»: se cuenta
+            // al cerrar (o cuando alguien lo marca).
+            l.shortfall > 0 && (closed || l.isChecked)
+                ? money.formatAmount(l.missingValue)
+                : '-',
+          ],
+      ],
+      emptyText: 'No había activos registrados en esta ubicación.',
+    );
+  }
+
+  /// Tabla de texto con encabezado. Las columnas desde [rightFrom] hasta
+  /// [rightUntil] (y la última si [rightLast]) van alineadas a la derecha.
+  static pw.Widget _simpleTable({
+    required List<String> headers,
+    required List<double> flex,
+    required List<List<String>> rows,
+    int rightFrom = 99,
+    int? rightUntil,
+    bool rightLast = false,
+    String emptyText = '',
+  }) {
+    final bold = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
+    const cell = pw.TextStyle(fontSize: 8);
+    bool right(int i) =>
+        (i >= rightFrom && (rightUntil == null || i <= rightUntil)) ||
+        (rightLast && i == headers.length - 1);
+    pw.Widget c(String text, int i, pw.TextStyle style) => pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+          child: pw.Text(
+            _s(text),
+            style: style,
+            textAlign: right(i) ? pw.TextAlign.right : pw.TextAlign.left,
+          ),
+        );
+    return pw.Table(
+      columnWidths: {
+        for (var i = 0; i < flex.length; i++) i: pw.FlexColumnWidth(flex[i]),
+      },
+      border: const pw.TableBorder(
+        horizontalInside: pw.BorderSide(width: 0.3, color: PdfColors.grey400),
+        bottom: pw.BorderSide(width: 0.6),
+        top: pw.BorderSide(width: 0.6),
+      ),
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          children: [
+            for (var i = 0; i < headers.length; i++) c(headers[i], i, bold),
+          ],
+        ),
+        for (final r in rows)
+          pw.TableRow(
+            children: [for (var i = 0; i < r.length; i++) c(r[i], i, cell)],
+          ),
+        if (rows.isEmpty && emptyText.isNotEmpty)
+          pw.TableRow(
+            children: [
+              for (var i = 0; i < headers.length; i++)
+                c(i == 1 ? emptyText : '', i, cell),
+            ],
+          ),
+      ],
+    );
+  }
+
   // ── Piezas ───────────────────────────────────────────────────────────────
 
   static pw.Widget _header({
@@ -363,8 +734,9 @@ class FixedAssetsPdf {
   ) {
     final subtotal = assets.fold<double>(
       0,
-      (s, a) => s + (a.purchaseCost ?? 0),
+      (s, a) => s + (a.totalValue ?? 0),
     );
+    final units = assets.fold<int>(0, (s, a) => s + a.quantity);
     return pw.Container(
       color: PdfColors.grey200,
       padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -378,7 +750,8 @@ class FixedAssetsPdf {
           ),
           pw.Text(
             _s(
-              '${assets.length} ${assets.length == 1 ? 'activo' : 'activos'}'
+              '${assets.length} ${assets.length == 1 ? 'registro' : 'registros'}'
+              ' · $units ${units == 1 ? 'unidad' : 'unidades'}'
               ' · ${money.formatAmount(subtotal)}',
             ),
             style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
@@ -425,11 +798,13 @@ class FixedAssetsPdf {
     return pw.Table(
       columnWidths: const {
         0: pw.FlexColumnWidth(1.25),
-        1: pw.FlexColumnWidth(3.6),
-        2: pw.FlexColumnWidth(2.1),
-        3: pw.FlexColumnWidth(2.0),
-        4: pw.FlexColumnWidth(1.6),
-        5: pw.FlexColumnWidth(1.7),
+        1: pw.FlexColumnWidth(3.2),
+        2: pw.FlexColumnWidth(1.8),
+        3: pw.FlexColumnWidth(1.7),
+        4: pw.FlexColumnWidth(1.4),
+        5: pw.FlexColumnWidth(0.7),
+        6: pw.FlexColumnWidth(1.5),
+        7: pw.FlexColumnWidth(1.6),
       },
       border: const pw.TableBorder(
         horizontalInside: pw.BorderSide(width: 0.3, color: PdfColors.grey400),
@@ -443,7 +818,9 @@ class FixedAssetsPdf {
             th('Ubicación'),
             th('Responsable'),
             th('Estado'),
-            th('Costo', right: true),
+            th('Cant.', right: true),
+            th('Valor unit.', right: true),
+            th('Total', right: true),
           ],
         ),
         for (final a in assets)
@@ -461,10 +838,15 @@ class FixedAssetsPdf {
               td(a.locationNote ?? '-'),
               td(a.employeeName.isEmpty ? '-' : a.employeeName),
               td(a.status.label),
+              td('${a.quantity}', right: true),
               td(
                 a.purchaseCost == null
                     ? '-'
                     : money.formatAmount(a.purchaseCost!),
+                right: true,
+              ),
+              td(
+                a.totalValue == null ? '-' : money.formatAmount(a.totalValue!),
                 right: true,
               ),
             ],
@@ -475,6 +857,7 @@ class FixedAssetsPdf {
 
   static pw.Widget _totals(
     int count,
+    int units,
     double total,
     FixedAssetsKpis kpis,
     BusinessCurrency money,
@@ -498,8 +881,9 @@ class FixedAssetsPdf {
         children: [
           pw.Text(
             _s(
-              'Total: $count ${count == 1 ? 'activo' : 'activos'} · '
-              'Valor de compra ${money.formatAmount(total)}',
+              'Total: $count ${count == 1 ? 'registro' : 'registros'} · '
+              '$units ${units == 1 ? 'unidad' : 'unidades'} · '
+              'Valor ${money.formatAmount(total)}',
             ),
             style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold),
           ),
@@ -510,8 +894,8 @@ class FixedAssetsPdf {
             ),
           pw.Text(
             _s(
-              'Costo histórico de compra, sin depreciación'
-              '${sinCosto > 0 ? ' · $sinCosto sin costo registrado' : ''}.',
+              'Valor = cantidad × valor unitario, sin depreciación'
+              '${sinCosto > 0 ? ' · $sinCosto sin valor registrado' : ''}.',
             ),
             style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
           ),
@@ -586,7 +970,10 @@ class FixedAssetsPdf {
     required String right,
     String? leftName,
     String? rightName,
-  }) {
+  }) => _signatureRow([(left, leftName), (right, rightName)]);
+
+  /// N firmas en una fila (el acta de verificación lleva tres).
+  static pw.Widget _signatureRow(List<(String, String?)> slots) {
     pw.Widget slot(String label, String? name) => pw.Expanded(
           child: pw.Column(
             children: [
@@ -626,9 +1013,10 @@ class FixedAssetsPdf {
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        slot(left, leftName),
-        pw.SizedBox(width: 28),
-        slot(right, rightName),
+        for (var i = 0; i < slots.length; i++) ...[
+          if (i > 0) pw.SizedBox(width: 20),
+          slot(slots[i].$1, slots[i].$2),
+        ],
       ],
     );
   }

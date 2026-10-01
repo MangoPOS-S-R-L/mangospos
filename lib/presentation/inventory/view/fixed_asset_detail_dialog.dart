@@ -4,6 +4,10 @@
 //
 // Cada acción pasa por su RPC y el servidor deja la fila de historia; acá
 // solo se vuelve a leer la historia para mostrarla.
+//
+// 20261001_0050: la ficha muestra la cantidad, el valor unitario y el total,
+// y cuándo se verificó por última vez («01/10/2026 (#3)» o «Nunca
+// verificado»).
 
 import 'package:flutter/material.dart';
 
@@ -27,6 +31,7 @@ Future<void> showFixedAssetDetailDialog(
   required BusinessCurrency money,
   required ValueChanged<FixedAsset> onChanged,
   required Future<void> Function(FixedAsset asset) onPrintAct,
+  bool supportsQuantity = true,
 }) {
   return showDialog<void>(
     context: context,
@@ -41,6 +46,7 @@ Future<void> showFixedAssetDetailDialog(
       money: money,
       onChanged: onChanged,
       onPrintAct: onPrintAct,
+      supportsQuantity: supportsQuantity,
     ),
   );
 }
@@ -107,6 +113,7 @@ class FixedAssetDetailDialog extends StatefulWidget {
     required this.money,
     required this.onChanged,
     required this.onPrintAct,
+    this.supportsQuantity = true,
   });
 
   final FixedAsset asset;
@@ -120,6 +127,9 @@ class FixedAssetDetailDialog extends StatefulWidget {
   final ValueChanged<FixedAsset> onChanged;
   final Future<void> Function(FixedAsset asset) onPrintAct;
 
+  /// false = la base solo tiene 0052 (sin cantidad ni verificaciones).
+  final bool supportsQuantity;
+
   @override
   State<FixedAssetDetailDialog> createState() => _FixedAssetDetailDialogState();
 }
@@ -131,10 +141,26 @@ class _FixedAssetDetailDialogState extends State<FixedAssetDetailDialog> {
   String? _historyError;
   bool _busy = false;
 
+  /// Número («#3») de la última verificación, cuando se pudo leer.
+  int? _lastVerificationNumber;
+
   @override
   void initState() {
     super.initState();
     _loadHistory();
+    _loadLastVerificationNumber();
+  }
+
+  Future<void> _loadLastVerificationNumber() async {
+    final id = _asset.lastVerificationId;
+    if (id == null) return;
+    try {
+      final numbers = await widget.repo.getVerificationNumbers([id]);
+      if (!mounted) return;
+      setState(() => _lastVerificationNumber = numbers[id]);
+    } catch (_) {
+      // Sin el número, la ficha muestra solo la fecha.
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -173,6 +199,8 @@ class _FixedAssetDetailDialogState extends State<FixedAssetDetailDialog> {
       employees: widget.employees,
       knownCategories: widget.knownCategories,
       asset: _asset,
+      money: widget.money,
+      supportsQuantity: widget.supportsQuantity,
     );
     if (saved != null && mounted) _applied(saved);
   }
@@ -340,7 +368,8 @@ class _FixedAssetDetailDialogState extends State<FixedAssetDetailDialog> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  a.name,
+                  a.quantity > 1 ? '${a.name}  ${a.quantityLabel}' : a.name,
+                  key: const Key('fixed-asset-detail-name'),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -379,13 +408,34 @@ class _FixedAssetDetailDialogState extends State<FixedAssetDetailDialog> {
       ('Responsable', a.responsibleLabel, Icons.person_outline),
       ('Categoría', a.category ?? '—', Icons.category_outlined),
       ('Número de serie', a.serialNumber ?? '—', Icons.qr_code_2_rounded),
+      if (widget.supportsQuantity)
+        (
+          'Cantidad',
+          a.quantity == 1 ? '1 unidad' : '${a.quantity} unidades',
+          Icons.format_list_numbered_rounded,
+        ),
       (
-        'Costo de compra',
+        'Valor unitario',
         a.purchaseCost == null
             ? '—'
             : widget.money.formatAmount(a.purchaseCost!),
         Icons.payments_outlined,
       ),
+      if (widget.supportsQuantity)
+        (
+          'Valor total',
+          a.totalValue == null ? '—' : widget.money.formatAmount(a.totalValue!),
+          Icons.account_balance_wallet_outlined,
+        ),
+      if (widget.supportsQuantity)
+        (
+          'Última verificación',
+          a.lastVerifiedAt == null
+              ? 'Nunca verificado'
+              : '${fmtFixedAssetDate(a.lastVerifiedAt!.toLocal())}'
+                    '${_lastVerificationNumber == null ? '' : ' (#$_lastVerificationNumber)'}',
+          Icons.fact_check_outlined,
+        ),
       (
         'Fecha de compra',
         a.purchaseDate == null ? '—' : fmtFixedAssetDate(a.purchaseDate),
@@ -647,12 +697,12 @@ class _HistoryTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    m.description,
+                    m.displayDescription,
                     style: TextStyle(fontSize: 13, color: AppColors.foreground),
                   ),
-                  if ((m.notes ?? '').isNotEmpty)
+                  if ((m.displayNotes ?? '').isNotEmpty)
                     Text(
-                      '«${m.notes}»',
+                      '«${m.displayNotes}»',
                       style: TextStyle(
                         fontSize: 12.5,
                         fontStyle: FontStyle.italic,

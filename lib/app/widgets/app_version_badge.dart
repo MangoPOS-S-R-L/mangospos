@@ -9,7 +9,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 class AppVersionBadge extends StatelessWidget {
   const AppVersionBadge({super.key});
 
-  static final Future<String> _version = PackageInfo.fromPlatform()
+  /// Versión instalada leída del bundle (sale de `version:` en pubspec.yaml),
+  /// ej. "v2.0.10". Vacía si no se pudo leer. No depende de
+  /// `--dart-define=APP_VERSION`, que el build de macOS no pasa.
+  static final Future<String> version = PackageInfo.fromPlatform()
       .then((info) => 'v${info.version}')
       .catchError((_) => '');
 
@@ -20,7 +23,7 @@ class AppVersionBadge extends StatelessWidget {
         child: Align(
           alignment: Alignment.bottomLeft,
           child: FutureBuilder<String>(
-            future: _version,
+            future: version,
             builder: (context, snapshot) {
               final text = snapshot.data ?? '';
               if (text.isEmpty) return const SizedBox.shrink();
@@ -41,6 +44,26 @@ class AppVersionBadge extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Texto "MangoPOS v2.0.10" para el pie de los menús de usuario. No ocupa
+/// espacio mientras carga o si la versión no se pudo leer.
+class AppVersionText extends StatelessWidget {
+  const AppVersionText({super.key, this.style});
+
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: AppVersionBadge.version,
+      builder: (context, snapshot) {
+        final text = snapshot.data ?? '';
+        if (text.isEmpty) return const SizedBox.shrink();
+        return Text('MangoPOS $text', style: style);
+      },
     );
   }
 }

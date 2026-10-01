@@ -27,6 +27,7 @@ import 'package:mangopos/presentation/cashier/services/cash_drawer_service.dart'
 
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
+import '../../app/widgets/app_version_badge.dart';
 import '../billing/widgets/access_guard.dart';
 import '../billing/widgets/billing_guard.dart';
 import '../onboarding/pending_approval_guard.dart';
@@ -1648,10 +1649,20 @@ class _UserInfo extends ConsumerWidget {
                 height: 40,
                 child: ColoredBox(
                   color: Color(0xFFF8FAFC),
-                  child: Center(
-                    child: Text(
-                      'version ${String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0')}',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 40,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: AppVersionText(
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
