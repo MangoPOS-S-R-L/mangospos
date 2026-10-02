@@ -1688,6 +1688,7 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
     final sessions = (summary['sessions_count'] as num?)?.toInt() ?? 0;
     final netCashFlow = (summary['net_cash_flow'] as num?)?.toDouble() ?? 0;
     final salesTotal = (summary['sales_total'] as num?)?.toDouble() ?? 0;
+    final salesCard = (summary['sales_card_total'] as num?)?.toDouble() ?? 0;
     final manualIn = (summary['manual_in_total'] as num?)?.toDouble() ?? 0;
     final manualOut = (summary['manual_out_total'] as num?)?.toDouble() ?? 0;
     final differences = (summary['differences_total'] as num?)?.toDouble() ?? 0;
@@ -1702,12 +1703,21 @@ class ReportsViewModel extends StateNotifier<ReportsState> {
         icon: Icons.account_balance_wallet_outlined,
         color: const Color(0xFF2563EB),
       ),
+      // `sales_total` sale de `cash_transactions`: es solo EFECTIVO. Con la
+      // tarjeta al lado, "Ventas en caja" se leía como el total vendido.
       SalesMetricCardData(
-        title: 'Ventas en caja',
+        title: 'Ventas en efectivo',
         value: state.currency.formatAmount(salesTotal),
         subtitle: '$sessions sesiones en el rango',
         icon: Icons.point_of_sale_outlined,
         color: const Color(0xFFF97316),
+      ),
+      SalesMetricCardData(
+        title: 'Ventas con tarjeta',
+        value: state.currency.formatAmount(salesCard),
+        subtitle: 'Cobrado con tarjeta en los turnos',
+        icon: Icons.credit_card_outlined,
+        color: const Color(0xFF0891B2),
       ),
       SalesMetricCardData(
         title: 'Entradas manuales',

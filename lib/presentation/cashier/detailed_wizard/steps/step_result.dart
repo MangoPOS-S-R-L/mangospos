@@ -53,6 +53,7 @@ class StepResult extends StatefulWidget {
 
 class _StepResultState extends State<StepResult> {
   bool _printing = false;
+  bool _buildingPdf = false;
   bool _autoPrintTried = false;
   String? _lastPrintError;
 
@@ -120,6 +121,43 @@ class _StepResultState extends State<StepResult> {
       }
     } finally {
       if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  /// El cierre en PDF: el mismo ticket en pantalla, con "Compartir PDF" e
+  /// "Impresora del sistema". No pasa por la térmica.
+  Future<void> _openPdf() async {
+    if (_buildingPdf) return;
+    setState(() => _buildingPdf = true);
+    try {
+      final client = Supabase.instance.client;
+      int recountCount = 0;
+      final sessionId = widget.cashRegisterSessionId;
+      if (sessionId != null && sessionId.isNotEmpty) {
+        recountCount = await PosSettingsRepository(client)
+            .getCashRecountCount(sessionId);
+      }
+      final text = await CashClosePrintService(client).buildCloseTicketText(
+        input: widget.input,
+        result: widget.result,
+        denominations: widget.denominations,
+        printedAt: DateTime.now(),
+        recountCount: recountCount,
+        sessionId: sessionId,
+      );
+      if (!mounted) return;
+      await showTicketPreviewDialog(
+        context,
+        title: 'Cierre de caja',
+        subtitle: 'Guárdalo o compártelo en PDF',
+        plainText: text,
+        fileNamePrefix: 'cierre_caja',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo generar el PDF del cierre: $e');
+    } finally {
+      if (mounted) setState(() => _buildingPdf = false);
     }
   }
 
@@ -271,6 +309,30 @@ class _StepResultState extends State<StepResult> {
                 onPressed: _printing ? null : () => _printTicket(),
                 icon: const Icon(Icons.print_outlined, size: 16),
                 label: const Text('Reimprimir'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: MangoColors.darkGray,
+                  side: const BorderSide(color: MangoColors.cardBorder),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  textStyle: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: _buildingPdf ? null : _openPdf,
+                icon: _buildingPdf
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.picture_as_pdf_outlined, size: 16),
+                label: const Text('PDF'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: MangoColors.darkGray,
                   side: const BorderSide(color: MangoColors.cardBorder),

@@ -8,7 +8,7 @@ import Foundation
 import app_links
 import auto_updater_macos
 import connectivity_plus
-import file_picker
+import file_picker_darwin
 import flutter_blue_plus
 import flutter_image_compress_macos
 import flutter_secure_storage_darwin

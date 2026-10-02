@@ -32,6 +32,19 @@ class ReportsRepository {
     return double.tryParse(match.group(1) ?? '') ?? 0;
   }
 
+  /// Primera etiqueta de [labels] que aparezca en las notas, en ese orden.
+  double _extractReportedAmountAny(String? notes, List<String> labels) {
+    final source = notes ?? '';
+    for (final label in labels) {
+      final match = RegExp(
+        '${RegExp.escape(label)}\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)',
+        caseSensitive: false,
+      ).firstMatch(source);
+      if (match != null) return double.tryParse(match.group(1) ?? '') ?? 0;
+    }
+    return 0;
+  }
+
   Future<List<Map<String, dynamic>>> _selectInBatches({
     required String table,
     required String select,
@@ -844,12 +857,19 @@ class ReportsRepository {
         final expectedTotal = _toDouble(summary['expected_total']) > 0
             ? _toDouble(summary['expected_total'])
             : expectedCash + expectedCard + expectedTransfer;
+        // El cierre compacto escribe "Tarjetas"/"Transferencias" y el
+        // detallado "Tarjeta"/"Transferencia". Se prueba el plural PRIMERO:
+        // el compacto también trae "Dif. tarjeta:" más adelante, y el singular
+        // solo (la búsqueda ignora mayúsculas) se quedaría con esa diferencia.
         final reportedCash = _extractReportedAmount(notes, 'Efectivo');
-        final reportedCard = _extractReportedAmount(notes, 'Tarjetas');
-        final reportedTransfer = _extractReportedAmount(
-          notes,
+        final reportedCard = _extractReportedAmountAny(notes, const [
+          'Tarjetas',
+          'Tarjeta',
+        ]);
+        final reportedTransfer = _extractReportedAmountAny(notes, const [
           'Transferencias',
-        );
+          'Transferencia',
+        ]);
         final extractedReportedTotal = _extractReportedAmount(
           notes,
           'Total reportado',
@@ -932,6 +952,19 @@ class ReportsRepository {
       (sum, c) => sum + _toDouble(c['difference']),
     );
 
+    // Ventas con tarjeta / transferencia de los turnos del rango, desde la
+    // misma RPC del cierre. Esos cobros no pasan por `cash_transactions`, así
+    // que `sales_total` (que sale de ahí) es SOLO efectivo y el reporte nunca
+    // mostraba lo vendido con tarjeta.
+    final salesCardTotal = closureDetails.fold<double>(
+      0.0,
+      (sum, c) => sum + _toDouble(c['sales_card']),
+    );
+    final salesTransferTotal = closureDetails.fold<double>(
+      0.0,
+      (sum, c) => sum + _toDouble(c['sales_transfer']),
+    );
+
     final typeRows = byType.values.toList(
       growable: false,
     )..sort((a, b) => _toDouble(b['amount']).compareTo(_toDouble(a['amount'])));
@@ -951,6 +984,8 @@ class ReportsRepository {
       'differences_total': differencesTotal,
       'average_difference': averageDifference,
       'sales_total': salesTotal,
+      'sales_card_total': salesCardTotal,
+      'sales_transfer_total': salesTransferTotal,
       // Ventas excluidas del cierre por anulación (payments.status =
       // cancelled/void). El UI puede mostrarlas como info aparte sin
       // sumarlas al efectivo esperado.

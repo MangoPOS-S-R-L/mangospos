@@ -1965,25 +1965,23 @@ class _AddEditProductDialogState extends ConsumerState<AddEditProductDialog> {
 
   Future<void> _pickImage() async {
     try {
-      final r = await FilePicker.pickFiles(
+      final picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
-        allowMultiple: false,
-        withData: kIsWeb,
       );
 
-      if (r == null || r.files.isEmpty) return;
+      if (picked == null) return;
 
       if (kIsWeb) {
-        final bytes = r.files.single.bytes;
-        if (bytes != null && bytes.isNotEmpty) {
+        final bytes = await picked.readAsBytes();
+        if (bytes.isNotEmpty) {
           setState(() {
             _pickedImageBytes = bytes;
             _pickedImageFile = null;
           });
         }
       } else {
-        final path = r.files.single.path;
+        final path = picked.path;
         if (path != null && path.isNotEmpty) {
           setState(() {
             _pickedImageFile = File(path);

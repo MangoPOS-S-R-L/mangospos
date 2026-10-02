@@ -196,17 +196,15 @@ class _BusinessProfileScreenState extends ConsumerState<BusinessProfileScreen> {
     if (bid == null) return;
     setState(() => _uploadingLogo = true);
     try {
-      final result = await FilePicker.pickFiles(
+      final file = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['png', 'jpg', 'jpeg'],
-        withData: true,
       );
-      if (result == null || result.files.isEmpty) {
+      if (file == null) {
         return; // usuario cancelo
       }
-      final file = result.files.first;
-      final bytes = file.bytes;
-      if (bytes == null) {
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
         throw Exception('No se pudo leer el archivo.');
       }
       // 2MB limit (mismo que el bucket).

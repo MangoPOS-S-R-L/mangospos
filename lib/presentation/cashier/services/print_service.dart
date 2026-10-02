@@ -35,25 +35,7 @@ class CashClosePrintService {
     bool reprint = false,
     CashCloseScreenPresenter? presentOnScreen,
   }) async {
-    // Desglose por área de producción: solo si el negocio activó el toggle
-    // y tenemos la sesión para acotar el periodo. Best-effort — si falla,
-    // el cierre se imprime igual sin esta sección.
-    final salesByArea = sessionId != null && sessionId.isNotEmpty
-        ? await _loadSalesByAreaIfEnabled(sessionId)
-        : const <Map<String, dynamic>>[];
-
-    // Desglose por producto dentro de cada área (toggle aparte). Mismo
-    // best-effort: si falla o está off, no aparece la sección.
-    final productsByArea = sessionId != null && sessionId.isNotEmpty
-        ? await _loadProductsByAreaIfEnabled(sessionId)
-        : const <Map<String, dynamic>>[];
-
-    // Abonos a crédito cobrados en el turno. Best-effort igual que los
-    // desgloses de arriba: si la RPC no existe (mig 20260902_0002 sin
-    // aplicar) o falla, el cierre sale como siempre, sin esta sección.
-    final creditPayments = sessionId != null && sessionId.isNotEmpty
-        ? await _loadCreditPayments(sessionId)
-        : null;
+    final extras = await _loadTicketExtras(sessionId);
 
     // El ticket se arma DESPUÉS de resolver la impresora: el layout depende
     // de si el papel es de 58mm o de 80mm (`printers.paper_width`).
@@ -64,9 +46,9 @@ class CashClosePrintService {
         denominations: denominations,
         printedAt: printedAt,
         recountCount: recountCount,
-        salesByArea: salesByArea,
-        productsByArea: productsByArea,
-        creditPayments: creditPayments,
+        salesByArea: extras.salesByArea,
+        productsByArea: extras.productsByArea,
+        creditPayments: extras.creditPayments,
         reprint: reprint,
         paperWidth: paperWidth,
       ),
@@ -75,19 +57,68 @@ class CashClosePrintService {
     );
   }
 
-  /// Reimprime el ticket de cierre de una sesión YA cerrada, reconstruyendo
-  /// exactamente los mismos datos que se imprimieron al cerrarla:
-  ///  - esperados + estadísticas del turno vía la RPC `fn_get_cash_session_summary`
-  ///    (misma fuente de verdad que el cierre real),
-  ///  - reportado por método + denominaciones desde el conteo firmado
-  ///    (`cash_count_blind`, cierre detallado); si no existe (cierre compacto),
-  ///    el reportado se parsea de las notas de la sesión y el ticket va sin el
-  ///    desglose de denominaciones (que ese modo nunca persiste),
-  ///  - movimientos manuales del turno (depósitos/retiros/gastos) con su razón.
-  ///
-  /// Usa el MISMO layout que `printCloseTicket` — solo agrega la marca
-  /// "REIMPRESION" bajo el encabezado. La fecha/hora del ticket son las del
-  /// cierre original (no las de la reimpresión).
+  /// Texto del cierre para guardarlo o compartirlo en PDF. Es el MISMO ticket
+  /// de [printCloseTicket] (secciones opcionales incluidas), pero NO pasa por
+  /// la térmica ni mira el modo sin impresora: el botón "PDF" tiene que servir
+  /// aunque el negocio tenga impresora. Usa el layout de 80mm, igual que la
+  /// vista en pantalla.
+  Future<String> buildCloseTicketText({
+    required CashCloseInput input,
+    required CashCloseResult result,
+    required List<DenominationCount> denominations,
+    required DateTime printedAt,
+    int recountCount = 0,
+    String? sessionId,
+    bool reprint = false,
+  }) async {
+    final extras = await _loadTicketExtras(sessionId);
+    return buildEscPos(
+      input: input,
+      result: result,
+      denominations: denominations,
+      printedAt: printedAt,
+      recountCount: recountCount,
+      salesByArea: extras.salesByArea,
+      productsByArea: extras.productsByArea,
+      creditPayments: extras.creditPayments,
+      reprint: reprint,
+    ).plainText;
+  }
+
+  /// Secciones opcionales del cierre que dependen de la sesión. Sin sesión
+  /// no hay periodo que acotar y el ticket va sin ellas.
+  Future<
+    ({
+      List<Map<String, dynamic>> salesByArea,
+      List<Map<String, dynamic>> productsByArea,
+      Map<String, dynamic>? creditPayments,
+    })
+  >
+  _loadTicketExtras(String? sessionId) async {
+    if (sessionId == null || sessionId.isEmpty) {
+      return (
+        salesByArea: const <Map<String, dynamic>>[],
+        productsByArea: const <Map<String, dynamic>>[],
+        creditPayments: null,
+      );
+    }
+    return (
+      // Desglose por área de producción: solo si el negocio activó el toggle.
+      // Best-effort — si falla, el cierre sale igual sin esta sección.
+      salesByArea: await _loadSalesByAreaIfEnabled(sessionId),
+      // Desglose por producto dentro de cada área (toggle aparte). Mismo
+      // best-effort: si falla o está off, no aparece la sección.
+      productsByArea: await _loadProductsByAreaIfEnabled(sessionId),
+      // Abonos a crédito cobrados en el turno. Si la RPC no existe (mig
+      // 20260902_0002 sin aplicar) o falla, el cierre sale sin esta sección.
+      creditPayments: await _loadCreditPayments(sessionId),
+    );
+  }
+
+  /// Reimprime el ticket de cierre de una sesión YA cerrada (ver
+  /// [_loadClosedSession]). Usa el MISMO layout que `printCloseTicket` — solo
+  /// agrega la marca "REIMPRESION" bajo el encabezado. La fecha/hora del
+  /// ticket son las del cierre original (no las de la reimpresión).
   ///
   /// [businessName]/[cashierName] son opcionales: si el caller ya los tiene
   /// (las vistas de cierres/reportes los muestran) se pasan para evitar
@@ -97,6 +128,72 @@ class CashClosePrintService {
     String? businessName,
     String? cashierName,
     CashCloseScreenPresenter? presentOnScreen,
+  }) async {
+    final close = await _loadClosedSession(
+      sessionId: sessionId,
+      businessName: businessName,
+      cashierName: cashierName,
+    );
+    await printCloseTicket(
+      input: close.input,
+      result: close.result,
+      denominations: close.denominations,
+      printedAt: close.closedAt,
+      cashRegisterId: close.cashRegisterId,
+      recountCount: close.recountCount,
+      sessionId: sessionId,
+      reprint: true,
+      presentOnScreen: presentOnScreen,
+    );
+  }
+
+  /// Texto del cierre de una sesión YA cerrada, para el PDF de Gestión de
+  /// Cierres y del reporte de Cierres de caja. Mismo contenido que
+  /// [reprintForSession] (marcado REIMPRESION: no es el ticket firmado).
+  Future<String> closeTicketTextForSession({
+    required String sessionId,
+    String? businessName,
+    String? cashierName,
+  }) async {
+    final close = await _loadClosedSession(
+      sessionId: sessionId,
+      businessName: businessName,
+      cashierName: cashierName,
+    );
+    return buildCloseTicketText(
+      input: close.input,
+      result: close.result,
+      denominations: close.denominations,
+      printedAt: close.closedAt,
+      recountCount: close.recountCount,
+      sessionId: sessionId,
+      reprint: true,
+    );
+  }
+
+  /// Reconstruye los datos de una sesión YA cerrada tal como se imprimieron
+  /// al cerrarla:
+  ///  - esperados + estadísticas del turno vía la RPC `fn_get_cash_session_summary`
+  ///    (misma fuente de verdad que el cierre real),
+  ///  - reportado por método + denominaciones desde el conteo firmado
+  ///    (`cash_count_blind`, cierre detallado); si no existe (cierre compacto),
+  ///    el reportado se parsea de las notas de la sesión y el ticket va sin el
+  ///    desglose de denominaciones (que ese modo nunca persiste),
+  ///  - movimientos manuales del turno (depósitos/retiros/gastos) con su razón.
+  Future<
+    ({
+      CashCloseInput input,
+      CashCloseResult result,
+      List<DenominationCount> denominations,
+      DateTime closedAt,
+      String? cashRegisterId,
+      int recountCount,
+    })
+  >
+  _loadClosedSession({
+    required String sessionId,
+    String? businessName,
+    String? cashierName,
   }) async {
     // 1. Fila de la sesión. Debe estar cerrada para tener un cierre que reimprimir.
     final session = await _client
@@ -249,16 +346,13 @@ class CashClosePrintService {
           await PosSettingsRepository(_client).getCashRecountCount(sessionId);
     } catch (_) {}
 
-    await printCloseTicket(
+    return (
       input: input,
       result: result,
       denominations: denominations,
-      printedAt: closedAt,
+      closedAt: closedAt,
       cashRegisterId: cashRegisterId,
       recountCount: recountCount,
-      sessionId: sessionId,
-      reprint: true,
-      presentOnScreen: presentOnScreen,
     );
   }
 

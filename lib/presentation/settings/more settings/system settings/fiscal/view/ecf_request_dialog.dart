@@ -71,15 +71,14 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
     try {
       // FileType.any a propósito: filtrar por extensión .p12 falla en algunos
       // Android/iOS que no conocen ese tipo. Se valida después.
-      final result = await FilePicker.pickFiles(type: FileType.any);
-      if (result == null || result.files.isEmpty) return;
-      final file = result.files.first;
+      final file = await FilePicker.pickFile(type: FileType.any);
+      if (file == null) return;
       final ext = file.name.contains('.') ? file.name.split('.').last.toLowerCase() : '';
       String? error;
       Uint8List? bytes;
       if (ext != 'p12' && ext != 'pfx') {
         error = 'El certificado tiene que ser un archivo .p12 o .pfx.';
-      } else if (file.size > _maxCertBytes) {
+      } else if (await file.length() > _maxCertBytes) {
         error = 'Ese archivo es demasiado grande para ser un certificado de firma.';
       } else {
         bytes = await file.readAsBytes();

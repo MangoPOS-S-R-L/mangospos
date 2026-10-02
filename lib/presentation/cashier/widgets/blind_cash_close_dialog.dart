@@ -36,6 +36,7 @@ class BlindCashCloseDialog extends ConsumerStatefulWidget {
 class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
   bool _processingClose = false;
   bool _processingPrint = false;
+  bool _processingPdf = false;
   // Una vez que el DB save tuvo éxito en `_onConfirmCount`, disparamos
   // un auto-print al entrar al step `result`. Este flag evita reintentos en
   // cada rebuild — el usuario reimprime con el botón "Reimprimir".
@@ -725,6 +726,28 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
               ),
               const SizedBox(width: 12),
               Expanded(
+                child: OutlinedButton.icon(
+                  icon: _processingPdf
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.picture_as_pdf_outlined),
+                  onPressed: _processingPdf ? null : () => _openPdf(state),
+                  label: const Text('PDF'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: MangoColors.primaryOrange,
+                    side: const BorderSide(color: MangoColors.primaryOrange),
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
                 child: FilledButton.icon(
                   icon: _processingClose
                       ? const SizedBox(
@@ -928,6 +951,39 @@ class _BlindCashCloseDialogState extends ConsumerState<BlindCashCloseDialog> {
     if (key == LogicalKeyboardKey.numpad8) return '8';
     if (key == LogicalKeyboardKey.numpad9) return '9';
     return null;
+  }
+
+  /// El cierre en PDF: el mismo ticket en pantalla, con "Compartir PDF" e
+  /// "Impresora del sistema". No pasa por la térmica.
+  Future<void> _openPdf(BlindCashCloseState state) async {
+    if (_processingPdf) return;
+    setState(() => _processingPdf = true);
+    try {
+      final client = Supabase.instance.client;
+      final recountCount = await PosSettingsRepository(client)
+          .getCashRecountCount(widget.sessionId);
+      final text = await CashClosePrintService(client).buildCloseTicketText(
+        input: state.input,
+        result: state.result,
+        denominations: state.denominations,
+        printedAt: DateTime.now(),
+        recountCount: recountCount,
+        sessionId: widget.sessionId,
+      );
+      if (!mounted) return;
+      await showTicketPreviewDialog(
+        context,
+        title: 'Cierre de caja',
+        subtitle: 'Guárdalo o compártelo en PDF',
+        plainText: text,
+        fileNamePrefix: 'cierre_caja',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo generar el PDF del cierre: $e');
+    } finally {
+      if (mounted) setState(() => _processingPdf = false);
+    }
   }
 
   Future<void> _printResult(

@@ -451,14 +451,14 @@ class _MinStockBulkViewState extends ConsumerState<MinStockBulkView> {
   }
 
   Future<void> _import() async {
-    final picked = await FilePicker.pickFiles(
+    final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: const ['xlsx'],
     );
-    if (picked == null || picked.files.isEmpty || !mounted) return;
+    if (picked == null || !mounted) return;
     final MinStockImportResult result;
     try {
-      final bytes = await picked.files.first.readAsBytes();
+      final bytes = await picked.readAsBytes();
       if (!mounted) return;
       final book = Excel.decodeBytes(bytes);
       final table = <List<String?>>[];

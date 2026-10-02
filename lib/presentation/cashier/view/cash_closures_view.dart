@@ -34,6 +34,8 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
   // Sesión cuya reimpresión de cierre está en curso (para el spinner en el
   // botón). null = ninguna en curso.
   String? _reprintingId;
+  // Igual, para el botón PDF.
+  String? _pdfLoadingId;
 
   ({double cash, double card, double transfer, double total})
   _reportedBreakdown(CashRegisterSession session) {
@@ -47,9 +49,12 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
       return double.tryParse(match.group(1) ?? '') ?? 0;
     }
 
+    // Singular o plural: el cierre compacto escribe "Tarjetas"/"Transferencias"
+    // y el detallado "Tarjeta"/"Transferencia". Buscando solo el plural, todo
+    // cierre detallado salía con tarjeta y transferencia en 0.
     final cash = extract('Efectivo');
-    final card = extract('Tarjetas');
-    final transfer = extract('Transferencias');
+    final card = extract('Tarjetas?');
+    final transfer = extract('Transferencias?');
     final total = extract('Total reportado');
 
     return (
@@ -507,6 +512,36 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
     }
   }
 
+  /// El cierre en PDF: el mismo ticket del cierre en pantalla, con "Compartir
+  /// PDF" e "Impresora del sistema" (donde también sale "Guardar como PDF").
+  /// No pasa por la térmica, así que sirve aunque el negocio tenga impresora.
+  Future<void> _openPdf(CashRegisterSession session) async {
+    if (_pdfLoadingId != null) return;
+    setState(() => _pdfLoadingId = session.id);
+    try {
+      final text = await CashClosePrintService(
+        Supabase.instance.client,
+      ).closeTicketTextForSession(
+        sessionId: session.id,
+        cashierName: _resolveCashierName(session),
+        businessName: ref.read(cashierViewModelProvider).businessName,
+      );
+      if (!mounted) return;
+      await showTicketPreviewDialog(
+        context,
+        title: 'Cierre de caja',
+        subtitle: 'Guárdalo o compártelo en PDF',
+        plainText: text,
+        fileNamePrefix: 'cierre_caja',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo generar el PDF del cierre: $e');
+    } finally {
+      if (mounted) setState(() => _pdfLoadingId = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -660,6 +695,28 @@ class _CashClosuresViewState extends ConsumerState<CashClosuresView> {
                                   color: MangoColors.primaryOrange,
                                   onPressed: _reprintingId == null
                                       ? () => _reprint(session)
+                                      : null,
+                                ),
+                        if (!isOpen)
+                          _pdfLoadingId == session.id
+                              ? const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                )
+                              : IconButton(
+                                  tooltip: 'Cierre en PDF',
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                  ),
+                                  color: MangoColors.primaryOrange,
+                                  onPressed: _pdfLoadingId == null
+                                      ? () => _openPdf(session)
                                       : null,
                                 ),
                         TextButton(

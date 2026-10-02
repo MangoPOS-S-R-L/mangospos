@@ -311,7 +311,7 @@ class _CashClosureCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.lg),
           LayoutBuilder(
             builder: (context, constraints) {
-              final vertical = constraints.maxWidth < 640;
+              final width = constraints.maxWidth;
               final items = [
                 ReportLedgerRow(
                   label: 'Esperado efectivo',
@@ -327,27 +327,48 @@ class _CashClosureCard extends StatelessWidget {
                   ),
                   secondaryValue: 'Conteo final',
                 ),
+                // Tarjeta y transferencia por separado: juntas no se sabía
+                // cuánto se vendió con tarjeta en el turno. El esperado de
+                // cada una ES lo cobrado por ese método.
                 ReportLedgerRow(
-                  label: 'Tarjetas / transferencias',
+                  label: 'Ventas con tarjeta',
                   primaryValue: currency.format(
-                    ((closure['expected_card'] as num?)?.toDouble() ?? 0) +
-                        ((closure['expected_transfer'] as num?)?.toDouble() ??
-                            0),
+                    (closure['expected_card'] as num?)?.toDouble() ?? 0,
                   ),
                   secondaryValue:
-                      '${currency.format((closure['reported_card'] as num?)?.toDouble() ?? 0)} reportado en tarjetas · ${currency.format((closure['reported_transfer'] as num?)?.toDouble() ?? 0)} en transferencias',
+                      '${currency.format((closure['reported_card'] as num?)?.toDouble() ?? 0)} reportado',
+                ),
+                ReportLedgerRow(
+                  label: 'Transferencias',
+                  primaryValue: currency.format(
+                    (closure['expected_transfer'] as num?)?.toDouble() ?? 0,
+                  ),
+                  secondaryValue:
+                      '${currency.format((closure['reported_transfer'] as num?)?.toDouble() ?? 0)} reportado',
                 ),
               ];
-              if (vertical) {
+              if (width < 640) {
                 return Column(children: items);
               }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              // Cuatro columnas solo con ancho de escritorio; en tablet van de
+              // a dos para que el monto y su "reportado" no se monten.
+              final perRow = width < 1000 ? 2 : items.length;
+              return Column(
                 children: [
-                  for (int i = 0; i < items.length; i++) ...[
-                    if (i > 0) const SizedBox(width: AppSpacing.itemGap),
-                    Expanded(child: items[i]),
-                  ],
+                  for (int r = 0; r < items.length; r += perRow)
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (int i = r; i < r + perRow; i++) ...[
+                          if (i > r) const SizedBox(width: AppSpacing.itemGap),
+                          Expanded(
+                            child: i < items.length
+                                ? items[i]
+                                : const SizedBox.shrink(),
+                          ),
+                        ],
+                      ],
+                    ),
                 ],
               );
             },
@@ -356,9 +377,20 @@ class _CashClosureCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.lg),
             Align(
               alignment: Alignment.centerRight,
-              child: _ReprintClosureButton(
-                sessionId: closure['id'].toString(),
-                cashierName: closure['cashier_name']?.toString(),
+              child: Wrap(
+                spacing: AppSpacing.itemGap,
+                runSpacing: AppSpacing.xs,
+                alignment: WrapAlignment.end,
+                children: [
+                  _ClosurePdfButton(
+                    sessionId: closure['id'].toString(),
+                    cashierName: closure['cashier_name']?.toString(),
+                  ),
+                  _ReprintClosureButton(
+                    sessionId: closure['id'].toString(),
+                    cashierName: closure['cashier_name']?.toString(),
+                  ),
+                ],
               ),
             ),
           ],
@@ -428,6 +460,70 @@ class _ReprintClosureButtonState extends State<_ReprintClosureButton> {
             )
           : const Icon(Icons.print_outlined, size: 18),
       label: const Text('Reimprimir cierre'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: MangoColors.primaryOrange,
+        side: BorderSide(
+          color: MangoColors.primaryOrange.withValues(alpha: 0.4),
+        ),
+      ),
+    );
+  }
+}
+
+/// Botón "PDF" del cierre en el reporte: arma el mismo ticket del cierre y lo
+/// abre en pantalla con "Compartir PDF" e "Impresora del sistema". No pasa por
+/// la térmica, así que sirve aunque el negocio tenga impresora.
+class _ClosurePdfButton extends StatefulWidget {
+  const _ClosurePdfButton({required this.sessionId, this.cashierName});
+
+  final String sessionId;
+  final String? cashierName;
+
+  @override
+  State<_ClosurePdfButton> createState() => _ClosurePdfButtonState();
+}
+
+class _ClosurePdfButtonState extends State<_ClosurePdfButton> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final text = await CashClosePrintService(
+        Supabase.instance.client,
+      ).closeTicketTextForSession(
+        sessionId: widget.sessionId,
+        cashierName: widget.cashierName,
+      );
+      if (!mounted) return;
+      await showTicketPreviewDialog(
+        context,
+        title: 'Cierre de caja',
+        subtitle: 'Guárdalo o compártelo en PDF',
+        plainText: text,
+        fileNamePrefix: 'cierre_caja',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      AppToast.error(context, 'No se pudo generar el PDF del cierre: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _busy ? null : _run,
+      icon: _busy
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+      label: const Text('PDF'),
       style: OutlinedButton.styleFrom(
         foregroundColor: MangoColors.primaryOrange,
         side: BorderSide(
