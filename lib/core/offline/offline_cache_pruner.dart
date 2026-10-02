@@ -83,6 +83,7 @@ class OfflineCachePruner {
     'offline_snapshot_', // borradores de orden
     'offline_queue_', // cola offline
     'offline_print_queue_',
+    'pending_kitchen_prints_',
     'offline_order_map_',
     'offline_item_map_',
     'offline_cash_session_map_',

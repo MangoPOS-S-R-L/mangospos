@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'order_item_snapshot.dart';
 import 'payment_intent_journal.dart';
+import 'pending_kitchen_prints.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -534,6 +535,11 @@ class OfflinePosService {
     bool localOnly = false,
   }) async {
     final storage = await _storage;
+    final orderId = state.order?.id;
+    if (orderId != null &&
+        await storage.read(_closedOrderKey(businessId, orderId)) != null) {
+      return;
+    }
     final payload = {
       'slot_id': slotId,
       'business_id': businessId,
@@ -556,6 +562,12 @@ class OfflinePosService {
       final payload = await _readSnapshot(storage, key);
       if (payload == null) return null;
       final stateMap = Map<String, dynamic>.from(payload['state'] as Map);
+      final orderId = (stateMap['order'] as Map?)?['id']?.toString();
+      if (orderId != null &&
+          await storage.read(_closedOrderKey(businessId, orderId)) != null) {
+        await storage.delete(key);
+        return null;
+      }
       final reconciledState = await _reconcileEncodedState(
         businessId: businessId,
         state: stateMap,
@@ -1116,6 +1128,23 @@ class OfflinePosService {
     }
   }
 
+  Future<List<String>> resolveKitchenPrintItemIds({
+    required String businessId,
+    required List<String> itemIds,
+  }) async {
+    final itemMap = await _readItemMap(businessId);
+    return itemIds
+        .map((id) {
+          if (!id.startsWith('tmp_')) return id;
+          final remote = itemMap[id]?.toString();
+          if (remote == null || remote.isEmpty) {
+            throw StateError('El producto $id aún no está sincronizado.');
+          }
+          return remote;
+        })
+        .toList(growable: false);
+  }
+
   /// A transport attempt can have succeeded even when its acknowledgement was
   /// lost. Never discard such an order merely because its mapping is absent.
   Future<bool> mayExistRemotely({
@@ -1153,6 +1182,32 @@ class OfflinePosService {
         debugPrint('OfflinePosService.removeOrderSnapshots: $e');
       }
     }
+  }
+
+  String _closedOrderKey(String businessId, String orderId) =>
+      'offline_closed_order_${businessId}_$orderId';
+
+  /// A confirmed full payment wins over late snapshot writes and stale Hub
+  /// projections for this exact order, without affecting a new table session.
+  Future<void> markOrderClosedLocally({
+    required String businessId,
+    required String orderId,
+  }) async {
+    final storage = await _storage;
+    final saved = await storage.write(
+      _closedOrderKey(businessId, orderId),
+      DateTime.now().toUtc().toIso8601String(),
+    );
+    if (!saved) throw StateError('No se pudo guardar el cierre local.');
+    await removeOrderSnapshots(businessId: businessId, orderId: orderId);
+  }
+
+  Future<bool> isOrderClosedLocally({
+    required String businessId,
+    required String orderId,
+  }) async {
+    final storage = await _storage;
+    return await storage.read(_closedOrderKey(businessId, orderId)) != null;
   }
 
   /// Descarta por completo una orden LOCAL que el cajero anuló antes de que
@@ -2757,7 +2812,7 @@ class OfflinePosService {
         }
 
         try {
-          await printingService.sendOrderToKitchen(
+          final printResult = await printingService.sendOrderToKitchen(
             orderId: resolvedOrderId,
             businessId: businessId,
             // Ver nota arriba: el replay nunca fusiona comandas.
@@ -2768,6 +2823,36 @@ class OfflinePosService {
             // como antes.
             excludeAreaCodes: printedAreas,
           );
+          final roundId = action['id']?.toString();
+          if (roundId != null && roundId.isNotEmpty) {
+            if (printResult.pendingPrintAreas.isNotEmpty) {
+              final rawItemsByArea = action['item_ids_by_area'];
+              await PendingKitchenPrints.instance.record(
+                businessId: businessId,
+                roundId: roundId,
+                orderId: action['order_id']?.toString() ?? resolvedOrderId,
+                tableName: action['table_name']?.toString() ?? 'Mesa',
+                itemIdsByArea: {
+                  for (final areaCode in printResult.pendingPrintAreas)
+                    areaCode:
+                        rawItemsByArea is Map &&
+                            rawItemsByArea[areaCode] is List
+                        ? (rawItemsByArea[areaCode] as List)
+                              .map((id) => id.toString())
+                              .toList(growable: false)
+                        : <String>[],
+                },
+              );
+            }
+            await PendingKitchenPrints.instance.resolveAreas(
+              businessId: businessId,
+              roundId: roundId,
+              acceptedAreas: {
+                ...printResult.directAreas,
+                ...printResult.escalatedAreas,
+              },
+            );
+          }
         } catch (e) {
           // Replay idempotente: si un intento previo (o otra caja) ya marcó
           // los ítems enviados a cocina, la orden no tiene drafts y

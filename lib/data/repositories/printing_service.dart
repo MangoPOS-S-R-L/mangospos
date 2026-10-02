@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart'
         TargetPlatform,
         visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../models/printing_models.dart';
 import '../models/order_item_removal_reason.dart';
 import '../models/sales_models.dart';
@@ -14,6 +15,7 @@ import '../../core/network/connectivity_service.dart';
 import '../../core/offline/offline_catalog_service.dart';
 import '../../core/offline/business_settings_offline_cache.dart';
 import '../../core/offline/offline_pos_service.dart';
+import '../../core/offline/pending_kitchen_prints.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
 import '../../core/printing/ble_printer_connection_manager.dart';
@@ -61,14 +63,22 @@ class KitchenSendResult {
   /// cloud queue. La UI puede informar al cajero sin alarmas.
   final List<String> escalatedAreas;
 
+  /// Áreas sin papel ni trabajo aceptado por una impresora. La orden puede
+  /// estar en KDS o en cola, pero la UI no debe anunciar impresión exitosa.
+  final List<String> pendingPrintAreas;
+
   const KitchenSendResult({
     required this.dispatchIds,
     required this.directAreas,
     required this.escalatedAreas,
+    this.pendingPrintAreas = const [],
   });
 
   bool get hadAnyEscalation => escalatedAreas.isNotEmpty;
-  bool get allDirect => escalatedAreas.isEmpty && directAreas.isNotEmpty;
+  bool get allDirect =>
+      escalatedAreas.isEmpty &&
+      pendingPrintAreas.isEmpty &&
+      directAreas.isNotEmpty;
 }
 
 /// Resultado de imprimir el ticket LISTO ("Imprimir al marcar listo").
@@ -336,6 +346,7 @@ class PrintingService {
       final createdJobs = <String, String>{}; // areaCode -> local dispatch id
       final directAreas = <String>[];
       final escalatedAreas = <String>[];
+      final pendingPrintAreas = <String>[];
 
       // Modo sin impresora: la orden entra al KDS igual, pero no se manda
       // papel a ninguna área. No abrimos modales aquí a propósito — el
@@ -374,6 +385,7 @@ class PrintingService {
 
         final printers = printersByAreaCode[areaCode] ?? const [];
         if (printers.isEmpty) {
+          pendingPrintAreas.add(areaCode);
           continue;
         }
 
@@ -426,6 +438,7 @@ class PrintingService {
         dispatchIds: createdJobs,
         directAreas: directAreas,
         escalatedAreas: escalatedAreas,
+        pendingPrintAreas: pendingPrintAreas,
       );
     } on NoAssignedKitchenPrinterException {
       rethrow;
@@ -695,7 +708,10 @@ class PrintingService {
           }
 
           try {
-            await _printingRepo.printRawDirectUsb(printer: printer, data: bytes);
+            await _printingRepo.printRawDirectUsb(
+              printer: printer,
+              data: bytes,
+            );
           } catch (e) {
             debugPrint(
               '⚠️ Direct USB failed for ${printer.name}, using local agent fallback: $e',
@@ -733,7 +749,8 @@ class PrintingService {
               defaultTargetPlatform == TargetPlatform.iOS) {
             // Misma clave de idempotencia que el cloud fallback → si el ticket
             // se reintenta, la cola lo deduplica y no se duplica el papel.
-            final jobId = ticketKey ??
+            final jobId =
+                ticketKey ??
                 'kitchen-${DateTime.now().microsecondsSinceEpoch}'
                     '-$areaCode-${printer.id}';
             final result = await BlePrinterConnectionManager.instance
@@ -844,8 +861,10 @@ class PrintingService {
           nmCodesByMenuItemId.putIfAbsent(mid, () => <String>[]).add(code);
         }
       } catch (e) {
-        debugPrint('groupItemsByPrintArea: N:M lookup falló, fallback '
-            'a print_area_code legacy: $e');
+        debugPrint(
+          'groupItemsByPrintArea: N:M lookup falló, fallback '
+          'a print_area_code legacy: $e',
+        );
       }
     }
 
@@ -868,7 +887,8 @@ class PrintingService {
 
       // 1) N:M (preferido si hay asignaciones).
       final pid = item.productId;
-      if (pid != null && pid.isNotEmpty &&
+      if (pid != null &&
+          pid.isNotEmpty &&
           (nmCodesByMenuItemId[pid]?.isNotEmpty ?? false)) {
         codesForItem = nmCodesByMenuItemId[pid]!;
       } else {
@@ -993,8 +1013,7 @@ class PrintingService {
       // Cliente de la mesa (table_sessions.customer_name). El mesero lo
       // captura al abrir la mesa; se muestra en la comanda para que
       // cocina identifique el cliente.
-      final customerName = (tableSession?['customer_name'] as String?)
-          ?.trim();
+      final customerName = (tableSession?['customer_name'] as String?)?.trim();
 
       // Resolver nombre de la mesa
       String? resolvedTableName;
@@ -1019,8 +1038,10 @@ class PrintingService {
       // ahora", para que precuenta/factura/comanda sean consistentes.
       String? resolvedWaiterName;
       try {
-        final rpcResult = await _client
-            .rpc('fn_order_opener_name', params: {'p_order_id': orderId});
+        final rpcResult = await _client.rpc(
+          'fn_order_opener_name',
+          params: {'p_order_id': orderId},
+        );
         final rpcName = rpcResult?.toString().trim();
         if (rpcName != null && rpcName.isNotEmpty) {
           resolvedWaiterName = rpcName;
@@ -1082,12 +1103,13 @@ class PrintingService {
       final user = _client.auth.currentUser;
       if (user == null) return null;
       final metadata = user.userMetadata ?? const <String, dynamic>{};
-      final raw = (metadata['full_name'] ??
-              metadata['name'] ??
-              metadata['display_name'] ??
-              '')
-          .toString()
-          .trim();
+      final raw =
+          (metadata['full_name'] ??
+                  metadata['name'] ??
+                  metadata['display_name'] ??
+                  '')
+              .toString()
+              .trim();
       return raw.isEmpty ? null : raw;
     } catch (_) {
       return null;
@@ -1123,9 +1145,7 @@ class PrintingService {
       final branchName = data?['branch_name']?.toString().trim();
       final resolved = (businessName != null && businessName.isNotEmpty)
           ? businessName
-          : ((branchName != null && branchName.isNotEmpty)
-              ? branchName
-              : null);
+          : ((branchName != null && branchName.isNotEmpty) ? branchName : null);
       if (resolved != null) {
         try {
           final storage = await StorageService.getInstance();
@@ -1245,13 +1265,42 @@ class PrintingService {
 
     // El fallo de una impresora no descarta la comanda ni las áreas que sí
     // salieron. El replay conserva las pendientes y excluye las ya entregadas.
+    final roundId = const Uuid().v4();
+    if (pendingAreas.isNotEmpty) {
+      try {
+        await PendingKitchenPrints.instance.record(
+          businessId: businessId,
+          roundId: roundId,
+          orderId: order.id,
+          tableName: tableName,
+          itemIdsByArea: {
+            for (final areaCode in pendingAreas)
+              areaCode: itemsByArea[areaCode]!
+                  .map((item) => item.id)
+                  .toList(growable: false),
+          },
+        );
+      } catch (error) {
+        // El aviso es auxiliar: la acción de cocina conserva los IDs por área
+        // y debe encolarse incluso si este almacenamiento falla.
+        debugPrint('[kitchen-local] no se guardó el aviso: $error');
+      }
+    }
     await _offlinePos.enqueueAction(
       businessId: businessId,
       action: {
+        'id': roundId,
         'type': 'confirm_local_order',
         'order_id': order.id,
         'origin': localState.origin,
         'item_count': draftItems.length,
+        'table_name': tableName,
+        'item_ids_by_area': {
+          for (final entry in itemsByArea.entries)
+            entry.key: entry.value
+                .map((item) => item.id)
+                .toList(growable: false),
+        },
         'printed_areas': createdJobs.keys.toList(growable: false),
         'missing_areas': pendingAreas,
       },
@@ -1268,6 +1317,8 @@ class PrintingService {
     required String orderId,
     required String businessId,
     required List<OrderItem> items,
+    Set<String>? onlyAreaCodes,
+    bool requirePrinter = false,
   }) async {
     try {
       final order = await _salesRepo.getOrder(orderId);
@@ -1288,9 +1339,13 @@ class PrintingService {
       // Duplicado deliberado: sello único para que las colas de reintento no
       // lo dedupliquen contra la comanda original (ver `ticketKey`).
       final reprintTag = 'reprint-${DateTime.now().microsecondsSinceEpoch}';
+      var dispatchedAreas = 0;
 
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
+        if (onlyAreaCodes != null && !onlyAreaCodes.contains(areaCode)) {
+          continue;
+        }
         final areaItems = entry.value;
 
         final area = await _ensureAreaForCode(businessId, areaCode);
@@ -1300,7 +1355,12 @@ class PrintingService {
           areaCode: areaCode,
         );
 
-        if (printers.isEmpty) continue;
+        if (printers.isEmpty) {
+          if (requirePrinter) {
+            throw StateError('No hay impresora para $areaCode.');
+          }
+          continue;
+        }
 
         List<int> buildKitchenBytes(PrinterConfig printer) =>
             PrintTicketService.generateKitchenTicket(
@@ -1331,6 +1391,10 @@ class PrintingService {
           orderId: orderId,
           idempotencySuffix: reprintTag,
         );
+        dispatchedAreas++;
+      }
+      if (requirePrinter && dispatchedAreas == 0) {
+        throw StateError('El área pendiente ya no corresponde a estos ítems.');
       }
     } on ItemsWithoutPrintAreaException {
       rethrow;
@@ -1365,10 +1429,9 @@ class PrintingService {
     try {
       final businessName = await _getBusinessName(businessId);
       final orderData = await _getOrderDisplayData(orderId);
-      final itemsByArea = await _groupItemsByPrintArea(
-        [item],
-        businessId: businessId,
-      );
+      final itemsByArea = await _groupItemsByPrintArea([
+        item,
+      ], businessId: businessId);
       // Sello propio: con la clave de la comanda original, las colas de
       // reintento lo descartarían por duplicado y el bar nunca se entera.
       final tag = 'removal-${DateTime.now().microsecondsSinceEpoch}';
@@ -1434,8 +1497,64 @@ class PrintingService {
       orderId: orderId,
       businessId: businessId,
       items: await _salesRepo.getOrderItems(orderId, includeModifiers: true),
+      onlyAreaCodes: {areaCode},
+      requirePrinter: true,
     );
     return _createLocalDispatchId(areaCode);
+  }
+
+  Future<void> retryPendingKitchenPrint({
+    required String businessId,
+    required String pendingId,
+  }) async {
+    final entries = await PendingKitchenPrints.instance.list(businessId);
+    final pending = entries.where((entry) => entry.id == pendingId).firstOrNull;
+    if (pending == null) throw StateError('La comanda ya no está pendiente.');
+    if (pending.itemIds.isEmpty) {
+      throw StateError(
+        'Faltan los IDs de la ronda; revisa la comanda manualmente.',
+      );
+    }
+    final unsettled = await _offlinePos.unsettledActions(businessId);
+    if (unsettled.any((action) => action['id'] == pending.roundId)) {
+      throw StateError('Sincroniza esta ronda antes de reimprimirla.');
+    }
+    final orderId = pending.orderId.startsWith('local-order-')
+        ? await _offlinePos.mappedRemoteOrderId(
+            businessId: businessId,
+            localOrderId: pending.orderId,
+          )
+        : pending.orderId;
+    if (orderId == null || orderId.isEmpty) {
+      throw StateError('La orden aún no está sincronizada.');
+    }
+    final ids = await _offlinePos.resolveKitchenPrintItemIds(
+      businessId: businessId,
+      itemIds: pending.itemIds,
+    );
+    final allItems = await _salesRepo.getOrderItems(
+      orderId,
+      includeModifiers: true,
+    );
+    final selected = allItems
+        .where((item) => ids.contains(item.id))
+        .toList(growable: false);
+    if (selected.length != ids.toSet().length) {
+      throw StateError(
+        'La ronda cambió; revisa los productos antes de imprimir.',
+      );
+    }
+    await reprintItems(
+      orderId: orderId,
+      businessId: businessId,
+      items: selected,
+      onlyAreaCodes: {pending.areaCode},
+      requirePrinter: true,
+    );
+    await PendingKitchenPrints.instance.dismiss(
+      businessId: businessId,
+      id: pendingId,
+    );
   }
 
   String _createLocalDispatchId(String areaCode) {

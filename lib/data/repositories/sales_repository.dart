@@ -15,6 +15,7 @@ import '../models/sales_note.dart';
 import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
 import '../../core/offline/hub/hub_client.dart';
+import '../../core/performance/performance_diagnostics.dart';
 
 /// Resultado de abrir/reanudar una mesa: order_id + bundle completo
 /// (order/items con modifiers+tax_lines/checks/customer). Compartido por el
@@ -730,14 +731,17 @@ class SalesRepository {
   }) async {
     // Ver nota en openTable: se cancela ANTES del RPC.
     cancelPendingEmptyTableRelease(tableId);
-    final response = await _client.rpc(
-      'fn_open_table_and_load',
-      params: {
-        'p_table_id': tableId,
-        'p_user_id': userId,
-        'p_people_count': peopleCount,
-        'p_opened_by_employee_id': openedByEmployeeId,
-      },
+    final response = await PerformanceDiagnostics.instance.measure(
+      'rpc_apertura_mesa',
+      () => _client.rpc(
+        'fn_open_table_and_load',
+        params: {
+          'p_table_id': tableId,
+          'p_user_id': userId,
+          'p_people_count': peopleCount,
+          'p_opened_by_employee_id': openedByEmployeeId,
+        },
+      ),
     );
 
     if (response == null) {
@@ -762,12 +766,15 @@ class SalesRepository {
   }) async {
     // Ver nota en openTable: se cancela ANTES de salir al Hub.
     cancelPendingEmptyTableRelease(tableId);
-    final raw = await HubClient().proxyOpenTable(
-      hubBaseUrl,
-      tableId: tableId,
-      userId: userId,
-      peopleCount: peopleCount,
-      openedByEmployeeId: openedByEmployeeId,
+    final raw = await PerformanceDiagnostics.instance.measure(
+      'proxy_hub_apertura_mesa',
+      () => HubClient().proxyOpenTable(
+        hubBaseUrl,
+        tableId: tableId,
+        userId: userId,
+        peopleCount: peopleCount,
+        openedByEmployeeId: openedByEmployeeId,
+      ),
     );
     if (raw == null) {
       throw Exception('El Hub no pudo abrir la mesa (sin respuesta)');
@@ -1569,6 +1576,43 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al obtener grupos del combo: $e');
     }
+  }
+
+  /// Precarga los grupos de todos los combos del catálogo en lotes, en vez
+  /// de repetir una petición por producto durante la preparación offline.
+  Future<Map<String, List<Map<String, dynamic>>>> getComboGroupsForItems(
+    List<String> menuItemIds,
+  ) async {
+    final ids = menuItemIds.toSet().toList(growable: false);
+    final grouped = <String, List<Map<String, dynamic>>>{
+      for (final id in ids) id: <Map<String, dynamic>>[],
+    };
+    const batchSize = 100;
+    const pageSize = 1000;
+    for (var start = 0; start < ids.length; start += batchSize) {
+      final batch = ids.skip(start).take(batchSize).toList(growable: false);
+      for (var offset = 0; ; offset += pageSize) {
+        final rows = await _client
+            .from('combo_groups')
+            .select(
+              'id, menu_item_id, name, min_select, max_select, is_required, sort_order, '
+              'combo_group_items(id, menu_item_id, price_delta, is_default, sort_order, '
+              'menu_items(id, name, price, is_active))',
+            )
+            .inFilter('menu_item_id', batch)
+            .order('menu_item_id', ascending: true)
+            .order('sort_order', ascending: true)
+            .order('id', ascending: true)
+            .range(offset, offset + pageSize - 1);
+        for (final row in rows) {
+          final group = Map<String, dynamic>.from(row as Map);
+          final itemId = group.remove('menu_item_id')?.toString();
+          grouped[itemId]?.add(group);
+        }
+        if (rows.length < pageSize) break;
+      }
+    }
+    return grouped;
   }
 
   // `is_sold_out` (auto-86 del modificador, 20260907_0004) va aparte: si la
@@ -3079,29 +3123,33 @@ class SalesRepository {
     String? offlineNcf,
   }) async {
     try {
-      final response = await _client
-          .rpc(
-            SalesQueries.rpcProcessPayment,
-            params: {
-              'p_order_id': orderId,
-              'p_check_id': checkId,
-              'p_payment_method_id': paymentMethodId,
-              'p_amount': amount,
-              'p_reference': reference,
-              'p_change_amount': changeAmount,
-              'p_customer_id': customerId,
-              'p_customer_rnc': customerRnc,
-              'p_requested_ncf_type': fiscalType,
-              'p_cashier_session_id': cashierSessionId,
-              'p_close_order': closeOrder,
-              'p_close_check': closeCheck,
-              'p_split_sequence': splitSequence,
-              if (paidAt != null) 'p_paid_at': paidAt.toUtc().toIso8601String(),
-              if (offlineNcf != null && offlineNcf.isNotEmpty)
-                'p_offline_ncf': offlineNcf,
-            },
-          )
-          .timeout(const Duration(seconds: 12));
+      final response = await PerformanceDiagnostics.instance.measure(
+        'rpc_pago',
+        () => _client
+            .rpc(
+              SalesQueries.rpcProcessPayment,
+              params: {
+                'p_order_id': orderId,
+                'p_check_id': checkId,
+                'p_payment_method_id': paymentMethodId,
+                'p_amount': amount,
+                'p_reference': reference,
+                'p_change_amount': changeAmount,
+                'p_customer_id': customerId,
+                'p_customer_rnc': customerRnc,
+                'p_requested_ncf_type': fiscalType,
+                'p_cashier_session_id': cashierSessionId,
+                'p_close_order': closeOrder,
+                'p_close_check': closeCheck,
+                'p_split_sequence': splitSequence,
+                if (paidAt != null)
+                  'p_paid_at': paidAt.toUtc().toIso8601String(),
+                if (offlineNcf != null && offlineNcf.isNotEmpty)
+                  'p_offline_ncf': offlineNcf,
+              },
+            )
+            .timeout(const Duration(seconds: 12)),
+      );
 
       return await validatePaymentResponse(
         _client,

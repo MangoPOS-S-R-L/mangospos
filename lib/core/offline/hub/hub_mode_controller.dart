@@ -17,6 +17,7 @@ import 'hub_read_cache.dart';
 import 'hub_auto_setup.dart';
 import 'hub_lease_service.dart';
 import 'hub_lan_token.dart';
+import 'hub_uploader_binding.dart';
 
 /// Resuelve el [TerminalMode] con politica Hub automatica para cada negocio,
 /// el rol persistido del equipo y la conectividad/alcanzabilidad del Hub.
@@ -77,6 +78,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
   final ConnectivityService _connectivity = ConnectivityService();
   final HubClient _hubClient = HubClient();
   final HubConfigService _hubConfig = HubConfigService();
+  final HubUploaderBinding _uploaderBinding = HubUploaderBinding();
   StreamSubscription<bool>? _sub;
   Timer? _timer;
   Future<void>? _refreshing;
@@ -161,6 +163,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
     final pos = OfflinePosService();
 
     if (!kHubModeEnabled) {
+      _uploaderBinding.reset();
       pos.setHubUploader(null);
       final m = _connectivity.isConnected
           ? TerminalMode.cloud
@@ -171,6 +174,7 @@ class HubModeController extends StateNotifier<TerminalMode> {
 
     final businessId = _ref.read(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
+      _uploaderBinding.reset();
       pos.setHubUploader(null);
       _reachableHubUrl = null;
       if (state != TerminalMode.cloud) state = TerminalMode.cloud;
@@ -183,13 +187,19 @@ class HubModeController extends StateNotifier<TerminalMode> {
             defaultTargetPlatform == TargetPlatform.linux ||
             defaultTargetPlatform == TargetPlatform.macOS)) {
       final cashier = _ref.read(cashierViewModelProvider);
-      canHost = canHostHub(
-        role: _ref.read(sessionProvider).activeRole,
-        cashSession: cashier.lastSession,
-        cashierBusinessId: cashier.businessId,
-        businessId: businessId,
-        deviceId: await DeviceUtils.getDeviceId(),
-      );
+      final role = _ref.read(sessionProvider).activeRole;
+      if (cashier.lastSession != null &&
+          (role == PosRole.cajero ||
+              role == PosRole.administrador ||
+              role == PosRole.supervisor)) {
+        canHost = canHostHub(
+          role: role,
+          cashSession: cashier.lastSession,
+          cashierBusinessId: cashier.businessId,
+          businessId: businessId,
+          deviceId: await DeviceUtils.getDeviceId(),
+        );
+      }
     }
     _role = await _autoSetup.prepare(
       businessId,
@@ -305,6 +315,13 @@ class HubModeController extends StateNotifier<TerminalMode> {
     TerminalMode mode,
     String businessId,
   ) {
+    if (!_uploaderBinding.shouldBind(
+      businessId: businessId,
+      mode: mode,
+      url: _reachableHubUrl,
+    )) {
+      return;
+    }
     switch (mode) {
       case TerminalMode.hubClient:
         final url = _reachableHubUrl;

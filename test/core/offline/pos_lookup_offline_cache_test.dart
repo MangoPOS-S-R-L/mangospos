@@ -5,24 +5,28 @@ import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Map<String, dynamic> _group(String id, List<Map<String, dynamic>> mods) => {
-      'id': id,
-      'name': 'Grupo $id',
-      'min_select': 0,
-      'max_select': 1,
-      'is_active': true,
-      'modifiers': mods,
-    };
+  'id': id,
+  'name': 'Grupo $id',
+  'min_select': 0,
+  'max_select': 1,
+  'is_active': true,
+  'modifiers': mods,
+};
 
-Map<String, dynamic> _row(String groupId, int position,
-        Map<String, dynamic> group) =>
-    {'group_id': groupId, 'position': position, 'modifier_groups': group};
+Map<String, dynamic> _row(
+  String groupId,
+  int position,
+  Map<String, dynamic> group,
+) => {'group_id': groupId, 'position': position, 'modifier_groups': group};
 
 void main() {
   late PosLookupOfflineCache cache;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    cache = PosLookupOfflineCache.forTesting(await StorageService.getInstance());
+    cache = PosLookupOfflineCache.forTesting(
+      await StorageService.getInstance(),
+    );
   });
 
   group('impuestos', () {
@@ -35,46 +39,51 @@ void main() {
       expect(rows!.first['rate'], 18);
     });
 
-    test('nunca guardado → null; negocio sin impuestos → lista vacía', () async {
-      // Id propio: StorageService retiene sus SharedPreferences entre tests.
-      expect(await cache.loadBusinessTaxes('biz-sin-tax'), isNull);
-      await cache.saveBusinessTaxes('biz-sin-tax', const []);
-      expect(await cache.loadBusinessTaxes('biz-sin-tax'), isEmpty);
-    });
+    test(
+      'nunca guardado → null; negocio sin impuestos → lista vacía',
+      () async {
+        // Id propio: StorageService retiene sus SharedPreferences entre tests.
+        expect(await cache.loadBusinessTaxes('biz-sin-tax'), isNull);
+        await cache.saveBusinessTaxes('biz-sin-tax', const []);
+        expect(await cache.loadBusinessTaxes('biz-sin-tax'), isEmpty);
+      },
+    );
   });
 
   group('modificadores', () {
-    test('un grupo compartido se guarda una vez y sirve a cada producto',
-        () async {
-      final salsas = _group('g1', [
-        {'id': 'm1', 'name': 'Ajo', 'sort_order': 1},
-      ]);
-      await cache.saveModifierGroups('biz', 'pizza', [_row('g1', 0, salsas)]);
-      await cache.saveModifierGroups('biz', 'pasta', [_row('g1', 2, salsas)]);
+    test(
+      'un grupo compartido se guarda una vez y sirve a cada producto',
+      () async {
+        final salsas = _group('g1', [
+          {'id': 'm1', 'name': 'Ajo', 'sort_order': 1},
+        ]);
+        await cache.saveModifierGroups('biz', 'pizza', [_row('g1', 0, salsas)]);
+        await cache.saveModifierGroups('biz', 'pasta', [_row('g1', 2, salsas)]);
 
-      final pizza = await cache.loadModifierGroups('biz', 'pizza');
-      final pasta = await cache.loadModifierGroups('biz', 'pasta');
-      expect(pizza!.single['group_id'], 'g1');
-      expect(pasta!.single['position'], 2);
-      expect(
-        (pasta.single['modifier_groups'] as Map)['modifiers'],
-        hasLength(1),
-      );
-    });
+        final pizza = await cache.loadModifierGroups('biz', 'pizza');
+        final pasta = await cache.loadModifierGroups('biz', 'pasta');
+        expect(pizza!.single['group_id'], 'g1');
+        expect(pasta!.single['position'], 2);
+        expect(
+          (pasta.single['modifier_groups'] as Map)['modifiers'],
+          hasLength(1),
+        );
+      },
+    );
 
-    test('producto nunca bajado → null (distinto de "sin modificadores")',
-        () async {
-      expect(await cache.loadModifierGroups('biz', 'nunca-bajado'), isNull);
-      await cache.saveModifierGroups('biz', 'agua', const []);
-      expect(await cache.loadModifierGroups('biz', 'agua'), isEmpty);
-    });
+    test(
+      'producto nunca bajado → null (distinto de "sin modificadores")',
+      () async {
+        expect(await cache.loadModifierGroups('biz', 'nunca-bajado'), isNull);
+        await cache.saveModifierGroups('biz', 'agua', const []);
+        expect(await cache.loadModifierGroups('biz', 'agua'), isEmpty);
+      },
+    );
 
     test('la bajada en bloque reemplaza lo anterior', () async {
-      await cache.saveModifierGroups(
-        'biz-bloque',
-        'viejo',
-        [_row('g0', 0, _group('g0', const []))],
-      );
+      await cache.saveModifierGroups('biz-bloque', 'viejo', [
+        _row('g0', 0, _group('g0', const [])),
+      ]);
       await cache.replaceAllModifierGroups('biz-bloque', {
         'pizza': [_row('g1', 0, _group('g1', const []))],
       });
@@ -87,9 +96,13 @@ void main() {
 
     test('lo devuelto es una copia: mutarlo no toca el caché', () async {
       await cache.saveModifierGroups('biz', 'pizza', [
-        _row('g1', 0, _group('g1', [
-          {'id': 'm1', 'name': 'Ajo'},
-        ])),
+        _row(
+          'g1',
+          0,
+          _group('g1', [
+            {'id': 'm1', 'name': 'Ajo'},
+          ]),
+        ),
       ]);
       final first = await cache.loadModifierGroups('biz', 'pizza');
       (first!.single['modifier_groups'] as Map)['modifiers'] = const [];
@@ -103,11 +116,9 @@ void main() {
     test('escrituras simultáneas no se pisan', () async {
       await Future.wait([
         for (var i = 0; i < 20; i++)
-          cache.saveModifierGroups(
-            'biz',
-            'p$i',
-            [_row('g$i', 0, _group('g$i', const []))],
-          ),
+          cache.saveModifierGroups('biz', 'p$i', [
+            _row('g$i', 0, _group('g$i', const [])),
+          ]),
       ]);
       for (var i = 0; i < 20; i++) {
         expect(await cache.loadModifierGroups('biz', 'p$i'), hasLength(1));
@@ -121,6 +132,33 @@ void main() {
       expect(await cache.loadComboGroups('biz', 'combo1'), hasLength(1));
       expect(await cache.loadComboGroups('biz', 'otro'), isNull);
     });
+
+    test(
+      'combos en bloque reemplazan los viejos y conservan combos vacíos',
+      () async {
+        await cache.saveComboGroups('biz-combos-bloque', 'viejo', [
+          {'id': 'cg-viejo'},
+        ]);
+        await cache.replaceAllComboGroups('biz-combos-bloque', {
+          'nuevo': [
+            {'id': 'cg-nuevo', 'combo_group_items': const []},
+          ],
+          'sin-grupos': <Map<String, dynamic>>[],
+        });
+        expect(
+          await cache.loadComboGroups('biz-combos-bloque', 'viejo'),
+          isNull,
+        );
+        expect(
+          await cache.loadComboGroups('biz-combos-bloque', 'nuevo'),
+          hasLength(1),
+        );
+        expect(
+          await cache.loadComboGroups('biz-combos-bloque', 'sin-grupos'),
+          isEmpty,
+        );
+      },
+    );
   });
 
   test('encabezado del recibo y razones de caja', () async {

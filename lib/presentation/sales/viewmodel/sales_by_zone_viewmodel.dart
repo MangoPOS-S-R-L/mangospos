@@ -15,6 +15,7 @@ import '../../../core/offline/hub/hub_config.dart';
 import '../../../core/offline/hub/hub_event_stream.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/utils/sorting_utils.dart';
+import '../logic/hub_zone_refresh_scope.dart';
 import '../state/by_zone_state.dart';
 
 final zonesRepoProvider = Provider(
@@ -24,6 +25,10 @@ final zonesRepoProvider = Provider(
 final byZoneVmProvider = NotifierProvider<ByZoneViewModel, ByZoneState>(
   ByZoneViewModel.new,
 );
+
+typedef _DraftsByTable =
+    Map<String, ({String tableId, int itemsCount, double total})>;
+typedef _HubTablesByTable = Map<String, Map<String, dynamic>>;
 
 /// Un snapshot fresco de Supabase sin sesión desmiente una orden con ID del
 /// servidor que el Hub todavía proyecta: esa op es stale tras el autocierre.
@@ -57,6 +62,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   final Set<String> _dirtyOrderIds = <String>{};
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
+  final Map<String, String> _hubOrderToTableIndex = <String, String>{};
   final OfflinePosService _offlinePos = OfflinePosService();
 
   // PERF: consulta business-wide (todas las zonas en 1 viaje) en vuelo.
@@ -71,7 +77,11 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   HubEventStream? _hubEvents;
   StreamSubscription<Map<String, dynamic>>? _hubEventsSub;
   String? _hubEventsUrl;
+  String? _hubEventsBusinessId;
   Timer? _hubEventDebounce;
+  final Set<String> _hubDirtyZoneIds = <String>{};
+  bool _hubReloadAllPending = false;
+  bool _hubFlushInProgress = false;
 
   // Throttle del barrido de mesas fantasma: la vista llama load() cada ~30s,
   // pero no queremos disparar el RPC tan seguido.
@@ -94,6 +104,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       _dirtyOrderIds.clear();
       _tableToZoneIndex.clear();
       _sessionToZoneIndex.clear();
+      _hubOrderToTableIndex.clear();
     });
 
     return const ByZoneState();
@@ -111,6 +122,9 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
               'No se pudo resolver el negocio del usuario (businessId=auto).',
         );
         return;
+      }
+      if (state.businessId != null && state.businessId != bizId) {
+        _hubOrderToTableIndex.clear();
       }
 
       final repo = ref.read(zonesRepoProvider);
@@ -311,7 +325,15 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     );
   }
 
-  Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) async {
+  Future<void> loadZoneStatus(String zoneId, {bool emitError = true}) =>
+      _loadZoneStatus(zoneId, emitError: emitError);
+
+  Future<void> _loadZoneStatus(
+    String zoneId, {
+    required bool emitError,
+    Future<_DraftsByTable>? sharedDrafts,
+    Future<_HubTablesByTable>? sharedHubTables,
+  }) async {
     final repo = ref.read(zonesRepoProvider);
     // Geometría para el floor map (perezosa: solo si aún no se cargó). El
     // grid no la necesita; un fallo aquí no debe tumbar la carga de estado.
@@ -330,13 +352,17 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       // (ese es el síntoma de "limpiar caché borra las mesas"). Las marcamos
       // ocupadas+pendientes para que no desaparezcan del salón de ESTE
       // dispositivo. La visibilidad entre cajas la aporta el Hub Local (F3).
-      final overlaidRows = await _overlayPendingDrafts(rows);
+      final overlaidRows = await _overlayPendingDrafts(
+        rows,
+        sharedDrafts: sharedDrafts,
+      );
       // H4c: en modo Hub, overlayamos también las mesas que el HUB conoce (las
       // que abrió OTRA caja) para que sean visibles en este equipo. Es lo que
       // hace aparecer la mesa del mesero en la caja principal.
       final hubRows = await _overlayHubSalon(
         overlaidRows,
         freshServerStatus: !result.fromCache,
+        sharedHubTables: sharedHubTables,
       );
 
       state = state.copyWith(
@@ -380,17 +406,20 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   /// cual. `ordersCount:1` e `itemsCount>=1` garantizan que cuenten como
   /// ocupadas (no "fantasma") de forma consistente con el conteo del grid.
   Future<List<TableStatus>> _overlayPendingDrafts(
-    List<TableStatus> rows,
-  ) async {
-    return _applyDraftOverlay(rows, await _fetchDraftsByTable());
+    List<TableStatus> rows, {
+    Future<_DraftsByTable>? sharedDrafts,
+  }) async {
+    return _applyDraftOverlay(
+      rows,
+      await (sharedDrafts ?? _fetchDraftsByTable()),
+    );
   }
 
   /// Lee los borradores locales pendientes UNA vez, indexados por tableId.
   /// [businessId] permite usarlo antes de que `state.businessId` esté seteado
   /// (pintado cache-first en arranque frío). Best-effort: ante fallo devuelve
   /// mapa vacío (sin overlay).
-  Future<Map<String, ({String tableId, int itemsCount, double total})>>
-  _fetchDraftsByTable({String? businessId}) async {
+  Future<_DraftsByTable> _fetchDraftsByTable({String? businessId}) async {
     final bizId = businessId ?? state.businessId;
     if (bizId == null || bizId.isEmpty) return const {};
     try {
@@ -403,7 +432,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
   List<TableStatus> _applyDraftOverlay(
     List<TableStatus> rows,
-    Map<String, ({String tableId, int itemsCount, double total})> byTable,
+    _DraftsByTable byTable,
   ) {
     if (byTable.isEmpty) return rows;
     return rows.map((r) {
@@ -447,8 +476,9 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   Future<List<TableStatus>> _overlayHubSalon(
     List<TableStatus> rows, {
     required bool freshServerStatus,
+    Future<_HubTablesByTable>? sharedHubTables,
   }) async {
-    final hubTables = await _fetchHubTablesByTableId();
+    final hubTables = await (sharedHubTables ?? _fetchHubTablesByTableId());
     final closedHubOrders = freshServerStatus
         ? await _confirmedClosedHubOrders(rows, hubTables)
         : const <String, String>{};
@@ -544,7 +574,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   /// usarlo antes de que `state.businessId` esté seteado (cache-first).
   /// Devuelve mapa vacío si este equipo no está en modo hub, el Hub no es
   /// alcanzable o la lectura falla (sin overlay).
-  Future<Map<String, Map<String, dynamic>>> _fetchHubTablesByTableId({
+  Future<_HubTablesByTable> _fetchHubTablesByTableId({
     String? businessId,
   }) async {
     final mode = ref.read(hubModeProvider);
@@ -560,8 +590,20 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       } else {
         final url = ref.read(hubModeProvider.notifier).reachableHubUrl;
         if (url == null) return const {};
-        hubTables =
-            await HubClient().getSalon(url, businessId: bizId) ?? const [];
+        final hubClient = HubClient();
+        try {
+          hubTables =
+              await hubClient.getSalon(url, businessId: bizId) ?? const [];
+        } finally {
+          hubClient.dispose();
+        }
+      }
+      for (final table in hubTables) {
+        final orderId = _toStringOrNull(table['order_id']);
+        final tableId = _toStringOrNull(table['table_id']);
+        if (orderId != null && tableId != null) {
+          _hubOrderToTableIndex[orderId] = tableId;
+        }
       }
       return {
         for (final t in hubTables)
@@ -574,7 +616,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
 
   List<TableStatus> _applyHubOverlay(
     List<TableStatus> rows,
-    Map<String, Map<String, dynamic>> byTable, {
+    _HubTablesByTable byTable, {
     required bool freshServerStatus,
     Set<String> confirmedClosedOrderIds = const {},
   }) {
@@ -628,33 +670,80 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       _disconnectHubEvents();
       return;
     }
-    if (_hubEventsUrl == url && _hubEvents != null) return;
+    if (_hubEventsUrl == url &&
+        _hubEventsBusinessId == businessId &&
+        _hubEvents != null) {
+      return;
+    }
     _disconnectHubEvents();
     _hubEventsUrl = url;
+    _hubEventsBusinessId = businessId;
     final stream = HubEventStream(baseUrl: url, businessId: businessId);
     _hubEvents = stream;
-    _hubEventsSub = stream.ops.listen((_) => _onHubEvent());
+    _hubEventsSub = stream.ops.listen(_onHubEvent);
     stream.connect();
   }
 
-  void _onHubEvent() {
+  void _onHubEvent(Map<String, dynamic> event) {
+    final zones = zonesForHubEvent(
+      event,
+      tableToZone: _tableToZoneIndex,
+      orderToTable: _hubOrderToTableIndex,
+    );
+    if (zones == null) {
+      _hubReloadAllPending = true;
+    } else {
+      _hubDirtyZoneIds.addAll(zones);
+    }
     _hubEventDebounce?.cancel();
     _hubEventDebounce = Timer(const Duration(milliseconds: 400), () {
-      final zoneIds = state.statusByZone.keys.toList(growable: false);
-      for (final z in zoneIds) {
-        unawaited(loadZoneStatus(z, emitError: false));
-      }
+      unawaited(_flushHubEventQueue());
     });
+  }
+
+  Future<void> _flushHubEventQueue() async {
+    if (_hubFlushInProgress) return;
+    _hubFlushInProgress = true;
+    try {
+      while (_hubReloadAllPending || _hubDirtyZoneIds.isNotEmpty) {
+        final zoneIds = _hubReloadAllPending
+            ? state.statusByZone.keys.toSet()
+            : Set<String>.from(_hubDirtyZoneIds);
+        _hubReloadAllPending = false;
+        _hubDirtyZoneIds.clear();
+        if (zoneIds.isEmpty) continue;
+        final sharedDrafts = _fetchDraftsByTable();
+        final sharedHubTables = _fetchHubTablesByTableId();
+        await Future.wait(
+          zoneIds.map(
+            (zoneId) => _loadZoneStatus(
+              zoneId,
+              emitError: false,
+              sharedDrafts: sharedDrafts,
+              sharedHubTables: sharedHubTables,
+            ),
+          ),
+        );
+      }
+    } finally {
+      _hubFlushInProgress = false;
+      if (_hubReloadAllPending || _hubDirtyZoneIds.isNotEmpty) {
+        unawaited(_flushHubEventQueue());
+      }
+    }
   }
 
   void _disconnectHubEvents() {
     _hubEventDebounce?.cancel();
     _hubEventDebounce = null;
+    _hubReloadAllPending = false;
+    _hubDirtyZoneIds.clear();
     _hubEventsSub?.cancel();
     _hubEventsSub = null;
     final s = _hubEvents;
     _hubEvents = null;
     _hubEventsUrl = null;
+    _hubEventsBusinessId = null;
     if (s != null) unawaited(s.dispose());
   }
 

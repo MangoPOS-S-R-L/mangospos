@@ -259,7 +259,8 @@ TIPO_LABEL = {
 }
 
 
-def build():
+def prepare():
+    """Lee, clasifica y limpia. Lo usan build() y build_import_cafeteria.py."""
     rows = load()
     total_rows = len(rows)
     total_cost = round(sum(r['total'] for r in rows), 2)
@@ -332,6 +333,12 @@ def build():
     caf.sort(key=key)
     productos = [r for r in caf if r['tipo'] != 'Insumo']
     insumos = [r for r in caf if r['tipo'] == 'Insumo']
+    return productos, insumos, tienda, decidir, total_rows, total_cost
+
+
+def build():
+    productos, insumos, tienda, decidir, total_rows, total_cost = prepare()
+    caf = productos + insumos
 
     write_cafeteria(productos, insumos, tienda, decidir, total_rows, total_cost)
     write_tienda(tienda)

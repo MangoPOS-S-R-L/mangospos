@@ -238,6 +238,15 @@ class PosLookupOfflineCache {
     });
   }
 
+  Future<void> replaceAllComboGroups(
+    String businessId,
+    Map<String, List<Map<String, dynamic>>> byItem,
+  ) {
+    return _mutate(businessId, (blob) {
+      blob['combo_items'] = byItem;
+    });
+  }
+
   Future<List<Map<String, dynamic>>?> loadComboGroups(
     String businessId,
     String menuItemId,

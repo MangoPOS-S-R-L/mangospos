@@ -11,6 +11,7 @@ import 'package:mangopos/core/offline/business_settings_offline_cache.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/pending_kitchen_prints.dart';
 import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
@@ -174,6 +175,57 @@ void main() {
     return container;
   }
 
+  test('cobro confirmado no revive snapshot anterior al caer la red', () async {
+    const biz = 'paid-then-offline';
+    const table = 'table-paid-then-offline';
+    final offline = OfflinePosService();
+    final oldState = CurrentOrderState(
+      order: order('paid-order'),
+      origin: 'table',
+    );
+    await offline.saveSnapshot(
+      businessId: biz,
+      slotId: table,
+      origin: 'table',
+      tableId: table,
+      state: oldState,
+    );
+    final container = await containerFor(
+      biz,
+      oldState,
+      PrintingService(client),
+    );
+
+    await container
+        .read(currentOrderProvider.notifier)
+        .markPaidOrderLocally('paid-order');
+    expect(container.read(currentOrderProvider).order, isNull);
+    expect(await offline.loadSnapshot(businessId: biz, slotId: table), isNull);
+
+    // Una escritura retrasada del pago viejo no debe volver a ocupar la mesa.
+    await offline.saveSnapshot(
+      businessId: biz,
+      slotId: table,
+      origin: 'table',
+      tableId: table,
+      state: oldState,
+    );
+    expect(await offline.loadSnapshot(businessId: biz, slotId: table), isNull);
+
+    // El cierre se asocia a la orden, no a la mesa: una sesión nueva sí vive.
+    await offline.saveSnapshot(
+      businessId: biz,
+      slotId: table,
+      origin: 'table',
+      tableId: table,
+      state: CurrentOrderState(order: order('new-order'), origin: 'table'),
+    );
+    expect(
+      (await offline.loadSnapshot(businessId: biz, slotId: table))?.order?.id,
+      'new-order',
+    );
+  });
+
   test(
     'mesa existente: agrega y envía a la impresora LAN sin tocar nube',
     () async {
@@ -192,7 +244,10 @@ void main() {
         productPrice: 100,
       );
       expect(container.read(currentOrderProvider).items.single.quantity, 1);
-      await vm.confirmOrder(tableName: 'Mesa 1');
+      final result = await vm.confirmOrder(tableName: 'Mesa 1');
+      expect(result?.directAreas, ['kitchen_hot']);
+      expect(result?.pendingPrintAreas, isEmpty);
+      expect(result?.allDirect, isTrue);
       expect(printers.printed, ['192.168.1.20']);
       expect(
         container.read(currentOrderProvider).items.single.status,
@@ -257,7 +312,9 @@ void main() {
         productName: 'Pizza',
         productPrice: 100,
       );
-      await vm.confirmOrder();
+      final result = await vm.confirmOrder();
+      expect(result?.pendingPrintAreas, ['kitchen_hot']);
+      expect(result?.allDirect, isFalse);
       expect(cloudRequests, 0);
       expect(printers.printed, isEmpty);
       expect(
@@ -267,6 +324,32 @@ void main() {
       final queued = await OfflinePosService().unsettledActions(biz);
       expect(queued.last['missing_areas'], ['kitchen_hot']);
       expect(queued.last['printed_areas'], isEmpty);
+      expect(queued.last['item_ids_by_area']['kitchen_hot'], [
+        container.read(currentOrderProvider).items.single.id,
+      ]);
+      final pending = await PendingKitchenPrints.instance.list(biz);
+      expect(pending, hasLength(1));
+      expect(pending.single.roundId, queued.last['id']);
+      expect(pending.single.areaCode, 'kitchen_hot');
+      expect(pending.single.itemIds, [
+        container.read(currentOrderProvider).items.single.id,
+      ]);
+      await expectLater(
+        PrintingService(
+          client,
+          printingRepository: printers,
+        ).retryPendingKitchenPrint(
+          businessId: biz,
+          pendingId: pending.single.id,
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('Sincroniza esta ronda'),
+          ),
+        ),
+      );
     },
   );
 
@@ -283,7 +366,9 @@ void main() {
       productName: 'Pizza',
       productPrice: 100,
     );
-    await vm.confirmOrder();
+    final result = await vm.confirmOrder();
+    expect(result?.pendingPrintAreas, ['kitchen_hot']);
+    expect(result?.allDirect, isFalse);
     expect(cloudRequests, 0);
     expect(
       container.read(currentOrderProvider).error,
@@ -291,6 +376,30 @@ void main() {
     );
     final queued = await OfflinePosService().unsettledActions(biz);
     expect(queued.last['missing_areas'], ['kitchen_hot']);
+  });
+
+  test('registro de impresión dañado no impide encolar la comanda', () async {
+    const biz = 'outage-corrupt-print-ledger';
+    final storage = await StorageService.getInstance();
+    await storage.write('pending_kitchen_prints_$biz', 'not-json');
+    final container = await containerFor(
+      biz,
+      CurrentOrderState(order: order('remote-corrupt-ledger'), origin: 'table'),
+      PrintingService(client, printingRepository: _Printers(client)),
+    );
+    final vm = container.read(currentOrderProvider.notifier);
+    await vm.addItem(
+      menuItemId: 'product',
+      productName: 'Pizza',
+      productPrice: 100,
+    );
+
+    final result = await vm.confirmOrder();
+    expect(result?.pendingPrintAreas, ['kitchen_hot']);
+    final queued = await OfflinePosService().unsettledActions(biz);
+    expect(queued.last['type'], 'confirm_local_order');
+    expect(queued.last['item_ids_by_area']['kitchen_hot'], hasLength(1));
+    expect(await storage.read('pending_kitchen_prints_$biz'), 'not-json');
   });
 
   test('escáner: agrega por ID usando el producto preparado offline', () async {
@@ -363,12 +472,21 @@ void main() {
         productName: 'Combo',
         productPrice: 100,
       );
-      await vm.confirmOrder();
+      final result = await vm.confirmOrder();
+      expect(result?.directAreas, ['kitchen_hot']);
+      expect(result?.pendingPrintAreas, ['bar']);
+      expect(result?.allDirect, isFalse);
       expect(cloudRequests, 0);
       expect(printers.printed, ['192.168.1.30']);
       final queued = await OfflinePosService().unsettledActions(biz);
       expect(queued.last['printed_areas'], ['kitchen_hot']);
       expect(queued.last['missing_areas'], ['bar']);
+      expect(
+        (await PendingKitchenPrints.instance.list(
+          biz,
+        )).map((entry) => entry.areaCode),
+        ['bar'],
+      );
     },
   );
 

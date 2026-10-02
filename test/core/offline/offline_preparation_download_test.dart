@@ -45,6 +45,7 @@ void main() {
               ? [
                   {
                     'id': 'g1',
+                    'menu_item_id': 'combo',
                     'name': 'Bebida',
                     'min_select': 1,
                     'max_select': 1,

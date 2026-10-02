@@ -344,6 +344,20 @@ class PhysicalCountDetail {
   const PhysicalCountDetail({required this.header, required this.lines});
 }
 
+/// Un insumo con una existencia que no cabe en la línea del conteo.
+class OutOfRangeStock {
+  final String itemName;
+  final String sku;
+  final String unit;
+  final double quantity;
+  const OutOfRangeStock({
+    required this.itemName,
+    required this.sku,
+    required this.unit,
+    required this.quantity,
+  });
+}
+
 // =============================================================================
 // REPO
 // =============================================================================
@@ -423,6 +437,42 @@ class PhysicalCountRepository {
       params: {'p_session_id': sessionId},
     );
     return Map<String, dynamic>.from(response as Map);
+  }
+
+  /// Tope de las cantidades del conteo: `physical_count_lines` las guarda
+  /// como numeric(14,4), así que no cabe nada de 10.000 millones para arriba.
+  /// La existencia (`inventory_stock.quantity`) no tiene tope, y un código de
+  /// barras escaneado en un campo de cantidad la deja ahí: congelar revienta
+  /// con 22003 para TODA la bodega.
+  static const countQuantityLimit = 10000000000;
+
+  /// ¿El error es ese desborde? (`numeric field overflow`).
+  static bool isQuantityOverflow(Object e) =>
+      e is PostgrestException && e.code == '22003';
+
+  /// Los insumos de [warehouseId] con existencia fuera de ese tope, para
+  /// decirle a la persona CUÁL corregir en vez de «No se pudo congelar».
+  Future<List<OutOfRangeStock>> findOutOfRangeStock(String warehouseId) async {
+    final rows = await _client
+        .from('inventory_stock')
+        .select('quantity, inventory_items!inner(name, sku, unit)')
+        .eq('warehouse_id', warehouseId)
+        .or(
+          'quantity.gte.$countQuantityLimit,'
+          'quantity.lte.-$countQuantityLimit',
+        )
+        .limit(50);
+    return [
+      for (final row in (rows as List).whereType<Map>())
+        OutOfRangeStock(
+          itemName:
+              (row['inventory_items'] as Map?)?['name']?.toString() ??
+              'Insumo',
+          sku: (row['inventory_items'] as Map?)?['sku']?.toString() ?? '',
+          unit: (row['inventory_items'] as Map?)?['unit']?.toString() ?? '',
+          quantity: _parseDouble(row['quantity']) ?? 0,
+        ),
+    ];
   }
 
   Future<void> setCount({

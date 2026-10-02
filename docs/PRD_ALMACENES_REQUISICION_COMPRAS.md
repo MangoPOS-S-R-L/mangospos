@@ -739,6 +739,25 @@ Antes de aplicar, confirmar en la BD viva que existen
 `user_has_business_permission(uuid,text)`, `user_has_business_access`,
 `user_business_role` y `profiles`.
 
+**F7b — Verificador de activos (2026-10-01, sin aplicar).** Los activos ya
+estaban etiquetados con códigos propios. `20261001_0050_fixed_asset_verification.sql`
+(+ROLLBACK generado desde la 0052; va DESPUÉS de la 0052, no la edita):
+- Ficha: `quantity` (un registro puede ser un grupo con una etiqueta: 40
+  sillas), `purchase_cost` = valor UNITARIO (total = cantidad × valor), código
+  de etiqueta propio (único sin distinguir mayúsculas; vacío = AF-00001),
+  `last_verified_at`. Cambio de cantidad = evento `quantity_changed` con motivo.
+- Verificación por ubicación (o de todas): al abrir se congela lo esperado; se
+  escanea (pistola) o marca lo encontrado, con cantidad en los grupos; lo no
+  registrado se da de alta en el acto; al cerrar se DECIDE cada diferencia
+  (faltante: pendiente o perdido; sobrante; fuera de lugar → trasladar; estado
+  visto). Lo encontrado queda verificado con evento `verified`. Acta A4 con
+  tres firmas (BORRADOR mientras está abierta).
+- App: `Activos fijos → Verificar` / `Historial de verificaciones`
+  (`/inventory/fixed-assets/verifications[/:id]`). Prueba local:
+  `supabase/tests/fixed_asset_verification_local_test.sh`.
+- Límite conocido: un grupo encontrado a medias en OTRA ubicación (10 de 40
+  sillas) no se parte: «trasladar» mueve el registro entero.
+
 ### F8 — Préstamos
 - Salida con devolución pendiente, comprobantes y vista de saldo.
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import '../performance/performance_diagnostics.dart';
 
 /// Coordina la BAJADA de datos (server → device) en reconexión (F6). Refresca
 /// los caches de lectura (catálogo, roster, zonas, inventario, config…) sin
@@ -157,6 +158,11 @@ class OfflineSyncCoordinator extends ChangeNotifier {
       lastFinishedAt = DateTime.now();
       _emit();
       final ms = DateTime.now().difference(t0).inMilliseconds;
+      PerformanceDiagnostics.instance.record(
+        'preparacion_offline_total',
+        ms,
+        success: fallaron == 0 && failedSteps.isEmpty,
+      );
       debugPrint(
         '[OfflineSyncCoordinator] bajada ($motivo): $ok ok, $fallaron con '
         'error, ${ms}ms. Los caches quedaron tibios para la próxima caída.',

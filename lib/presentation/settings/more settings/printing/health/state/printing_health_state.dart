@@ -8,6 +8,7 @@
 import 'package:equatable/equatable.dart';
 
 import 'package:mangopos/data/models/printing_v2.dart';
+import 'package:mangopos/core/offline/pending_kitchen_prints.dart';
 
 /// Nivel de salud agregado por impresora. Lo deriva la viewmodel a
 /// partir de online + last_seen + counts de jobs.
@@ -35,6 +36,7 @@ class PrinterHealth extends Equatable {
   final int pendingCount;
   final int failedCount;
   final int printingCount;
+
   /// Slice C — Status granular reportado por el agent vía `printer_health`
   /// (Fase 1). NULL = nunca reportó (el agent no soporta probe o no corrió
   /// todavía). Posibles: online / offline / low_paper / no_paper /
@@ -72,9 +74,7 @@ class PrinterHealth extends Equatable {
     );
   }
 
-  PrinterHealth copyWith({
-    PrinterHealthStatus? granularStatus,
-  }) {
+  PrinterHealth copyWith({PrinterHealthStatus? granularStatus}) {
     return PrinterHealth(
       id: id,
       name: name,
@@ -136,15 +136,15 @@ class PrinterHealth extends Equatable {
   /// Slice C: label human-readable del status granular para mostrar en UI.
   /// Retorna NULL si no hay granular reportado (caer al display legacy).
   String? get granularStatusLabel => switch (granularStatus) {
-        null => null,
-        PrinterHealthStatus.online => null, // no agrega info
-        PrinterHealthStatus.offline => 'Offline',
-        PrinterHealthStatus.lowPaper => 'Poco papel',
-        PrinterHealthStatus.noPaper => 'Sin papel',
-        PrinterHealthStatus.coverOpen => 'Tapa abierta',
-        PrinterHealthStatus.error => 'Error',
-        PrinterHealthStatus.unknown => null,
-      };
+    null => null,
+    PrinterHealthStatus.online => null, // no agrega info
+    PrinterHealthStatus.offline => 'Offline',
+    PrinterHealthStatus.lowPaper => 'Poco papel',
+    PrinterHealthStatus.noPaper => 'Sin papel',
+    PrinterHealthStatus.coverOpen => 'Tapa abierta',
+    PrinterHealthStatus.error => 'Error',
+    PrinterHealthStatus.unknown => null,
+  };
 
   @override
   List<Object?> get props => [
@@ -274,16 +274,23 @@ class PrinterStateTransition extends Equatable {
   }
 
   @override
-  List<Object?> get props =>
-      [printerId, printerName, previous, current, granularLabel];
+  List<Object?> get props => [
+    printerId,
+    printerName,
+    previous,
+    current,
+    granularLabel,
+  ];
 }
 
 class PrintingHealthState extends Equatable {
   final List<PrinterHealth> printers;
   final List<PrintJobRow> activeJobs;
+  final List<PendingKitchenPrint> pendingKitchenPrints;
   final bool loading;
   final String? error;
   final DateTime? lastUpdatedAt;
+
   /// Slice C.2: transiciones a peor estado detectadas en el último
   /// refresh. La UI las consume para mostrar snackbars y luego llama a
   /// `clearTransitions` para no re-notificar.
@@ -292,6 +299,7 @@ class PrintingHealthState extends Equatable {
   const PrintingHealthState({
     this.printers = const [],
     this.activeJobs = const [],
+    this.pendingKitchenPrints = const [],
     this.loading = false,
     this.error,
     this.lastUpdatedAt,
@@ -301,6 +309,7 @@ class PrintingHealthState extends Equatable {
   PrintingHealthState copyWith({
     List<PrinterHealth>? printers,
     List<PrintJobRow>? activeJobs,
+    List<PendingKitchenPrint>? pendingKitchenPrints,
     bool? loading,
     String? error,
     bool clearError = false,
@@ -310,6 +319,7 @@ class PrintingHealthState extends Equatable {
     return PrintingHealthState(
       printers: printers ?? this.printers,
       activeJobs: activeJobs ?? this.activeJobs,
+      pendingKitchenPrints: pendingKitchenPrints ?? this.pendingKitchenPrints,
       loading: loading ?? this.loading,
       error: clearError ? null : (error ?? this.error),
       lastUpdatedAt: lastUpdatedAt ?? this.lastUpdatedAt,
@@ -323,13 +333,13 @@ class PrintingHealthState extends Equatable {
       activeJobs.where((j) => j.isTerminalFailed).length;
 
   /// Total de jobs pendientes/en proceso/en retry.
-  int get jobsInFlight =>
-      activeJobs.where((j) => !j.isTerminalFailed).length;
+  int get jobsInFlight => activeJobs.where((j) => !j.isTerminalFailed).length;
 
   @override
   List<Object?> get props => [
     printers,
     activeJobs,
+    pendingKitchenPrints,
     loading,
     error,
     lastUpdatedAt,

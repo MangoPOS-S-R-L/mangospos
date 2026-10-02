@@ -58,7 +58,7 @@ class ZonesRepository {
   /// Usa los defaults de [fetchZones] (sin virtuales, solo activas). Esos
   /// son los unicos parametros que la vista "Por zona" necesita.
   Future<({List<Zone> zones, bool fromCache, DateTime? cachedAt})>
-      fetchZonesWithCache(String businessId) async {
+  fetchZonesWithCache(String businessId) async {
     try {
       final zones = await fetchZones(businessId);
       return (zones: zones, fromCache: false, cachedAt: null);
@@ -151,10 +151,9 @@ class ZonesRepository {
 
     // Persistir filas enriquecidas (con waiter_name / customer_name / total
     // calculado) para el cache offline. fetchByZoneWithCache las reusa.
-    unawaited(ZonesOfflineCache().saveZoneStatusSnapshot(
-      zoneId: zoneId,
-      rowsRaw: rows,
-    ));
+    unawaited(
+      ZonesOfflineCache().saveZoneStatusSnapshot(zoneId: zoneId, rowsRaw: rows),
+    );
 
     return rows.map(TableStatus.fromMap).toList();
   }
@@ -183,10 +182,12 @@ class ZonesRepository {
     }
 
     for (final entry in rawByZone.entries) {
-      unawaited(ZonesOfflineCache().saveZoneStatusSnapshot(
-        zoneId: entry.key,
-        rowsRaw: entry.value,
-      ));
+      unawaited(
+        ZonesOfflineCache().saveZoneStatusSnapshot(
+          zoneId: entry.key,
+          rowsRaw: entry.value,
+        ),
+      );
     }
 
     return {
@@ -203,10 +204,7 @@ class ZonesRepository {
   /// en otro terminal mientras estabamos offline no se reflejan hasta que
   /// el internet vuelva y se llame de nuevo a este metodo.
   Future<({List<TableStatus> rows, bool fromCache, DateTime? cachedAt})>
-      fetchByZoneWithCache(
-    String zoneId, {
-    String? businessId,
-  }) async {
+  fetchByZoneWithCache(String zoneId, {String? businessId}) async {
     try {
       final rows = await fetchByZone(zoneId, businessId: businessId);
       return (rows: rows, fromCache: false, cachedAt: null);
@@ -232,6 +230,43 @@ class ZonesRepository {
   }
 
   // ---- MESAS POR ZONA (para Ajustes → Salones y mesas) ----
+  /// Prepara el plano offline de todas las zonas con una lectura agrupada,
+  /// manteniendo el mismo snapshot por zona que fetchTablesByZone.
+  Future<void> prewarmTablesForZones(List<String> zoneIds) async {
+    if (zoneIds.isEmpty) return;
+    final uniqueIds = zoneIds.toSet().toList(growable: false);
+    final grouped = <String, List<Map<String, dynamic>>>{
+      for (final id in uniqueIds) id: <Map<String, dynamic>>[],
+    };
+    const pageSize = 1000;
+    for (var offset = 0; ; offset += pageSize) {
+      final rows = await sb
+          .from('dining_tables')
+          .select(
+            'id, zone_id, code, label, shape, capacity, '
+            'pos_x, pos_y, width, height, rotation, '
+            'state, is_active, created_at',
+          )
+          .inFilter('zone_id', uniqueIds)
+          .eq('is_active', true)
+          .order('zone_id', ascending: true)
+          .order('code', ascending: true)
+          .order('id', ascending: true)
+          .range(offset, offset + pageSize - 1);
+      for (final row in rows) {
+        final table = Map<String, dynamic>.from(row as Map);
+        grouped[table['zone_id']]?.add(table);
+      }
+      if (rows.length < pageSize) break;
+    }
+    for (final entry in grouped.entries) {
+      await ZonesOfflineCache().saveZoneTablesSnapshot(
+        zoneId: entry.key,
+        rowsRaw: entry.value,
+      );
+    }
+  }
+
   Future<List<DiningTable>> fetchTablesByZone(
     String zoneId, {
     bool includeInactive = false,
@@ -279,25 +314,21 @@ class ZonesRepository {
   /// el modal de asignar a mesa y el floor map quedaban vacíos sin red aunque
   /// las zonas sí cargaran de cache — el cajero veía la zona pero ninguna mesa.
   Future<({List<DiningTable> tables, bool fromCache, DateTime? cachedAt})>
-      fetchTablesByZoneWithCache(String zoneId) async {
+  fetchTablesByZoneWithCache(String zoneId) async {
     try {
       final tables = await fetchTablesByZone(zoneId);
       return (tables: tables, fromCache: false, cachedAt: null);
     } catch (_) {
       final cached = await loadCachedTablesByZone(zoneId);
       if (cached == null) rethrow;
-      return (
-        tables: cached.tables,
-        fromCache: true,
-        cachedAt: cached.savedAt,
-      );
+      return (tables: cached.tables, fromCache: true, cachedAt: cached.savedAt);
     }
   }
 
   /// Lee el snapshot local de las mesas de una zona SIN tocar la red.
   /// Devuelve null si no hay snapshot.
   Future<({List<DiningTable> tables, DateTime savedAt})?>
-      loadCachedTablesByZone(String zoneId) async {
+  loadCachedTablesByZone(String zoneId) async {
     final snap = await ZonesOfflineCache().loadZoneTablesSnapshot(
       zoneId: zoneId,
     );
@@ -347,10 +378,7 @@ class ZonesRepository {
   }) async {
     final res = await sb.rpc(
       'fn_move_table_to_zone',
-      params: {
-        'p_table_id': tableId,
-        'p_target_zone_id': targetZoneId,
-      },
+      params: {'p_table_id': tableId, 'p_target_zone_id': targetZoneId},
     );
     if (res is Map) {
       return res['moved'] == true;
@@ -491,8 +519,10 @@ class ZonesRepository {
           .eq('id', sessionId)
           .select('id');
       // ignore: avoid_print
-      print('[ZonesRepo] markPrecheckPrinted OK rows=${result.length} '
-          'sessionId=$sessionId');
+      print(
+        '[ZonesRepo] markPrecheckPrinted OK rows=${result.length} '
+        'sessionId=$sessionId',
+      );
     } catch (e) {
       // No relanzamos: la mesa simplemente seguirá en naranja, pero
       // la precuenta ya salió en papel — el flujo principal no debe

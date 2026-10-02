@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart' show ChangeNotifierProvider;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -67,25 +66,14 @@ List<Future<void> Function()> buildOfflineRefreshers({
   final catalog =
       refreshCatalog ??
       (String b) => CatalogRefreshService(resolveClient()).refresh(b);
-  // Zonas + las MESAS de cada zona. Bajar solo las zonas dejaba el floor map y
-  // el modal de asignar a mesa sin geometría en un arranque en frío: el cajero
-  // veía sus zonas pero ninguna mesa dentro. Son pocas zonas por local (una
-  // consulta por zona), y ambas lecturas cachean como efecto secundario.
+  // Zonas + mesas en una lectura agrupada. Ambas lecturas guardan las copias
+  // por zona para el plano y el modal de asignar sin internet.
   final zones =
       refreshZones ??
       (String b) async {
         final repo = ZonesRepository(resolveClient());
         final list = await repo.fetchZones(b, includeVirtualSalesZones: true);
-        var failed = false;
-        for (final zone in list) {
-          try {
-            await repo.fetchTablesByZone(zone.id);
-          } catch (e) {
-            failed = true;
-            debugPrint('[offline] mesas de la zona ${zone.id} no bajaron: $e');
-          }
-        }
-        if (failed) throw StateError('No se descargaron todas las mesas.');
+        await repo.prewarmTablesForZones([for (final zone in list) zone.id]);
       };
   final inventory =
       refreshInventory ??
@@ -129,14 +117,15 @@ List<Future<void> Function()> buildOfflineRefreshers({
       (String b) async {
         final client = resolveClient();
         final results = await Future.wait<Object?>([
-          CustomersRepository(client).getCustomers(b).then<Object?>((_) => null,
-              onError: (Object e) => e),
-          CashierRepository(client).getPaymentMethods(b).then<Object?>(
-              (_) => null,
-              onError: (Object e) => e),
-          BankAccountsRepository(client).listActive(b).then<Object?>(
-              (_) => null,
-              onError: (Object e) => e),
+          CustomersRepository(client)
+              .getCustomers(b)
+              .then<Object?>((_) => null, onError: (Object e) => e),
+          CashierRepository(client)
+              .getPaymentMethods(b)
+              .then<Object?>((_) => null, onError: (Object e) => e),
+          BankAccountsRepository(
+            client,
+          ).listActive(b).then<Object?>((_) => null, onError: (Object e) => e),
         ]);
         final error = results.whereType<Object>().firstOrNull;
         if (error != null) throw error;
@@ -206,12 +195,14 @@ Future<void> _refreshPosLookups(
         .map((p) => p['id']?.toString() ?? '')
         .where((id) => id.isNotEmpty && !byItem.containsKey(id)),
   );
-  final sales = SalesRepository(client);
-  for (final product in products.where((p) => p['item_type'] == 'combo')) {
-    final id = product['id'].toString();
-    final groups = await sales.getComboGroupsForMenuItem(id);
-    await cache.saveComboGroups(businessId, id, groups);
-  }
+  final comboIds = products
+      .where((p) => p['item_type'] == 'combo')
+      .map((p) => p['id']?.toString())
+      .whereType<String>()
+      .where((id) => id.isNotEmpty)
+      .toList(growable: false);
+  final combos = await SalesRepository(client).getComboGroupsForItems(comboIds);
+  await cache.replaceAllComboGroups(businessId, combos);
 
   // Razones de gastos/ingresos: la pantalla las exige para registrar uno.
   final reasons = await CashierRepository(

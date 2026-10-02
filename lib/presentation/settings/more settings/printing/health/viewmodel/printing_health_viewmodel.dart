@@ -17,8 +17,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../../../core/business/business_resolver.dart';
+import '../../../../../../core/offline/pending_kitchen_prints.dart';
 import '../../../../../../data/models/printing_v2.dart';
 import '../../../../../../data/repositories/printing_repository.dart';
+import '../../../../../../data/repositories/printing_service.dart';
 import '../../../../../../data/repositories/printing_v2_repository.dart';
 import '../state/printing_health_state.dart';
 
@@ -26,9 +28,10 @@ final printingHealthRepositoryProvider = Provider<PrintingRepository>((ref) {
   return PrintingRepository(Supabase.instance.client);
 });
 
-final printingHealthViewModelProvider = NotifierProvider.autoDispose<
-    PrintingHealthViewModel,
-    PrintingHealthState>(PrintingHealthViewModel.new);
+final printingHealthViewModelProvider =
+    NotifierProvider.autoDispose<PrintingHealthViewModel, PrintingHealthState>(
+      PrintingHealthViewModel.new,
+    );
 
 class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   String? _businessId;
@@ -36,8 +39,7 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   Timer? _refreshDebounce;
   bool _disposed = false;
 
-  PrintingRepository get _repo =>
-      ref.read(printingHealthRepositoryProvider);
+  PrintingRepository get _repo => ref.read(printingHealthRepositoryProvider);
 
   @override
   PrintingHealthState build() {
@@ -60,7 +62,11 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   /// fetch inicial y abre la suscripción realtime.
   Future<void> initialize({String businessId = 'auto'}) async {
     if (_disposed) return;
-    state = state.copyWith(loading: true, clearError: true);
+    state = state.copyWith(
+      loading: true,
+      clearError: true,
+      pendingKitchenPrints: const [],
+    );
     try {
       _businessId = await BusinessResolver.ensure(businessId);
       await _fetch();
@@ -82,6 +88,9 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
     final bid = _businessId;
     if (bid == null) return;
     try {
+      final pending = await PendingKitchenPrints.instance.list(bid);
+      if (_disposed) return;
+      state = state.copyWith(pendingKitchenPrints: pending);
       final printersFuture = _repo.getPrintersHealth(bid);
       final jobsFuture = _repo.getActivePrintJobs(bid);
       // Slice C: status granular (no_paper/cover_open/error) desde
@@ -131,6 +140,31 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
     }
   }
 
+  Future<String?> retryPendingKitchenPrint(String id) async {
+    final bid = _businessId;
+    if (bid == null) return 'No hay un negocio activo.';
+    try {
+      await PrintingService(
+        Supabase.instance.client,
+      ).retryPendingKitchenPrint(businessId: bid, pendingId: id);
+      state = state.copyWith(
+        pendingKitchenPrints: await PendingKitchenPrints.instance.list(bid),
+      );
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<void> dismissPendingKitchenPrint(String id) async {
+    final bid = _businessId;
+    if (bid == null) return;
+    await PendingKitchenPrints.instance.dismiss(businessId: bid, id: id);
+    state = state.copyWith(
+      pendingKitchenPrints: await PendingKitchenPrints.instance.list(bid),
+    );
+  }
+
   /// Slice C.2: identifica impresoras que pasaron de ok → warning/down.
   /// Solo emite la primera vez (no re-notifica si sigue en el mismo mal
   /// estado). No emite para transiciones a mejor (warning → ok).
@@ -149,18 +183,21 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
       if (prev == null) continue; // impresora nueva, no notificamos.
       if (prev.level == cur.level) continue;
       // Solo notificar transiciones a peor.
-      final isWorse = (prev.level == PrinterHealthLevel.ok &&
+      final isWorse =
+          (prev.level == PrinterHealthLevel.ok &&
               cur.level != PrinterHealthLevel.ok) ||
           (prev.level == PrinterHealthLevel.warning &&
               cur.level == PrinterHealthLevel.down);
       if (!isWorse) continue;
-      result.add(PrinterStateTransition(
-        printerId: cur.id,
-        printerName: cur.name,
-        previous: prev.level,
-        current: cur.level,
-        granularLabel: cur.granularStatusLabel,
-      ));
+      result.add(
+        PrinterStateTransition(
+          printerId: cur.id,
+          printerName: cur.name,
+          previous: prev.level,
+          current: cur.level,
+          granularLabel: cur.granularStatusLabel,
+        ),
+      );
     }
     return result;
   }
@@ -208,7 +245,8 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   /// del business. Retorna map por printer_id para enriquecer la lista
   /// principal con status granular.
   Future<Map<String, PrinterHealthRecord>> _fetchGranularHealth(
-      String businessId) async {
+    String businessId,
+  ) async {
     try {
       final repo = PrinterHealthRepository(Supabase.instance.client);
       final list = await repo.getHealthForBusiness(businessId);

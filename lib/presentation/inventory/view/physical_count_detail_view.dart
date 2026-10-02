@@ -228,10 +228,91 @@ class _PhysicalCountDetailViewState
       await _load();
     } catch (e) {
       if (!mounted) return;
+      if (PhysicalCountRepository.isQuantityOverflow(e)) {
+        await _explainOutOfRangeStock();
+        return;
+      }
       AppToast.error(context, 'No se pudo congelar: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Congelar falló porque algún insumo de la bodega tiene una existencia
+  /// imposible (de 10.000 millones para arriba). Se dice CUÁL y cómo
+  /// corregirlo: un aviso genérico deja a la persona sin salida.
+  Future<void> _explainOutOfRangeStock() async {
+    final warehouseId = _detail?.header.warehouseId;
+    var items = const <OutOfRangeStock>[];
+    if (warehouseId != null && warehouseId.isNotEmpty) {
+      try {
+        items = await ref
+            .read(physicalCountRepositoryProvider)
+            .findOutOfRangeStock(warehouseId);
+      } catch (_) {
+        // Sin la lista igual se explica qué pasa.
+      }
+    }
+    if (!mounted) return;
+    final qty = NumberFormat.decimalPattern('es_DO');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('count-out-of-range'),
+        title: const Text('Hay existencias imposibles en esta bodega'),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  items.isEmpty
+                      ? 'Algún insumo de esta bodega tiene una existencia de '
+                            '10.000 millones o más, y el conteo no la puede '
+                            'copiar.'
+                      : items.length == 1
+                      ? 'Este insumo tiene una existencia que el conteo no '
+                            'puede copiar:'
+                      : 'Estos insumos tienen una existencia que el conteo '
+                            'no puede copiar:',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                for (final i in items)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '• ${i.itemName}'
+                      '${i.sku.isEmpty ? '' : ' (${i.sku})'}: '
+                      '${qty.format(i.quantity)} ${i.unit}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Casi siempre es un código de barras escaneado en el campo '
+                  'de cantidad (de una compra, una recepción o un ajuste). '
+                  'Corrige la existencia desde Insumos → Ajustar, con el '
+                  'motivo «Corrección», y vuelve a congelar.',
+                  style: TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openComplete() async {

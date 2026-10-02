@@ -77,9 +77,11 @@ void main() {
     test('la cola offline sobrevive', () async {
       await storage.write('offline_queue_$otro', '[]');
       await storage.write('offline_print_queue_$otro', '[]');
+      await storage.write('pending_kitchen_prints_$otro', '[]');
       await pruner.pruneOtherBusinesses(activo);
       expect(await storage.read('offline_queue_$otro'), isNotNull);
       expect(await storage.read('offline_print_queue_$otro'), isNotNull);
+      expect(await storage.read('pending_kitchen_prints_$otro'), isNotNull);
     });
 
     test('los mapas de ids sobreviven', () async {

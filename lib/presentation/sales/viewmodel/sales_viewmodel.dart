@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:mangopos/core/network/resilient_http_client.dart';
+import 'package:mangopos/core/performance/performance_diagnostics.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
 import 'package:flutter/foundation.dart';
@@ -97,6 +98,32 @@ class _HubModeShortCircuit implements Exception {
   const _HubModeShortCircuit();
 }
 
+/// Cliente de la orden (sesión) elegido con el botón "Cliente".
+class _OrderCustomer {
+  const _OrderCustomer({
+    required this.id,
+    required this.name,
+    this.legalName,
+    this.taxId,
+  });
+
+  final String id;
+  final String name;
+  final String? legalName;
+  final String? taxId;
+}
+
+/// Cliente ya aplicado en pantalla que el servidor todavía no confirma (ver
+/// `SalesViewModel._pendingCustomers`).
+class _PendingOrderCustomer {
+  _PendingOrderCustomer(this.customer) : at = DateTime.now();
+
+  final _OrderCustomer customer;
+  final DateTime at;
+  bool savedOnServer = false;
+  bool pushing = false;
+}
+
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   static const _promoPrefix = '[PROMO_AUTO:';
@@ -188,6 +215,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final Map<String, String?> _checkNcfOverride = {};
   final Map<String, ({String? id, String? name, String? rnc})>
   _checkCustomerOverride = {};
+  // Cliente de la orden que el cajero ya eligió pero el servidor aún no
+  // confirma (sin red, orden local o RPC en vuelo), por order_id. Se reaplica
+  // tras cada recarga hasta que el bundle lo traiga: antes una recarga stale
+  // (o la falta de red) lo borraba y la comanda/factura salían sin nombre.
+  // Al sincronizar, sigue a la orden cuando el `local-order-…` se remapea.
+  final Map<String, _PendingOrderCustomer> _pendingCustomers = {};
+  // Cliente elegido cuando la venta rápida/manual todavía no tenía orden
+  // (abriéndose, o la anterior cerrándose tras el cobro). Se aplica a la venta
+  // nueva en cuanto abre.
+  ({String origin, _OrderCustomer customer, DateTime at})? _nextOrderCustomer;
+  // Venta rápida/manual ya cobrada que sigue en pantalla mientras se abre la
+  // siguiente. Un cliente elegido en esa ventana es para la venta nueva.
+  String? _closingOrderId;
   bool _syncInFlight = false;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
@@ -1184,6 +1224,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state.order == null) {
       return;
     }
+    final snapshot = state;
+    final orderId = snapshot.order!.id;
 
     // Para mesas, la clave del snapshot es SIEMPRE el tableId (es la que
     // leen el fallback offline de openTable, la hidratación cache-first y
@@ -1197,7 +1239,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       slotId: _resolvePersistSlotId(origin, effectiveTableId),
       origin: origin,
       tableId: effectiveTableId,
-      state: state,
+      state: snapshot,
       localOnly: localOnly,
     );
 
@@ -1205,7 +1247,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // actualizaba al abrir/cargar, así que salir y volver a la mesa tras una
     // mutación offline pintaba el estado viejo.
     if (origin == 'table' && effectiveTableId != null) {
-      _tableCache[effectiveTableId] = state;
+      if (await _offlinePos.isOrderClosedLocally(
+        businessId: businessId,
+        orderId: orderId,
+      )) {
+        return;
+      }
+      if (state.order?.id == orderId) {
+        _tableCache[effectiveTableId] = snapshot;
+      }
+    }
+  }
+
+  Future<void> markPaidOrderLocally(String orderId) async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    await _offlinePos.markOrderClosedLocally(
+      businessId: businessId,
+      orderId: orderId,
+    );
+    _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
+    if (state.order?.id == orderId) {
+      ++_openTableToken;
+      state = const CurrentOrderState();
     }
   }
 
@@ -1314,6 +1378,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 peopleCount: peopleCount,
                 openedByEmployeeId: _trustedActiveWaiter()?.employeeId,
               );
+          if (await _offlinePos.isOrderClosedLocally(
+            businessId: businessId,
+            orderId: result.orderId,
+          )) {
+            throw StateError('El Hub devolvió una orden ya cobrada.');
+          }
           await _loadOrderDetail(
             result.orderId,
             origin: 'table',
@@ -1340,7 +1410,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             )).any((op) => op['order_id'] == existing.order?.id);
       // A cached order must not hide another terminal's acknowledged changes.
       // Keep local state only when its edits have not reached the Hub yet.
-      if (existing != null && (hubOrder == null || pendingHere)) {
+      final existingClosed =
+          existing?.order?.id != null &&
+          await _offlinePos.isOrderClosedLocally(
+            businessId: businessId,
+            orderId: existing!.order!.id,
+          );
+      if (existing != null &&
+          !existingClosed &&
+          (hubOrder == null || pendingHere)) {
         state = _normalizeHydratedState(
           existing.copyWith(loading: false, origin: 'table', error: null),
         );
@@ -1352,7 +1430,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       //    caja)? → reconstruirla y resumirla para verla/cobrarla. Persistimos
       //    un snapshot local con el MISMO order_id del Hub para que las
       //    mutaciones (agregar ítem / cobrar) referencien esa misma orden.
+      final hubOrderId =
+          hubOrder?['order_id']?.toString() ?? hubOrder?['id']?.toString();
+      final hubOrderClosed =
+          hubOrderId != null &&
+          await _offlinePos.isOrderClosedLocally(
+            businessId: businessId,
+            orderId: hubOrderId,
+          );
       if (hubOrder != null &&
+          !hubOrderClosed &&
           ((hubOrder['items'] as List?)?.isNotEmpty ?? false)) {
         final hydrated = stateFromHubOrder(hubOrder);
         await _offlinePos.saveSnapshot(
@@ -1470,7 +1557,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
-  Future<void> openTable(String tableId, {int peopleCount = 1}) async {
+  Future<void> openTable(String tableId, {int peopleCount = 1}) {
+    final diagnostics = PerformanceDiagnostics.instance;
+    if (!diagnostics.isRunning) {
+      return _openTableImpl(tableId, peopleCount: peopleCount);
+    }
+    return diagnostics
+        .measure('apertura_mesa_total', () async {
+          await _openTableImpl(tableId, peopleCount: peopleCount);
+          return state.order != null;
+        }, accepted: (opened) => opened)
+        .then<void>((_) {});
+  }
+
+  Future<void> _openTableImpl(String tableId, {int peopleCount = 1}) async {
     // ⚡ Fix anti-parpadeo: reset SÍNCRONO del state ANTES de cualquier
     // await. Antes los checks de caja + business tax se ejecutaban
     // primero (cada uno con await) y durante esos ~200-400ms la UI
@@ -1598,7 +1698,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           businessId: businessId,
           slotId: tableId,
         );
-        if (offlineState != null) {
+        if (offlineState != null &&
+            offlineState.order?.id != null &&
+            !await _offlinePos.isOrderClosedLocally(
+              businessId: businessId,
+              orderId: offlineState.order!.id,
+            )) {
           state = _normalizeHydratedState(
             offlineState.copyWith(
               loading: false,
@@ -2145,15 +2250,72 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<void> assignCustomerToCurrentOrder({
+  /// Asigna el cliente a la orden DESDE QUE SE ELIGE: el estado cambia al
+  /// instante (chip, comanda y factura ya lo usan) y el servidor se actualiza
+  /// detrás. Sin red o en orden local queda pendiente y se guarda al
+  /// reconectar; el cobro offline ya viaja con `customer_id`, así que el
+  /// comprobante sale a su nombre igual. Si la venta rápida/manual todavía no
+  /// tiene orden ([nextOrderOrigin]), se aplica a la venta nueva cuando abra.
+  ///
+  /// Devuelve null si quedó asignado, o el mensaje de error para mostrar.
+  Future<String?> assignCustomerToCurrentOrder({
     required String customerId,
     required String customerName,
     String? customerLegalName,
     String? customerTaxId,
+    String? nextOrderOrigin,
   }) async {
+    final customer = _OrderCustomer(
+      id: customerId,
+      name: customerName,
+      legalName: customerLegalName,
+      taxId: customerTaxId,
+    );
     final order = state.order;
-    if (order == null) return;
+    final orderClosing =
+        order != null &&
+        (order.id == _closingOrderId ||
+            order.status == 'paid' ||
+            order.status == 'void' ||
+            order.closedAt != null);
+    if (order == null || orderClosing) {
+      if (nextOrderOrigin == 'quick' || nextOrderOrigin == 'manual') {
+        _nextOrderCustomer = (
+          origin: nextOrderOrigin!,
+          customer: customer,
+          at: DateTime.now(),
+        );
+        return null;
+      }
+      return 'No hay una orden abierta para asignarle el cliente.';
+    }
 
+    final previous = (
+      id: state.customerId,
+      name: state.customerName,
+      legalName: state.customerLegalName,
+      taxId: state.customerTaxId,
+    );
+    final pending = _PendingOrderCustomer(customer);
+    _pendingCustomers.removeWhere(
+      (_, p) => DateTime.now().difference(p.at) > const Duration(hours: 12),
+    );
+    _pendingCustomers[order.id] = pending;
+    _applyCustomerToState(customer);
+    // Retail: reflejar el cliente en la etiqueta de la pestaña del carrito.
+    if (_isRetail && _activeRetailSlotId != null) {
+      ref
+          .read(retailCartsProvider.notifier)
+          .setCustomerName(_activeRetailSlotId!, customerName);
+      await _persistRetailCartsIndex();
+    }
+
+    if (_preferLocalOperations || order.id.startsWith('local-order-')) {
+      await _persistCurrentState(localOnly: true);
+      return null;
+    }
+
+    pending.pushing = true;
     try {
       await ref
           .read(salesRepositoryProvider)
@@ -2162,28 +2324,151 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             customerId: customerId,
             customerName: customerName,
             businessId: _activeBusinessId,
-          );
-      state = state.copyWith(
-        customerId: customerId,
-        customerName: customerName,
-        customerLegalName: customerLegalName,
-        customerTaxId: customerTaxId,
-      );
-      // Retail: reflejar el cliente en la etiqueta de la pestaña del carrito.
-      if (_isRetail && _activeRetailSlotId != null) {
-        ref
-            .read(retailCartsProvider.notifier)
-            .setCustomerName(_activeRetailSlotId!, customerName);
-        await _persistRetailCartsIndex();
-      }
-      await _loadOrderDetail(
-        order.id,
-        origin: state.origin,
-        caller: 'assignCustomer',
-      );
+          )
+          .timeout(const Duration(seconds: 10));
+      pending.savedOnServer = true;
+      pending.pushing = false;
     } catch (e) {
-      state = state.copyWith(error: 'Error al asignar cliente: $e');
+      pending.pushing = false;
+      if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
+        // Queda pendiente: se guarda en el servidor en la próxima recarga
+        // con red (ver _pushPendingCustomer).
+        _recordTransportFailure();
+        await _persistCurrentState(localOnly: true);
+        return null;
+      }
+      // El servidor rechazó la asignación: deshacer lo aplicado.
+      if (identical(_pendingCustomers[order.id], pending)) {
+        _pendingCustomers.remove(order.id);
+      }
+      if (state.order?.id == order.id &&
+          state.customerId == customer.id) {
+        state = state
+            .copyWith(clearCustomer: true)
+            .copyWith(
+              customerId: previous.id,
+              customerName: previous.name,
+              customerLegalName: previous.legalName,
+              customerTaxId: previous.taxId,
+            );
+        if (_isRetail && _activeRetailSlotId != null) {
+          ref
+              .read(retailCartsProvider.notifier)
+              .setCustomerName(_activeRetailSlotId!, previous.name);
+          await _persistRetailCartsIndex();
+        }
+      }
+      return 'No se pudo asignar el cliente: ${FriendlyError.from(e)}';
     }
+    // Sin `await` desde que se marcó `savedOnServer`: la recarga arranca ya y
+    // su generación nueva descarta cualquier recarga vieja en vuelo.
+    await _loadOrderDetail(
+      order.id,
+      origin: state.origin,
+      caller: 'assignCustomer',
+    );
+    return null;
+  }
+
+  /// Pone el cliente en el estado. Limpia primero el anterior para que su
+  /// RNC/razón social no se queden pegados al nuevo cliente si este no trae.
+  void _applyCustomerToState(_OrderCustomer c) {
+    state = state
+        .copyWith(clearCustomer: true)
+        .copyWith(
+          customerId: c.id,
+          customerName: c.name,
+          customerLegalName: c.legalName,
+          customerTaxId: c.taxId,
+        );
+  }
+
+  /// Guarda en el servidor el cliente pendiente de [orderId] (elegido sin red
+  /// o en orden local). Best-effort: si vuelve a fallar por red sigue
+  /// pendiente; si el servidor lo rechaza se suelta para no reintentar en
+  /// cada recarga.
+  Future<void> _pushPendingCustomer(String orderId, {String? sessionId}) async {
+    final pending = _pendingCustomers[orderId];
+    if (pending == null || pending.savedOnServer || pending.pushing) return;
+    if (orderId.startsWith('local-order-') || !_connectivity.isConnected) {
+      return;
+    }
+    // Antes del await: evita dos envíos si llegan dos recargas juntas.
+    pending.pushing = true;
+    try {
+      final repo = ref.read(salesRepositoryProvider);
+      final resolvedSessionId =
+          sessionId ??
+          (await repo.getOrder(orderId, businessId: _activeBusinessId))
+              ?.sessionId;
+      if (resolvedSessionId == null || resolvedSessionId.isEmpty) return;
+      await repo
+          .assignCustomerToSession(
+            sessionId: resolvedSessionId,
+            customerId: pending.customer.id,
+            customerName: pending.customer.name,
+            businessId: _activeBusinessId,
+          )
+          .timeout(const Duration(seconds: 10));
+      pending.savedOnServer = true;
+    } catch (e) {
+      if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
+        return;
+      }
+      debugPrint('[SalesVM] cliente pendiente rechazado ($orderId): $e');
+      if (identical(_pendingCustomers[orderId], pending)) {
+        _pendingCustomers.remove(orderId);
+      }
+    } finally {
+      pending.pushing = false;
+    }
+  }
+
+  /// Tras sincronizar la cola offline: los clientes elegidos sobre órdenes
+  /// locales pasan al id real de su orden y se guardan en el servidor.
+  Future<void> _remapAndPushPendingCustomers(String businessId) async {
+    for (final localId in _pendingCustomers.keys.toList(growable: false)) {
+      if (!localId.startsWith('local-order-')) continue;
+      final remoteId = await _offlinePos.mappedRemoteOrderId(
+        businessId: businessId,
+        localOrderId: localId,
+      );
+      if (remoteId == null) continue;
+      final pending = _pendingCustomers.remove(localId);
+      if (pending == null) continue;
+      _pendingCustomers.putIfAbsent(remoteId, () => pending);
+    }
+    for (final orderId in _pendingCustomers.keys.toList(growable: false)) {
+      await _pushPendingCustomer(orderId);
+    }
+  }
+
+  /// La venta rápida/manual [orderId] ya se cobró y se está abriendo la
+  /// siguiente: un cliente elegido en esta ventana es para la venta nueva.
+  void markOrderClosing(String orderId) {
+    _closingOrderId = orderId;
+  }
+
+  /// Aplica a la venta recién abierta el cliente que se eligió mientras
+  /// todavía no había orden. Solo si es del mismo modo y reciente.
+  void _applyNextOrderCustomer(String origin) {
+    final next = _nextOrderCustomer;
+    // Si la venta no llegó a abrir, el cliente espera al siguiente intento.
+    if (state.order == null) return;
+    _nextOrderCustomer = null;
+    _closingOrderId = null;
+    if (next == null || next.origin != origin) return;
+    if (DateTime.now().difference(next.at) > const Duration(minutes: 2)) {
+      return;
+    }
+    unawaited(
+      assignCustomerToCurrentOrder(
+        customerId: next.customer.id,
+        customerName: next.customer.name,
+        customerLegalName: next.customer.legalName,
+        customerTaxId: next.customer.taxId,
+      ),
+    );
   }
 
   /// Asigna un cliente a una sub-cuenta (check) puntual en vez de a la
@@ -2365,6 +2650,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         origin: origin,
         caller: 'openManualOrQuick:$origin',
       );
+      _applyNextOrderCustomer(origin);
     } catch (e) {
       final businessId = _activeBusinessId;
       // Sin red: venta NUEVA local (no se recupera ninguna vieja, así que no
@@ -2382,6 +2668,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
         state = _normalizeHydratedState(draft.copyWith(loading: false));
         unawaited(_hydrateFiscalSequencesOffline());
+        _applyNextOrderCustomer(origin);
         return;
       }
       // PRD 2.5: ignoramos completamente el cache offline para Quick/Manual.
@@ -4427,7 +4714,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Camino local: imprime directo por la LAN y encola el envío para el
       // replay. Es el de siempre sin red; ahora también el de la ventana en
       // que la red ya murió pero el detector aún no lo admite.
-      Future<void> sendLocally() async {
+      Future<KitchenSendResult> sendLocally() async {
         // sendLocalOrderToKitchen ya encola su propio 'confirm_local_order'
         // (con printed_areas para que el replay marque sin reimprimir). Antes
         // aquí se encolaba ADEMÁS un 'send_to_kitchen' → dos replays por
@@ -4473,6 +4760,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     'Comprueba la impresora y la conexión local.',
         );
         await _persistCurrentState(localOnly: true);
+        return KitchenSendResult(
+          dispatchIds: localResult.dispatchIds,
+          directAreas: localResult.dispatchIds.keys.toList(growable: false),
+          escalatedAreas: const [],
+          pendingPrintAreas: localResult.pendingAreas,
+        );
       }
 
       // Si hay ítems temporales, el servidor aún NO tiene la ronda completa.
@@ -4481,8 +4774,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (_preferLocalOperations ||
           orderId.startsWith('local-order-') ||
           state.items.any((item) => item.id.startsWith('tmp_'))) {
-        await sendLocally();
-        return null;
+        return sendLocally();
       }
 
       // Ítems que ESTE device ya sabe enviados (p.ej. impresos por el camino
@@ -4511,8 +4803,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // no salía ni se encolaba.
         debugPrint('confirmOrder: sin red antes de imprimir, envío local ($e)');
         _recordTransportFailure();
-        await sendLocally();
-        return null;
+        return sendLocally();
       }
       refreshOrder();
       return result;
@@ -4577,6 +4868,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required Order order,
     required List<OrderItem> items,
     String tableName = 'Venta Rápida',
+    // Cliente de la venta: la comanda lo imprime para que cocina sepa a quién
+    // llamar. Sin él salía solo "MESA: Venta Rápida".
+    String? customerName,
   }) async {
     try {
       final session = ref.read(sessionProvider);
@@ -4593,6 +4887,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         order: order,
         items: snapItems,
         origin: 'quick',
+        customerName: customerName,
       );
       await ref
           .read(printingServiceProvider)
@@ -4747,6 +5042,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
         } catch (e) {
           debugPrint('[SalesVM] syncHubOpLog (drenado del Hub) falló: $e');
+        }
+      }
+
+      // Clientes elegidos sin red: pasan al id real de su orden y se guardan
+      // en el servidor. Antes de las recargas de abajo, para que estas ya
+      // encuentren el cliente bajo el id nuevo.
+      if (_pendingCustomers.isNotEmpty) {
+        try {
+          await _remapAndPushPendingCustomers(businessId);
+        } catch (e) {
+          debugPrint('[SalesVM] clientes pendientes: $e');
         }
       }
 
@@ -5245,6 +5551,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // que la condición no puede cambiar bajo nuestros pies.
     if (myGeneration != _loadGeneration) return;
 
+    // Cliente elegido que el servidor todavía no confirma: gana sobre el
+    // bundle hasta que el bundle lo traiga (o el servidor ya lo tenga y otra
+    // caja lo haya cambiado después). Ver _pendingCustomers.
+    final pendingCustomer = _pendingCustomers[orderId];
+    var pushPendingCustomer = false;
+    if (pendingCustomer != null) {
+      final c = pendingCustomer.customer;
+      final confirmed =
+          customerId == c.id ||
+          (customerId == null && customerName?.trim() == c.name.trim());
+      final changedElsewhere =
+          pendingCustomer.savedOnServer &&
+          customerId != null &&
+          customerId != c.id;
+      if (confirmed || changedElsewhere) {
+        _pendingCustomers.remove(orderId);
+      } else {
+        customerId = c.id;
+        customerName = c.name;
+        pushPendingCustomer =
+            !pendingCustomer.savedOnServer && !pendingCustomer.pushing;
+      }
+    }
+
     state = _normalizeHydratedState(
       state.copyWith(
         loading: false,
@@ -5283,6 +5613,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _queuedRefreshOrderId = null;
     _queuedClearIfPaid = false;
     _refreshOrderDebounceTimer?.cancel();
+
+    if (pushPendingCustomer) {
+      unawaited(_pushPendingCustomer(orderId, sessionId: order?.sessionId));
+    }
 
     final promotionsChanged = await _applyAutomaticPromotionsIfNeeded();
     if (promotionsChanged) {

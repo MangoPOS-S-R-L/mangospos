@@ -41,6 +41,8 @@ import 'mobile_shell.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 import 'offline_preparation_banner.dart';
+import 'performance_diagnostics_dialog.dart';
+import '../../core/performance/performance_diagnostics.dart';
 import '../../core/theme/app_colors.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 
@@ -58,6 +60,12 @@ class MainShell extends ConsumerStatefulWidget {
 
 class _MainShellState extends ConsumerState<MainShell> {
   OfflineQueueSyncResult? _lastNotifiedResult;
+
+  @override
+  void dispose() {
+    PerformanceDiagnostics.instance.stop();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -297,7 +305,6 @@ class _MainShellState extends ConsumerState<MainShell> {
 
                 // ======= BANNER ACTUALIZACIÓN (solo web, solo si hay deploy nuevo)
                 const UpdateAvailableBanner(),
-                const OfflinePreparationBanner(),
 
                 // ======= CONTENIDO =======
                 Expanded(child: child),
@@ -1346,15 +1353,20 @@ class _UserInfo extends ConsumerWidget {
     final businessName = session.activeBusinessName?.trim().isNotEmpty == true
         ? session.activeBusinessName!.trim()
         : 'Negocio';
+    final canSeeInventory = ctrl.hasPermission('inventario.acceso');
 
     // Alertas de inventario (antes badges del header): se muestran dentro del
     // menú del usuario. El avatar lleva un punto rojo si hay alguna activa.
-    final lowStockCount = ref
-        .watch(lowStockBadgeCountProvider)
-        .maybeWhen(data: (v) => v, orElse: () => 0);
-    final expiringLotsCount = ref
-        .watch(expiringLotsBadgeCountProvider)
-        .maybeWhen(data: (v) => v, orElse: () => 0);
+    final lowStockCount = canSeeInventory
+        ? ref
+              .watch(lowStockBadgeCountProvider)
+              .maybeWhen(data: (v) => v, orElse: () => 0)
+        : 0;
+    final expiringLotsCount = canSeeInventory
+        ? ref
+              .watch(expiringLotsBadgeCountProvider)
+              .maybeWhen(data: (v) => v, orElse: () => 0)
+        : 0;
     final hasInventoryAlerts = lowStockCount > 0 || expiringLotsCount > 0;
 
     return Row(
@@ -1468,6 +1480,15 @@ class _UserInfo extends ConsumerWidget {
               case _UserMenuAction.settings:
                 context.go(AppRoutes.settings);
                 break;
+              case _UserMenuAction.offlinePreparation:
+                await showOfflinePreparationDialog(context, ref);
+                break;
+              case _UserMenuAction.performanceDiagnostics:
+                await showDialog<void>(
+                  context: context,
+                  builder: (_) => const PerformanceDiagnosticsDialog(),
+                );
+                break;
               case _UserMenuAction.lowStock:
                 context.go(AppRoutes.inventoryLowStock);
                 break;
@@ -1550,37 +1571,50 @@ class _UserInfo extends ConsumerWidget {
                 ),
               ),
               const PopupMenuDivider(height: 1),
-              PopupMenuItem<_UserMenuAction>(
-                value: _UserMenuAction.lowStock,
-                padding: EdgeInsets.zero,
-                height: 56,
-                child: _UserMenuTile(
-                  icon: lowStockCount > 0
-                      ? Icons.notifications_active_rounded
-                      : Icons.notifications_none,
-                  label: 'Alertas de stock bajo',
-                  accent: const Color(0xFFFFE9E0),
-                  iconColor: const Color(0xFFDC2626),
-                  badgeCount: lowStockCount,
-                  badgeColor: const Color(0xFFDC2626),
+              if (canSeeInventory)
+                PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.lowStock,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: lowStockCount > 0
+                        ? Icons.notifications_active_rounded
+                        : Icons.notifications_none,
+                    label: 'Alertas de stock bajo',
+                    accent: const Color(0xFFFFE9E0),
+                    iconColor: const Color(0xFFDC2626),
+                    badgeCount: lowStockCount,
+                    badgeColor: const Color(0xFFDC2626),
+                  ),
                 ),
-              ),
-              PopupMenuItem<_UserMenuAction>(
-                value: _UserMenuAction.expiringLots,
-                padding: EdgeInsets.zero,
-                height: 56,
-                child: _UserMenuTile(
-                  icon: expiringLotsCount > 0
-                      ? Icons.event_busy_rounded
-                      : Icons.event_note_outlined,
-                  label: 'Lotes por vencer',
-                  accent: const Color(0xFFFFEAD9),
-                  iconColor: const Color(0xFFC2410C),
-                  badgeCount: expiringLotsCount,
-                  badgeColor: const Color(0xFFC2410C),
+              if (canSeeInventory)
+                PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.expiringLots,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: expiringLotsCount > 0
+                        ? Icons.event_busy_rounded
+                        : Icons.event_note_outlined,
+                    label: 'Lotes por vencer',
+                    accent: const Color(0xFFFFEAD9),
+                    iconColor: const Color(0xFFC2410C),
+                    badgeCount: expiringLotsCount,
+                    badgeColor: const Color(0xFFC2410C),
+                  ),
                 ),
-              ),
               const PopupMenuDivider(height: 1),
+              const PopupMenuItem<_UserMenuAction>(
+                value: _UserMenuAction.offlinePreparation,
+                padding: EdgeInsets.zero,
+                height: 56,
+                child: _UserMenuTile(
+                  icon: Icons.offline_pin_outlined,
+                  label: 'Preparación sin internet',
+                  accent: Color(0xFFFFF3E6),
+                  iconColor: MangoColors.primaryOrange,
+                ),
+              ),
               if (canSwitchBranch)
                 PopupMenuItem<_UserMenuAction>(
                   value: _UserMenuAction.switchBranch,
@@ -1591,6 +1625,18 @@ class _UserInfo extends ConsumerWidget {
                     label: 'Cambiar sucursal',
                     accent: Color(0xFFEAFBF3),
                     iconColor: Color(0xFF059669),
+                  ),
+                ),
+              if (isAdminLevel)
+                const PopupMenuItem<_UserMenuAction>(
+                  value: _UserMenuAction.performanceDiagnostics,
+                  padding: EdgeInsets.zero,
+                  height: 56,
+                  child: _UserMenuTile(
+                    icon: Icons.speed_outlined,
+                    label: 'Diagnóstico de rendimiento',
+                    accent: Color(0xFFEAF0FF),
+                    iconColor: Color(0xFF2563EB),
                   ),
                 ),
               if (isAdminLevel)
@@ -1835,6 +1881,8 @@ Future<SessionBusiness?> _showBranchPicker(
 }
 
 enum _UserMenuAction {
+  offlinePreparation,
+  performanceDiagnostics,
   switchBranch,
   manageBranches,
   plan,

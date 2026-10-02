@@ -6,12 +6,20 @@
 // ni entra en la valuación ni en el costo de venta (20260930_0052). Sin
 // depreciación (decisión del dueño).
 //
+// 20261001_0050: una ficha puede cubrir varias unidades («×40») con UNA
+// etiqueta; el valor que se muestra y se suma es cantidad × valor unitario.
+// «Verificar» abre el levantamiento físico por ubicación, y el filtro «Sin
+// verificar» muestra lo que nadie ha visto en más de 6 meses.
+//
 // Ver: `inventario.activos.acceso` (lo gatea la ruta). Escribir:
 // `inventario.activos.gestionar` (acá se esconden los botones; el servidor
 // lo vuelve a exigir en cada RPC).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../../app/router/routes.dart';
 
 import '../../../core/currency/business_currency.dart';
 import '../../../core/currency/business_currency_provider.dart';
@@ -26,6 +34,8 @@ import '../services/fixed_assets_pdf.dart';
 import '../state/fixed_assets_state.dart';
 import 'fixed_asset_detail_dialog.dart';
 import 'fixed_asset_form_dialog.dart';
+import 'fixed_asset_verifications_view.dart'
+    show startFixedAssetVerification;
 import 'widgets/inventory_back_button.dart';
 
 /// Permiso para dar de alta, editar, mover y dar de baja.
@@ -180,8 +190,29 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
       warehouses: _warehouses,
       employees: _employees,
       knownCategories: fixedAssetCategoriesIn(_assets),
+      money: currentBusinessCurrencyOrFallback(ref),
+      supportsQuantity: _repo.quantitySupported,
     );
     if (saved != null && mounted) _replace(saved);
+  }
+
+  /// Abre (o retoma) una verificación. Al volver se recarga: cerrarla pudo
+  /// cambiar cantidades, estados y ubicaciones.
+  Future<void> _verify() async {
+    final businessId = _businessId;
+    if (businessId == null) return;
+    await startFixedAssetVerification(
+      context,
+      repo: _repo,
+      businessId: businessId,
+      warehouses: _warehouses,
+    );
+    if (mounted) await _load();
+  }
+
+  Future<void> _openVerifications() async {
+    await context.push(AppRoutes.inventoryFixedAssetVerifications);
+    if (mounted) await _load();
   }
 
   void _open(FixedAsset asset, BusinessCurrency money, bool canManage) {
@@ -199,6 +230,7 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
       money: money,
       onChanged: _replace,
       onPrintAct: (a) => _printAct(a, money),
+      supportsQuantity: _repo.quantitySupported,
     );
   }
 
@@ -341,6 +373,19 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
           icon: const Icon(Icons.print_outlined, size: 18),
           label: const Text('Imprimir'),
         ),
+        OutlinedButton.icon(
+          key: const Key('fixed-assets-verifications'),
+          onPressed: ready ? _openVerifications : null,
+          icon: const Icon(Icons.history_rounded, size: 18),
+          label: const Text('Historial de verificaciones'),
+        ),
+        if (canManage)
+          OutlinedButton.icon(
+            key: const Key('fixed-assets-verify'),
+            onPressed: ready ? _verify : null,
+            icon: const Icon(Icons.fact_check_outlined, size: 18),
+            label: const Text('Verificar'),
+          ),
         if (canManage)
           FilledButton.icon(
             key: const Key('fixed-assets-new'),
@@ -384,7 +429,9 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
         ),
       ],
     );
-    if (width < 760) {
+    // Con cinco acciones, al lado del título solo caben en pantallas
+    // anchas; si no, van debajo y se acomodan solas (Wrap).
+    if (width < 1280) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [title, const SizedBox(height: 12), actions],
@@ -480,6 +527,8 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
     final locations = _locationOptions;
     final hasNoWarehouse = _assets.any((a) => a.warehouseId == null);
     final retiredCount = _assets.where((a) => a.status.isRetired).length;
+    final now = DateTime.now();
+    final staleCount = _assets.where((a) => a.needsVerification(now)).length;
     final f = _filter;
 
     InputDecoration deco(String label) => InputDecoration(
@@ -596,6 +645,20 @@ class _FixedAssetsViewState extends ConsumerState<FixedAssetsView> {
           selected: f.showRetired,
           onSelected: (v) => _setFilter(f.copyWith(showRetired: v)),
         ),
+        if (_repo.quantitySupported)
+          FilterChip(
+            key: const Key('fixed-assets-stale'),
+            avatar: Icon(
+              Icons.fact_check_outlined,
+              size: 16,
+              color: AppColors.warning,
+            ),
+            label: Text('Sin verificar en 6 meses ($staleCount)'),
+            tooltip: 'Nunca verificados, o la última vez fue hace más de 6 '
+                'meses',
+            selected: f.staleOnly,
+            onSelected: (v) => _setFilter(f.copyWith(staleOnly: v)),
+          ),
       ],
     );
   }
@@ -773,17 +836,21 @@ class _KpiRow extends StatelessWidget {
         key: const Key('fixed-assets-kpi-in-use'),
         label: 'Activos en uso',
         value: '${kpis.inUse}',
-        caption: 'de ${kpis.registered} registrados (sin contar bajas)',
+        caption: '${kpis.inUse} ${kpis.inUse == 1 ? 'registro' : 'registros'}'
+            ' · ${kpis.unitsInUse} '
+            '${kpis.unitsInUse == 1 ? 'unidad' : 'unidades'}'
+            ' · de ${kpis.registered} vigentes',
         icon: Icons.check_circle_outline_rounded,
         color: AppColors.success,
       ),
       _KpiTile(
         key: const Key('fixed-assets-kpi-value'),
-        label: 'Valor de compra',
+        label: 'Valor',
         value: money.formatAmount(kpis.purchaseValue),
         caption: kpis.withoutCost > 0
-            ? 'Sin depreciación · ${kpis.withoutCost} sin costo cargado'
-            : 'Costo histórico, sin depreciación',
+            ? 'Cantidad × valor unitario · ${kpis.withoutCost} sin valor '
+                  'cargado'
+            : 'Cantidad × valor unitario, sin depreciación',
         icon: Icons.payments_outlined,
         color: AppColors.info,
       ),
@@ -945,7 +1012,7 @@ class _TableHeader extends StatelessWidget {
           cell('Ubicación', _colLocation),
           cell('Responsable', _colResponsible),
           cell('Estado', _colStatus),
-          cell('Costo', _colCost, right: true),
+          cell('Valor', _colCost, right: true),
         ],
       ),
     );
@@ -997,7 +1064,7 @@ class _AssetRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      a.name,
+                      a.quantity > 1 ? '${a.name}  ${a.quantityLabel}' : a.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: body.copyWith(fontWeight: FontWeight.w700),
@@ -1048,12 +1115,26 @@ class _AssetRow extends StatelessWidget {
               ),
               Expanded(
                 flex: _colCost,
-                child: Text(
-                  a.purchaseCost == null
-                      ? '—'
-                      : money.formatAmount(a.purchaseCost!),
-                  textAlign: TextAlign.right,
-                  style: body,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      a.totalValue == null
+                          ? '—'
+                          : money.formatAmount(a.totalValue!),
+                      textAlign: TextAlign.right,
+                      style: body,
+                    ),
+                    // Con varias unidades se ve también el unitario.
+                    if (a.quantity > 1 && a.purchaseCost != null)
+                      Text(
+                        '${a.quantity} × ${money.formatAmount(a.purchaseCost!)}',
+                        textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: muted,
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -1133,7 +1214,7 @@ class _AssetCard extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                a.name,
+                a.quantity > 1 ? '${a.name}  ${a.quantityLabel}' : a.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -1151,10 +1232,14 @@ class _AssetCard extends StatelessWidget {
                 ),
               line(Icons.place_outlined, a.locationLabel),
               line(Icons.person_outline, a.responsibleLabel),
-              if (a.purchaseCost != null)
+              if (a.totalValue != null)
                 line(
                   Icons.payments_outlined,
-                  money.formatAmount(a.purchaseCost!),
+                  a.quantity > 1
+                      ? '${money.formatAmount(a.totalValue!)} '
+                            '(${a.quantity} × '
+                            '${money.formatAmount(a.purchaseCost!)})'
+                      : money.formatAmount(a.totalValue!),
                 ),
             ],
           ),

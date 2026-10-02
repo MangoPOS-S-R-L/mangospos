@@ -5,6 +5,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/core/currency/business_currency.dart';
 import 'package:mangopos/presentation/inventory/services/fixed_assets_pdf.dart';
+import 'package:mangopos/presentation/inventory/state/fixed_asset_verification_state.dart';
 import 'package:mangopos/presentation/inventory/state/fixed_assets_state.dart';
 
 String _mediaBox(List<int> bytes) {
@@ -157,5 +158,134 @@ void main() {
       FixedAssetsPdf.assignmentFileName(_asset(12)),
       'acta_asignacion_AF-00012.pdf',
     );
+  });
+
+  test('inventario y acta con grupos (cantidad × valor unitario)', () async {
+    final sillas = FixedAsset(
+      id: 's',
+      businessId: 'b1',
+      code: 'SILLA-01',
+      name: 'Silla de madera',
+      quantity: 40,
+      purchaseCost: 2500,
+      warehouseId: 'w1',
+      warehouseName: 'Salón',
+    );
+    final inventario = await FixedAssetsPdf.buildInventory(
+      assets: [sillas, _asset(1)],
+      businessName: 'La Penda',
+    );
+    expect(String.fromCharCodes(inventario.take(4)), '%PDF');
+    final acta = await FixedAssetsPdf.buildAssignmentAct(
+      asset: sillas,
+      businessName: 'La Penda',
+    );
+    expect(String.fromCharCodes(acta.take(4)), '%PDF');
+  });
+
+  group('acta de verificación', () {
+    FixedAssetVerificationLine line(
+      String id, {
+      bool expected = true,
+      int? expectedQty = 1,
+      int? found,
+      bool isNew = false,
+      String? resolution,
+      String? observed,
+    }) => FixedAssetVerificationLine.fromMap({
+      'id': 'l-$id',
+      'verification_id': 'v1',
+      'asset_id': id,
+      'asset_code': 'AF-$id',
+      'asset_name': 'Activo “$id” — prueba 🧪',
+      'unit_value': 2500,
+      'registered_warehouse_name': expected ? 'Cocina' : 'Bar',
+      'expected': expected,
+      'expected_qty': expected ? expectedQty : null,
+      'found_qty': found,
+      'expected_status': 'active',
+      'observed_status': observed,
+      'is_new': isNew,
+      'resolution': resolution,
+    });
+
+    FixedAssetVerification verification({
+      required FixedAssetVerificationStatus status,
+      int extra = 0,
+    }) => FixedAssetVerification(
+      id: 'v1',
+      businessId: 'b1',
+      number: 3,
+      warehouseId: 'w1',
+      warehouseName: 'Cocina',
+      status: status,
+      startedByName: 'Dueño',
+      startedAt: DateTime(2026, 10, 1, 9),
+      closedByName: status == FixedAssetVerificationStatus.open ? null : 'Ana',
+      closedAt: status == FixedAssetVerificationStatus.open
+          ? null
+          : DateTime(2026, 10, 1, 12),
+      notes: 'Conteo de cierre — mes',
+      summary: status == FixedAssetVerificationStatus.closed
+          ? const FixedAssetVerificationSummary(
+              okCount: 1,
+              lostCount: 1,
+              pendingCount: 1,
+              foundValue: 97500,
+            )
+          : null,
+      lines: [
+        line('1', found: 1, resolution: 'ok'),
+        line('2', expectedQty: 40, found: 38, resolution: 'lost'),
+        line('3', resolution: 'pending'),
+        line('4', found: 1, observed: 'damaged', resolution: 'ok'),
+        line('5', expected: false, found: 1, resolution: 'moved'),
+        line('6', expected: false, isNew: true, found: 2, resolution: 'new'),
+        for (var i = 0; i < extra; i++) line('x$i', found: 1),
+      ],
+    );
+
+    test('abierta: sale como borrador, en A4', () async {
+      final bytes = await FixedAssetsPdf.buildVerificationAct(
+        verification: verification(status: FixedAssetVerificationStatus.open),
+        businessName: 'La Penda',
+        printedBy: 'Cristian',
+        printedAt: DateTime(2026, 10, 1, 11),
+      );
+      expect(String.fromCharCodes(bytes.take(4)), '%PDF');
+      expect(_mediaBox(bytes), contains('595'));
+    });
+
+    test('cerrada, con muchas líneas: pasa de página', () async {
+      final bytes = await FixedAssetsPdf.buildVerificationAct(
+        verification: verification(
+          status: FixedAssetVerificationStatus.closed,
+          extra: 120,
+        ),
+        businessName: 'La Penda',
+        currency: BusinessCurrency.catalog['EUR'],
+      );
+      expect(_pages(bytes), greaterThan(1));
+    });
+
+    test('cancelada y sin líneas también genera el documento', () async {
+      final bytes = await FixedAssetsPdf.buildVerificationAct(
+        verification: const FixedAssetVerification(
+          id: 'v2',
+          businessId: 'b1',
+          number: 2,
+          status: FixedAssetVerificationStatus.cancelled,
+          cancelReason: 'Se abrió por error',
+        ),
+        businessName: '',
+      );
+      expect(String.fromCharCodes(bytes.take(4)), '%PDF');
+      expect(
+        FixedAssetsPdf.verificationFileName(
+          const FixedAssetVerification(id: 'x', businessId: 'b', number: 12),
+        ),
+        'acta_verificacion_12.pdf',
+      );
+    });
   });
 }

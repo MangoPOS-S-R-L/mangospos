@@ -18,7 +18,7 @@ const _kPollingInterval = Duration(seconds: 60);
 /// - Si no hay negocio activo: emite `0` y no hace requests.
 /// - Si falla la query: emite el último valor conocido (no propaga el error
 ///   al header, para no romper la UI con un banner).
-final lowStockBadgeCountProvider = StreamProvider<int>((ref) {
+final lowStockBadgeCountProvider = StreamProvider.autoDispose<int>((ref) {
   final repo = ref.watch(inventoryRepositoryProvider);
   final businessId = ref.watch(
     sessionProvider.select((s) => s.activeBusinessId),

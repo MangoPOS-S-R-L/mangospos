@@ -57,6 +57,8 @@ import '../../presentation/inventory/view/inventory_kardex_view.dart';
 import '../../presentation/inventory/view/inventory_lots_view.dart';
 import '../../presentation/inventory/view/inventory_low_stock_view.dart';
 import '../../presentation/inventory/view/inventory_rotation_view.dart';
+import '../../presentation/inventory/view/fixed_asset_verification_view.dart';
+import '../../presentation/inventory/view/fixed_asset_verifications_view.dart';
 import '../../presentation/inventory/view/fixed_assets_view.dart';
 import '../../presentation/inventory/view/inventory_supplies_view.dart';
 import '../../presentation/inventory/view/inventory_yield_view.dart';
@@ -948,6 +950,20 @@ class AppRouter {
                 // escribir, `inventario.activos.gestionar`, que la pantalla
                 // gatea y la base vuelve a validar en cada RPC.
                 builder: (context, state) => const FixedAssetsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryFixedAssetVerifications,
+                // Verificaciones (levantamiento físico). Ver pide
+                // `inventario.activos.acceso` por prefijo; abrir, marcar y
+                // cerrar, `inventario.activos.gestionar` (pantalla y base).
+                builder: (context, state) =>
+                    const FixedAssetVerificationsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.inventoryFixedAssetVerification,
+                builder: (context, state) => FixedAssetVerificationView(
+                  verificationId: state.pathParameters['verificationId'] ?? '',
+                ),
               ),
             ],
           ),

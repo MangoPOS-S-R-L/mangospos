@@ -17,7 +17,7 @@ const _kPollingInterval = Duration(seconds: 60);
 /// Conteo de lotes en estado crítico (≤7 días para vencer) o ya vencidos.
 /// Útil para mostrar un badge en el header que avise al usuario sin que
 /// tenga que entrar al módulo de inventario.
-final expiringLotsBadgeCountProvider = StreamProvider<int>((ref) {
+final expiringLotsBadgeCountProvider = StreamProvider.autoDispose<int>((ref) {
   final repo = ref.watch(inventoryRepositoryProvider);
   final businessId = ref.watch(
     sessionProvider.select((s) => s.activeBusinessId),

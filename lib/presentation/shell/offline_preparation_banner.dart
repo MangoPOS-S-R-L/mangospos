@@ -35,16 +35,7 @@ class OfflinePreparationBanner extends ConsumerWidget {
       color: ready ? const Color(0xFFF0FDF4) : const Color(0xFFFFFBEB),
       child: InkWell(
         onTap: () async {
-          ref.invalidate(offlineReadinessProvider);
-          final action = await showDialog<OfflineReadinessAction>(
-            context: context,
-            builder: (_) => const _OfflinePreparationDialog(),
-          );
-          if (!context.mounted || action != OfflineReadinessAction.bindDevice) {
-            return;
-          }
-          await context.push(AppRoutes.settingsDeviceBinding);
-          if (context.mounted) ref.invalidate(offlineReadinessProvider);
+          await showOfflinePreparationDialog(context, ref);
         },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -79,6 +70,20 @@ class OfflinePreparationBanner extends ConsumerWidget {
       ),
     );
   }
+}
+
+Future<void> showOfflinePreparationDialog(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  ref.invalidate(offlineReadinessProvider);
+  final action = await showDialog<OfflineReadinessAction>(
+    context: context,
+    builder: (_) => const _OfflinePreparationDialog(),
+  );
+  if (!context.mounted || action != OfflineReadinessAction.bindDevice) return;
+  await context.push(AppRoutes.settingsDeviceBinding);
+  if (context.mounted) ref.invalidate(offlineReadinessProvider);
 }
 
 class _OfflinePreparationDialog extends ConsumerWidget {

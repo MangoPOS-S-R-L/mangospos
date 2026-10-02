@@ -25,6 +25,7 @@ import '../sales/viewmodel/sales_viewmodel.dart';
 import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 import 'offline_preparation_banner.dart';
+import 'performance_diagnostics_dialog.dart';
 import '../../core/theme/app_colors.dart';
 
 class MobileShell extends ConsumerStatefulWidget {
@@ -93,9 +94,7 @@ class _MobileShellState extends ConsumerState<MobileShell> {
         foregroundColor: MangoColors.darkGray,
         elevation: 0,
         scrolledUnderElevation: 0,
-        shape: const Border(
-          bottom: BorderSide(color: Color(0xFFE5E7EB)),
-        ),
+        shape: const Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
         leading: IconButton(
           icon: const Icon(Icons.menu_rounded),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
@@ -107,12 +106,17 @@ class _MobileShellState extends ConsumerState<MobileShell> {
           fit: BoxFit.contain,
         ),
         centerTitle: true,
-        actions: const [
-          _AppBarOfflineQueueBadge(),
-          _AppBarExpiringLotsBadge(),
-          SizedBox(width: 4),
-          _AppBarLowStockBadge(),
-          SizedBox(width: 8),
+        actions: [
+          const _AppBarOfflineQueueBadge(),
+          if (ref.watch(sessionProvider).activeBusinessId != null &&
+              ref
+                  .read(sessionProvider.notifier)
+                  .hasPermission('inventario.acceso')) ...[
+            const _AppBarExpiringLotsBadge(),
+            const SizedBox(width: 4),
+            const _AppBarLowStockBadge(),
+          ],
+          const SizedBox(width: 8),
         ],
       ),
       drawer: _MobileDrawer(
@@ -123,7 +127,6 @@ class _MobileShellState extends ConsumerState<MobileShell> {
         children: [
           // Banner de actualización (solo web, solo si hay deploy nuevo).
           const UpdateAvailableBanner(),
-            const OfflinePreparationBanner(),
           Expanded(child: widget.navigationShell),
         ],
       ),
@@ -162,11 +165,13 @@ class _MobileShellState extends ConsumerState<MobileShell> {
               goToShellDestination(context, widget.navigationShell, d.route);
             },
             items: _bottomDestinations
-                .map((d) => BottomNavigationBarItem(
-                      icon: Icon(d.iconOutlined),
-                      activeIcon: Icon(d.icon),
-                      label: d.label,
-                    ))
+                .map(
+                  (d) => BottomNavigationBarItem(
+                    icon: Icon(d.iconOutlined),
+                    activeIcon: Icon(d.icon),
+                    label: d.label,
+                  ),
+                )
                 .toList(growable: false),
           ),
         ),
@@ -208,10 +213,9 @@ class _MobileDrawer extends ConsumerWidget {
     final ctrl = ref.read(sessionProvider.notifier);
     final role = session.activeRole;
     final roleLabel = role?.label ?? 'Sin rol';
-    final businessName =
-        session.activeBusinessName?.trim().isNotEmpty == true
-            ? session.activeBusinessName!.trim()
-            : 'Negocio';
+    final businessName = session.activeBusinessName?.trim().isNotEmpty == true
+        ? session.activeBusinessName!.trim()
+        : 'Negocio';
     final isAdminLevel = role == PosRole.administrador;
     final canOpenSettings = ctrl.hasPermission('settings.usuarios.acceso');
     final canSwitchBranch = session.availableBusinesses.length > 1;
@@ -246,33 +250,54 @@ class _MobileDrawer extends ConsumerWidget {
                         disabledAsync.value ?? const <String>[];
                     final features = ref.watchBusinessFeatures();
                     final modules = ref.watchEnabledModules();
-                    return kPrimaryDestinations.where((d) {
-                      final code = d.permissionCode;
-                      final hasPerm =
-                          code == null || ctrl.hasPermission(code);
-                      final hidden = disabledRoutes.contains(d.route);
-                      final featureOk =
-                          isDestinationFeatureEnabled(d, features);
-                      final moduleOk =
-                          isDestinationModuleEnabled(d, modules);
-                      return hasPerm && !hidden && featureOk && moduleOk;
-                    }).map(
-                      (d) => _DrawerNavTile(
-                        destination: d,
-                        currentLocation: currentLocation,
-                        onTap: () {
-                          Navigator.of(context).pop();
-                          goToShellDestination(
-                            context,
-                            navigationShell,
-                            d.route,
+                    return kPrimaryDestinations
+                        .where((d) {
+                          final code = d.permissionCode;
+                          final hasPerm =
+                              code == null || ctrl.hasPermission(code);
+                          final hidden = disabledRoutes.contains(d.route);
+                          final featureOk = isDestinationFeatureEnabled(
+                            d,
+                            features,
                           );
-                        },
-                      ),
-                    );
+                          final moduleOk = isDestinationModuleEnabled(
+                            d,
+                            modules,
+                          );
+                          return hasPerm && !hidden && featureOk && moduleOk;
+                        })
+                        .map(
+                          (d) => _DrawerNavTile(
+                            destination: d,
+                            currentLocation: currentLocation,
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              goToShellDestination(
+                                context,
+                                navigationShell,
+                                d.route,
+                              );
+                            },
+                          ),
+                        );
                   }(),
                   const Divider(height: 24),
                   const _DrawerSectionTitle('Cuenta'),
+                  _DrawerActionTile(
+                    icon: Icons.offline_pin_outlined,
+                    label: 'Preparación sin internet',
+                    iconColor: MangoColors.primaryOrange,
+                    bg: const Color(0xFFFFF3E6),
+                    onTap: () async {
+                      Navigator.of(context).pop();
+                      await Future<void>.delayed(
+                        const Duration(milliseconds: 80),
+                      );
+                      if (context.mounted) {
+                        await showOfflinePreparationDialog(context, ref);
+                      }
+                    },
+                  ),
                   if (canSwitchBranch)
                     _DrawerActionTile(
                       icon: Icons.swap_horiz_rounded,
@@ -285,10 +310,33 @@ class _MobileDrawer extends ConsumerWidget {
                           const Duration(milliseconds: 80),
                         );
                         if (!context.mounted) return;
-                        final selected =
-                            await _showBranchPicker(context, session, ctrl);
+                        final selected = await _showBranchPicker(
+                          context,
+                          session,
+                          ctrl,
+                        );
                         if (selected != null && context.mounted) {
                           context.go(AppRoutes.dashboard);
+                        }
+                      },
+                    ),
+                  if (isAdminLevel)
+                    _DrawerActionTile(
+                      icon: Icons.speed_outlined,
+                      label: 'Diagnóstico de rendimiento',
+                      iconColor: const Color(0xFF2563EB),
+                      bg: const Color(0xFFEAF0FF),
+                      onTap: () async {
+                        Navigator.of(context).pop();
+                        await Future<void>.delayed(
+                          const Duration(milliseconds: 80),
+                        );
+                        if (context.mounted) {
+                          await showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                const PerformanceDiagnosticsDialog(),
+                          );
                         }
                       },
                     ),
@@ -334,7 +382,9 @@ class _MobileDrawer extends ConsumerWidget {
                     textColor: const Color(0xFFDC2626),
                     onTap: () async {
                       final proceed = await confirmLogoutDiscardingOffline(
-                          context, session.activeBusinessId);
+                        context,
+                        session.activeBusinessId,
+                      );
                       if (!proceed || !context.mounted) return;
                       Navigator.of(context).pop();
                       await ctrl.signOut();
@@ -495,7 +545,8 @@ class _DrawerNavTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(sessionProvider);
-    final hasAccess = destination.permissionCode == null ||
+    final hasAccess =
+        destination.permissionCode == null ||
         ref
             .read(sessionProvider.notifier)
             .hasPermission(destination.permissionCode!);
@@ -503,9 +554,7 @@ class _DrawerNavTile extends ConsumerWidget {
 
     final accent = active
         ? MangoColors.primaryOrange
-        : (hasAccess
-            ? const Color(0xFF374151)
-            : const Color(0xFF94A3B8));
+        : (hasAccess ? const Color(0xFF374151) : const Color(0xFF94A3B8));
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -513,9 +562,7 @@ class _DrawerNavTile extends ConsumerWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
-            color: active
-                ? const Color(0xFFFFF7ED)
-                : Colors.transparent,
+            color: active ? const Color(0xFFFFF7ED) : Colors.transparent,
             border: Border(
               left: BorderSide(
                 color: active ? MangoColors.primaryOrange : Colors.transparent,
@@ -540,8 +587,7 @@ class _DrawerNavTile extends ConsumerWidget {
                   destination.label,
                   style: TextStyle(
                     color: accent,
-                    fontWeight:
-                        active ? FontWeight.w800 : FontWeight.w600,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
                     fontSize: 14,
                   ),
                 ),
@@ -609,8 +655,9 @@ class _DrawerActionTile extends StatelessWidget {
               Icon(
                 Icons.chevron_right_rounded,
                 size: 18,
-                color: (textColor ?? const Color(0xFF9CA3AF))
-                    .withValues(alpha: 0.8),
+                color: (textColor ?? const Color(0xFF9CA3AF)).withValues(
+                  alpha: 0.8,
+                ),
               ),
             ],
           ),
@@ -653,8 +700,7 @@ class _AppBarLowStockBadge extends ConsumerWidget {
               top: -4,
               right: -4,
               child: Container(
-                constraints:
-                    const BoxConstraints(minWidth: 16, minHeight: 16),
+                constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFFDC2626),
@@ -694,12 +740,11 @@ class _AppBarOfflineQueueBadge extends ConsumerWidget {
     // ámbar = solo espera conexión.
     if (!hasPending && !hasDead) return const SizedBox.shrink();
     final total = count + dead;
-    final accent =
-        hasDead ? const Color(0xFFB91C1C) : const Color(0xFFB45309);
+    final accent = hasDead ? const Color(0xFFB91C1C) : const Color(0xFFB45309);
     return IconButton(
       tooltip: hasDead
           ? '$dead sin resolver (requieren revisión)'
-              '${hasPending ? ' · $count pendiente(s)' : ''}'
+                '${hasPending ? ' · $count pendiente(s)' : ''}'
           : '$count operación(es) offline pendiente(s)',
       onPressed: () => ref
           .read(currentOrderProvider.notifier)
@@ -757,9 +802,7 @@ class _AppBarExpiringLotsBadge extends ConsumerWidget {
         clipBehavior: Clip.none,
         children: [
           Icon(
-            hasAlerts
-                ? Icons.event_busy_rounded
-                : Icons.event_note_outlined,
+            hasAlerts ? Icons.event_busy_rounded : Icons.event_note_outlined,
             color: hasAlerts
                 ? const Color(0xFFC2410C)
                 : const Color(0xFF6B7280),
@@ -769,8 +812,7 @@ class _AppBarExpiringLotsBadge extends ConsumerWidget {
               top: -4,
               right: -4,
               child: Container(
-                constraints:
-                    const BoxConstraints(minWidth: 16, minHeight: 16),
+                constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 decoration: BoxDecoration(
                   color: const Color(0xFFC2410C),
@@ -866,7 +908,8 @@ Future<SessionBusiness?> _showBranchPicker(
                         ),
                         child: ListTile(
                           leading: CircleAvatar(
-                            backgroundColor: branch.id == session.activeBusinessId
+                            backgroundColor:
+                                branch.id == session.activeBusinessId
                                 ? const Color(0xFFFFE8D6)
                                 : const Color(0xFFF3F4F6),
                             child: Icon(
@@ -880,8 +923,7 @@ Future<SessionBusiness?> _showBranchPicker(
                           ),
                           title: Text(
                             branch.name,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w700),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                           subtitle: Text(
                             branch.companyName ?? branch.roleLabel,

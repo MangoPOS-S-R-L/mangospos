@@ -207,7 +207,7 @@ class _PaymentSuccessDialogState extends State<_PaymentSuccessDialog> {
               children: [
                 Expanded(
                   child: TextButton(
-                    onPressed: _printing ? null : _close,
+                    onPressed: _close,
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(

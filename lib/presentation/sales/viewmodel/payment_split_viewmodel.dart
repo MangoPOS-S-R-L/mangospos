@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/fiscal/ncf_types.dart';
 import '../../../core/fiscal/payment_stage.dart';
 import '../../../core/network/connectivity_service.dart';
+import '../../../core/performance/performance_diagnostics.dart';
 import '../../../core/offline/offline_ncf_service.dart';
 import '../../../core/offline/offline_pos_service.dart';
 import '../../../core/offline/hub/hub_payment_mirror.dart';
@@ -1335,7 +1336,15 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
   }
 
-  Future<List<Payment>?> confirmPayment(BuildContext context) async {
+  Future<List<Payment>?> confirmPayment(BuildContext context) {
+    return PerformanceDiagnostics.instance.measure(
+      'confirmacion_pago_total',
+      () => _confirmPaymentImpl(context),
+      accepted: (payments) => payments != null && payments.isNotEmpty,
+    );
+  }
+
+  Future<List<Payment>?> _confirmPaymentImpl(BuildContext context) async {
     if (_localProcessing || state.isBusy || _paymentConfirmed) return null;
     // Primera confirmación: esperar la lectura del diario (disco local, rápida)
     // con el guard puesto, para no arrancar un cobro NUEVO encima de uno que

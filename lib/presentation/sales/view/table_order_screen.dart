@@ -72,6 +72,7 @@ import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
+import 'package:mangopos/presentation/sales/logic/payment_completion_gate.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/presentation/sales/widgets/table_deposit_dialog.dart';
@@ -1021,6 +1022,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final cart = _CartView(
       origin: widget.origin,
       tableCode: _currentTableCode ?? '',
+      zoneId: widget.zoneId,
       onAssignClient: () => _handleAssignClient(context),
     );
     cart._openPaymentModal(
@@ -1331,14 +1333,32 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             customerTaxId: customerTaxId,
           );
     } else {
-      await ref
+      // Se aplica desde que se elige (también sin red). En venta rápida/manual
+      // sin orden todavía (abriéndose tras el cobro anterior) va a la nueva.
+      final error = await ref
           .read(currentOrderProvider.notifier)
           .assignCustomerToCurrentOrder(
             customerId: customerId,
             customerName: customerName,
             customerLegalName: customerLegalName,
             customerTaxId: customerTaxId,
+            // Retail no abre la venta siguiente por openQuick (cambia de
+            // carrito), así que ahí no se guarda para "la próxima".
+            nextOrderOrigin: ref.read(currentBusinessModelProvider).isRetail
+                ? null
+                : switch (widget.origin) {
+                    OrderOrigin.quick => 'quick',
+                    OrderOrigin.manual => 'manual',
+                    _ => null,
+                  },
           );
+      if (!context.mounted) return;
+      if (error != null) {
+        ScaffoldMessenger.of(context).showAppSnackBar(
+          SnackBar(content: Text(error), backgroundColor: Colors.redAccent),
+        );
+        return;
+      }
     }
 
     if (!context.mounted) return;
@@ -1595,6 +1615,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             final cart = _CartView(
               origin: widget.origin,
               tableCode: _currentTableCode ?? '',
+              zoneId: widget.zoneId,
               onAssignClient: () => _handleAssignClient(context),
               deliveryAddressEnabled: _deliveryAddressEnabled,
             );
@@ -1808,6 +1829,7 @@ extension _MobileSalesShell on _OrderScreenState {
                 child: _CartView(
                   origin: widget.origin,
                   tableCode: widget.tableCode ?? 'Venta libre',
+                  zoneId: widget.zoneId,
                   isStacked: true,
                   onAssignClient: () => _handleAssignClient(context),
                   deliveryAddressEnabled: _deliveryAddressEnabled,
@@ -2442,6 +2464,7 @@ final Map<String, String> _stickyDiscountModeByBiz = {};
 class _CartView extends ConsumerWidget {
   final OrderOrigin origin;
   final String tableCode;
+  final String? zoneId;
   final bool isStacked;
   final Future<void> Function() onAssignClient;
 
@@ -2452,6 +2475,7 @@ class _CartView extends ConsumerWidget {
   const _CartView({
     required this.origin,
     required this.tableCode,
+    this.zoneId,
     required this.onAssignClient,
     this.isStacked = false,
     this.deliveryAddressEnabled = false,
@@ -3029,6 +3053,26 @@ class _CartView extends ConsumerWidget {
     // navega/recarga la orden. Definido aquí para que tanto onConfirmed
     // (vía _showReimpresionDialog en error) como el .then() lo puedan
     // invocar.
+    void returnToSalon() {
+      if (!context.mounted) return;
+      final salonZoneId = zoneId?.trim();
+      if (salonZoneId != null && salonZoneId.isNotEmpty) {
+        unawaited(
+          ref
+              .read(byZoneVmProvider.notifier)
+              .loadZoneStatus(salonZoneId, emitError: false),
+        );
+      }
+      context.go(
+        salonZoneId == null || salonZoneId.isEmpty
+            ? AppRoutes.salesByZone
+            : Uri(
+                path: AppRoutes.salesByZone,
+                queryParameters: {'zone': salonZoneId},
+              ).toString(),
+      );
+    }
+
     void onFinish() {
       if (checkId == null) {
         // PRD 4: en Quick/Manual cerramos la orden de forma MANDATORIA,
@@ -3038,6 +3082,12 @@ class _CartView extends ConsumerWidget {
         // final, el cart queda vacío con state.order=null y los taps
         // de producto fallan con "no hay orden activa".
         if (origin == OrderOrigin.quick || origin == OrderOrigin.manual) {
+          // Mientras se cierra esta venta y abre la siguiente, un cliente
+          // elegido es para la venta NUEVA, no para la ya cobrada. Retail no
+          // reabre aquí (cambia de carrito), así que no aplica.
+          if (!ref.read(currentBusinessModelProvider).isRetail) {
+            ref.read(currentOrderProvider.notifier).markOrderClosing(order.id);
+          }
           () async {
             // Sin red (o venta local) no hay nada que cerrar en el servidor:
             // el replay del cobro la cierra al sincronizar. Esperar a que
@@ -3074,7 +3124,7 @@ class _CartView extends ConsumerWidget {
             }
           }();
         } else {
-          if (context.mounted) context.go(AppRoutes.salesByZone);
+          returnToSalon();
         }
       } else {
         // Cobro de una sub-cuenta (split bill). Refrescar y verificar si
@@ -3093,7 +3143,7 @@ class _CartView extends ConsumerWidget {
               refreshed.status == 'void' ||
               refreshed.status == 'cancelled';
           if (orderClosed && context.mounted) {
-            context.go(AppRoutes.salesByZone);
+            returnToSalon();
           }
         }();
       }
@@ -3109,6 +3159,14 @@ class _CartView extends ConsumerWidget {
     }) async {
       if (!context.mounted) return;
 
+      if (origin == OrderOrigin.table &&
+          checkId == null &&
+          payments.isNotEmpty) {
+        await ref
+            .read(currentOrderProvider.notifier)
+            .markPaidOrderLocally(order.id);
+      }
+
       final items = List<OrderItem>.from(prePaymentItems);
       final printOrder = prePaymentOrder;
 
@@ -3120,7 +3178,11 @@ class _CartView extends ConsumerWidget {
         unawaited(
           ref
               .read(currentOrderProvider.notifier)
-              .fireQuickSaleKitchenSnapshot(order: printOrder, items: items),
+              .fireQuickSaleKitchenSnapshot(
+                order: printOrder,
+                items: items,
+                customerName: finalCustomerName,
+              ),
         );
       }
 
@@ -3435,6 +3497,8 @@ class _CartView extends ConsumerWidget {
       return;
     }
 
+    final completionGate = PaymentCompletionGate(onFinish);
+
     _showSmoothDialog(
       context: context,
       barrierDismissible: false,
@@ -3449,12 +3513,16 @@ class _CartView extends ConsumerWidget {
         fiscalType: finalFiscalType,
         // Cuando el Future de onConfirmed resuelve, el modal de pago hace
         // pop y el .then() de abajo dispara onFinish.
-        onConfirmed: handleConfirmed,
+        onConfirmed: (payments, {offlineNcf}) async {
+          try {
+            await handleConfirmed(payments, offlineNcf: offlineNcf);
+          } finally {
+            completionGate.confirm();
+          }
+        },
       ),
     ).then((result) {
-      if (result is List<Payment>) {
-        onFinish();
-      }
+      completionGate.close(hasPaymentResult: result is List<Payment>);
     });
   }
 
@@ -5215,129 +5283,141 @@ class _CartView extends ConsumerWidget {
                       onPressed: sendKitchenLocked
                           ? null
                           : () async {
-                              await _runLockedAction(
-                                ref,
-                                sendKitchenLockKey,
-                                () async {
-                                  try {
-                                    final waiterName =
-                                        await _loadWaiterName(
-                                          ref,
-                                          orderState.order!.id,
-                                        ) ??
-                                        ref.read(sessionProvider).userName;
-                                    if (!context.mounted) return;
-                                    final kitchenResult = await ref
-                                        .read(currentOrderProvider.notifier)
-                                        .confirmOrder(
-                                          tableName: tableCode,
-                                          waiterName: waiterName,
-                                        );
-                                    if (!context.mounted) return;
-                                    // Refrescar stock — el trigger auto-86 ya
-                                    // corrió en backend, queremos que el
-                                    // badge del catálogo refleje las nuevas
-                                    // cantidades sin esperar al próximo
-                                    // loadAll.
-                                    unawaited(
-                                      ref
-                                          .read(menuBrowserVmProvider.notifier)
-                                          .refreshStock(),
-                                    );
-                                    // Si alguna área tuvo que escalar al
-                                    // worker, mostramos snackbar amigable
-                                    // amarillo en lugar del verde de éxito.
-                                    if (kitchenResult != null &&
-                                        kitchenResult.hadAnyEscalation) {
-                                      final areas = kitchenResult.escalatedAreas
-                                          .join(', ');
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showAppSnackBar(
-                                        SnackBar(
-                                          backgroundColor: const Color(
-                                            0xFFF59E0B,
-                                          ),
-                                          duration: const Duration(seconds: 4),
-                                          content: Text(
-                                            'Orden enviada a cocina. Las '
-                                            'impresoras de $areas no '
-                                            'respondieron, el sistema lo '
-                                            'está intentando de otra forma '
-                                            '— las comandas saldrán en '
-                                            'unos segundos.',
-                                          ),
-                                        ),
+                              await _runLockedAction(ref, sendKitchenLockKey, () async {
+                                try {
+                                  final waiterName =
+                                      await _loadWaiterName(
+                                        ref,
+                                        orderState.order!.id,
+                                      ) ??
+                                      ref.read(sessionProvider).userName;
+                                  if (!context.mounted) return;
+                                  final kitchenResult = await ref
+                                      .read(currentOrderProvider.notifier)
+                                      .confirmOrder(
+                                        tableName: tableCode,
+                                        waiterName: waiterName,
                                       );
-                                    } else {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showAppSnackBar(
-                                        const SnackBar(
-                                          backgroundColor: Color(0xFF22C55E),
-                                          content: Text(
-                                            'Orden enviada a cocina',
-                                          ),
-                                        ),
-                                      );
-                                    }
-
-                                    // Auto-close para delivery externo (ya pagado)
-                                    final dt = orderState.deliveryType;
-                                    if (origin == OrderOrigin.delivery &&
-                                        (dt == 'uber_eats' ||
-                                            dt == 'pedidos_ya')) {
-                                      final orderId = orderState.order?.id;
-                                      if (orderId != null) {
-                                        await ref
-                                            .read(salesRepositoryProvider)
-                                            .closeDeliveryOrder(
-                                              orderId: orderId,
-                                            );
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showAppSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                'Orden cerrada automaticamente (pagada externamente)',
-                                              ),
-                                            ),
-                                          );
-                                          context.go(
-                                            Uri(
-                                              path: AppRoutes.salesReact,
-                                              queryParameters: const {
-                                                'mode': 'delivery',
-                                              },
-                                            ).toString(),
-                                          );
-                                        }
-                                      }
-                                    }
-                                  } on NoAssignedKitchenPrinterException catch (
-                                    e
-                                  ) {
-                                    if (!context.mounted) return;
-                                    await _showMissingKitchenPrinterDialog(
-                                      context,
-                                      e,
-                                    );
-                                  } catch (e) {
-                                    if (!context.mounted) return;
+                                  if (!context.mounted) return;
+                                  // Refrescar stock — el trigger auto-86 ya
+                                  // corrió en backend, queremos que el
+                                  // badge del catálogo refleje las nuevas
+                                  // cantidades sin esperar al próximo
+                                  // loadAll.
+                                  unawaited(
+                                    ref
+                                        .read(menuBrowserVmProvider.notifier)
+                                        .refreshStock(),
+                                  );
+                                  // Si alguna área tuvo que escalar al
+                                  // worker, mostramos snackbar amigable
+                                  // amarillo en lugar del verde de éxito.
+                                  if (kitchenResult != null &&
+                                      kitchenResult
+                                          .pendingPrintAreas
+                                          .isNotEmpty) {
+                                    final areas = kitchenResult
+                                        .pendingPrintAreas
+                                        .join(', ');
                                     ScaffoldMessenger.of(
                                       context,
                                     ).showAppSnackBar(
                                       SnackBar(
-                                        content: Text(
-                                          'Error al enviar el pedido: ${e.toString()}',
+                                        backgroundColor: const Color(
+                                          0xFFB45309,
                                         ),
-                                        backgroundColor: Colors.red,
+                                        duration: const Duration(seconds: 7),
+                                        content: Text(
+                                          'Orden guardada, pero NO se imprimió '
+                                          'la comanda de: $areas. Revisa la '
+                                          'impresora o la ruta de cocina.',
+                                        ),
+                                      ),
+                                    );
+                                  } else if (kitchenResult != null &&
+                                      kitchenResult.hadAnyEscalation) {
+                                    final areas = kitchenResult.escalatedAreas
+                                        .join(', ');
+                                    ScaffoldMessenger.of(
+                                      context,
+                                    ).showAppSnackBar(
+                                      SnackBar(
+                                        backgroundColor: const Color(
+                                          0xFFF59E0B,
+                                        ),
+                                        duration: const Duration(seconds: 4),
+                                        content: Text(
+                                          'Orden enviada a cocina. Las '
+                                          'impresoras de $areas no '
+                                          'respondieron, el sistema lo '
+                                          'está intentando de otra forma '
+                                          '— las comandas saldrán en '
+                                          'unos segundos.',
+                                        ),
+                                      ),
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(
+                                      context,
+                                    ).showAppSnackBar(
+                                      const SnackBar(
+                                        backgroundColor: Color(0xFF22C55E),
+                                        content: Text('Orden enviada a cocina'),
                                       ),
                                     );
                                   }
-                                },
-                              );
+
+                                  // Auto-close para delivery externo (ya pagado)
+                                  final dt = orderState.deliveryType;
+                                  if (origin == OrderOrigin.delivery &&
+                                      (dt == 'uber_eats' ||
+                                          dt == 'pedidos_ya')) {
+                                    final orderId = orderState.order?.id;
+                                    if (orderId != null) {
+                                      await ref
+                                          .read(salesRepositoryProvider)
+                                          .closeDeliveryOrder(orderId: orderId);
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showAppSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Orden cerrada automaticamente (pagada externamente)',
+                                            ),
+                                          ),
+                                        );
+                                        context.go(
+                                          Uri(
+                                            path: AppRoutes.salesReact,
+                                            queryParameters: const {
+                                              'mode': 'delivery',
+                                            },
+                                          ).toString(),
+                                        );
+                                      }
+                                    }
+                                  }
+                                } on NoAssignedKitchenPrinterException catch (
+                                  e
+                                ) {
+                                  if (!context.mounted) return;
+                                  await _showMissingKitchenPrinterDialog(
+                                    context,
+                                    e,
+                                  );
+                                } catch (e) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showAppSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Error al enviar el pedido: ${e.toString()}',
+                                      ),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              });
                             },
                       icon: Icons.soup_kitchen_outlined,
                     ),

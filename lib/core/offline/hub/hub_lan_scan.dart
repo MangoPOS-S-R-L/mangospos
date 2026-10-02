@@ -73,6 +73,7 @@ class HubLanScanner {
   /// los equipos MangoPOS encontrados, dedupeados por IP.
   Future<List<DiscoveredAgent>> scan({
     List<String> extraSubnetBases = const [],
+    String? hubBusinessId,
     void Function(int done, int total)? onProgress,
   }) async {
     final bases = <String>{
@@ -97,7 +98,7 @@ class HubLanScanner {
     Future<void> worker() async {
       while (it.moveNext()) {
         final ip = it.current;
-        final agent = await _probeHost(ip);
+        final agent = await _probeHost(ip, hubBusinessId: hubBusinessId);
         if (agent != null) {
           found[agent.ip ?? agent.host] = agent;
         }
@@ -111,10 +112,16 @@ class HubLanScanner {
     return found.values.toList(growable: false);
   }
 
-  Future<DiscoveredAgent?> _probeHost(String ip) async {
+  Future<DiscoveredAgent?> _probeHost(
+    String ip, {
+    String? hubBusinessId,
+  }) async {
     for (final port in _ports) {
       if (!await _portOpen(ip, port)) continue;
-      if (await _isHubEndpoint('http://$ip:$port')) {
+      if (await _isHubEndpoint(
+        'http://$ip:$port',
+        hubBusinessId: hubBusinessId,
+      )) {
         return DiscoveredAgent(
           name: 'Equipo $ip',
           host: ip,
@@ -141,16 +148,21 @@ class HubLanScanner {
 
   /// A print agent or an unrelated HTTP 200 is not evidence of a Hub.
   /// Business and authority are validated by HubClient before connecting.
-  Future<bool> _isHubEndpoint(String baseUrl) async {
+  Future<bool> _isHubEndpoint(String baseUrl, {String? hubBusinessId}) async {
     try {
-      final resp = await _http
-          .get(Uri.parse('$baseUrl/hub/health'))
-          .timeout(_httpTimeout);
+      final healthUri = Uri.parse('$baseUrl/hub/health').replace(
+        queryParameters: hubBusinessId == null || hubBusinessId.isEmpty
+            ? null
+            : {'business_id': hubBusinessId},
+      );
+      final resp = await _http.get(healthUri).timeout(_httpTimeout);
       if (resp.statusCode != 200) return false;
       final body = jsonDecode(resp.body);
       return body is Map &&
           body['status'] == 'ok' &&
-          const ['hub', 'hub_backup', 'pos'].contains(body['role']);
+          (hubBusinessId == null || hubBusinessId.isEmpty
+              ? const ['hub', 'hub_backup', 'pos'].contains(body['role'])
+              : body['role'] == 'hub' && body['business_id'] == hubBusinessId);
     } catch (_) {
       return false;
     }

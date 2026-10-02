@@ -8,7 +8,9 @@ import '../../services/session/session_controller.dart';
 import 'offline_readiness.dart';
 import 'offline_refreshers.dart';
 
-final offlineReadinessProvider = FutureProvider<OfflineReadiness>((ref) async {
+final offlineReadinessProvider = FutureProvider.autoDispose<OfflineReadiness>((
+  ref,
+) async {
   final businessId = ref.watch(
     sessionProvider.select((s) => s.activeBusinessId),
   );

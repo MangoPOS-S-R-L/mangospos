@@ -20,6 +20,7 @@ import 'package:go_router/go_router.dart';
 import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
+import 'package:mangopos/core/offline/pending_kitchen_prints.dart';
 
 import '../state/printing_health_state.dart';
 import '../viewmodel/printing_health_viewmodel.dart';
@@ -36,6 +37,59 @@ class PrintingHealthView extends ConsumerStatefulWidget {
 }
 
 class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
+  final Set<String> _pendingRetries = <String>{};
+
+  Future<void> _retryPendingKitchenPrint(String id) async {
+    if (_pendingRetries.contains(id)) return;
+    setState(() => _pendingRetries.add(id));
+    try {
+      final error = await ref
+          .read(printingHealthViewModelProvider.notifier)
+          .retryPendingKitchenPrint(id);
+      if (!mounted) return;
+      AppToast.info(
+        context,
+        error == null
+            ? 'Comanda aceptada por la impresora o su cola. Confirma el papel.'
+            : 'La comanda sigue pendiente: $error Comprueba si salió papel '
+                  'antes de volver a intentar.',
+      );
+    } finally {
+      if (mounted) setState(() => _pendingRetries.remove(id));
+    }
+  }
+
+  Future<void> _dismissPendingKitchenPrint(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Marcar comanda como revisada'),
+        content: const Text(
+          'Esto no imprime ni elimina la orden. Hazlo solo después de '
+          'confirmar con cocina que la comanda fue atendida.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Marcar revisada'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref
+          .read(printingHealthViewModelProvider.notifier)
+          .dismissPendingKitchenPrint(id);
+    } catch (e) {
+      if (mounted) AppToast.info(context, 'No se guardó la revisión: $e');
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -87,8 +141,11 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
                   padding: EdgeInsets.symmetric(horizontal: 20),
                   child: Row(
                     children: [
-                      Icon(Icons.history,
-                          color: MangoColors.darkGray, size: 20),
+                      Icon(
+                        Icons.history,
+                        color: MangoColors.darkGray,
+                        size: 20,
+                      ),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -158,41 +215,41 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
 
     // Slice C.2: cuando el VM detecta transiciones a peor (ok→down/warn),
     // mostrar snackbar por cada una y limpiar la lista para no repetir.
-    ref.listen<PrintingHealthState>(
-      printingHealthViewModelProvider,
-      (prev, next) {
-        if (next.pendingTransitions.isEmpty) return;
-        final messenger = ScaffoldMessenger.of(context);
-        for (final t in next.pendingTransitions) {
-          messenger.showAppSnackBar(
-            SnackBar(
-              backgroundColor: t.current == PrinterHealthLevel.down
-                  ? const Color(0xFFEF4444)
-                  : const Color(0xFFF59E0B),
-              duration: const Duration(seconds: 5),
-              content: Row(
-                children: [
-                  Icon(
-                    t.current == PrinterHealthLevel.down
-                        ? Icons.error_outline
-                        : Icons.warning_amber_rounded,
-                    color: Colors.white,
+    ref.listen<PrintingHealthState>(printingHealthViewModelProvider, (
+      prev,
+      next,
+    ) {
+      if (next.pendingTransitions.isEmpty) return;
+      final messenger = ScaffoldMessenger.of(context);
+      for (final t in next.pendingTransitions) {
+        messenger.showAppSnackBar(
+          SnackBar(
+            backgroundColor: t.current == PrinterHealthLevel.down
+                ? const Color(0xFFEF4444)
+                : const Color(0xFFF59E0B),
+            duration: const Duration(seconds: 5),
+            content: Row(
+              children: [
+                Icon(
+                  t.current == PrinterHealthLevel.down
+                      ? Icons.error_outline
+                      : Icons.warning_amber_rounded,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    t.message,
+                    style: const TextStyle(color: Colors.white),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      t.message,
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          );
-        }
-        vm.clearTransitions();
-      },
-    );
+          ),
+        );
+      }
+      vm.clearTransitions();
+    });
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -219,6 +276,25 @@ class _PrintingHealthViewState extends ConsumerState<PrintingHealthView> {
 
             _SummaryRow(state: state),
             const SizedBox(height: 24),
+
+            if (state.pendingKitchenPrints.isNotEmpty) ...[
+              const _SectionTitle('Comandas locales por revisar'),
+              const SizedBox(height: 8),
+              const Text(
+                'Estas áreas no confirmaron impresión. La venta puede estar '
+                'sincronizada; revisa el papel antes de reintentar.',
+              ),
+              const SizedBox(height: 12),
+              ...state.pendingKitchenPrints.map(
+                (pending) => _PendingKitchenPrintCard(
+                  pending: pending,
+                  busy: _pendingRetries.contains(pending.id),
+                  onRetry: () => _retryPendingKitchenPrint(pending.id),
+                  onDismiss: () => _dismissPendingKitchenPrint(pending.id),
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
 
             const _SectionTitle('Estado de impresoras'),
             const SizedBox(height: 12),
@@ -519,10 +595,7 @@ class _PrinterHealthCard extends StatelessWidget {
             width: 14,
             height: 14,
             margin: const EdgeInsets.only(top: 4),
-            decoration: BoxDecoration(
-              color: dotColor,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -776,6 +849,61 @@ class _PrintJobRow extends StatelessWidget {
   }
 }
 
+class _PendingKitchenPrintCard extends StatelessWidget {
+  const _PendingKitchenPrintCard({
+    required this.pending,
+    required this.busy,
+    required this.onRetry,
+    required this.onDismiss,
+  });
+
+  final PendingKitchenPrint pending;
+  final bool busy;
+  final VoidCallback onRetry;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final time = pending.queuedAt.toLocal();
+    final minute = time.minute.toString().padLeft(2, '0');
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${pending.tableName} · ${pending.areaCode}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              pending.itemIds.isEmpty
+                  ? 'Ronda anterior sin IDs: revisión manual requerida'
+                  : '${pending.itemIds.length} productos · '
+                        '${time.day}/${time.month} ${time.hour}:$minute',
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                OutlinedButton(
+                  onPressed: busy || pending.itemIds.isEmpty ? null : onRetry,
+                  child: const Text('Reintentar área'),
+                ),
+                TextButton(
+                  onPressed: busy ? null : onDismiss,
+                  child: const Text('Marcar revisada'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _LoadingBlock extends StatelessWidget {
   const _LoadingBlock();
 
@@ -826,10 +954,7 @@ class _EmptyTile extends StatelessWidget {
 /// Slice C.3: tile para cada ticket impreso reciente que se puede
 /// reimprimir. Muestra impresora, kind, hora y un botón "Reimprimir".
 class _PrintedJobReprintTile extends StatelessWidget {
-  const _PrintedJobReprintTile({
-    required this.job,
-    required this.onReprint,
-  });
+  const _PrintedJobReprintTile({required this.job, required this.onReprint});
 
   final PrintJobRow job;
   final VoidCallback onReprint;

@@ -19,7 +19,7 @@ void main() {
     () async {
       final client = HubClient(
         discovery: _NoMdns(),
-        lanScan: () async => [
+        lanScan: (businessId) async => [
           const DiscoveredAgent(name: 'other', host: '192.168.1.2', port: 4000),
           const DiscoveredAgent(
             name: 'cashier',
@@ -49,10 +49,12 @@ void main() {
     'does not scan every five seconds or scan without a business scope',
     () async {
       var scans = 0;
+      final scannedBusinesses = <String>[];
       final client = HubClient(
         discovery: _NoMdns(),
-        lanScan: () async {
+        lanScan: (businessId) async {
           scans++;
+          scannedBusinesses.add(businessId);
           return [];
         },
       );
@@ -61,6 +63,7 @@ void main() {
       await client.findReachableHub(businessId: 'biz', scanFallback: true);
       await client.findReachableHub(scanFallback: true);
       expect(scans, 1);
+      expect(scannedBusinesses, ['biz']);
     },
   );
 
@@ -70,7 +73,7 @@ void main() {
       var scans = 0;
       final client = HubClient(
         discovery: _NoMdns(),
-        lanScan: () async {
+        lanScan: (businessId) async {
           scans++;
           return [];
         },

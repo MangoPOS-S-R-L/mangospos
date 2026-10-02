@@ -203,7 +203,7 @@ void main() {
         },
       });
       expect(updated.changes['purchase_cost']?.to, '900000');
-      expect(updated.description, 'Cambió: Nombre, Costo');
+      expect(updated.description, 'Cambió: Nombre, Valor unitario');
     });
   });
 

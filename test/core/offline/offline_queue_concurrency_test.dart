@@ -4,6 +4,8 @@ import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/hub/hub_config.dart';
+import 'package:mangopos/core/offline/hub/hub_uploader_binding.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
@@ -121,6 +123,47 @@ void main() {
       );
     },
   );
+
+  test('an unchanged Hub poll does not interrupt a queued batch', () async {
+    const biz = 'stable-hub-uploader';
+    service.setHubUploader(null);
+    addTearDown(() => service.setHubUploader(null));
+    await enqueueCount(biz, 'hub-first', 1);
+    await enqueueCount(biz, 'hub-second', 2);
+    final binding = HubUploaderBinding();
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final sent = <String>[];
+
+    void bindOnPoll() {
+      if (!binding.shouldBind(
+        businessId: biz,
+        mode: TerminalMode.hubClient,
+        url: 'http://10.0.0.2:4100',
+      )) {
+        return;
+      }
+      service.setHubUploader((_, action) async {
+        final id = action['id'].toString();
+        sent.add(id);
+        if (id == 'hub-first') {
+          entered.complete();
+          await release.future;
+        }
+        return sent.length;
+      });
+    }
+
+    bindOnPoll();
+    final draining = service.flushPendingToHub(biz);
+    await entered.future;
+    bindOnPoll();
+    release.complete();
+    final result = await draining;
+    expect(sent, ['hub-first', 'hub-second']);
+    expect(result.completed, 2);
+    expect(result.pending, 0);
+  });
 
   test(
     'separate kitchen rounds keep FIFO and their own delivery state',

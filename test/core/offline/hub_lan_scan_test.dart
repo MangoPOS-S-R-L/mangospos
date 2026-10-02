@@ -50,4 +50,32 @@ void main() {
     addTearDown(scanner.dispose);
     expect((await scanner.scan()).single.port, 4000);
   });
+
+  test('automatic scan returns only the active Hub of this business', () async {
+    final requestedBusinesses = <String?>[];
+    final scanner = HubLanScanner(
+      subnetProvider: () async => ['10.101.0'],
+      portProbe: (ip, port) async =>
+          port == 4100 &&
+          ['10.101.0.27', '10.101.0.93', '10.101.0.171'].contains(ip),
+      httpClient: MockClient((request) async {
+        requestedBusinesses.add(request.url.queryParameters['business_id']);
+        final ip = request.url.host;
+        return http.Response(
+          jsonEncode({
+            'status': 'ok',
+            'role': ip.endsWith('.93') ? 'pos' : 'hub',
+            'business_id': ip.endsWith('.171') ? 'other' : 'biz',
+          }),
+          200,
+        );
+      }),
+    );
+    addTearDown(scanner.dispose);
+
+    final found = await scanner.scan(hubBusinessId: 'biz');
+    expect(found.map((agent) => agent.ip), ['10.101.0.27']);
+    expect(requestedBusinesses, isNotEmpty);
+    expect(requestedBusinesses.every((id) => id == 'biz'), isTrue);
+  });
 }

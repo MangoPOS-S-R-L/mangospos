@@ -47,7 +47,7 @@ class HubClient {
     AgentDiscovery? discovery,
     http.Client? httpClient,
     Future<String> Function(String)? businessToken,
-    Future<List<DiscoveredAgent>> Function()? lanScan,
+    Future<List<DiscoveredAgent>> Function(String businessId)? lanScan,
   }) : _discovery = discovery ?? AgentDiscovery(),
        _businessToken = businessToken ?? HubLanTokenService.instance.tokenFor,
        _lanScan = lanScan ?? _scanLan,
@@ -56,14 +56,14 @@ class HubClient {
   final AgentDiscovery _discovery;
   final http.Client _http;
   final Future<String> Function(String) _businessToken;
-  final Future<List<DiscoveredAgent>> Function() _lanScan;
+  final Future<List<DiscoveredAgent>> Function(String businessId) _lanScan;
   final Map<String, DateTime> _lastScan = {};
 
-  static Future<List<DiscoveredAgent>> _scanLan() async {
+  static Future<List<DiscoveredAgent>> _scanLan(String businessId) async {
     if (kIsWeb) return const [];
     final scanner = HubLanScanner();
     try {
-      return await scanner.scan();
+      return await scanner.scan(hubBusinessId: businessId);
     } finally {
       scanner.dispose();
     }
@@ -141,7 +141,7 @@ class HubClient {
           now.difference(previous) >= const Duration(seconds: 30)) {
         _lastScan[businessId] = now;
         try {
-          for (final agent in await _lanScan()) {
+          for (final agent in await _lanScan(businessId)) {
             for (final url in _hubCandidateUrls(agent.baseUrl)) {
               if (await _isHub(url, businessId: businessId)) return url;
             }
@@ -193,10 +193,7 @@ class HubClient {
     return best;
   }
 
-  Future<HubProbeResult> _probeOne(
-    String baseUrl, {
-    String? businessId,
-  }) async {
+  Future<HubProbeResult> _probeOne(String baseUrl, {String? businessId}) async {
     try {
       final resp = await _http
           .get(_healthUri(baseUrl, businessId))
