@@ -41,6 +41,7 @@ class _StepReviewSignState extends ConsumerState<StepReviewSign> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(detailedWizardProvider(widget.input));
+    final usd = state.usdCount;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -56,6 +57,10 @@ class _StepReviewSignState extends ConsumerState<StepReviewSign> {
           _SummaryRow(
             label: 'Efectivo',
             value: 'RD\$ ${_formatInt(state.totalCounted)}',
+            detail: usd == null || usd.isEmpty
+                ? null
+                : 'RD\$ ${_formatInt(state.pesosCounted)} en pesos + '
+                      '${usdBreakdownLabel(usd)}',
           ),
           const SizedBox(height: 8),
           _SummaryRow(
@@ -119,10 +124,11 @@ class _StepIntro extends StatelessWidget {
 }
 
 class _SummaryRow extends StatelessWidget {
-  const _SummaryRow({required this.label, required this.value});
+  const _SummaryRow({required this.label, required this.value, this.detail});
 
   final String label;
   final String value;
+  final String? detail;
 
   @override
   Widget build(BuildContext context) {
@@ -136,13 +142,28 @@ class _SummaryRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-                color: MangoColors.darkGray,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: MangoColors.darkGray,
+                  ),
+                ),
+                if (detail != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    detail!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           Text(

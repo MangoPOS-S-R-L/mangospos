@@ -227,6 +227,70 @@ void main() {
   });
 
   test(
+    'orden anulada no revive al reabrir la mesa para una venta nueva',
+    () async {
+      const biz = 'void-then-reopen';
+      const table = 'table-void-then-reopen';
+      final offline = OfflinePosService();
+      final oldState = CurrentOrderState(
+        order: order('voided-order'),
+        origin: 'table',
+      );
+      await offline.saveSnapshot(
+        businessId: biz,
+        slotId: table,
+        origin: 'table',
+        tableId: table,
+        state: oldState,
+      );
+      final container = await containerFor(
+        biz,
+        oldState,
+        PrintingService(client),
+      );
+
+      await container
+          .read(currentOrderProvider.notifier)
+          .cancelCurrentOrder(reason: 'Cliente se fue');
+      expect(container.read(currentOrderProvider).order, isNull);
+      final queued = await offline.unsettledActions(biz);
+      expect(queued.single['type'], 'void_order');
+      expect(queued.single['order_id'], 'voided-order');
+      // La reapertura (venta nueva) no debe pintar la orden anulada.
+      expect(
+        await offline.loadSnapshot(businessId: biz, slotId: table),
+        isNull,
+      );
+
+      // Una escritura retrasada de la orden anulada tampoco la revive.
+      await offline.saveSnapshot(
+        businessId: biz,
+        slotId: table,
+        origin: 'table',
+        tableId: table,
+        state: oldState,
+      );
+      expect(
+        await offline.loadSnapshot(businessId: biz, slotId: table),
+        isNull,
+      );
+
+      // La venta nueva de la misma mesa sí se guarda.
+      await offline.saveSnapshot(
+        businessId: biz,
+        slotId: table,
+        origin: 'table',
+        tableId: table,
+        state: CurrentOrderState(order: order('new-sale'), origin: 'table'),
+      );
+      expect(
+        (await offline.loadSnapshot(businessId: biz, slotId: table))?.order?.id,
+        'new-sale',
+      );
+    },
+  );
+
+  test(
     'mesa existente: agrega y envía a la impresora LAN sin tocar nube',
     () async {
       const biz = 'outage-table';

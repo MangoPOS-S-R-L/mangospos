@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/presentation/cashier/state/cash_close_formatters.dart';
 
 import '../cash_close_detailed_wizard.dart';
 import '../state/detailed_wizard_state.dart';
@@ -94,6 +95,14 @@ class _ConfirmCloseDialogState extends State<ConfirmCloseDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _row('Efectivo', 'RD\$ ${_formatInt(s.cashAmount)}'),
+            if (s.usd != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                'Incluye ${usdBreakdownLabel(s.usd!)}',
+                textAlign: TextAlign.end,
+                style: const TextStyle(color: MangoColors.muted, fontSize: 12),
+              ),
+            ],
             const SizedBox(height: 6),
             _row('Tarjeta', 'RD\$ ${_formatInt(s.cardAmount.round())}'),
             const SizedBox(height: 6),

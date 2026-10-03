@@ -275,6 +275,7 @@ class _DestinationTile extends StatelessWidget {
     final iconData = switch (destination.kind) {
       PrintDestinationKind.printer => _printerIcon(),
       PrintDestinationKind.screenOnly => Icons.desktop_windows_outlined,
+      PrintDestinationKind.allPrinters => Icons.dynamic_feed_outlined,
     };
     final color = destination.kind == PrintDestinationKind.screenOnly
         ? const Color(0xFF6366F1)
@@ -305,7 +306,7 @@ class _DestinationTile extends StatelessWidget {
 
   Widget _healthBadge() {
     final health = destination.health;
-    if (destination.kind == PrintDestinationKind.screenOnly) {
+    if (destination.kind != PrintDestinationKind.printer) {
       return const SizedBox.shrink();
     }
     if (health == null) {

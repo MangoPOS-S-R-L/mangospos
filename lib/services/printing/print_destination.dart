@@ -21,6 +21,10 @@ enum PrintDestinationKind {
   /// Solo mostrar la pre-cuenta en pantalla (modal). No imprime nada.
   screenOnly,
 
+  /// Comanda: imprimir en TODAS las impresoras del área (como antes de la
+  /// elección por dispositivo). Ver `KitchenAreaPrinterPreference`.
+  allPrinters,
+
   // Reservados para futuras fases:
   // whatsapp, email, pdfDownload, etc.
 }
@@ -74,6 +78,15 @@ class PrintDestination {
       kind: PrintDestinationKind.screenOnly,
       displayName: 'Mostrar en pantalla',
       subtitle: 'Sin imprimir — el cliente lee directo',
+    );
+  }
+
+  /// Comanda en todas las impresoras del área de producción.
+  factory PrintDestination.allPrinters() {
+    return const PrintDestination(
+      kind: PrintDestinationKind.allPrinters,
+      displayName: 'Todas las impresoras del área',
+      subtitle: 'La comanda sale en cada una',
     );
   }
 
@@ -144,6 +157,27 @@ class PrintDestinationResolver {
       printsReceipts: true,
       includeScreenOnly: includeScreenOnly,
     );
+  }
+
+  /// Destinos para la comanda de un área con 2+ impresoras: cada una con su
+  /// salud + "Todas". La salud es best-effort: sin red el selector igual
+  /// tiene que salir (el envío a cocina funciona offline).
+  Future<List<PrintDestination>> resolveForKitchenArea(
+    List<PrinterConfig> printers,
+  ) async {
+    var health = const <String, PrinterHealthRecord>{};
+    try {
+      health = await _fetchHealthMap(
+        printers.map((p) => p.id).toList(growable: false),
+      ).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // Sin salud: los puntos salen grises ("Sin datos").
+    }
+    return [
+      for (final p in printers)
+        PrintDestination.fromPrinter(p, health: health[p.id]),
+      PrintDestination.allPrinters(),
+    ];
   }
 
   /// Helper compartido. Filtra impresoras activas de un business que

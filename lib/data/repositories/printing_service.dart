@@ -19,6 +19,10 @@ import '../../core/offline/pending_kitchen_prints.dart';
 import '../../core/storage/storage_service.dart';
 import '../../core/printing/bluetooth_print_service.dart';
 import '../../core/printing/ble_printer_connection_manager.dart';
+import '../../core/printing/device_identity.dart';
+import '../../core/printing/kitchen_area_printer_preference.dart';
+export '../../core/printing/kitchen_area_printer_preference.dart'
+    show KitchenAreaPrinterChooser;
 import '../../core/printing/printerless_mode.dart';
 import '../../core/printing/star/print_speed.dart';
 import '../../services/printing/print_ticket_service.dart';
@@ -247,6 +251,13 @@ class PrintingService {
     // anterior). El replay offline lo apaga: reproduce envíos encolados
     // seguidos y fusionaría rondas que en el salón fueron distintas.
     bool allowKitchenMerge = true,
+    // Área con 2+ impresoras sin elección en este dispositivo: se pregunta
+    // con esto (solo «Enviar Pedido»). Sin chooser (replay, reimpresión)
+    // manda la elección guardada, o todas si no hay.
+    KitchenAreaPrinterChooser? choosePrinter,
+    // Mantener presionado «Enviar Pedido»: volver a preguntar aunque ya haya
+    // una impresora fijada.
+    bool forceChoosePrinter = false,
   }) async {
     var printingStarted = false;
     try {
@@ -332,6 +343,34 @@ class PrintingService {
         printersByAreaCode[resolved.areaCode] = resolved.printers;
       }
 
+      // Modo sin impresora: la orden entra al KDS igual, pero no se manda
+      // papel a ninguna área. No abrimos modales aquí a propósito — el
+      // mesero envía muchas rondas seguidas y la cocina ya ve todo en el
+      // KDS. Ver core/printing/printerless_mode.dart.
+      //
+      // OJO: acá manda el flag de COCINA del negocio, no el de caja ni el
+      // override del device. Son ámbitos aparte: lo normal es tener
+      // impresora en caja y cocina solo con KDS. Y la impresora de cocina
+      // es compartida — que esta tablet no tenga impresora propia no
+      // significa que la cocina no deba recibir su comanda.
+      final printerless = await PrinterlessMode.kitchenEnabled(businessId);
+
+      // Áreas con 2+ impresoras: la(s) de ESTE dispositivo. Se pregunta
+      // ANTES de marcar la orden: si algo falla acá, nada quedó a medias.
+      if (!printerless) {
+        for (final areaCode in itemsByArea.keys) {
+          if (excludeAreaCodes.contains(areaCode)) continue;
+          printersByAreaCode[areaCode] = await _printersForThisDevice(
+            businessId: businessId,
+            areaCode: areaCode,
+            areaName: areasByCode[areaCode]?.name,
+            printers: printersByAreaCode[areaCode] ?? const [],
+            chooser: choosePrinter,
+            forceChoose: forceChoosePrinter,
+          );
+        }
+      }
+
       // Si no hay impresoras configuradas para "enviar a cocina",
       // la orden igual debe pasar a cocina; simplemente se omite la impresión.
 
@@ -347,18 +386,6 @@ class PrintingService {
       final directAreas = <String>[];
       final escalatedAreas = <String>[];
       final pendingPrintAreas = <String>[];
-
-      // Modo sin impresora: la orden entra al KDS igual, pero no se manda
-      // papel a ninguna área. No abrimos modales aquí a propósito — el
-      // mesero envía muchas rondas seguidas y la cocina ya ve todo en el
-      // KDS. Ver core/printing/printerless_mode.dart.
-      //
-      // OJO: acá manda el flag de COCINA del negocio, no el de caja ni el
-      // override del device. Son ámbitos aparte: lo normal es tener
-      // impresora en caja y cocina solo con KDS. Y la impresora de cocina
-      // es compartida — que esta tablet no tenga impresora propia no
-      // significa que la cocina no deba recibir su comanda.
-      final printerless = await PrinterlessMode.kitchenEnabled(businessId);
 
       printingStarted = true;
       for (final entry in itemsByArea.entries) {
@@ -1180,6 +1207,8 @@ class PrintingService {
     String tableName = 'LOCAL',
     String? waiterName,
     String? businessName,
+    KitchenAreaPrinterChooser? choosePrinter,
+    bool forceChoosePrinter = false,
   }) async {
     final order = localState.order;
     if (order == null) throw Exception('No hay orden local para imprimir');
@@ -1218,9 +1247,15 @@ class PrintingService {
         continue;
       }
       try {
-        final printers = await _readCachedOrderPrinters(
+        final printers = await _printersForThisDevice(
           businessId: businessId,
           areaCode: areaCode,
+          printers: await _readCachedOrderPrinters(
+            businessId: businessId,
+            areaCode: areaCode,
+          ),
+          chooser: choosePrinter,
+          forceChoose: forceChoosePrinter,
         );
         if (printers.isEmpty) {
           pendingAreas.add(areaCode);
@@ -1349,10 +1384,14 @@ class PrintingService {
         final areaItems = entry.value;
 
         final area = await _ensureAreaForCode(businessId, areaCode);
-        final printers = await _getOrderPrintersWithOfflineFallback(
+        final printers = await _printersForThisDevice(
           businessId: businessId,
-          areaId: area.id,
           areaCode: areaCode,
+          printers: await _getOrderPrintersWithOfflineFallback(
+            businessId: businessId,
+            areaId: area.id,
+            areaCode: areaCode,
+          ),
         );
 
         if (printers.isEmpty) {
@@ -1439,10 +1478,14 @@ class PrintingService {
       for (final entry in itemsByArea.entries) {
         final areaCode = entry.key;
         final area = await _ensureAreaForCode(businessId, areaCode);
-        final printers = await _getOrderPrintersWithOfflineFallback(
+        final printers = await _printersForThisDevice(
           businessId: businessId,
-          areaId: area.id,
           areaCode: areaCode,
+          printers: await _getOrderPrintersWithOfflineFallback(
+            businessId: businessId,
+            areaId: area.id,
+            areaCode: areaCode,
+          ),
         );
         if (printers.isEmpty) continue;
 
@@ -1758,10 +1801,14 @@ class PrintingService {
         // se reporta y se sigue con la siguiente.
         try {
           final area = await _ensureAreaForCode(businessId, areaCode);
-          final printers = await _getOrderPrintersWithOfflineFallback(
+          final printers = await _printersForThisDevice(
             businessId: businessId,
-            areaId: area.id,
             areaCode: areaCode,
+            printers: await _getOrderPrintersWithOfflineFallback(
+              businessId: businessId,
+              areaId: area.id,
+              areaCode: areaCode,
+            ),
           );
           if (printers.isEmpty) {
             areasWithoutPrinter.add(areaCode);
@@ -1883,6 +1930,36 @@ class PrintingService {
       throw StateError('No se descargaron todas las impresoras.');
     }
     return cached;
+  }
+
+  /// Impresoras de comanda que usa ESTE dispositivo en un área con 2+
+  /// (ver [KitchenAreaPrinterPreference.resolve]). Sin elección: todas, como
+  /// antes. Nunca deja un área sin impresora por esto — cualquier fallo
+  /// devuelve la lista completa.
+  Future<List<PrinterConfig>> _printersForThisDevice({
+    required String businessId,
+    required String areaCode,
+    required List<PrinterConfig> printers,
+    String? areaName,
+    KitchenAreaPrinterChooser? chooser,
+    bool forceChoose = false,
+  }) async {
+    if (printers.length < 2) return printers;
+    try {
+      return await KitchenAreaPrinterPreference.resolve(
+        deviceId: await DeviceIdentity.getOrCreateId(businessId),
+        areaCode: areaCode,
+        areaLabel: (areaName?.trim().isNotEmpty ?? false)
+            ? areaName!.trim()
+            : areaCode.replaceAll('_', ' ').toUpperCase(),
+        printers: printers,
+        chooser: chooser,
+        forceChoose: forceChoose,
+      );
+    } catch (e) {
+      debugPrint('[kitchen] elección por dispositivo de $areaCode falló: $e');
+      return printers;
+    }
   }
 
   Future<List<PrinterConfig>> _getOrderPrintersWithOfflineFallback({

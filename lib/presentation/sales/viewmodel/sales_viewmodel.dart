@@ -4626,10 +4626,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    // Tras anular, la pantalla abre una venta nueva en la misma mesa. La orden
+    // anulada no debe volver a aparecer: openTable pinta primero el cache en
+    // memoria (y si no hay, el snapshot en disco), y una recarga de Realtime
+    // ya agendada o en vuelo la volvería a cargar mientras la nueva abre. Mismo
+    // trato que un pago completo (markPaidOrderLocally). La liberación de una
+    // mesa vacía (releaseOnlyIfEmpty) no pasa por aquí: no reabre nada.
+    Future<void> forgetVoidedOrder() async {
+      if (releaseOnlyIfEmpty) return;
+      _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
+      if (_queuedRefreshOrderId == orderId) {
+        _queuedRefreshOrderId = null;
+        _queuedClearIfPaid = false;
+        _refreshOrderDebounceTimer?.cancel();
+      }
+      ++_loadGeneration;
+      ++_openTableToken;
+      if (businessId == null || businessId.isEmpty) return;
+      try {
+        await _offlinePos.markOrderClosedLocally(
+          businessId: businessId,
+          orderId: orderId,
+        );
+      } catch (e) {
+        debugPrint('cancelCurrentOrder: no se marcó cerrada localmente: $e');
+      }
+    }
+
     // Local IDs are not valid for the online close RPC. Route them through
     // the durable queue even if the connectivity probe still reports online.
     if (orderId.startsWith('local-order-')) {
       await enqueueVoidOffline();
+      await forgetVoidedOrder();
       _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState();
       return;
@@ -4640,6 +4668,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // limitación en el case 'void_order' del _replayAction.)
     if (!_connectivity.isConnected) {
       await enqueueVoidOffline();
+      await forgetVoidedOrder();
       _hasManualFiscalTypeSelection = false;
       state = const CurrentOrderState();
       return;
@@ -4679,6 +4708,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await enqueueVoidOffline();
     }
 
+    await forgetVoidedOrder();
     _hasManualFiscalTypeSelection = false;
     state = const CurrentOrderState();
   }
@@ -4690,6 +4720,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<KitchenSendResult?> confirmOrder({
     String? tableName,
     String? waiterName,
+    // Área con 2+ impresoras: pregunta en cuál imprime este dispositivo
+    // (como la precuenta). [forceChoosePrinter] = mantener presionado.
+    KitchenAreaPrinterChooser? choosePrinter,
+    bool forceChoosePrinter = false,
   }) async {
     if (!operatorHasPermissionRef(ref, 'ventas.orden.enviar_cocina')) {
       state = state.copyWith(
@@ -4699,6 +4733,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     final orderId = state.order?.id;
     if (orderId == null) return null;
+    // Si el envío online ya preguntó y luego cayó al camino local, no se
+    // vuelve a preguntar: la elección quedó guardada.
+    var askedForPrinter = false;
+    final KitchenAreaPrinterChooser? chooser = choosePrinter == null
+        ? null
+        : (areaName, printers, current) {
+            askedForPrinter = true;
+            return choosePrinter(areaName, printers, current);
+          };
     // No ponemos loading: true aquí para evitar el parpadeo de la pantalla completa.
     // El usuario verá el item aparecer inmediatamente cuando _loadOrderDetail termine.
     // state = state.copyWith(loading: true);
@@ -4729,6 +4772,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                   tableName ?? (state.origin == 'table' ? 'MESA' : 'LOCAL'),
               waiterName: waiterName ?? session.userName,
               businessName: session.activeBusinessName,
+              choosePrinter: chooser,
+              forceChoosePrinter: forceChoosePrinter && !askedForPrinter,
             );
 
         // Espejo local del RPC fn_confirm_order_to_kitchen: marca los
@@ -4796,6 +4841,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               fallbackTableName: tableName,
               fallbackWaiterName: waiterName ?? session.userName,
               excludeItemIds: locallySentIds,
+              choosePrinter: chooser,
+              forceChoosePrinter: forceChoosePrinter,
             );
       } on KitchenSendNetworkException catch (e) {
         // Sin papel impreso todavía: repetir por el camino local no duplica

@@ -24,6 +24,7 @@ class StepResult extends StatefulWidget {
     required this.input,
     required this.result,
     required this.denominations,
+    this.usdCount,
     required this.onClose,
     this.cashRegisterSessionId,
     this.canRecount = false,
@@ -33,6 +34,9 @@ class StepResult extends StatefulWidget {
   final CashCloseInput input;
   final CashCloseResult result;
   final List<DenominationCount> denominations;
+
+  /// Dólares en gaveta firmados (ya incluidos en `result.totalCounted`).
+  final UsdCashCount? usdCount;
   final VoidCallback onClose;
 
   /// Id de la sesión de caja. Si está presente, el ticket de cierre
@@ -91,6 +95,7 @@ class _StepResultState extends State<StepResult> {
         input: widget.input,
         result: widget.result,
         denominations: widget.denominations,
+        usdCount: widget.usdCount,
         printedAt: DateTime.now(),
         recountCount: recountCount,
         sessionId: sessionId,
@@ -141,6 +146,7 @@ class _StepResultState extends State<StepResult> {
         input: widget.input,
         result: widget.result,
         denominations: widget.denominations,
+        usdCount: widget.usdCount,
         printedAt: DateTime.now(),
         recountCount: recountCount,
         sessionId: sessionId,

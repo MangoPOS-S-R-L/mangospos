@@ -185,10 +185,19 @@ class _PrintingAreaAssignmentsPageState
   Future<void> _selectPrinterForArea(PrintArea area) async {
     final areasCtrl = ref.read(printingAreasViewModelProvider.notifier);
     final printersCtrl = ref.read(printingPrintersViewModelProvider.notifier);
+    // Las que ya están en el área no se ofrecen: volver a agregarlas
+    // reescribe la fila y le apagaría "Imprimir al marcar listo".
+    final alreadyAssigned = {
+      for (final p in _assignedByArea[area.id] ?? const <PrinterConfig>[])
+        p.id,
+    };
     final printers =
-        List<PrinterDevice>.from(
-          ref.read(printingPrintersViewModelProvider).items,
-        )..sort((a, b) {
+        ref
+            .read(printingPrintersViewModelProvider)
+            .items
+            .where((p) => !alreadyAssigned.contains(p.id))
+            .toList()
+          ..sort((a, b) {
           if (a.online == b.online) return a.name.compareTo(b.name);
           return a.online ? -1 : 1;
         });
@@ -204,10 +213,14 @@ class _PrintingAreaAssignmentsPageState
     if (selectedPrinter == null) return;
     if (!mounted) return;
 
+    // Un área puede tener varias impresoras (p. ej. Cocina 1 y Cocina 2);
+    // cada dispositivo elige la suya al enviar a cocina. `exclusive: true`
+    // le apagaba la comanda a la impresora que ya estaba.
     final ok = await areasCtrl.linkAreaPrinter(
       areaId: area.id,
       printerId: selectedPrinter.id,
       printsOrders: true,
+      exclusive: false,
     );
     if (!mounted) return;
 

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart'
     show debugPrint, kIsWeb, visibleForTesting;
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
@@ -29,6 +30,7 @@ class CashClosePrintService {
     required CashCloseResult result,
     required List<DenominationCount> denominations,
     required DateTime printedAt,
+    UsdCashCount? usdCount,
     String? cashRegisterId,
     int recountCount = 0,
     String? sessionId,
@@ -44,6 +46,7 @@ class CashClosePrintService {
         input: input,
         result: result,
         denominations: denominations,
+        usdCount: usdCount,
         printedAt: printedAt,
         recountCount: recountCount,
         salesByArea: extras.salesByArea,
@@ -67,6 +70,7 @@ class CashClosePrintService {
     required CashCloseResult result,
     required List<DenominationCount> denominations,
     required DateTime printedAt,
+    UsdCashCount? usdCount,
     int recountCount = 0,
     String? sessionId,
     bool reprint = false,
@@ -76,6 +80,7 @@ class CashClosePrintService {
       input: input,
       result: result,
       denominations: denominations,
+      usdCount: usdCount,
       printedAt: printedAt,
       recountCount: recountCount,
       salesByArea: extras.salesByArea,
@@ -138,6 +143,7 @@ class CashClosePrintService {
       input: close.input,
       result: close.result,
       denominations: close.denominations,
+      usdCount: close.usdCount,
       printedAt: close.closedAt,
       cashRegisterId: close.cashRegisterId,
       recountCount: close.recountCount,
@@ -164,6 +170,7 @@ class CashClosePrintService {
       input: close.input,
       result: close.result,
       denominations: close.denominations,
+      usdCount: close.usdCount,
       printedAt: close.closedAt,
       recountCount: close.recountCount,
       sessionId: sessionId,
@@ -185,6 +192,7 @@ class CashClosePrintService {
       CashCloseInput input,
       CashCloseResult result,
       List<DenominationCount> denominations,
+      UsdCashCount? usdCount,
       DateTime closedAt,
       String? cashRegisterId,
       int recountCount,
@@ -287,11 +295,14 @@ class CashClosePrintService {
     double reportedCard;
     double reportedTransfer;
     List<DenominationCount> denominations;
+    UsdCashCount? usdCount;
     if (blind != null) {
       reportedCash = toInt(blind['cash_amount']);
       reportedCard = toDouble(blind['card_amount']);
       reportedTransfer = toDouble(blind['transfer_amount']);
       denominations = _denominationsFromJson(blind['denominations']);
+      final rawDenoms = blind['denominations'];
+      usdCount = rawDenoms is Map ? UsdCashCount.fromJson(rawDenoms['usd']) : null;
     } else {
       final parsed = _reportedFromNotes(notes);
       reportedCash = parsed.cash.round();
@@ -350,6 +361,7 @@ class CashClosePrintService {
       input: input,
       result: result,
       denominations: denominations,
+      usdCount: usdCount,
       closedAt: closedAt,
       cashRegisterId: cashRegisterId,
       recountCount: recountCount,
@@ -562,6 +574,9 @@ class CashClosePrintService {
     required CashCloseResult result,
     required List<DenominationCount> denominations,
     required DateTime printedAt,
+    /// Dólares en gaveta (ya sumados en `result.totalCounted`). `null` o
+    /// vacío = el ticket sale igual que siempre, sin sección de dólares.
+    UsdCashCount? usdCount,
     int recountCount = 0,
     List<Map<String, dynamic>> salesByArea = const [],
     List<Map<String, dynamic>> productsByArea = const [],
@@ -604,6 +619,28 @@ class CashClosePrintService {
     gen.setBold(false);
     for (final d in denominations.where((e) => e.count > 0)) {
       gen.textRow('${formatRD(d.value)} x ${d.count}', formatRD(d.subtotal));
+    }
+    if (usdCount != null && !usdCount.isEmpty) {
+      gen.separator();
+      gen.textRow(
+        'Efectivo RD\$',
+        formatRD(result.totalCounted - usdCount.totalDop),
+      );
+      gen.separator();
+      gen.setBold(true);
+      gen.text('DOLARES (tasa ${formatRDigital(usdCount.rate.toDouble())})');
+      gen.setBold(false);
+      for (final d in usdCount.denominations.where((e) => e.count > 0)) {
+        gen.textRow(
+          '${usdCount.symbol} ${d.value} x ${d.count}',
+          _formatUsd(usdCount.symbol, d.subtotal),
+        );
+      }
+      gen.textRow(
+        'Total dolares',
+        _formatUsd(usdCount.symbol, usdCount.totalUsd),
+      );
+      gen.textRow('Dolares en RD\$', formatRD(usdCount.totalDop));
     }
     gen.separator();
     gen.textRow('Total efectivo', formatRD(result.totalCounted));
@@ -817,6 +854,9 @@ class CashClosePrintService {
       data: buildTicket(printer.paperWidth).bytes,
     );
   }
+
+  String _formatUsd(String symbol, num amount) =>
+      '$symbol ${NumberFormat('#,##0.00', 'en_US').format(amount)}';
 
   String _shortMoney(num amount) {
     return formatRD(amount).replaceFirst('RD\$ ', '');

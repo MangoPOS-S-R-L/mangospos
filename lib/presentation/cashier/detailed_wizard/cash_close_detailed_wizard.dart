@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/business/business_resolver.dart';
+import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/presentation/cashier/state/blind_cash_close_models.dart';
 
@@ -59,6 +60,7 @@ class _CashCloseDetailedWizardState
   int _currentStep = 0;
   CashCloseResult? _signedResult;
   List<DenominationCount>? _signedDenominations;
+  UsdCashCount? _signedUsd;
   double _zoomFactor = 1.0;
   // Toggle de "Permitir recontar" cargado desde business_settings al
   // abrir el wizard. Si es true, después de firmar+imprimir el step
@@ -79,6 +81,24 @@ class _CashCloseDetailedWizardState
   void initState() {
     super.initState();
     Future.microtask(_loadAllowRecount);
+    Future.microtask(_loadUsdSettings);
+  }
+
+  /// "Dólares en gaveta" solo aparece si el negocio activó la moneda USD en
+  /// Ajustes → Monedas. Si no se puede leer, el cierre sigue solo en RD$.
+  Future<void> _loadUsdSettings() async {
+    try {
+      final businessId = await BusinessResolver.ensure('auto');
+      final settings = await ref
+          .read(posSettingsRepositoryProvider)
+          .getUsdDisplaySettings(businessId);
+      if (!mounted || !settings.enabled) return;
+      ref
+          .read(detailedWizardProvider(widget.input).notifier)
+          .configureUsd(settings);
+    } catch (_) {
+      // Falla silenciosa: sin config USD el cierre queda como siempre.
+    }
   }
 
   Future<void> _loadAllowRecount() async {
@@ -154,6 +174,7 @@ class _CashCloseDetailedWizardState
     setState(() {
       _signedResult = null;
       _signedDenominations = null;
+      _signedUsd = null;
       _currentStep = 0;
       _currentAttempt = 2;
     });
@@ -192,6 +213,14 @@ class _CashCloseDetailedWizardState
       _onCancel();
       return;
     }
+    if (_currentStep == 0 &&
+        ref.read(detailedWizardProvider(widget.input)).usdMissingRate) {
+      AppToast.error(
+        context,
+        'Escribe la tasa del día para convertir los dólares a RD\$.',
+      );
+      return;
+    }
     if (_currentStep < _stepLabels.length - 1) {
       _next();
       return;
@@ -216,6 +245,7 @@ class _CashCloseDetailedWizardState
         _signedDenominations = ref
             .read(detailedWizardProvider(widget.input))
             .denominations;
+        _signedUsd = snapshot.usd;
       });
     }
   }
@@ -319,6 +349,7 @@ class _CashCloseDetailedWizardState
                         result: _signedResult!,
                         denominations:
                             _signedDenominations ?? const [],
+                        usdCount: _signedUsd,
                         onClose: _onCancel,
                         cashRegisterSessionId:
                             widget.cashRegisterSessionId,

@@ -1202,7 +1202,26 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
     if (goToZonesOnSuccess) {
       context.go(AppRoutes.salesByZone);
+      return;
     }
+
+    // Delivery vuelve a su lista: un pedido anulado no se reemplaza por otro
+    // vacío (al salir nadie lo liberaría; eso solo existe para mesas).
+    if (widget.origin == OrderOrigin.delivery) {
+      context.go(
+        Uri(
+          path: AppRoutes.salesReact,
+          queryParameters: const {'mode': 'delivery'},
+        ).toString(),
+      );
+      return;
+    }
+
+    // Venta nueva en la misma pantalla, igual que al entrar. Antes quedaba
+    // "MESA70 · 0 productos" sin orden detrás y cada producto tocado decía
+    // "No hay una orden activa". Si el mesero sale sin agregar nada, la mesa
+    // vacía se libera como siempre (dispose/_handleBack).
+    _initializeOrder();
   }
 
   String? _parseLegalName(String? notes) {
@@ -2598,6 +2617,29 @@ class _CartView extends ConsumerWidget {
         return age < _kLockMaxAge.inMilliseconds;
       }),
     );
+  }
+
+  /// "¿Dónde imprime COCINA?" para un área con 2+ impresoras de comanda:
+  /// la misma hoja de la precuenta, con las impresoras del área + "Todas".
+  /// Devuelve el `persistKey` elegido o null si se cerró sin elegir.
+  Future<String?> _chooseKitchenPrinter(
+    BuildContext context,
+    WidgetRef ref,
+    String areaName,
+    List<PrinterConfig> printers,
+    String? current,
+  ) async {
+    final destinations = await ref
+        .read(printDestinationResolverProvider)
+        .resolveForKitchenArea(printers);
+    if (!context.mounted) return null;
+    final picked = await showPrintDestinationPicker(
+      context,
+      destinations: destinations,
+      title: '¿Dónde imprime $areaName en este dispositivo?',
+      recentlyUsedKey: current,
+    );
+    return picked?.persistKey;
   }
 
   Future<void> _runLockedAction(
@@ -5277,149 +5319,159 @@ class _CartView extends ConsumerWidget {
                   // En los demás modos se conserva el botón manual.
                   if (ref.watchBusinessFeatures().kitchenEnabled &&
                       origin != OrderOrigin.quick) ...[
-                    _ActionButton(
-                      label: 'Enviar Pedido',
-                      background: _salesKitchenButton,
-                      onPressed: sendKitchenLocked
-                          ? null
-                          : () async {
-                              await _runLockedAction(ref, sendKitchenLockKey, () async {
-                                try {
-                                  final waiterName =
-                                      await _loadWaiterName(
-                                        ref,
-                                        orderState.order!.id,
-                                      ) ??
-                                      ref.read(sessionProvider).userName;
-                                  if (!context.mounted) return;
-                                  final kitchenResult = await ref
-                                      .read(currentOrderProvider.notifier)
-                                      .confirmOrder(
-                                        tableName: tableCode,
-                                        waiterName: waiterName,
-                                      );
-                                  if (!context.mounted) return;
-                                  // Refrescar stock — el trigger auto-86 ya
-                                  // corrió en backend, queremos que el
-                                  // badge del catálogo refleje las nuevas
-                                  // cantidades sin esperar al próximo
-                                  // loadAll.
-                                  unawaited(
-                                    ref
-                                        .read(menuBrowserVmProvider.notifier)
-                                        .refreshStock(),
+                    Builder(
+                      builder: (btnContext) {
+                        // Como la Pre-Cuenta: tap usa la impresora fijada en
+                        // este dispositivo para cada área con 2+ impresoras
+                        // (o pregunta la primera vez); long press vuelve a
+                        // preguntar para cambiarla.
+                        Future<void> sendKitchen({
+                          required bool forceChoosePrinter,
+                        }) async {
+                          await _runLockedAction(ref, sendKitchenLockKey, () async {
+                            try {
+                              final waiterName =
+                                  await _loadWaiterName(
+                                    ref,
+                                    orderState.order!.id,
+                                  ) ??
+                                  ref.read(sessionProvider).userName;
+                              if (!context.mounted) return;
+                              final kitchenResult = await ref
+                                  .read(currentOrderProvider.notifier)
+                                  .confirmOrder(
+                                    tableName: tableCode,
+                                    waiterName: waiterName,
+                                    choosePrinter:
+                                        (areaName, printers, current) =>
+                                            _chooseKitchenPrinter(
+                                              context,
+                                              ref,
+                                              areaName,
+                                              printers,
+                                              current,
+                                            ),
+                                    forceChoosePrinter: forceChoosePrinter,
                                   );
-                                  // Si alguna área tuvo que escalar al
-                                  // worker, mostramos snackbar amigable
-                                  // amarillo en lugar del verde de éxito.
-                                  if (kitchenResult != null &&
-                                      kitchenResult
-                                          .pendingPrintAreas
-                                          .isNotEmpty) {
-                                    final areas = kitchenResult
-                                        .pendingPrintAreas
-                                        .join(', ');
-                                    ScaffoldMessenger.of(
-                                      context,
-                                    ).showAppSnackBar(
-                                      SnackBar(
-                                        backgroundColor: const Color(
-                                          0xFFB45309,
-                                        ),
-                                        duration: const Duration(seconds: 7),
-                                        content: Text(
-                                          'Orden guardada, pero NO se imprimió '
-                                          'la comanda de: $areas. Revisa la '
-                                          'impresora o la ruta de cocina.',
-                                        ),
-                                      ),
-                                    );
-                                  } else if (kitchenResult != null &&
-                                      kitchenResult.hadAnyEscalation) {
-                                    final areas = kitchenResult.escalatedAreas
-                                        .join(', ');
-                                    ScaffoldMessenger.of(
-                                      context,
-                                    ).showAppSnackBar(
-                                      SnackBar(
-                                        backgroundColor: const Color(
-                                          0xFFF59E0B,
-                                        ),
-                                        duration: const Duration(seconds: 4),
-                                        content: Text(
-                                          'Orden enviada a cocina. Las '
-                                          'impresoras de $areas no '
-                                          'respondieron, el sistema lo '
-                                          'está intentando de otra forma '
-                                          '— las comandas saldrán en '
-                                          'unos segundos.',
-                                        ),
-                                      ),
-                                    );
-                                  } else {
+                              if (!context.mounted) return;
+                              // Refrescar stock — el trigger auto-86 ya
+                              // corrió en backend, queremos que el
+                              // badge del catálogo refleje las nuevas
+                              // cantidades sin esperar al próximo
+                              // loadAll.
+                              unawaited(
+                                ref
+                                    .read(menuBrowserVmProvider.notifier)
+                                    .refreshStock(),
+                              );
+                              // Si alguna área tuvo que escalar al
+                              // worker, mostramos snackbar amigable
+                              // amarillo en lugar del verde de éxito.
+                              if (kitchenResult != null &&
+                                  kitchenResult.pendingPrintAreas.isNotEmpty) {
+                                final areas = kitchenResult.pendingPrintAreas
+                                    .join(', ');
+                                ScaffoldMessenger.of(context).showAppSnackBar(
+                                  SnackBar(
+                                    backgroundColor: const Color(0xFFB45309),
+                                    duration: const Duration(seconds: 7),
+                                    content: Text(
+                                      'Orden guardada, pero NO se imprimió '
+                                      'la comanda de: $areas. Revisa la '
+                                      'impresora o la ruta de cocina.',
+                                    ),
+                                  ),
+                                );
+                              } else if (kitchenResult != null &&
+                                  kitchenResult.hadAnyEscalation) {
+                                final areas = kitchenResult.escalatedAreas.join(
+                                  ', ',
+                                );
+                                ScaffoldMessenger.of(context).showAppSnackBar(
+                                  SnackBar(
+                                    backgroundColor: const Color(0xFFF59E0B),
+                                    duration: const Duration(seconds: 4),
+                                    content: Text(
+                                      'Orden enviada a cocina. Las '
+                                      'impresoras de $areas no '
+                                      'respondieron, el sistema lo '
+                                      'está intentando de otra forma '
+                                      '— las comandas saldrán en '
+                                      'unos segundos.',
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showAppSnackBar(
+                                  const SnackBar(
+                                    backgroundColor: Color(0xFF22C55E),
+                                    content: Text('Orden enviada a cocina'),
+                                  ),
+                                );
+                              }
+
+                              // Auto-close para delivery externo (ya pagado)
+                              final dt = orderState.deliveryType;
+                              if (origin == OrderOrigin.delivery &&
+                                  (dt == 'uber_eats' || dt == 'pedidos_ya')) {
+                                final orderId = orderState.order?.id;
+                                if (orderId != null) {
+                                  await ref
+                                      .read(salesRepositoryProvider)
+                                      .closeDeliveryOrder(orderId: orderId);
+                                  if (context.mounted) {
                                     ScaffoldMessenger.of(
                                       context,
                                     ).showAppSnackBar(
                                       const SnackBar(
-                                        backgroundColor: Color(0xFF22C55E),
-                                        content: Text('Orden enviada a cocina'),
+                                        content: Text(
+                                          'Orden cerrada automaticamente (pagada externamente)',
+                                        ),
                                       ),
                                     );
+                                    context.go(
+                                      Uri(
+                                        path: AppRoutes.salesReact,
+                                        queryParameters: const {
+                                          'mode': 'delivery',
+                                        },
+                                      ).toString(),
+                                    );
                                   }
-
-                                  // Auto-close para delivery externo (ya pagado)
-                                  final dt = orderState.deliveryType;
-                                  if (origin == OrderOrigin.delivery &&
-                                      (dt == 'uber_eats' ||
-                                          dt == 'pedidos_ya')) {
-                                    final orderId = orderState.order?.id;
-                                    if (orderId != null) {
-                                      await ref
-                                          .read(salesRepositoryProvider)
-                                          .closeDeliveryOrder(orderId: orderId);
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showAppSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'Orden cerrada automaticamente (pagada externamente)',
-                                            ),
-                                          ),
-                                        );
-                                        context.go(
-                                          Uri(
-                                            path: AppRoutes.salesReact,
-                                            queryParameters: const {
-                                              'mode': 'delivery',
-                                            },
-                                          ).toString(),
-                                        );
-                                      }
-                                    }
-                                  }
-                                } on NoAssignedKitchenPrinterException catch (
-                                  e
-                                ) {
-                                  if (!context.mounted) return;
-                                  await _showMissingKitchenPrinterDialog(
-                                    context,
-                                    e,
-                                  );
-                                } catch (e) {
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showAppSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Error al enviar el pedido: ${e.toString()}',
-                                      ),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
                                 }
-                              });
-                            },
-                      icon: Icons.soup_kitchen_outlined,
+                              }
+                            } on NoAssignedKitchenPrinterException catch (e) {
+                              if (!context.mounted) return;
+                              await _showMissingKitchenPrinterDialog(
+                                context,
+                                e,
+                              );
+                            } catch (e) {
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showAppSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Error al enviar el pedido: ${e.toString()}',
+                                  ),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          });
+                        }
+
+                        return _ActionButton(
+                          label: 'Enviar Pedido',
+                          background: _salesKitchenButton,
+                          onPressed: sendKitchenLocked
+                              ? null
+                              : () => sendKitchen(forceChoosePrinter: false),
+                          onLongPress: sendKitchenLocked
+                              ? null
+                              : () => sendKitchen(forceChoosePrinter: true),
+                          icon: Icons.soup_kitchen_outlined,
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                   ], // cierra `if (kitchenEnabled)`
@@ -8362,6 +8414,7 @@ class _ActionButton extends StatelessWidget {
   final String label;
   final Color background;
   final VoidCallback? onPressed;
+  final VoidCallback? onLongPress;
   final IconData icon;
 
   const _ActionButton({
@@ -8369,6 +8422,7 @@ class _ActionButton extends StatelessWidget {
     required this.background,
     required this.onPressed,
     required this.icon,
+    this.onLongPress,
   });
 
   @override
@@ -8379,6 +8433,7 @@ class _ActionButton extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: TouchTargets.primary),
       child: ElevatedButton(
         onPressed: onPressed,
+        onLongPress: onLongPress,
         style:
             ElevatedButton.styleFrom(
               backgroundColor: background,

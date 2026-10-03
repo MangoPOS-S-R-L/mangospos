@@ -1,3 +1,4 @@
+import 'package:decimal/decimal.dart';
 import 'package:equatable/equatable.dart';
 
 class DenominationCount extends Equatable {
@@ -23,6 +24,86 @@ class DenominationCount extends Equatable {
 
   @override
   List<Object?> get props => [value, label, count];
+}
+
+/// Dólares contados en la gaveta. Solo existe si el negocio activó la moneda
+/// USD en Ajustes → Monedas. Se convierten a RD$ con la tasa del día y se
+/// SUMAN al efectivo contado: el sistema registra en RD$ lo que se cobró en
+/// dólares, así que el esperado de efectivo ya los incluye.
+///
+/// Se guarda dentro del JSONB `cash_count_blind.denominations` bajo la llave
+/// `"usd"` (ver [toJson]); la reimpresión lo lee de vuelta con [fromJson].
+class UsdCashCount extends Equatable {
+  final String symbol;
+
+  /// RD$ por 1 US$ usada en este cierre.
+  final Decimal rate;
+
+  /// La tasa de Ajustes al abrir el cierre. Queda en el JSONB para auditar
+  /// si el cajero la cambió.
+  final Decimal? configuredRate;
+
+  /// `value` en dólares (100, 50, 20…).
+  final List<DenominationCount> denominations;
+
+  const UsdCashCount({
+    required this.symbol,
+    required this.rate,
+    this.configuredRate,
+    required this.denominations,
+  });
+
+  int get totalUsd => denominations.fold<int>(0, (sum, d) => sum + d.subtotal);
+
+  /// Equivalente en RD$, redondeado al peso: el efectivo DOP no tiene
+  /// centavos (ver `formatRD`). Sin tasa válida no convierte.
+  int get totalDop {
+    if (rate <= Decimal.zero) return 0;
+    return (Decimal.fromInt(totalUsd) * rate).round().toBigInt().toInt();
+  }
+
+  bool get isEmpty => totalUsd == 0;
+
+  Map<String, dynamic> toJson() => {
+    'symbol': symbol,
+    'rate': double.parse(rate.toString()),
+    if (configuredRate != null)
+      'configured_rate': double.parse(configuredRate.toString()),
+    'counts': {
+      for (final d in denominations)
+        if (d.count > 0) d.value.toString(): d.count,
+    },
+    'total_usd': totalUsd,
+    'total_dop': totalDop,
+  };
+
+  /// Inverso de [toJson]. `null` si no hubo dólares en ese cierre.
+  static UsdCashCount? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final rate = Decimal.tryParse(raw['rate']?.toString() ?? '');
+    final counts = raw['counts'];
+    if (rate == null || counts is! Map) return null;
+    final list = <DenominationCount>[];
+    counts.forEach((k, v) {
+      final value = int.tryParse(k.toString());
+      final count = v is num ? v.toInt() : int.tryParse(v.toString()) ?? 0;
+      if (value != null && count > 0) {
+        list.add(DenominationCount(value: value, label: '', count: count));
+      }
+    });
+    if (list.isEmpty) return null;
+    list.sort((a, b) => b.value.compareTo(a.value));
+    final symbol = raw['symbol']?.toString().trim() ?? '';
+    return UsdCashCount(
+      symbol: symbol.isEmpty ? 'US\$' : symbol,
+      rate: rate,
+      configuredRate: Decimal.tryParse(raw['configured_rate']?.toString() ?? ''),
+      denominations: list,
+    );
+  }
+
+  @override
+  List<Object?> get props => [symbol, rate, configuredRate, denominations];
 }
 
 /// Sprint Caja Pro — Una entrada individual del listado de
@@ -184,8 +265,12 @@ class CashCloseCalculator {
     required String cardInput,
     required String transferInput,
     required CashCloseInput input,
+    // Efectivo contado fuera de las denominaciones RD$: los dólares en
+    // gaveta ya convertidos (UsdCashCount.totalDop). 0 = solo pesos.
+    int extraCashCounted = 0,
   }) {
-    final totalCounted = calculateCashCounted(denominations);
+    final totalCounted =
+        calculateCashCounted(denominations) + extraCashCounted;
     final numericCard = parseAmount(cardInput);
     final numericTransfer = parseAmount(transferInput);
     final totalReported = totalCounted + numericCard + numericTransfer;
