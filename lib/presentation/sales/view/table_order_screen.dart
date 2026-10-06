@@ -2656,6 +2656,15 @@ class _CartView extends ConsumerWidget {
     return 'send_kitchen:${orderId ?? 'none'}';
   }
 
+  /// La subcuenta a la que pertenecen TODOS [items], o null si son de la
+  /// cuenta completa (sin subcuenta o de varias).
+  static String? _singleCheckIdOf(List<OrderItem>? items) {
+    if (items == null || items.isEmpty) return null;
+    final first = items.first.checkId;
+    if (first == null || first.isEmpty) return null;
+    return items.every((i) => i.checkId == first) ? first : null;
+  }
+
   String _printActionKey(String type, {String? orderId, String? checkId}) {
     return 'print:$type:${orderId ?? 'none'}:${checkId ?? 'all'}';
   }
@@ -3558,7 +3567,11 @@ class _CartView extends ConsumerWidget {
             ref: ref,
             type: 'invoice',
             data: invoiceData,
-            orderObj: order,
+            // La MISMA orden del primer intento (la de la subcuenta, si es
+            // una): el reintento tiene que imprimir el mismo comprobante, no
+            // el `order` capturado al abrir el cobro, que en una subcuenta
+            // trae los totales de la mesa entera.
+            orderObj: printOrder,
             orderItems: items,
             payments: payments,
             tableName: tableName,
@@ -7047,8 +7060,18 @@ class _CartView extends ConsumerWidget {
       // Sin esto, el comportamiento es legacy (error inmediato al
       // cajero). Con esto, el agent retoma el job en background.
       final orderIdForKey = orderObj?.id;
+      // Subcuenta: llave propia. La "orden" de una subcuenta lleva el id de
+      // la orden real (ver `OrderCheck.toOrder`), así que sin esto dos
+      // subcuentas de la misma mesa compartirían llave y, si las dos caen a
+      // la cola del servidor, la segunda se descartaría como "ya encolada".
+      // El id de la subcuenta va EN MEDIO a propósito: los diagnósticos
+      // (scripts/DIAGNOSTICO_cola_atascada_mesa.sql) leen la primera uuid
+      // como la orden y la última como la impresora.
+      final checkIdForKey = _singleCheckIdOf(orderItems);
       final idempotencyKey = orderIdForKey != null && orderIdForKey.isNotEmpty
-          ? 'print-$type-$orderIdForKey-${printer.id}'
+          ? 'print-$type-$orderIdForKey'
+                '${checkIdForKey == null ? '' : '-$checkIdForKey'}'
+                '-${printer.id}'
           : null;
 
       // UX: snackbar INSTANTÁNEO al click, antes del await. El cajero

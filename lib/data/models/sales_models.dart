@@ -561,9 +561,18 @@ class OrderCheck extends Equatable {
     );
   }
 
+  /// La subcuenta vista como orden: sus TOTALES con el id de la orden REAL.
+  ///
+  /// El id tiene que ser el de la orden, no el de la subcuenta: los productos
+  /// llevan `orderId` = la orden, y `PrintTicketService.generateInvoice` se
+  /// niega a imprimir si un producto no pertenece a la orden del encabezado
+  /// (candado anti-comprobante cruzado). Con el id de la subcuenta, TODA
+  /// factura de subcuenta fallaba al primer intento —"Fallo de Impresión"—,
+  /// también la reimpresión desde el historial, y el papel mostraba el
+  /// número de la subcuenta en vez del de la orden.
   Order toOrder({required DateTime createdAt}) {
     return Order(
-      id: id,
+      id: orderId,
       sessionId: orderId,
       status: isClosed ? 'closed' : 'open',
       subtotal: subtotal,
