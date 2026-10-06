@@ -14,6 +14,8 @@ import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
+import 'package:mangopos/core/printing/star/cut_feed.dart';
+import 'package:mangopos/core/printing/star/print_width.dart';
 import 'package:mangopos/core/printing/star/raster_ink.dart';
 import 'package:mangopos/core/printing/star/star_print_adapter.dart';
 import 'package:mangopos/core/printing/usb_printer_identity.dart';
@@ -292,6 +294,68 @@ class PrintingRepository {
       _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al guardar la nitidez de impresión: $e');
+    }
+  }
+
+  /// Columnas del ticket raster de ESTA impresora (ver
+  /// `core/printing/star/print_width.dart`). [columns] null borra la clave y
+  /// la deja en el default del papel (48 en 80mm, 32 en 58mm).
+  Future<void> setPrintColumns({
+    required String printerId,
+    required int? columns,
+  }) async {
+    try {
+      final row = await _client
+          .from('printers')
+          .select('connection_config')
+          .eq('id', printerId)
+          .maybeSingle();
+      final config = Map<String, dynamic>.from(
+        (row?['connection_config'] as Map?) ?? const {},
+      );
+      if (columns == null) {
+        config.remove(kPrintColumnsConfigKey);
+      } else {
+        config[kPrintColumnsConfigKey] = columns;
+      }
+      await _client
+          .from('printers')
+          .update({'connection_config': config})
+          .eq('id', printerId);
+      _clearLookupCaches();
+    } catch (e) {
+      throw Exception('Error al guardar el ancho del ticket: $e');
+    }
+  }
+
+  /// Renglones extra antes del corte para ESTA impresora (ver
+  /// `core/printing/star/cut_feed.dart`). [lines] null borra la clave y la
+  /// deja en el avance de siempre.
+  Future<void> setCutFeedLines({
+    required String printerId,
+    required int? lines,
+  }) async {
+    try {
+      final row = await _client
+          .from('printers')
+          .select('connection_config')
+          .eq('id', printerId)
+          .maybeSingle();
+      final config = Map<String, dynamic>.from(
+        (row?['connection_config'] as Map?) ?? const {},
+      );
+      if (lines == null) {
+        config.remove(kCutFeedConfigKey);
+      } else {
+        config[kCutFeedConfigKey] = lines;
+      }
+      await _client
+          .from('printers')
+          .update({'connection_config': config})
+          .eq('id', printerId);
+      _clearLookupCaches();
+    } catch (e) {
+      throw Exception('Error al guardar el avance antes del corte: $e');
     }
   }
 

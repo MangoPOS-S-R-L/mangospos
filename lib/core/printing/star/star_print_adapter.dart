@@ -14,9 +14,11 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../data/models/printing.dart';
+import 'cut_feed.dart';
 import 'esc_pos_raster_encoder.dart';
 import 'escpos_parser.dart';
 import 'print_speed.dart';
+import 'print_width.dart';
 import 'printer_emulation.dart';
 import 'raster_ink.dart';
 import 'star_raster_encoder.dart';
@@ -41,7 +43,12 @@ class StarPrintAdapter {
     // Velocidad elegida para ESTA impresora (ver `print_speed.dart`). Va al
     // final porque el comando depende del formato que realmente sale: ESC/POS
     // tras el `ESC @`, o `ESC * r Q` dentro del raster Star.
-    return applyPrintSpeed(adapted, resolvePrintSpeed(printer));
+    final timed = applyPrintSpeed(adapted, resolvePrintSpeed(printer));
+    // Avance extra antes del corte para la impresora cuya cuchilla queda más
+    // lejos del cabezal (ver `cut_feed.dart`). Va aquí, en el punto por el
+    // que pasa TODO lo que se imprime, para que cubra factura, precuenta,
+    // comanda y cierre por igual, salgan en texto o en raster.
+    return applyCutFeed(timed, resolveCutFeedLines(printer));
   }
 
   static Future<List<int>> _adaptFormat({
@@ -90,18 +97,29 @@ class StarPrintAdapter {
         // resultado depende del CABEZAL: la misma imagen sale negra en una
         // térmica y gris en otra (ver `raster_ink.dart`).
         ink: resolveRasterInk(printer),
+        // Columnas elegidas para ESTA impresora: una Epson TM-T88 (180 dpi)
+        // imprime 512 puntos en 80mm y tira lo que pase de ahí — se cortaban
+        // los montos de la derecha (ver `print_width.dart`).
+        printDots: resolvePrintDots(printer),
       );
       if (bitmap.height == 0) return escPosData;
+      // Un ticket más angosto que el papel sale centrado. La Star no tiene
+      // alineación en raster: se rellena a los lados hasta su cabezal.
+      final narrower = bitmap.width < dots;
       final bytes = isStar
-          ? StarRasterEncoder.encode(bitmap, cut: parsed.cut)
+          ? StarRasterEncoder.encode(
+              narrower ? bitmap.centeredOn(dots) : bitmap,
+              cut: parsed.cut,
+            )
           : EscPosRasterEncoder.encode(
               bitmap,
               cut: parsed.cut,
               openCashDrawer: parsed.openCashDrawer,
+              center: narrower,
             );
       debugPrint(
         '[$label] ${printer.name}: ESC/POS ${escPosData.length}B → raster '
-        '${bytes.length}B (${dots}x${bitmap.height} puntos)',
+        '${bytes.length}B (${bitmap.width}x${bitmap.height} puntos)',
       );
       return bytes;
     } catch (e, st) {

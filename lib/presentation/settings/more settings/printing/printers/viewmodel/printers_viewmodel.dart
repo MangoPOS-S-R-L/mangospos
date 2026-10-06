@@ -344,6 +344,16 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
     /// Null = no tocar la nitidez guardada.
     RasterInk? rasterInk,
+
+    /// Columnas del ticket raster. Null = no tocar; para volver al default
+    /// del papel se pasa [clearPrintColumns] (mismo patrón que el respaldo).
+    int? printColumns,
+    bool clearPrintColumns = false,
+
+    /// Renglones extra antes del corte. Mismo patrón: null = no tocar,
+    /// [clearCutFeedLines] = volver al avance de siempre.
+    int? cutFeedLines,
+    bool clearCutFeedLines = false,
   }) async {
     final trimmedName = name.trim();
     if (trimmedName.isEmpty) {
@@ -381,6 +391,18 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         await _repo.setRasterInk(
           printerId: printerId,
           ink: rasterInk.wireValue,
+        );
+      }
+      if (clearPrintColumns || printColumns != null) {
+        await _repo.setPrintColumns(
+          printerId: printerId,
+          columns: clearPrintColumns ? null : printColumns,
+        );
+      }
+      if (clearCutFeedLines || cutFeedLines != null) {
+        await _repo.setCutFeedLines(
+          printerId: printerId,
+          lines: clearCutFeedLines ? null : cutFeedLines,
         );
       }
       await load(businessId: b, force: true);

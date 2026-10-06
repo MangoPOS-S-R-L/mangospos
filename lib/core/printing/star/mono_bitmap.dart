@@ -52,6 +52,26 @@ class MonoBitmap {
     }
   }
 
+  /// Copia de este bitmap centrada en un lienzo de [target] puntos de ancho.
+  ///
+  /// El corrimiento se redondea a byte entero para copiar filas tal cual en
+  /// vez de punto por punto; medio byte de descentrado (4 puntos, 0.5mm) no
+  /// se ve en papel.
+  MonoBitmap centeredOn(int target) {
+    if (target <= width) return this;
+    final out = MonoBitmap(target);
+    final shift = ((target - width) ~/ 2) ~/ 8;
+    out.ensureHeight(height);
+    for (var y = 0; y < height; y++) {
+      final src = _rows[y];
+      final dst = out._rows[y];
+      for (var i = 0; i < src.length && shift + i < dst.length; i++) {
+        dst[shift + i] = src[i];
+      }
+    }
+    return out;
+  }
+
   /// Recorta las filas totalmente en blanco del final. El avance previo al
   /// corte lo pone el encoder, no el contenido.
   void trimTrailingBlankRows() {

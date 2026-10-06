@@ -68,8 +68,11 @@ class EscPosRasterEncoder {
   /// activaba nunca justo en los negocios que tienen logo.
   ///
   /// La pregunta correcta es si el trabajo es SOLO raster. Antes del primer
-  /// `GS v 0`, [encode] no emite nada más que `ESC @`, avances `ESC J` y —
-  /// cuando se habilita [trimLeftEdge] — posiciones `ESC $`. Cualquier otra
+  /// `GS v 0`, [encode] no emite nada más que `ESC @`, avances `ESC J`, el
+  /// centrado `ESC a` de un ticket angosto y — cuando se habilita
+  /// [trimLeftEdge] — posiciones `ESC $`. Un ticket de texto nunca llega ahí
+  /// con eso solo: `EscPosGenerator.initialize` emite `ESC t` justo detrás
+  /// del `ESC @`. Cualquier otra
   /// cosa (fuente, interlineado, alineación, un salto de línea, texto suelto)
   /// delata un ticket de texto.
   static bool looksLikeEscPosRaster(List<int> data) {
@@ -91,6 +94,8 @@ class EscPosRasterEncoder {
       if (data[i] != _esc) return false;
       switch (data[i + 1]) {
         case 0x4A: // ESC J n — avance en puntos
+          i += 3;
+        case 0x61: // ESC a n — centrado de un ticket angosto (ver [encode])
           i += 3;
         case 0x24: // ESC $ nL nH — posición horizontal
           i += 4;
@@ -160,13 +165,23 @@ class EscPosRasterEncoder {
   ///
   /// [openCashDrawer] va DESPUES del corte, igual que en el camino de texto:
   /// asi el cajero saca el recibo y la gaveta se abre a la vez.
+  ///
+  /// [center] es para un ticket MAS ANGOSTO que el papel (menos columnas,
+  /// ver `print_width.dart`): se manda `ESC a 1` y la impresora lo centra
+  /// dentro de su propio ancho, sin que haga falta saber cuanto mide su
+  /// cabezal — es como ya se centran el logo y el QR. Exige que TODAS las
+  /// bandas midan lo mismo: con el recorte derecho cada una se centraria por
+  /// su cuenta y el ticket saldria en escalera. Por eso con [center] no se
+  /// recorta.
   static List<int> encode(
     MonoBitmap bitmap, {
     bool cut = true,
     bool openCashDrawer = false,
+    bool center = false,
   }) {
     final out = <int>[];
     out.addAll([_esc, 0x40]); // ESC @ — inicializar
+    if (center) out.addAll([_esc, 0x61, 0x01]); // ESC a 1 — centrar
 
     final rows = bitmap.rows;
     final bytesPerRow = bitmap.bytesPerRow;
@@ -186,8 +201,10 @@ class EscPosRasterEncoder {
       while (y < rows.length && !_isBlank(rows[y])) {
         y++;
       }
-      _emitInkRun(out, rows, start, y, bytesPerRow);
+      _emitInkRun(out, rows, start, y, bytesPerRow, fullWidth: center);
     }
+
+    if (center) out.addAll([_esc, 0x61, 0x00]); // ESC a 0 — restaurar
 
     if (cut) {
       // El avance se hace con `ESC J n` (avance en PUNTOS, no en lineas):
@@ -211,8 +228,9 @@ class EscPosRasterEncoder {
     List<Uint8List> rows,
     int from,
     int to,
-    int bytesPerRow,
-  ) {
+    int bytesPerRow, {
+    bool fullWidth = false,
+  }) {
     for (var start = from; start < to; start += _bandRows) {
       final end = (start + _bandRows < to) ? start + _bandRows : to;
 
@@ -227,8 +245,9 @@ class EscPosRasterEncoder {
         if (b > right) right = b;
       }
       if (right < left) continue; // banda sin tinta: no deberia pasar
+      if (fullWidth) right = bytesPerRow - 1;
 
-      final x0 = trimLeftEdge ? left : 0;
+      final x0 = (trimLeftEdge && !fullWidth) ? left : 0;
       final width = right - x0 + 1;
       final bandHeight = end - start;
 

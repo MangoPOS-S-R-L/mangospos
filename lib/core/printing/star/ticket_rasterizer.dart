@@ -188,22 +188,37 @@ class TicketRasterizer {
   /// [ink] es cuánto trazo pone el binarizado, que depende del CABEZAL: la
   /// misma imagen sale negra en una térmica y gris en otra (ver
   /// [RasterInk]). Solo aplica al camino proporcional.
+  ///
+  /// [printDots] es el ancho REAL del cabezal cuando es menor que [dots]
+  /// (una Epson TM-T88 de 180 dpi imprime 512 puntos en 80mm, no 576 — ver
+  /// `print_width.dart`). El ticket se sigue componiendo a [dots], la
+  /// rejilla del builder, y se DIBUJA escalado: la tipografía se rasteriza ya
+  /// a su tamaño final y recién después se binariza, así que el trazo sale
+  /// limpio en vez de achicar un bitmap de 1 bit. Null o igual a [dots] = el
+  /// camino de siempre, punto por punto.
   static Future<MonoBitmap> render(
     ParsedTicket ticket,
     int dots, {
     bool proportional = false,
     RasterInk ink = RasterInk.normal,
+    int? printDots,
   }) async {
-    if (proportional) return _renderProportional(ticket, dots, ink);
-    final layout = _layout(ticket.ops, dots);
-    final bitmap = MonoBitmap(dots);
+    final out = (printDots == null || printDots <= 0 || printDots >= dots)
+        ? dots
+        : printDots;
+    final scale = out / dots;
+    if (proportional) {
+      return _renderProportional(ticket, dots, out, scale, ink);
+    }
+    final layout = _layout(ticket.ops, dots, out, scale);
+    final bitmap = MonoBitmap(out);
 
     if (layout.height > 0) {
-      final textPixels = await _paintText(layout, dots);
+      final textPixels = await _paintText(layout, out, scale);
       bitmap.ensureHeight(layout.height);
       for (var y = 0; y < layout.height; y++) {
-        for (var x = 0; x < dots; x++) {
-          if (textPixels[y * dots + x]) bitmap.setPixel(x, y);
+        for (var x = 0; x < out; x++) {
+          if (textPixels[y * out + x]) bitmap.setPixel(x, y);
         }
       }
     }
@@ -212,8 +227,8 @@ class TicketRasterizer {
     for (final placed in layout.images) {
       final op = placed.op;
       final dx = switch (op.align) {
-        TicketAlign.center => ((dots - op.width) / 2).round(),
-        TicketAlign.right => dots - op.width,
+        TicketAlign.center => ((out - op.width) / 2).round(),
+        TicketAlign.right => out - op.width,
         TicketAlign.left => 0,
       };
       bitmap.blit(op.pixels, op.width, op.height, dx < 0 ? 0 : dx, placed.y);
@@ -223,26 +238,82 @@ class TicketRasterizer {
     return bitmap;
   }
 
+  // ── Escala al cabezal ─────────────────────────────────────────────────
+  //
+  // Con un cabezal más angosto que la rejilla del layout (ver [render]), las
+  // posiciones verticales se llevan a puntos FÍSICOS: cada renglón ocupa su
+  // avance escalado y las imágenes su alto real. El texto de cada renglón se
+  // dibuja en coordenadas del layout dentro de su banda, con el lienzo
+  // escalado. Con escala 1 nada de esto toca el lienzo.
+
+  /// [value] puntos del layout llevados al cabezal.
+  static int _toPrint(int value, double scale) =>
+      scale == 1 ? value : (value * scale).round();
+
+  /// Dibuja con [paint] un renglón compuesto en coordenadas del LAYOUT
+  /// dentro de su banda física, que empieza en [bandTop].
+  static void _paintInBand(
+    ui.Canvas canvas,
+    int bandTop,
+    double scale,
+    void Function() paint,
+  ) {
+    canvas.save();
+    canvas.translate(0, bandTop.toDouble());
+    canvas.scale(scale);
+    paint();
+    canvas.restore();
+  }
+
+  /// Un logo o QR más ancho que el cabezal no puede salir cortado: se achica
+  /// lo justo para que entre. Lo normal es que quepa (el logo se arma a 384
+  /// puntos como máximo) y entonces se pega tal cual, sin escalar, porque un
+  /// QR con los módulos re-muestreados se lee peor.
+  static TicketImageOp _fitImage(TicketImageOp op, int out) {
+    if (op.width <= out || op.width <= 0) return op;
+    final w = out;
+    final h = (op.height * out / op.width).round();
+    final pixels = List<bool>.filled(w * h, false);
+    for (var y = 0; y < h; y++) {
+      final sy = (y * op.height) ~/ h;
+      for (var x = 0; x < w; x++) {
+        final sx = (x * op.width) ~/ w;
+        pixels[y * w + x] = op.pixels[sy * op.width + sx];
+      }
+    }
+    return TicketImageOp(width: w, height: h, pixels: pixels, align: op.align);
+  }
+
   // ── Layout ────────────────────────────────────────────────────────────
 
-  static _Layout _layout(List<Object> ops, int dots) {
+  static _Layout _layout(
+    List<Object> ops,
+    int dots,
+    int out,
+    double scale,
+  ) {
     final lines = <_PlacedLine>[];
     final images = <_PlacedImage>[];
     var y = 0;
 
-    for (final op in ops) {
-      if (op is TicketImageOp) {
+    for (final raw in ops) {
+      if (raw is TicketImageOp) {
+        final op = _fitImage(raw, out);
         images.add(_PlacedImage(op: op, y: y));
         y += op.height;
         continue;
       }
-      if (op is TicketTextOp) {
+      if (raw is TicketTextOp) {
+        final op = raw;
         final glyph = (op.fontB ? cellHeightB : cellHeight) * op.heightFactor;
         final h = _pitch(glyph, op);
+        final band = _toPrint(h, scale);
         if (op.text.isNotEmpty || op.inverse) {
-          lines.add(_PlacedLine(op: op, y: y, height: h));
+          lines.add(
+            _PlacedLine(op: op, y: y, height: band, layoutHeight: h),
+          );
         }
-        y += h;
+        y += band;
       }
     }
 
@@ -272,30 +343,46 @@ class TicketRasterizer {
 
   // ── Dibujo ────────────────────────────────────────────────────────────
 
-  static Future<List<bool>> _paintText(_Layout layout, int dots) async {
+  /// [width] es el ancho del CABEZAL; `layout.dots`, el de la rejilla con la
+  /// que se compuso el ticket. Solo difieren con un cabezal angosto.
+  static Future<List<bool>> _paintText(
+    _Layout layout,
+    int width,
+    double scale,
+  ) async {
+    final dots = layout.dots;
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(
       recorder,
-      ui.Rect.fromLTWH(0, 0, dots.toDouble(), layout.height.toDouble()),
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), layout.height.toDouble()),
     );
     // Fondo blanco: el papel. Sin esto el buffer queda transparente y el
     // umbral leería todo como blanco.
     canvas.drawRect(
-      ui.Rect.fromLTWH(0, 0, dots.toDouble(), layout.height.toDouble()),
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), layout.height.toDouble()),
       ui.Paint()..color = const ui.Color(0xFFFFFFFF),
     );
 
     for (final placed in layout.lines) {
-      _paintLine(canvas, placed, dots);
+      if (scale == 1) {
+        _paintLine(canvas, placed, dots);
+      } else {
+        _paintInBand(
+          canvas,
+          placed.y,
+          scale,
+          () => _paintLine(canvas, placed.atLayoutOrigin(), dots),
+        );
+      }
     }
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(dots, layout.height);
+    final image = await picture.toImage(width, layout.height);
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     picture.dispose();
     image.dispose();
 
-    final out = List<bool>.filled(dots * layout.height, false);
+    final out = List<bool>.filled(width * layout.height, false);
     if (byteData == null) return out;
     final bytes = byteData.buffer.asUint8List();
     for (var i = 0; i < out.length; i++) {
@@ -379,50 +466,70 @@ class TicketRasterizer {
 
   // ── Proporcional ──────────────────────────────────────────────────────
 
+  /// [dots] es la rejilla del layout y [width] el ancho del cabezal (ver
+  /// [render]); [scale] = width / dots.
   static Future<MonoBitmap> _renderProportional(
     ParsedTicket ticket,
     int dots,
+    int width,
+    double scale,
     RasterInk ink,
   ) async {
     final lines = <_ProportionalLine>[];
     final images = <_PlacedImage>[];
     var y = 0;
 
-    for (final op in ticket.ops) {
-      if (op is TicketImageOp) {
+    for (final raw in ticket.ops) {
+      if (raw is TicketImageOp) {
+        final op = _fitImage(raw, width);
         // El margen se mide contra la TINTA del gráfico, no contra su borde:
         // un QR trae 4 módulos de blanco obligatorios alrededor (la quiet
         // zone del estándar) y un logo PNG suele traer los suyos. Sumarle el
         // margen entero a ese blanco dejaba el QR a 77 puntos del texto
         // mientras el resto del ticket iba a 66.
         final (arriba, abajo) = _blankEdges(op);
-        y += _marginAfterInk(arriba);
+        y += _toPrint(_marginAfterInk(arriba), scale);
         images.add(_PlacedImage(op: op, y: y));
-        y += op.height + _marginAfterInk(abajo);
+        y += op.height + _toPrint(_marginAfterInk(abajo), scale);
         continue;
       }
-      if (op is! TicketTextOp) continue;
+      if (raw is! TicketTextOp) continue;
+      final op = raw;
       final isRule = _looksLikeRule(op.text);
       // Una regla no necesita el renglón completo: su "glifo" son 2 puntos de
       // trazo, y el aire se lo da el mismo interlineado que a todo lo demás.
       final height = isRule
           ? _ruleLineHeight
           : _pitch(proportionalPitch(op.heightFactor), op);
+      final band = _toPrint(height, scale);
       if (op.text.isNotEmpty || op.inverse) {
         lines.add(
-          _ProportionalLine(op: op, y: y, height: height, isRule: isRule),
+          _ProportionalLine(
+            op: op,
+            y: y,
+            height: band,
+            layoutHeight: height,
+            isRule: isRule,
+          ),
         );
       }
-      y += height;
+      y += band;
     }
 
-    final bitmap = MonoBitmap(dots);
+    final bitmap = MonoBitmap(width);
     if (y > 0) {
-      final pixels = await _paintProportional(lines, dots, y, ink);
+      final pixels = await _paintProportional(
+        lines,
+        dots,
+        width,
+        scale,
+        y,
+        ink,
+      );
       bitmap.ensureHeight(y);
       for (var py = 0; py < y; py++) {
-        for (var px = 0; px < dots; px++) {
-          if (pixels[py * dots + px]) bitmap.setPixel(px, py);
+        for (var px = 0; px < width; px++) {
+          if (pixels[py * width + px]) bitmap.setPixel(px, py);
         }
       }
     }
@@ -430,8 +537,8 @@ class TicketRasterizer {
     for (final placed in images) {
       final op = placed.op;
       final dx = switch (op.align) {
-        TicketAlign.center => ((dots - op.width) / 2).round(),
-        TicketAlign.right => dots - op.width,
+        TicketAlign.center => ((width - op.width) / 2).round(),
+        TicketAlign.right => width - op.width,
         TicketAlign.left => 0,
       };
       bitmap.blit(op.pixels, op.width, op.height, dx < 0 ? 0 : dx, placed.y);
@@ -444,30 +551,41 @@ class TicketRasterizer {
   static Future<List<bool>> _paintProportional(
     List<_ProportionalLine> lines,
     int dots,
+    int width,
+    double scale,
     int height,
     RasterInk ink,
   ) async {
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(
       recorder,
-      ui.Rect.fromLTWH(0, 0, dots.toDouble(), height.toDouble()),
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
     );
     canvas.drawRect(
-      ui.Rect.fromLTWH(0, 0, dots.toDouble(), height.toDouble()),
+      ui.Rect.fromLTWH(0, 0, width.toDouble(), height.toDouble()),
       ui.Paint()..color = const ui.Color(0xFFFFFFFF),
     );
 
     for (final line in lines) {
-      _paintProportionalLine(canvas, line, dots);
+      if (scale == 1) {
+        _paintProportionalLine(canvas, line, dots);
+      } else {
+        _paintInBand(
+          canvas,
+          line.y,
+          scale,
+          () => _paintProportionalLine(canvas, line.atLayoutOrigin(), dots),
+        );
+      }
     }
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(dots, height);
+    final image = await picture.toImage(width, height);
     final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
     picture.dispose();
     image.dispose();
 
-    final out = List<bool>.filled(dots * height, false);
+    final out = List<bool>.filled(width * height, false);
     if (byteData == null) return out;
     final bytes = byteData.buffer.asUint8List();
     for (var i = 0; i < out.length; i++) {
@@ -477,7 +595,7 @@ class TicketRasterizer {
           (bytes[o] * 30 + bytes[o + 1] * 59 + bytes[o + 2] * 11) ~/ 100;
       out[i] = lum < ink.threshold;
     }
-    _thicken(out, dots, height, ink.dilate);
+    _thicken(out, width, height, ink.dilate);
     return out;
   }
 
@@ -802,13 +920,27 @@ class _Layout {
 }
 
 class _PlacedLine {
-  const _PlacedLine({required this.op, required this.y, required this.height});
+  const _PlacedLine({
+    required this.op,
+    required this.y,
+    required this.height,
+    int? layoutHeight,
+  }) : layoutHeight = layoutHeight ?? height;
   final TicketTextOp op;
   final int y;
 
   /// Avance de papel de la línea (ver `TicketRasterizer._pitch`). Puede ser
   /// mayor que la celda del glifo: esa diferencia es el aire del ticket.
   final int height;
+
+  /// El mismo avance en puntos del LAYOUT. Solo difiere de [height] con un
+  /// cabezal más angosto que la rejilla (ver `TicketRasterizer.render`).
+  final int layoutHeight;
+
+  /// La línea en coordenadas del layout, al principio de su banda: así se
+  /// dibuja con el lienzo ya trasladado y escalado.
+  _PlacedLine atLayoutOrigin() =>
+      _PlacedLine(op: op, y: 0, height: layoutHeight);
 }
 
 class _PlacedImage {
@@ -829,10 +961,22 @@ class _ProportionalLine {
     required this.y,
     required this.height,
     required this.isRule,
-  });
+    int? layoutHeight,
+  }) : layoutHeight = layoutHeight ?? height;
 
   final TicketTextOp op;
   final int y;
   final int height;
   final bool isRule;
+
+  /// Ver `_PlacedLine.layoutHeight`.
+  final int layoutHeight;
+
+  /// Ver `_PlacedLine.atLayoutOrigin`.
+  _ProportionalLine atLayoutOrigin() => _ProportionalLine(
+    op: op,
+    y: 0,
+    height: layoutHeight,
+    isRule: isRule,
+  );
 }

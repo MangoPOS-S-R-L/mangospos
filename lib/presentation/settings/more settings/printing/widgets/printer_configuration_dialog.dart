@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
+import 'package:mangopos/core/printing/star/cut_feed.dart';
 import 'package:mangopos/core/printing/star/print_speed.dart';
+import 'package:mangopos/core/printing/star/print_width.dart';
 import 'package:mangopos/core/printing/star/raster_ink.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing_models.dart';
@@ -48,6 +50,14 @@ class _PrinterConfigurationDialogState
   late PrintSpeed _printSpeed;
   late final RasterInk _initialRasterInk;
   late RasterInk _rasterInk;
+  /// Columnas del ticket raster guardadas hoy (null = default del papel) y
+  /// las elegidas en el diálogo. Ver `core/printing/star/print_width.dart`.
+  late final int? _initialColumnsWire;
+  late int _columns;
+  /// Renglones extra antes del corte guardados hoy (null = ninguno) y los
+  /// elegidos en el diálogo. Ver `core/printing/star/cut_feed.dart`.
+  late final int? _initialCutFeedWire;
+  late int _cutFeedLines;
   late bool _isActive;
   /// Sprint 3 — id de la impresora de respaldo elegida en el dropdown.
   /// null = "Sin respaldo" → al guardar mandamos `clearFallback: true`.
@@ -73,6 +83,20 @@ class _PrinterConfigurationDialogState
       printer.connectionConfig[kRasterInkConfigKey],
     );
     _rasterInk = _initialRasterInk;
+    final rawColumns = printer.connectionConfig[kPrintColumnsConfigKey];
+    final storedColumns = rawColumns is num
+        ? rawColumns.toInt()
+        : int.tryParse('${rawColumns ?? ''}'.trim());
+    _initialColumnsWire = storedColumns;
+    _columns = clampColumns(
+      storedColumns ?? defaultColumnsForPaperWidth(_paperWidth),
+      _paperWidth,
+    );
+    final rawCutFeed = printer.connectionConfig[kCutFeedConfigKey];
+    _initialCutFeedWire = rawCutFeed is num
+        ? rawCutFeed.toInt()
+        : int.tryParse('${rawCutFeed ?? ''}'.trim());
+    _cutFeedLines = cutFeedWireValue(_initialCutFeedWire ?? 0) ?? 0;
     _isActive = printer.online;
     _fallbackPrinterId = printer.fallbackPrinterId;
   }
@@ -84,6 +108,20 @@ class _PrinterConfigurationDialogState
     _macCtrl.dispose();
     _deviceCtrl.dispose();
     super.dispose();
+  }
+
+  /// Cambiar el papel arrastra las columnas: si estaban en el default del
+  /// papel anterior pasan al del nuevo (48 → 32), y si no, se acotan a su
+  /// rango.
+  void _setPaperWidth(int width) {
+    setState(() {
+      final wasDefault =
+          _columns == defaultColumnsForPaperWidth(_paperWidth);
+      _paperWidth = width;
+      _columns = wasDefault
+          ? defaultColumnsForPaperWidth(width)
+          : clampColumns(_columns, width);
+    });
   }
 
   /// Printing v2 (Slice A — Auto-discovery): abre un dialog que escanea
@@ -110,6 +148,11 @@ class _PrinterConfigurationDialogState
 
   Future<void> _save() async {
     setState(() => _saving = true);
+    // Solo si cambió: evita reescribir connection_config en cada guardado.
+    final columnsWire = printColumnsWireValue(_columns, _paperWidth);
+    final columnsChanged = columnsWire != _initialColumnsWire;
+    final cutFeedWire = cutFeedWireValue(_cutFeedLines);
+    final cutFeedChanged = cutFeedWire != _initialCutFeedWire;
     // Sprint 3 — distinguir "sin respaldo" (clearFallback) vs "asignar
     // X como respaldo" (fallbackPrinterId). El viewmodel maneja ambas
     // ramas; pasar las dos cosas en simultáneo no rompe (clearFallback
@@ -129,6 +172,10 @@ class _PrinterConfigurationDialogState
       // Solo si cambió: evita reescribir connection_config en cada guardado.
       printSpeed: _printSpeed == _initialPrintSpeed ? null : _printSpeed,
       rasterInk: _rasterInk == _initialRasterInk ? null : _rasterInk,
+      printColumns: columnsChanged ? columnsWire : null,
+      clearPrintColumns: columnsChanged && columnsWire == null,
+      cutFeedLines: cutFeedChanged ? cutFeedWire : null,
+      clearCutFeedLines: cutFeedChanged && cutFeedWire == null,
     );
     if (!mounted) return;
     setState(() => _saving = false);
@@ -422,7 +469,7 @@ class _PrinterConfigurationDialogState
               child: _PaperWidthCard(
                 width: 80,
                 selected: _paperWidth == 80,
-                onTap: () => setState(() => _paperWidth = 80),
+                onTap: () => _setPaperWidth(80),
               ),
             ),
             const SizedBox(width: 18),
@@ -430,7 +477,7 @@ class _PrinterConfigurationDialogState
               child: _PaperWidthCard(
                 width: 58,
                 selected: _paperWidth == 58,
-                onTap: () => setState(() => _paperWidth = 58),
+                onTap: () => _setPaperWidth(58),
               ),
             ),
           ],
@@ -439,6 +486,10 @@ class _PrinterConfigurationDialogState
         _buildPrintSpeedSection(),
         const SizedBox(height: 22),
         _buildRasterInkSection(),
+        const SizedBox(height: 22),
+        _buildPrintColumnsSection(),
+        const SizedBox(height: 22),
+        _buildCutFeedSection(),
         const SizedBox(height: 22),
         _buildFallbackSection(),
         const SizedBox(height: 22),
@@ -637,6 +688,213 @@ class _PrinterConfigurationDialogState
         const Text(
           'Antes de subirla, prueba la velocidad Lenta: una térmica quema '
           'mejor cada punto cuanto más despacio avanza.',
+          style: TextStyle(
+            fontSize: 11,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Ancho del ticket en columnas para lo que sale como imagen (factura y
+  /// pre-cuenta "Moderna"). Ver `core/printing/star/print_width.dart`.
+  Widget _buildPrintColumnsSection() {
+    final max = defaultColumnsForPaperWidth(_paperWidth);
+    final min = minColumnsForPaperWidth(_paperWidth);
+    // Atajos: el normal y los anchos que suelen hacer falta. 42 es el de una
+    // Epson TM-T88 de 80mm (cabezal de 512 puntos).
+    final presets = _paperWidth <= 58
+        ? const [32, 30, 28]
+        : const [48, 44, 42, 40];
+    final canEdit = !_saving;
+
+    Widget stepButton(IconData icon, bool enabled, int delta) {
+      return IconButton.outlined(
+        onPressed: enabled && canEdit
+            ? () => setState(() => _columns = clampColumns(
+                  _columns + delta,
+                  _paperWidth,
+                ))
+            : null,
+        icon: Icon(icon),
+        style: IconButton.styleFrom(
+          foregroundColor: MangoColors.primaryOrange,
+          side: const BorderSide(color: Color(0xFFCFCFCF)),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Ancho del ticket',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Columnas de ancho de la factura y la precuenta "Moderna". Con '
+          'menos columnas sale el MISMO ticket, más angosto, centrado y con '
+          'la letra proporcionalmente más pequeña. Si se cortan los montos '
+          'del lado derecho, baja el número.',
+          style: TextStyle(
+            fontSize: 12,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            stepButton(Icons.remove, _columns > min, -1),
+            Expanded(
+              child: Column(
+                children: [
+                  Text(
+                    '$_columns',
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  Text(
+                    _columns == max
+                        ? 'columnas · normal'
+                        : 'columnas · normal $max',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            stepButton(Icons.add, _columns < max, 1),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final preset in presets)
+              ChoiceChip(
+                label: Text(preset == max ? '$preset (normal)' : '$preset'),
+                selected: _columns == preset,
+                selectedColor: const Color(0xFFEFF4FF),
+                side: BorderSide(
+                  color: _columns == preset
+                      ? const Color(0xFFF97316)
+                      : const Color(0xFFCFCFCF),
+                ),
+                onSelected: canEdit
+                    ? (_) => setState(() => _columns = preset)
+                    : null,
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Epson TM-T88 y compatibles (180 dpi) en 80mm: 42. Las comandas y '
+          'el modelo Estándar no cambian. Guarda e imprime una precuenta para '
+          'comparar.',
+          style: TextStyle(
+            fontSize: 11,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Avance extra antes del corte, para la impresora cuya cuchilla queda
+  /// más lejos del cabezal. Ver `core/printing/star/cut_feed.dart`.
+  Widget _buildCutFeedSection() {
+    final canEdit = !_saving;
+    final mm = (_cutFeedLines * kCutFeedLineMm).round();
+
+    Widget stepButton(IconData icon, bool enabled, int delta) {
+      return IconButton.outlined(
+        onPressed: enabled && canEdit
+            ? () => setState(() => _cutFeedLines =
+                  (_cutFeedLines + delta).clamp(0, kMaxCutFeedLines))
+            : null,
+        icon: Icon(icon),
+        style: IconButton.styleFrom(
+          foregroundColor: MangoColors.primaryOrange,
+          side: const BorderSide(color: Color(0xFFCFCFCF)),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Avance antes del corte',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: MangoColors.darkGray,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Si lo último del ticket (el Cambio, el pie) sale impreso al '
+          'principio del ticket siguiente, la cuchilla de ESTA impresora está '
+          'más lejos del cabezal. Sube el avance hasta que el ticket salga '
+          'completo.',
+          style: TextStyle(
+            fontSize: 12,
+            color: MangoColors.muted,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            stepButton(Icons.remove, _cutFeedLines > 0, -1),
+            Expanded(
+              child: Column(
+                children: [
+                  Text(
+                    _cutFeedLines == 0 ? 'Normal' : '+$_cutFeedLines',
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: MangoColors.darkGray,
+                    ),
+                  ),
+                  Text(
+                    _cutFeedLines == 0
+                        ? 'sin avance extra'
+                        : _cutFeedLines == 1
+                        ? 'renglón extra · ~$mm mm'
+                        : 'renglones extra · ~$mm mm',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: MangoColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            stepButton(Icons.add, _cutFeedLines < kMaxCutFeedLines, 1),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Aplica a todo lo que sale por esta impresora (factura, precuenta, '
+          'comanda, cierre). Cada renglón es papel en blanco de más al final '
+          'del ticket: sube de uno en uno.',
           style: TextStyle(
             fontSize: 11,
             color: MangoColors.muted,
