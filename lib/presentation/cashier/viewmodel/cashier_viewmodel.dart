@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
 import 'package:mangopos/data/utils/payment_amount_utils.dart';
@@ -22,6 +23,7 @@ import 'package:mangopos/core/utils/app_time.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/core/utils/device_utils.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 
 final cashierRepositoryProvider = Provider<CashierRepository>((ref) {
   return CashierRepository(Supabase.instance.client);
@@ -33,12 +35,39 @@ final cashierViewModelProvider = ChangeNotifierProvider<CashierViewModel>((
   return CashierViewModel(
     ref.read(cashierRepositoryProvider),
     ref.read(salesRepositoryProvider),
+    settingsRepository: ref.read(posSettingsRepositoryProvider),
+    canOperateAnyDevice: () => ref.read(sessionProvider).isOwnerOrAdmin,
   );
 });
+
+/// Como termino [CashierViewModel.openBox].
+enum CashOpenOutcome {
+  /// Caja nueva confirmada por el server.
+  opened,
+
+  /// Caja local encolada para sincronizar (sin red).
+  openedOffline,
+
+  /// No se abrio otra: ya habia una que le toca a este usuario/equipo (la
+  /// suya en otra registradora o equipo, o la del negocio en modo "1 sola
+  /// caja") y se adopto.
+  alreadyOpen,
+}
 
 class CashierViewModel extends ChangeNotifier {
   final CashierRepository _repository;
   final SalesRepository _salesRepository;
+  final PosSettingsRepository? _settingsRepository;
+  // Dueño/admin de la cuenta en el negocio activo: operan una caja desde
+  // cualquier equipo. El resto solo con la caja abierta en su equipo.
+  final bool Function()? _canOperateAnyDeviceResolver;
+
+  // Modo de caja del negocio (Ajustes -> Cajas). Default "1 sola caja", el
+  // mismo que aplica la BD cuando el negocio no tiene fila de ajustes.
+  String _cashSessionMode = PosSettingsRepository.cashSessionSingle;
+  String? _cashSessionModeBusinessId;
+  DateTime? _cashSessionModeLoadedAt;
+  static const Duration _cashSessionModeTtl = Duration(minutes: 5);
 
   bool _isLoading = false;
   Map<String, dynamic>? _lastSession;
@@ -48,6 +77,11 @@ class CashierViewModel extends ChangeNotifier {
   // operar a la vez: yo puedo no tener caja y el local si tenerla abierta,
   // y el mesero debe poder seguir vendiendo en ese caso.
   bool _registerCashOpen = false;
+  // Caja que le toca a este usuario pero NO esta en este equipo: la suya
+  // abierta en otro equipo o, en "1 sola caja", la del negocio. Con ella no
+  // se cobra desde aqui (salvo dueño/admin); se informa y se puede pasar a
+  // este equipo con PIN de supervisor.
+  Map<String, dynamic>? _cashElsewhere;
   int _pendingTables = 0;
   String? _currentRegisterId;
   String _currentRegisterName = '';
@@ -74,7 +108,15 @@ class CashierViewModel extends ChangeNotifier {
   Timer? _silentRefreshTimer;
   static const Duration _silentRefreshInterval = Duration(seconds: 30);
 
-  CashierViewModel(this._repository, this._salesRepository);
+  CashierViewModel(
+    this._repository,
+    this._salesRepository, {
+    PosSettingsRepository? settingsRepository,
+    bool Function()? canOperateAnyDevice,
+  }) : _settingsRepository = settingsRepository,
+       _canOperateAnyDeviceResolver = canOperateAnyDevice;
+
+  bool get canOperateAnyDevice => _canOperateAnyDeviceResolver?.call() ?? false;
 
   /// Arranca el polling silencioso. Idempotente: si ya hay timer, no
   /// duplica. Lo llama `init()`; el widget no necesita gestionarlo.
@@ -307,19 +349,61 @@ class CashierViewModel extends ChangeNotifier {
     unawaited(_persistRegisterCashOpen(value));
   }
 
-  /// Resuelve el estado de caja de [registerId] en UNA consulta y sincroniza
-  /// las dos vistas que la app necesita:
+  /// Lee el modo de caja del negocio. Cachea [_cashSessionModeTtl] porque
+  /// `refreshSilently` corre cada 30 s; [force] lo salta (init / cambio de
+  /// negocio). Si falla conserva el ultimo modo conocido.
+  Future<void> _loadCashSessionMode({bool force = false}) async {
+    final businessId = _businessId;
+    final settings = _settingsRepository;
+    if (businessId == null || settings == null) return;
+    final loadedAt = _cashSessionModeLoadedAt;
+    final fresh = _cashSessionModeBusinessId == businessId &&
+        loadedAt != null &&
+        DateTime.now().difference(loadedAt) < _cashSessionModeTtl;
+    if (!force && fresh) return;
+    try {
+      _cashSessionMode = await settings.getCashSessionMode(businessId);
+      _cashSessionModeBusinessId = businessId;
+      _cashSessionModeLoadedAt = DateTime.now();
+    } catch (e) {
+      debugPrint('cashier: no se pudo leer el modo de caja: $e');
+    }
+  }
+
+  /// Aplica el modo recien guardado en Ajustes sin esperar al TTL y
+  /// re-resuelve la caja con el.
+  Future<void> applyCashSessionMode(String mode) async {
+    _cashSessionMode = PosSettingsRepository.parseCashSessionMode(mode);
+    _cashSessionModeBusinessId = _businessId;
+    _cashSessionModeLoadedAt = DateTime.now();
+    final registerId = _currentRegisterId;
+    if (registerId != null && _businessId != null) {
+      try {
+        await _refreshSessionState(registerId);
+      } catch (e) {
+        debugPrint('cashier: no se pudo refrescar la caja tras cambiar modo: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  /// Resuelve el estado de caja en UNA consulta (todo el negocio) y
+  /// sincroniza lo que la app necesita:
   ///
-  ///  - `_lastSession`: MI caja (la mia, o la abierta desde este equipo). Es
-  ///    la que se abre, se cierra y se arquea. Si no tengo ninguna, cae al
-  ///    historico propio para que el panel siga mostrando mi ultimo cierre.
-  ///  - `_registerCashOpen`: hay alguna caja abierta en la registradora, de
-  ///    quien sea. Solo gatea la venta.
+  ///  - `_lastSession`: la caja que se opera DESDE ESTE EQUIPO (abrir,
+  ///    cerrar, arquear, cobrar). La caja es del equipo y la registradora
+  ///    donde se abrio: para cajero/mesero es solo la abierta en este equipo;
+  ///    dueño/admin operan desde cualquiera (ver
+  ///    [CashierRepository.resolveDeviceCash]). Si no hay, cae al historico
+  ///    propio para que el panel siga mostrando el ultimo cierre.
+  ///  - `_cashElsewhere`: la caja que le toca pero esta en otro equipo. Se
+  ///    informa y se puede pasar a este equipo; no se cobra con ella aqui.
+  ///  - `_registerCashOpen`: hay caja abierta en el negocio, de quien sea.
+  ///    Solo gatea tomar pedidos (los meseros venden en cualquier equipo).
   ///
-  /// Antes las dos salian de la misma consulta ("la caja abierta mas reciente
-  /// de la registradora"), y por eso una segunda cajera en otro equipo veia la
-  /// caja de su companera: sin boton "Abrir caja" y con el de cerrar apuntando
-  /// a la ajena.
+  /// Se consulta el NEGOCIO, no solo la registradora del equipo: el bloqueo
+  /// de apertura mira el negocio entero, y mirando menos el cajero veia "no
+  /// tienes caja" y al abrir le respondian "ya tienes una caja abierta".
   Future<void> _refreshSessionState(String registerId) async {
     String? deviceId;
     try {
@@ -328,17 +412,23 @@ class CashierViewModel extends ChangeNotifier {
       debugPrint('cashier: no se pudo resolver el device_id: $e');
     }
 
-    final openSessions = await _repository.getOpenSessionsForRegister(
-      registerId,
-    );
+    final businessId = _businessId;
+    final openSessions = businessId != null
+        ? await _repository.getOpenSessionsForBusiness(businessId)
+        : await _repository.getOpenSessionsForRegister(registerId);
     _setRegisterCashOpen(openSessions.isNotEmpty);
 
-    final mine = CashierRepository.pickOwnOpenSession(
+    final resolved = CashierRepository.resolveDeviceCash(
       openSessions,
       userId: Supabase.instance.client.auth.currentUser?.id,
       deviceId: deviceId,
+      registerId: registerId,
+      singleMode: isSingleCashMode,
+      canOperateAnyDevice: canOperateAnyDevice,
     );
+    _cashElsewhere = resolved.elsewhere;
 
+    final mine = resolved.operable;
     if (mine != null) {
       _setLastSession(mine);
       return;
@@ -374,6 +464,37 @@ class CashierViewModel extends ChangeNotifier {
   String get bestDayName => _bestDayName;
   String? get currentRegisterId => _currentRegisterId;
   String get currentRegisterName => _currentRegisterName;
+
+  /// Nombre de la caja que muestra el panel: el de la registradora de la
+  /// sesion abierta cuando no es la del equipo (caja adoptada desde otra
+  /// PC/registradora), y si no el de la registradora del equipo.
+  String get displayRegisterName {
+    final session = _lastSession;
+    if (session != null &&
+        session['status'] == 'open' &&
+        session['cash_register_id']?.toString() != _currentRegisterId) {
+      final name = session['cash_register_name']?.toString().trim() ?? '';
+      if (name.isNotEmpty) return name;
+    }
+    return _currentRegisterName;
+  }
+
+  /// 'single' o 'multi' (ver [PosSettingsRepository.cashSessionSingle]).
+  String get cashSessionMode => _cashSessionMode;
+
+  /// "1 sola caja": una caja abierta para todo el negocio, compartida por
+  /// quien entre en cualquier equipo.
+  bool get isSingleCashMode =>
+      _cashSessionMode != PosSettingsRepository.cashSessionMulti;
+
+  /// Renombrar la registradora del equipo no cambia nada mas: no hace falta
+  /// re-atarla (eso falla con la caja abierta).
+  void updateCurrentRegisterName(String registerId, String name) {
+    if (_currentRegisterId != registerId) return;
+    _currentRegisterName = name;
+    unawaited(_persistRegister());
+    notifyListeners();
+  }
   /// MI caja esta abierta (la mia, o la abierta desde este equipo).
   /// Es lo que gobierna abrir / cerrar / arquear en la pantalla de Caja.
   bool get isCashOpen => _lastSession?['status'] == 'open';
@@ -385,7 +506,40 @@ class CashierViewModel extends ChangeNotifier {
 
   /// Hay una caja abierta en el local que NO es la mia. Sirve para avisar en
   /// la pantalla de Caja que abrir aqui crea una segunda caja en paralelo.
-  bool get hasOtherOpenCash => _registerCashOpen && !isCashOpen;
+  bool get hasOtherOpenCash =>
+      _registerCashOpen && !isCashOpen && _cashElsewhere == null;
+
+  /// La caja que le toca a este usuario pero esta abierta en OTRO equipo (la
+  /// suya, o la del negocio en "1 sola caja"). Desde aqui no se cobra con
+  /// ella: se puede pasar a este equipo con PIN de supervisor.
+  Map<String, dynamic>? get cashElsewhere => isCashOpen ? null : _cashElsewhere;
+
+  /// [cashElsewhere] es del usuario logueado (y no la de otro cajero).
+  bool get isCashElsewhereMine {
+    final elsewhere = cashElsewhere;
+    if (elsewhere == null) return false;
+    return elsewhere['user_id']?.toString() ==
+        Supabase.instance.client.auth.currentUser?.id;
+  }
+
+  /// Pasa [cashElsewhere] a este equipo ("caja pegada"). El server exige
+  /// [approverPin] de supervisor/admin salvo que la cuenta ya lo sea.
+  Future<void> moveCashElsewhereHere({String? approverPin}) async {
+    final sessionId = cashElsewhere?['id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) {
+      throw const CashRegisterException(
+        errorCode: 'SESSION_NOT_FOUND',
+        message: 'No hay una caja en otro equipo para pasar a este.',
+      );
+    }
+    await _repository.moveSessionToDevice(
+      sessionId: sessionId,
+      deviceId: await DeviceUtils.getDeviceId(),
+      deviceName: DeviceUtils.getDeviceName(),
+      approverPin: approverPin,
+    );
+    await init();
+  }
 
   String? get businessId => _businessId;
 
@@ -412,6 +566,10 @@ class CashierViewModel extends ChangeNotifier {
       _businessId = await resolveBusinessIdOrNull(client, 'auto');
 
       if (_businessId != null) {
+        // En paralelo con el resto: decide como se resuelve "mi caja" en
+        // `_refreshSessionState`, asi que se espera justo antes.
+        final modeLoad = _loadCashSessionMode(force: true);
+
         // Fetch Business Name
         try {
           final businessData = await client
@@ -456,10 +614,12 @@ class CashierViewModel extends ChangeNotifier {
           // Cachear el register resuelto para que un arranque frío sin
           // internet pueda reconstruir la clave del cache de sesión.
           unawaited(_persistRegister());
-          // Modelo: cada cajero abre SU caja (el server lo limita a una por
-          // usuario y una por dispositivo); el resto del local vende contra
-          // cualquier caja abierta de la registradora. `_refreshSessionState`
-          // mantiene las dos lecturas separadas.
+          // Modelo: en "1 sola caja" todos trabajan con la caja abierta del
+          // negocio; en multi caja cada cajero abre SU caja (el server lo
+          // limita a una por usuario y una por dispositivo) y el resto vende
+          // contra cualquier caja abierta de la registradora.
+          // `_refreshSessionState` mantiene las dos lecturas separadas.
+          await modeLoad;
           await _refreshSessionState(_currentRegisterId!);
 
           _lastCashOpenValidationAt = AppTime.nowAst();
@@ -1005,23 +1165,30 @@ class CashierViewModel extends ChangeNotifier {
     _bestDayName = data['best_day_name'] ?? '-';
   }
 
-  /// Abre la caja. Devuelve `true` si la apertura se resolvió por la rama
-  /// OFFLINE (sesión local encolada para sync) y `false` si se confirmó
-  /// online contra el server. El caller usa esto para no mostrar "Caja
-  /// abierta exitosamente" cuando en realidad quedó pendiente de sync.
-  Future<bool> openBox(double amount) async {
+  /// Abre la caja. El caller usa el [CashOpenOutcome] para no mostrar "Caja
+  /// abierta exitosamente" cuando quedó pendiente de sync (`openedOffline`) o
+  /// cuando no se abrió otra porque ya había una que le toca (`alreadyOpen`).
+  Future<CashOpenOutcome> openBox(double amount) async {
     if (_currentRegisterId == null) {
       final businessId = _businessId;
       if (businessId == null) {
         throw Exception('No se pudo identificar el negocio');
       }
       try {
-        final created = await _repository.createCashRegister(
-          businessId: businessId,
-          name: 'Caja principal',
-        );
-        _currentRegisterId = created['id'] as String;
-        _currentRegisterName = created['name']?.toString() ?? 'Caja principal';
+        // Volver a consultar ANTES de crear: si init() falló (red lenta,
+        // timeout) aquí no hay registradora en memoria aunque el negocio SÍ
+        // la tenga. Crear otra "Caja principal" partía el negocio en dos
+        // registradoras y la caja quedaba invisible para los demás equipos.
+        final registers = await _repository.getCashRegisters(businessId);
+        final chosen = registers.isNotEmpty
+            ? pickRegisterForDevice(registers, await _readPreferredRegisterId())
+            : await _repository.createCashRegister(
+                businessId: businessId,
+                name: 'Caja principal',
+              );
+        _currentRegisterId = chosen['id'] as String;
+        _currentRegisterName = chosen['name']?.toString() ?? 'Caja principal';
+        unawaited(_persistRegister());
       } catch (e) {
         // Sin red Y sin register_id local: único caso donde abrir caja
         // offline es imposible. Device totalmente nuevo en esta sucursal
@@ -1046,37 +1213,30 @@ class CashierViewModel extends ChangeNotifier {
       final deviceId = await DeviceUtils.getDeviceId();
       final deviceName = DeviceUtils.getDeviceName();
 
-      // Guards previos: si fallan POR RED NO bloqueamos — el RPC server-
-      // side los re-valida al sync. Si fallan por estado real (sesión ya
-      // abierta) sí propagamos el error.
+      // ¿Ya hay una caja que toque en este equipo? La de este equipo o, para
+      // dueño/admin, la suya o la del negocio. Se adopta en vez de abrir
+      // otra. Si la caja que le toca esta en OTRO equipo (cajero), no se
+      // abre otra: se dice donde esta y que se puede pasar a este equipo.
+      //
+      // Lo que esto NO encuentra (una caja del usuario o del equipo en OTRA
+      // sucursal) lo decide el RPC: al dueño/admin se lo permite (una caja
+      // por sucursal), al resto no. Por eso ya no hay guard local de
+      // dispositivo: era global y bloqueaba al dueño multisucursal.
+      //
+      // Si falla POR RED no bloqueamos — el RPC lo re-valida al sync.
       try {
-        final existingDeviceSession = await _repository.getDeviceActiveSession(
-          deviceId,
-        );
-        if (existingDeviceSession != null) {
-          throw const CashRegisterException(
-            errorCode: 'DEVICE_ALREADY_OPEN',
-            message:
-                'No se puede abrir otra caja ya que hay una caja abierta actualmente en este dispositivo.',
-          );
+        await _loadCashSessionMode();
+        await _refreshSessionState(_currentRegisterId!);
+        if (isCashOpen) {
+          await init();
+          return CashOpenOutcome.alreadyOpen;
         }
-
-        // Escopear el chequeo al business actual: si el usuario es owner
-        // de varias sucursales, la migración 20260509_0002 le permite
-        // abrir caja simultánea en cada una. Filtrar sin business_id
-        // bloquearía aunque el backend lo permita. El RPC sigue siendo
-        // la autoridad final y rechaza si Rule B aplica para no-owners.
-        final businessIdScope = _businessId;
-        final existingUserSession = businessIdScope != null
-            ? await _repository.getCurrentUserActiveSessionForBusiness(
-                businessId: businessIdScope,
-              )
-            : await _repository.getCurrentUserActiveSession();
-        if (existingUserSession != null) {
-          throw const CashRegisterException(
-            errorCode: 'USER_ALREADY_OPEN',
-            message:
-                'Ya tienes una sesión de caja abierta en esta sucursal.',
+        if (cashElsewhere != null) {
+          throw CashRegisterException(
+            errorCode: 'CASH_ON_OTHER_DEVICE',
+            message: cashElsewhereMessage(),
+            existingSessionId: cashElsewhere?['id']?.toString(),
+            existingBusinessId: _businessId,
           );
         }
       } on CashRegisterException {
@@ -1095,7 +1255,34 @@ class CashierViewModel extends ChangeNotifier {
           deviceName: deviceName,
         );
         await init(); // Refresh — solo en path online (lee server state).
-        return false; // Confirmado online.
+        return CashOpenOutcome.opened;
+      } on CashRegisterException catch (e) {
+        // Conflicto del server (otro equipo abrió en el mismo instante, o la
+        // caja estaba donde el paso 1 no pudo verla). Si la caja que lo causó
+        // es de este negocio, se adopta.
+        final conflictBusiness = e.existingBusinessId;
+        if (e.existingSessionId != null &&
+            (conflictBusiness == null || conflictBusiness == _businessId)) {
+          await init();
+          if (isCashOpen) return CashOpenOutcome.alreadyOpen;
+        }
+        throw _friendlyOpenConflict(e);
+      } on PostgrestException catch (e) {
+        // RPC previo a 20261005_0001: el choque con los indices unicos
+        // globales (una caja abierta por usuario / por equipo) llega como un
+        // 23505 crudo. Le pasa al dueño, que el chequeo exime pero el indice
+        // no. Mismo trato que un conflicto: adoptar si es de este negocio.
+        if (e.code != '23505') rethrow;
+        await init();
+        if (isCashOpen) return CashOpenOutcome.alreadyOpen;
+        throw _friendlyOpenConflict(
+          CashRegisterException(
+            errorCode: e.message.contains('per_device')
+                ? 'DEVICE_ALREADY_OPEN'
+                : 'USER_ALREADY_OPEN',
+            message: e.message,
+          ),
+        );
       } catch (e) {
         if (!_isConnectivityError(e)) rethrow;
         // Diagnóstico: dejamos rastro del error real que clasificamos como
@@ -1112,14 +1299,71 @@ class CashierViewModel extends ChangeNotifier {
           deviceId: deviceId,
           deviceName: deviceName,
         );
-        return true; // Quedó pendiente de sincronizar.
+        return CashOpenOutcome.openedOffline; // Pendiente de sincronizar.
       }
-    } catch (e) {
-      rethrow;
     } finally {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  /// Donde esta [cashElsewhere], para el cajero que no puede operarla aqui.
+  String cashElsewhereMessage() {
+    final session = _cashElsewhere;
+    final device = session?['device_name']?.toString().trim();
+    final where = (device == null || device.isEmpty) ? 'otro equipo' : device;
+    final opened = AppTime.tryParseServerToAst(session?['opened_at']);
+    final since = opened == null
+        ? ''
+        : ' desde el ${opened.day.toString().padLeft(2, '0')}/'
+              '${opened.month.toString().padLeft(2, '0')} '
+              '${opened.hour.toString().padLeft(2, '0')}:'
+              '${opened.minute.toString().padLeft(2, '0')}';
+    final whose = isCashElsewhereMine ? 'Tu caja' : 'La caja del negocio';
+    return '$whose está abierta en $where$since. Desde este equipo puedes '
+        'tomar pedidos, pero para cobrar ve a ese equipo o pásala a este '
+        'con PIN de supervisor.';
+  }
+
+  /// Traduce los rechazos de apertura que NO se pudieron adoptar a un
+  /// mensaje que diga dónde está la caja: en otro equipo de este negocio (se
+  /// puede pasar a este) o en otro negocio/sucursal (hay que cerrarla allá).
+  CashRegisterException _friendlyOpenConflict(CashRegisterException e) {
+    final code = e.errorCode;
+    final text = e.message.toLowerCase();
+    final sameBusiness =
+        e.existingBusinessId != null && e.existingBusinessId == _businessId;
+    if (sameBusiness && cashElsewhere != null) {
+      return CashRegisterException(
+        errorCode: 'CASH_ON_OTHER_DEVICE',
+        message: cashElsewhereMessage(),
+        existingSessionId: e.existingSessionId,
+        existingBusinessId: e.existingBusinessId,
+      );
+    }
+    if (code == 'DEVICE_ALREADY_OPEN' ||
+        text.contains('dispositivo ya tiene una caja abierta')) {
+      return CashRegisterException(
+        errorCode: 'DEVICE_ALREADY_OPEN',
+        message:
+            'Este equipo tiene una caja abierta en otro negocio o sucursal. '
+            'Ciérrala allí antes de abrir una aquí.',
+        existingSessionId: e.existingSessionId,
+        existingBusinessId: e.existingBusinessId,
+      );
+    }
+    if (code == 'USER_ALREADY_OPEN' ||
+        text.contains('ya tienes una caja abierta')) {
+      return CashRegisterException(
+        errorCode: 'USER_ALREADY_OPEN',
+        message:
+            'Tu usuario tiene una caja abierta en otro negocio o sucursal. '
+            'Ciérrala allí antes de abrir una aquí.',
+        existingSessionId: e.existingSessionId,
+        existingBusinessId: e.existingBusinessId,
+      );
+    }
+    return e;
   }
 
   /// Rama offline de [openBox]: crea una sesión con id temporal
@@ -1261,7 +1505,9 @@ class CashierViewModel extends ChangeNotifier {
         final prevHash = _observableStateHash();
 
         // Misma resolucion que init(): mi caja para el panel, caja del local
-        // para el gate de venta.
+        // para el gate de venta. El modo se relee cada pocos minutos para que
+        // un cambio hecho en Ajustes desde otro equipo llegue sin reiniciar.
+        await _loadCashSessionMode();
         await _refreshSessionState(_currentRegisterId!);
         _lastCashOpenValidationAt = AppTime.nowAst();
         _pendingTables = await _salesRepository.getOpenTablesCount(

@@ -716,26 +716,6 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     return (id == null || id.isEmpty) ? null : id;
   }
 
-  /// La caja contra la que cobra este equipo, de entre las abiertas de su
-  /// registradora: la mía, la abierta desde este equipo y, si no hay, la más
-  /// reciente (el mesero cobra contra la caja del cajero).
-  @visibleForTesting
-  static String? pickRegisterSessionForCharge(
-    List<Map<String, dynamic>> openSessions, {
-    String? userId,
-    String? deviceId,
-  }) {
-    if (openSessions.isEmpty) return null;
-    final picked =
-        CashierRepository.pickOwnOpenSession(
-          openSessions,
-          userId: userId,
-          deviceId: deviceId,
-        ) ??
-        openSessions.first;
-    return openSessionIdOf(picked);
-  }
-
   @visibleForTesting
   static bool isCashSessionNotOpenError(Object error) =>
       error.toString().contains('CASH_SESSION_NOT_OPEN');
@@ -783,47 +763,31 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     }
   }
 
+  /// Caja con la que puede cobrar ESTE equipo, preguntando al servidor. La
+  /// caja es del equipo donde se abrió: cajero/mesero solo cobran con la de
+  /// su equipo; dueño/admin con la suya, la de este equipo o la del negocio.
+  /// Ver [CashierRepository.pickChargeSession].
   Future<String?> _resolveOpenSessionFromServer(
     CashierViewModel cashier,
   ) async {
     final repo = _ref.read(cashierRepositoryProvider);
     final businessId =
         _ref.read(sessionProvider).activeBusinessId ?? cashier.businessId;
-
-    // 1. Mi caja en este negocio (un dueño puede tener una por sucursal).
-    final own = (businessId != null && businessId.isNotEmpty)
-        ? await repo.getCurrentUserActiveSessionForBusiness(
-            businessId: businessId,
-          )
-        : await repo.getCurrentUserActiveSession();
-    if (own != null) return own.id;
+    if (businessId == null || businessId.isEmpty) return null;
 
     String? deviceId;
     try {
       deviceId = await DeviceUtils.getDeviceId();
     } catch (_) {}
 
-    // 2. La registradora de este equipo: con dos cajas, el cobro no debe
-    //    caer en el turno de la otra.
-    final registerId = cashier.currentRegisterId;
-    if (registerId != null && registerId.isNotEmpty) {
-      final fromRegister = pickRegisterSessionForCharge(
-        await repo.getOpenSessionsForRegister(registerId),
-        userId: Supabase.instance.client.auth.currentUser?.id,
-        deviceId: deviceId,
-      );
-      if (fromRegister != null) return fromRegister;
-    }
-
-    // 3. Cualquier caja abierta del negocio (primero la de este equipo).
-    if (businessId != null && businessId.isNotEmpty) {
-      final any = await repo.getActiveSessionForBusiness(
-        businessId,
-        deviceId: deviceId,
-      );
-      if (any != null) return any.id;
-    }
-    return null;
+    final picked = CashierRepository.pickChargeSession(
+      await repo.getOpenSessionsForBusiness(businessId),
+      userId: Supabase.instance.client.auth.currentUser?.id,
+      deviceId: deviceId,
+      registerId: cashier.currentRegisterId,
+      canOperateAnyDevice: _ref.read(sessionProvider).isOwnerOrAdmin,
+    );
+    return openSessionIdOf(picked);
   }
 
   Future<void> _loadOrderForReceipt() async {
@@ -1405,7 +1369,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         state = state.copyWith(
           isProcessing: false,
           stage: PaymentStage.idle,
-          validationError: 'No hay una caja abierta para procesar el cobro.',
+          // Hay caja en el negocio pero no en este equipo: decir dónde
+          // cobrar en vez de "no hay caja".
+          validationError: _ref.read(cashierViewModelProvider).canSellWithOpenCash
+              ? CashierRepository.cashOnOtherDeviceMessage
+              : 'No hay una caja abierta para procesar el cobro.',
         );
         return null;
       }

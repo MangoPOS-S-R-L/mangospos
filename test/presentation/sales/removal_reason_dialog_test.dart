@@ -57,6 +57,43 @@ Future<OrderItemRemovalDecision?> _open(
   return result;
 }
 
+/// «6 × Presidente» con selector de cantidad, como lo abre «Eliminar» sobre
+/// un producto agrupado. La decisión llega por [onDecision] al cerrarse.
+Future<void> _openChooser(
+  WidgetTester tester, {
+  String? Function(double quantity)? describeRemoval,
+  void Function(OrderItemRemovalDecision? decision)? onDecision,
+}) async {
+  _tabletScreen(tester);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [sessionProvider.overrideWith(_FakeSession.new)],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                final decision = await showRemovalReasonDialog(
+                  context,
+                  productName: 'Presidente',
+                  quantity: 6,
+                  alreadySent: true,
+                  chooseQuantity: true,
+                  describeRemoval: describeRemoval,
+                );
+                onDecision?.call(decision);
+              },
+              child: const Text('abrir'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('abrir'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('sin motivo no se puede quitar el producto', (tester) async {
     await _open(tester);
@@ -131,6 +168,65 @@ void main() {
     expect(decision!.note, 'El bar ya la abrió');
     expect(decision!.text, 'Error de digitación: El bar ya la abrió');
     expect(decision!.inventoryLabel, 'Merma: NO vuelve al inventario');
+  });
+
+  testWidgets('con 6 unidades arranca en quitar 1, no las 6', (tester) async {
+    OrderItemRemovalDecision? decision;
+    await _openChooser(tester, onDecision: (d) => decision = d);
+
+    expect(find.text('1 × Presidente'), findsOneWidget);
+    expect(find.text('de 6'), findsOneWidget);
+
+    await tester.tap(find.text('Error de digitación'));
+    await tester.pump();
+    await tester.tap(find.text('QUITAR 1'));
+    await tester.pumpAndSettle();
+
+    expect(decision, isNotNull);
+    expect(decision!.quantity, 1);
+  });
+
+  testWidgets('se puede subir la cantidad o pedir todas', (tester) async {
+    OrderItemRemovalDecision? decision;
+    await _openChooser(tester, onDecision: (d) => decision = d);
+
+    await tester.tap(find.byKey(const ValueKey('removal-qty-plus')));
+    await tester.pump();
+    expect(find.text('2 × Presidente'), findsOneWidget);
+
+    await tester.tap(find.text('Todas (6)'));
+    await tester.pump();
+    expect(find.text('6 × Presidente'), findsOneWidget);
+    // Ya en el tope, el + se apaga.
+    final plus = tester.widget<IconButton>(
+      find.byKey(const ValueKey('removal-qty-plus')),
+    );
+    expect(plus.onPressed, isNull);
+
+    await tester.tap(find.text('Error de digitación'));
+    await tester.pump();
+    await tester.tap(find.text('QUITAR 6'));
+    await tester.pumpAndSettle();
+    expect(decision!.quantity, 6);
+  });
+
+  testWidgets('avisa de qué subcuenta sale según la cantidad', (tester) async {
+    await _openChooser(
+      tester,
+      describeRemoval: (qty) => 'Se quita de C2: ${qty.toInt()}.',
+    );
+
+    expect(find.text('Se quita de C2: 1.'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('removal-qty-plus')));
+    await tester.pump();
+    expect(find.text('Se quita de C2: 2.'), findsOneWidget);
+  });
+
+  testWidgets('sin selector la cantidad es la que se mostró', (tester) async {
+    // La reducción con «−» ya fijó cuántas: el diálogo no vuelve a preguntar.
+    await _open(tester);
+    expect(find.byKey(const ValueKey('removal-qty-plus')), findsNothing);
+    expect(find.text('QUITAR PRODUCTO'), findsOneWidget);
   });
 
   testWidgets('cancelar no devuelve nada', (tester) async {

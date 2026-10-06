@@ -25,6 +25,8 @@ String _ticket({
   bool forStation = false,
   String product = 'Old Parr 18 Años 750Ml',
   double quantity = 1,
+  String? approverName,
+  bool approvedWithPin = false,
 }) =>
     RemovalVoucherTicket.generate(
       businessName: 'El Prodigio Y La Super Banda - Arena',
@@ -40,6 +42,8 @@ String _ticket({
       unitPrice: 24000,
       sentAt: DateTime.utc(2026, 9, 20, 3, 20),
       operatorName: 'Johan Osma',
+      approverName: approverName,
+      approvedWithPin: approvedWithPin,
       paperWidth: paperWidth,
       removedAt: DateTime.utc(2026, 9, 20, 3, 26),
       forStation: forStation,
@@ -61,6 +65,26 @@ void main() {
     expect(raw, contains('19/09/2026 23:26'));
     expect(raw, contains('Enviado a cocina: 19/09/2026 23:20'));
     expect(raw, contains('Autorizado por: JOHAN OSMA'));
+  });
+
+  test('con PIN de supervisor: quién lo quitó y quién lo autorizó', () {
+    // El caso de El Prodigio: la cuenta de la tablet salía como "quien lo
+    // quitó" aunque lo hubiera autorizado la gerente con su PIN.
+    final raw = _ticket(
+      reason: _merma,
+      approverName: 'Ana Gerente',
+      approvedWithPin: true,
+    );
+    expect(raw, contains('Quitado por: JOHAN OSMA'));
+    expect(raw, contains('Autorizado por: ANA GERENTE'));
+    expect(raw, isNot(contains('Autorizado por: JOHAN OSMA')));
+  });
+
+  test('PIN sin confirmar por el servidor: dice que hubo PIN', () {
+    final raw = _ticket(reason: _merma, approvedWithPin: true);
+    expect(raw, contains('Quitado por: JOHAN OSMA'));
+    expect(raw, contains('Autorizado con PIN de supervisor'));
+    expect(raw, isNot(contains('Autorizado por:')));
   });
 
   test('merma y devolución se leen distinto', () {

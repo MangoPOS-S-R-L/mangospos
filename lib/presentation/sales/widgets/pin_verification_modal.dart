@@ -58,6 +58,37 @@ Future<String?> showSupervisorApprovalPinModal(
   return captured;
 }
 
+/// Pide un PIN de Supervisor/Admin, lo valida aquí y devuelve el PIN (o null
+/// si canceló). Para operaciones cuyo RPC vuelve a validar el PIN en el
+/// server, como pasar una caja a otro equipo: sin eso, la autorización
+/// quedaba solo del lado de la app.
+Future<String?> showSupervisorPinCaptureModal(
+  BuildContext context,
+  WidgetRef ref, {
+  String title = 'Autorización requerida',
+  String subtitle = 'Ingrese PIN de Supervisor para continuar',
+}) async {
+  String? captured;
+  await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => _PinVerificationDialog(
+      title: title,
+      subtitle: subtitle,
+      onVerify: (pin) async {
+        final userId = await ref
+            .read(sessionProvider.notifier)
+            .verifyPinApprover(pin: pin, level: PinAccessLevel.supervisor);
+        if (userId == null) return false;
+        captured = pin.trim();
+        return true;
+      },
+      invalidMessage: 'PIN inválido o sin jerarquía requerida.',
+    ),
+  );
+  return captured;
+}
+
 Future<bool> showCurrentUserPinVerificationModal(
   BuildContext context,
   WidgetRef ref, {

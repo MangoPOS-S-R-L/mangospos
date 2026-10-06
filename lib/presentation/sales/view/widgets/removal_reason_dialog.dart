@@ -24,6 +24,15 @@ Future<OrderItemRemovalDecision?> showRemovalReasonDialog(
   /// La comanda ya salió: el producto pudo haberse preparado, así que el
   /// destino del inventario deja de ser obvio.
   bool alreadySent = false,
+
+  /// El cajero escoge CUÁNTAS de las [quantity] unidades quita, con 1
+  /// marcada. Sin esto, «Eliminar» sobre «6 × Presidente» borraba las seis
+  /// aunque quisiera quitar una. Solo aplica si [quantity] es entera y > 1.
+  bool chooseQuantity = false,
+
+  /// Aviso de DÓNDE salen las unidades (p. ej. de qué subcuenta), según la
+  /// cantidad elegida. `null` o texto `null` = no se muestra nada.
+  String? Function(double quantity)? describeRemoval,
 }) {
   return showDialog<OrderItemRemovalDecision>(
     context: context,
@@ -32,6 +41,8 @@ Future<OrderItemRemovalDecision?> showRemovalReasonDialog(
       productName: productName,
       quantity: quantity,
       alreadySent: alreadySent,
+      chooseQuantity: chooseQuantity,
+      describeRemoval: describeRemoval,
     ),
   );
 }
@@ -41,11 +52,15 @@ class _RemovalReasonDialog extends ConsumerStatefulWidget {
     required this.productName,
     required this.quantity,
     required this.alreadySent,
+    required this.chooseQuantity,
+    this.describeRemoval,
   });
 
   final String productName;
   final double quantity;
   final bool alreadySent;
+  final bool chooseQuantity;
+  final String? Function(double quantity)? describeRemoval;
 
   @override
   ConsumerState<_RemovalReasonDialog> createState() =>
@@ -58,9 +73,19 @@ class _RemovalReasonDialogState extends ConsumerState<_RemovalReasonDialog> {
   OrderItemRemovalReason? _selected;
   bool? _isWasteOverride;
 
+  /// Unidades a quitar. Con selector arranca en 1: quitar todas es la
+  /// excepción y se pide a propósito con «Todas».
+  late double _qty;
+
+  bool get _canChoose =>
+      widget.chooseQuantity &&
+      widget.quantity >= 2 &&
+      widget.quantity == widget.quantity.roundToDouble();
+
   @override
   void initState() {
     super.initState();
+    _qty = _canChoose ? 1 : widget.quantity;
     _loadReasons();
   }
 
@@ -90,6 +115,7 @@ class _RemovalReasonDialogState extends ConsumerState<_RemovalReasonDialog> {
   @override
   Widget build(BuildContext context) {
     final selected = _selected;
+    final removalWhere = widget.describeRemoval?.call(_qty);
     return AlertDialog(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.white,
@@ -121,12 +147,27 @@ class _RemovalReasonDialogState extends ConsumerState<_RemovalReasonDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${_qtyLabel(widget.quantity)} × ${widget.productName}',
+                '${_qtyLabel(_qty)} × ${widget.productName}',
                 style: const TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 15,
                 ),
               ),
+              if (_canChoose) ...[
+                const SizedBox(height: 10),
+                _quantityPicker(),
+              ],
+              if (removalWhere != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  removalWhere,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Color(0xFFB45309),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               if (widget.alreadySent) ...[
                 const SizedBox(height: 6),
                 const Text(
@@ -240,12 +281,68 @@ class _RemovalReasonDialogState extends ConsumerState<_RemovalReasonDialog> {
                     reason: selected,
                     isWaste: _isWaste,
                     note: _note.text.trim().isEmpty ? null : _note.text.trim(),
+                    quantity: _qty,
                   ),
                 ),
-          child: const Text(
-            'QUITAR PRODUCTO',
-            style: TextStyle(fontWeight: FontWeight.bold),
+          child: Text(
+            _canChoose ? 'QUITAR ${_qtyLabel(_qty)}' : 'QUITAR PRODUCTO',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
+        ),
+      ],
+    );
+  }
+
+  /// «¿Cuántas?» con − / + y el atajo «Todas (N)».
+  Widget _quantityPicker() {
+    final all = widget.quantity;
+    final isAll = (_qty - all).abs() < 0.0001;
+    return Row(
+      children: [
+        const Text(
+          '¿Cuántas?',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5),
+        ),
+        const SizedBox(width: 10),
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                key: const ValueKey('removal-qty-minus'),
+                onPressed: _qty > 1 ? () => setState(() => _qty -= 1) : null,
+                icon: const Icon(Icons.remove, size: 18),
+              ),
+              SizedBox(
+                width: 36,
+                child: Text(
+                  _qtyLabel(_qty),
+                  key: const ValueKey('removal-qty-value'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              IconButton(
+                key: const ValueKey('removal-qty-plus'),
+                onPressed: _qty < all ? () => setState(() => _qty += 1) : null,
+                icon: const Icon(Icons.add, size: 18),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text('de ${_qtyLabel(all)}', style: const TextStyle(color: _kMuted)),
+        const Spacer(),
+        TextButton(
+          onPressed: isAll ? null : () => setState(() => _qty = all),
+          child: Text('Todas (${_qtyLabel(all)})'),
         ),
       ],
     );

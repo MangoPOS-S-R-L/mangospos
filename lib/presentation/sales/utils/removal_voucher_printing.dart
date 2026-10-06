@@ -38,6 +38,8 @@ class RemovalVoucherPrinting {
     double unitPrice = 0,
     DateTime? sentAt,
     String? operatorName,
+    String? approverName,
+    bool approvedWithPin = false,
     required String businessId,
   }) async {
     final printerless = await PrinterlessMode.isEnabled(businessId);
@@ -58,6 +60,8 @@ class RemovalVoucherPrinting {
         unitPrice: unitPrice,
         sentAt: sentAt,
         operatorName: operatorName,
+        approverName: approverName,
+        approvedWithPin: approvedWithPin,
         currencySymbol: currentBusinessCurrencyOrFallback(ref).symbol,
         paperWidth: printer?.paperWidth ?? 80,
       );

@@ -3431,7 +3431,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<void> deleteItem(
+  /// Devuelve `true` si el producto salió de la cuenta: borrado en el
+  /// servidor o encolado sin red (el borrado ya es un hecho para esta caja).
+  /// `false` si no se borró — la pantalla no debe imprimir el comprobante ni
+  /// avisar al bar de algo que sigue en la cuenta.
+  Future<bool> deleteItem(
     String itemId, {
     String? reason,
     String? reasonCode,
@@ -3440,7 +3444,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     bool? isWaste,
   }) async {
     final orderId = state.order?.id;
-    if (orderId == null) return;
+    if (orderId == null) return false;
 
     OrderItem? targetItem;
     for (final item in state.items) {
@@ -3453,7 +3457,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(
         error: 'No se elimino el producto: ya no pertenece a esta orden.',
       );
-      return;
+      return false;
     }
 
     // 1. Snapshot for rollback
@@ -3525,6 +3529,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         'order_id': orderId,
         'item_id': itemId,
       });
+      return true;
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -3556,7 +3561,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             order: previousOrder,
             error: 'No se guardo la eliminacion offline: $queueError',
           );
-          return;
+          return false;
         }
         try {
           await _persistCurrentState(localOnly: true);
@@ -3566,12 +3571,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 'Eliminacion en cola, pero fallo la copia local: '
                 '$snapshotError. No cierre este equipo hasta sincronizar.',
           );
-          return;
+          // La eliminación SÍ quedó en la cola: se va a aplicar.
+          return true;
         }
         state = state.copyWith(
           error: 'Producto eliminado en local. Pendiente de sincronizar.',
         );
-        return;
+        return true;
       }
 
       // El borrado falló → soltamos la guarda para no ocultar el item.
@@ -3581,6 +3587,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         order: previousOrder,
         error: 'Error al eliminar: $e',
       );
+      return false;
     }
   }
 

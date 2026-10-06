@@ -69,6 +69,7 @@ class OrderItemRemovalDecision {
     required this.reason,
     required this.isWaste,
     this.note,
+    this.quantity,
   });
 
   final OrderItemRemovalReason reason;
@@ -76,6 +77,10 @@ class OrderItemRemovalDecision {
   /// Puede diferir del motivo: el cajero lo cambia si ese caso fue distinto.
   final bool isWaste;
   final String? note;
+
+  /// Cuántas unidades escogió quitar el cajero. `null` = todas las que se le
+  /// mostraron (el diálogo no le dio a escoger).
+  final double? quantity;
 
   /// Lo que se guarda como motivo escrito y sale en el comprobante.
   String get text {

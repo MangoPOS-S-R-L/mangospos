@@ -235,10 +235,21 @@ class _WelcomeCard extends StatelessWidget {
         ? viewModel.currentRegisterName.trim()
         : 'Caja sin configurar';
     final isCashOpen = viewModel.isCashOpen;
+    // La caja que le toca esta abierta en otro equipo: no es "cerrada" ni se
+    // puede "aperturar" aqui; en Caja se ofrece pasarla a este equipo.
+    final cashElsewhere = viewModel.cashElsewhere != null;
     final statusColor = isCashOpen ? AppColors.success : AppColors.warning;
-    final statusLabel = isCashOpen ? 'Caja abierta' : 'Caja cerrada';
-    final actionLabel = isCashOpen ? 'Gestionar Caja' : 'Aperturar Caja';
-    final actionIcon = isCashOpen ? Icons.point_of_sale : Icons.lock_open;
+    final statusLabel = isCashOpen
+        ? 'Caja abierta'
+        : cashElsewhere
+        ? 'Caja en otro equipo'
+        : 'Caja cerrada';
+    final actionLabel = isCashOpen || cashElsewhere
+        ? 'Gestionar Caja'
+        : 'Aperturar Caja';
+    final actionIcon = isCashOpen || cashElsewhere
+        ? Icons.point_of_sale
+        : Icons.lock_open;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

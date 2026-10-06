@@ -159,6 +159,10 @@ class SalesQueries {
   /// cocina (20260919_0002).
   static const String rpcNoteItemRemoval = 'fn_note_order_item_removal';
 
+  /// Sellar quién autorizó con PIN de supervisor un producto quitado
+  /// (20261005_0003). El PIN se valida en el servidor.
+  static const String rpcApproveItemRemoval = 'fn_approve_order_item_removal';
+
   /// Mover item a otro check
   static const String rpcMoveItemToCheck = 'fn_move_item_to_check';
   static const String rpcMoveItemsToCheckBatch = 'fn_move_items_to_check_batch';

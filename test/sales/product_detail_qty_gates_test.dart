@@ -25,6 +25,7 @@ Future<void> _pumpModal(
   String? addMoreBlockedReason,
   double? reduceFloor,
   VoidCallback? onReprint,
+  Future<bool> Function()? onAuthorizeReduce,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -34,6 +35,7 @@ Future<void> _pumpModal(
           addMoreBlockedReason: addMoreBlockedReason,
           reduceFloor: reduceFloor,
           reduceBlockedReason: 'Solo un supervisor puede quitarlo.',
+          onAuthorizeReduce: onAuthorizeReduce,
           onReprint: onReprint,
           onSave: (_) async {},
           onDelete: (_) async {},
@@ -141,6 +143,67 @@ void main() {
       expect(_removeButton(tester).onPressed, isNull);
     },
   );
+
+  testWidgets(
+    'cajero en el piso: el − pide PIN de supervisor y, con PIN, baja',
+    (tester) async {
+      // Caso real: el cajero quería quitar 1 de las 2 ya enviadas y su única
+      // salida era «Eliminar», que borraba las dos.
+      var pinRequests = 0;
+      await _pumpModal(
+        tester,
+        reduceFloor: 2,
+        onAuthorizeReduce: () async {
+          pinRequests++;
+          return true;
+        },
+      );
+
+      expect(_removeButton(tester).onPressed, isNotNull);
+      await tester.tap(find.byIcon(Icons.remove));
+      await tester.pumpAndSettle();
+
+      expect(pinRequests, 1);
+      expect(find.text('1'), findsOneWidget);
+    },
+  );
+
+  testWidgets('PIN rechazado: la cantidad no se mueve', (tester) async {
+    await _pumpModal(
+      tester,
+      reduceFloor: 2,
+      onAuthorizeReduce: () async => false,
+    );
+
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    expect(find.text('2'), findsOneWidget);
+  });
+
+  testWidgets('con el PIN ya puesto no lo vuelve a pedir', (tester) async {
+    var pinRequests = 0;
+    await _pumpModal(
+      tester,
+      reduceFloor: 2,
+      onAuthorizeReduce: () async {
+        pinRequests++;
+        return true;
+      },
+    );
+
+    // Sube a 3, baja a 1: el PIN se pide una sola vez, al cruzar el piso.
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    expect(pinRequests, 0, reason: 'la que sumó y no envió la devuelve sola');
+    await tester.tap(find.byIcon(Icons.remove));
+    await tester.pumpAndSettle();
+    expect(pinRequests, 1);
+    expect(find.text('1'), findsOneWidget);
+    // En 1 se apaga: de ahí en adelante es «Eliminar».
+    expect(_removeButton(tester).onPressed, isNull);
+  });
 
   testWidgets('sin piso el − baja hasta 1 y no más', (tester) async {
     await _pumpModal(tester);

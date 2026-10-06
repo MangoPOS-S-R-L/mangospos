@@ -250,6 +250,30 @@ class SessionState {
     }
     return false;
   }
+
+  /// Rol de la CUENTA logueada en el negocio activo ('owner', 'admin',
+  /// 'manager', 'cashier', ...), o null.
+  String? get activeBusinessRole {
+    if (activeBusinessId == null) return null;
+    for (final b in availableBusinesses) {
+      if (b.id == activeBusinessId) return b.role;
+    }
+    return null;
+  }
+
+  /// Dueño o admin de la CUENTA en el negocio activo (no del PIN de mesero).
+  /// Es la misma regla que aplica el server en `fn_open_cash_session`: solo
+  /// ellos operan una caja desde un equipo que no es el de la caja y tienen
+  /// una por sucursal.
+  bool get isOwnerOrAdmin {
+    if (activeBusinessId == null) return false;
+    for (final b in availableBusinesses) {
+      if (b.id == activeBusinessId && (b.role == 'owner' || b.role == 'admin')) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 /// Ventana mínima entre releídas de permisos. Suficientemente corta para que

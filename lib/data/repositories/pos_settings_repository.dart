@@ -559,6 +559,38 @@ class PosSettingsRepository {
     }, onConflict: 'business_id');
   }
 
+  /// Modo de caja del negocio. 'single' (default): una sola caja abierta para
+  /// todo el negocio; quien entre, en cualquier equipo, trabaja con ella.
+  /// 'multi': cada cajero abre la suya, con su propio arqueo y cierre.
+  /// Tolera columna ausente (pre-migración 20261005_0001) → 'single'.
+  static const String cashSessionSingle = 'single';
+  static const String cashSessionMulti = 'multi';
+
+  static String parseCashSessionMode(Object? raw) =>
+      raw?.toString() == cashSessionMulti ? cashSessionMulti : cashSessionSingle;
+
+  Future<String> getCashSessionMode(String businessId) async {
+    try {
+      return parseCashSessionMode(
+        (await _fetchAndCacheRow(businessId))?['cash_session_mode'],
+      );
+    } catch (_) {
+      return parseCashSessionMode(
+        (await _cachedRow(businessId))?['cash_session_mode'],
+      );
+    }
+  }
+
+  Future<void> setCashSessionMode({
+    required String businessId,
+    required String mode,
+  }) async {
+    await _client.from('business_settings').upsert({
+      'business_id': businessId,
+      'cash_session_mode': parseCashSessionMode(mode),
+    }, onConflict: 'business_id');
+  }
+
   /// Política de red del local (modo híbrido Hub LAN-first). 'cloud' (default)
   /// = cada caja habla directo con Supabase; 'hub' = la caja principal es el
   /// servidor central de la LAN y única subida. El rol del dispositivo es

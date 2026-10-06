@@ -179,7 +179,10 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       if (online) {
         try {
           cashSession = await _cashierRepo
-              .requireActiveSession(businessId: businessId)
+              .requireActiveSession(
+                businessId: businessId,
+                canOperateAnyDevice: _ref.read(sessionProvider).isOwnerOrAdmin,
+              )
               .timeout(_preReadTimeout);
         } catch (e) {
           if (!_isNetworkFailure(e)) rethrow;

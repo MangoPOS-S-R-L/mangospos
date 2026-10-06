@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/credits_repository.dart';
 import 'package:mangopos/data/utils/business_id_resolver.dart';
+import 'package:mangopos/services/session/session_controller.dart';
 import '../state/credit_payment_receipt.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
@@ -15,11 +16,17 @@ final creditsRepositoryProvider = Provider<CreditsRepository>((ref) {
 final creditsViewModelProvider = ChangeNotifierProvider<CreditsViewModel>((
   ref,
 ) {
-  return CreditsViewModel(ref.read(creditsRepositoryProvider));
+  return CreditsViewModel(
+    ref.read(creditsRepositoryProvider),
+    canOperateAnyDevice: () => ref.read(sessionProvider).isOwnerOrAdmin,
+  );
 });
 
 class CreditsViewModel extends ChangeNotifier {
   final CreditsRepository _repository;
+  // Dueño/admin cobran abonos desde cualquier equipo; el resto solo con la
+  // caja abierta en su equipo.
+  final bool Function()? _canOperateAnyDevice;
 
   bool _isLoading = false;
   String? _businessId;
@@ -27,7 +34,8 @@ class CreditsViewModel extends ChangeNotifier {
   List<Map<String, dynamic>> _receivables = [];
   List<Map<String, dynamic>> _payables = [];
 
-  CreditsViewModel(this._repository);
+  CreditsViewModel(this._repository, {bool Function()? canOperateAnyDevice})
+    : _canOperateAnyDevice = canOperateAnyDevice;
 
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -223,14 +231,29 @@ class CreditsViewModel extends ChangeNotifier {
     final bid = _businessId;
     if (bid == null) return null;
     final cashierRepo = CashierRepository(Supabase.instance.client);
-    final session = await cashierRepo.getCurrentUserActiveSessionForBusiness(
-      businessId: bid,
-    );
-    if (session == null && requiredForCash) {
+    // La caja es del equipo donde se abrió: el abono entra a la caja de ESTE
+    // equipo (dueño/admin: la suya o la del negocio). Antes era "mi caja en
+    // el negocio", que dejaba cobrar desde cualquier PC.
+    try {
+      final session = await cashierRepo.requireActiveSession(
+        businessId: bid,
+        canOperateAnyDevice: _canOperateAnyDevice?.call() ?? false,
+      );
+      return session.id;
+    } catch (e) {
+      final message = e.toString();
+      final onOtherDevice = message.contains(
+        CashierRepository.cashOnOtherDeviceMessage,
+      );
+      final noSession =
+          onOtherDevice ||
+          message.contains(CashierRepository.noCashSessionMessage);
+      if (!noSession) rethrow; // Red u otro error: que se vea tal cual.
+      if (!requiredForCash) return null;
+      if (onOtherDevice) rethrow;
       throw Exception(
         'Necesitas una caja abierta para recibir abonos en efectivo.',
       );
     }
-    return session?.id;
   }
 }

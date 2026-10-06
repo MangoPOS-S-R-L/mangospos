@@ -26,6 +26,15 @@ class RemovalVoucherTicket {
     double unitPrice = 0,
     DateTime? sentAt,
     String? operatorName,
+
+    /// Supervisor/Administrador que autorizó con su PIN, ya validado por el
+    /// servidor (20261005_0003). Con él, [operatorName] pasa a ser quien lo
+    /// quitó y no quien lo autorizó.
+    String? approverName,
+
+    /// Se autorizó con PIN de supervisor pero no se sabe el nombre (sin red:
+    /// el servidor todavía no lo confirmó).
+    bool approvedWithPin = false,
     String? currencySymbol,
     int paperWidth = 80,
     DateTime? removedAt,
@@ -106,8 +115,21 @@ class RemovalVoucherTicket {
     );
     gen.doubleSeparator();
 
-    if (operatorName != null && operatorName.isNotEmpty) {
-      gen.textWrapped('Autorizado por: ${operatorName.toUpperCase()}');
+    final operator = operatorName?.trim() ?? '';
+    final approver = approverName?.trim() ?? '';
+    if (approver.isNotEmpty || approvedWithPin) {
+      if (operator.isNotEmpty) {
+        gen.textWrapped('Quitado por: ${operator.toUpperCase()}');
+      }
+      gen.textWrapped(
+        approver.isNotEmpty
+            ? 'Autorizado por: ${approver.toUpperCase()}'
+            : 'Autorizado con PIN de supervisor',
+      );
+    } else if (operator.isNotEmpty) {
+      // Sin PIN de por medio: quien lo quitó tenía el permiso, así que él
+      // mismo lo autorizó.
+      gen.textWrapped('Autorizado por: ${operator.toUpperCase()}');
     }
 
     if (!forStation) {

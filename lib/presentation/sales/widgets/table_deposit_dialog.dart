@@ -111,7 +111,10 @@ class _TableDepositDialogState extends ConsumerState<TableDepositDialog> {
     if (businessId == null || businessId.isEmpty) return null;
     final session = await ref
         .read(cashierRepositoryProvider)
-        .requireActiveSession(businessId: businessId);
+        .requireActiveSession(
+          businessId: businessId,
+          canOperateAnyDevice: ref.read(sessionProvider).isOwnerOrAdmin,
+        );
     return session.id;
   }
 

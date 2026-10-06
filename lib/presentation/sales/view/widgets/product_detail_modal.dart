@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../data/models/order_item_removal_reason.dart';
+import '../../logic/unit_removal_plan.dart';
 import 'removal_reason_dialog.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import '../../viewmodel/menu_browser_viewmodel.dart';
@@ -46,6 +47,17 @@ class ProductDetailModal extends StatefulWidget {
   /// Texto del tooltip del "−" cuando está apagado por [reduceFloor].
   final String? reduceBlockedReason;
 
+  /// Pide autorización (PIN de supervisor) para bajar de [reduceFloor]. Con
+  /// valor, el "−" NO se apaga en el piso: al tocarlo pide el PIN y, si se
+  /// autoriza, el piso deja de aplicar en este modal. Sin esto el cajero no
+  /// podía quitar 1 de 6 ya enviadas y su única salida era «Eliminar».
+  final Future<bool> Function()? onAuthorizeReduce;
+
+  /// De dónde salen las unidades que se quitan (p. ej. qué subcuenta), para
+  /// avisarlo en el diálogo de motivo. Devuelve `null` si no hay nada que
+  /// avisar.
+  final String? Function(double quantity)? describeRemoval;
+
   /// Autoriza aplicar un descuento manual o cortesía NUEVO. Debe devolver true
   /// si el usuario tiene el permiso `ventas.orden.descuento_aplicar` o autoriza
   /// con PIN de supervisor; false si cancela. Si es null, no se exige
@@ -68,6 +80,8 @@ class ProductDetailModal extends StatefulWidget {
     this.addMoreBlockedReason,
     this.reduceFloor,
     this.reduceBlockedReason,
+    this.onAuthorizeReduce,
+    this.describeRemoval,
     this.onAuthorizeDiscount,
   });
 
@@ -109,6 +123,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   bool _isMarkingSoldOut = false;
   bool _isSaving = false;
   bool _isEditingModifiers = false;
+
+  /// Un supervisor ya autorizó bajar de [ProductDetailModal.reduceFloor].
+  bool _reduceUnlocked = false;
+  bool _authorizingReduce = false;
 
   @override
   void initState() {
@@ -169,13 +187,34 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   /// `true` si al ítem todavía se le pueden quitar unidades: por encima del
   /// mínimo de 1 y del piso de lo ya enviado a cocina.
   bool get _canReduce =>
-      _quantity > 1 && _quantity > (widget.reduceFloor ?? 0) + 0.0001;
+      _quantity > 1 &&
+      (_reduceUnlocked || _quantity > (widget.reduceFloor ?? 0) + 0.0001);
+
+  /// El "−" está en el piso pero se puede pedir PIN para pasarlo.
+  bool get _reduceNeedsAuth =>
+      !_canReduce &&
+      _quantity > 1 &&
+      !_reduceUnlocked &&
+      widget.onAuthorizeReduce != null;
 
   void _decrementQty() {
     if (!_canReduce) return;
     setState(() {
       _quantity = _normalizeQty(_quantity - 1);
     });
+  }
+
+  Future<void> _authorizeAndDecrement() async {
+    if (_authorizingReduce || widget.onAuthorizeReduce == null) return;
+    _authorizingReduce = true;
+    try {
+      final allowed = await widget.onAuthorizeReduce!();
+      if (!allowed || !mounted) return;
+      setState(() => _reduceUnlocked = true);
+      _decrementQty();
+    } finally {
+      _authorizingReduce = false;
+    }
   }
 
   Future<void> _handleDelete() async {
@@ -188,12 +227,17 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     // Motivo de una lista + qué pasa con el inventario (merma o devolución),
     // igual que Toast/Micros. Antes era un campo de texto libre que además
     // se tiraba a la basura al borrar.
+    //
+    // Con más de una unidad se escoge CUÁNTAS (1 marcada): antes «Eliminar»
+    // sobre «6 × Presidente» borraba las seis.
     final total = _scopedItems.fold<double>(0, (sum, i) => sum + i.quantity);
     final decision = await showRemovalReasonDialog(
       context,
       productName: widget.item.productName,
       quantity: total <= 0 ? widget.item.quantity : total,
       alreadySent: _scopedItems.any((i) => i.status != 'draft'),
+      chooseQuantity: canRemoveByUnits(_scopedItems),
+      describeRemoval: widget.describeRemoval,
     );
 
     if (decision != null) {
@@ -213,11 +257,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (_quantity < originalQuantity - 0.0001) {
       // Bajar la cantidad saca unidades de la cuenta igual que borrarlas:
       // mismo motivo, misma pregunta de inventario, mismo comprobante.
+      final removedQty = originalQuantity - _quantity;
       reduction = await showRemovalReasonDialog(
         context,
         productName: widget.item.productName,
-        quantity: originalQuantity - _quantity,
+        quantity: removedQty,
         alreadySent: _scopedItems.any((i) => i.status != 'draft'),
+        describeRemoval: widget.describeRemoval == null
+            ? null
+            : (_) => widget.describeRemoval!(removedQty),
       );
       if (reduction == null) return;
       if (!mounted) return;
@@ -281,7 +329,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       _isSaving = true;
     });
     try {
-      if (_isGroupedMode && widget.onSaveBatch != null) {
+      // Toda reducción va por el lote, también la de una sola línea: es el
+      // camino que guarda el motivo, pide el PIN si hace falta e imprime el
+      // comprobante. `onSave` lo descartaba.
+      if ((_isGroupedMode || reduction != null) && widget.onSaveBatch != null) {
         await widget.onSaveBatch!(_scopedItems, updated, reduction);
       } else {
         await widget.onSave(updated);
@@ -511,7 +562,11 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              onPressed: _canReduce ? _decrementQty : null,
+                              onPressed: _canReduce
+                                  ? _decrementQty
+                                  : _reduceNeedsAuth
+                                  ? _authorizeAndDecrement
+                                  : null,
                               icon: const Icon(Icons.remove, size: 20),
                               color: kTextSecondary,
                               disabledColor: kTextSecondary.withValues(
@@ -519,6 +574,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                               ),
                               tooltip: _canReduce
                                   ? null
+                                  : _reduceNeedsAuth
+                                  ? 'Pide PIN de supervisor'
                                   : widget.reduceBlockedReason,
                             ),
                             Container(

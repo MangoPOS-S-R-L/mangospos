@@ -73,6 +73,8 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.da
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
 import 'package:mangopos/presentation/sales/logic/payment_completion_gate.dart';
+import 'package:mangopos/presentation/sales/logic/unit_removal_plan.dart';
+import 'package:mangopos/core/utils/friendly_error.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/presentation/sales/widgets/table_deposit_dialog.dart';
@@ -130,14 +132,51 @@ Future<void> _afterRemoval(
   required OrderItemRemovalDecision decision,
   required bool alreadySent,
   String? tableName,
+
+  /// PIN del supervisor que autorizó (null si no hizo falta: dueño, permiso
+  /// propio o draft). Se manda al servidor para sellar quién autorizó.
+  String? approverPin,
+
+  /// Las líneas que salieron de la cuenta, para sellar cada retiro.
+  List<String> removedItemIds = const [],
 }) async {
   final session = ref.read(sessionProvider);
   final businessId = session.activeBusinessId ?? '';
   final waiter = ref.read(activeWaiterProvider);
-  final operatorName = waiter == null
+  final orderId = ref.read(currentOrderProvider).order?.id ?? '';
+
+  // 0. Quién autorizó: el servidor valida el PIN y lo sella en
+  //    order_item_removals (20261005_0003). Va antes del papel para que el
+  //    comprobante lleve el nombre. Sin red o con el retiro aún en cola no
+  //    hay qué sellar: el papel dice igual que hubo PIN.
+  String? approverName;
+  if (approverPin != null && removedItemIds.isNotEmpty) {
+    final repo = ref.read(salesRepositoryProvider);
+    try {
+      final results = await Future.wait([
+        for (final id in removedItemIds.toSet())
+          repo.approveItemRemoval(itemId: id, approverPin: approverPin),
+      ]).timeout(const Duration(seconds: 4));
+      for (final result in results) {
+        approverName ??= result.approverName;
+      }
+    } catch (e) {
+      debugPrint('[removals] sello del aprobador sin respuesta: $e');
+    }
+  }
+
+  // Con PIN de supervisor, el operador es quien LO QUITÓ: si no hay mesero
+  // con PIN, la cuenta logueada (el cajero).
+  final waiterName = waiter == null
       ? null
       : '${waiter.firstName} ${waiter.lastName ?? ''}'.trim();
-  final orderId = ref.read(currentOrderProvider).order?.id ?? '';
+  final sessionName = session.userName?.trim();
+  final operatorName =
+      waiterName ??
+      (approverPin != null && sessionName != null && sessionName.isNotEmpty
+          ? sessionName
+          : null);
+  if (!context.mounted) return;
 
   // 1. El comprobante sale SIEMPRE: es el papel que queda del hecho.
   await RemovalVoucherPrinting.print(
@@ -154,6 +193,8 @@ Future<void> _afterRemoval(
         : null,
     unitPrice: item.unitPrice,
     operatorName: operatorName,
+    approverName: approverName,
+    approvedWithPin: approverPin != null,
   );
 
   // 2. Aviso a la estación solo si la comanda YA salió: el bar tiene el papel
@@ -171,6 +212,8 @@ Future<void> _afterRemoval(
           note: decision.note,
           isWaste: decision.isWaste,
           operatorName: operatorName,
+          approverName: approverName,
+          approvedWithPin: approverPin != null,
         ),
   );
 }
@@ -184,8 +227,23 @@ Future<bool> _ensureCanDeleteOrderItem(
   /// quitar algo del carrito antes de confirmar. La proteccion con PIN
   /// solo aplica cuando el item ya salio impreso a cocina/bar.
   required bool isDraft,
+}) async => (await _requestRemovalAuthorization(
+  context,
+  ref,
+  isDraft: isDraft,
+)).allowed;
+
+/// Igual que [_ensureCanDeleteOrderItem], pero devuelve también el PIN del
+/// supervisor que autorizó (null si no hizo falta PIN). El PIN se manda
+/// después al servidor, que lo vuelve a validar y deja constancia de quién
+/// autorizó (`fn_approve_order_item_removal`, 20261005_0003).
+Future<({bool allowed, String? approverPin})> _requestRemovalAuthorization(
+  BuildContext context,
+  WidgetRef ref, {
+  required bool isDraft,
 }) async {
-  if (isDraft) return true;
+  const noPin = (allowed: true, approverPin: null);
+  if (isDraft) return noPin;
 
   // El owner pasa directo, igual que quien tenga `ventas.orden.eliminar_item`
   // concedido en su perfil de acceso. Cualquier otro debe escribir PIN de
@@ -195,20 +253,21 @@ Future<bool> _ensureCanDeleteOrderItem(
   // El chequeo de permiso faltaba acá aunque el mismo gate en cuentas
   // divididas (split_bill_modal.dart) sí lo hacía: borrar un item desde la
   // mesa pedía PIN y borrarlo desde la subcuenta no.
-  if (operatorIsOwner(ref)) return true;
+  if (operatorIsOwner(ref)) return noPin;
   if (operatorHasPermission(ref, 'ventas.orden.eliminar_item')) {
-    return true;
+    return noPin;
   }
 
-  final authorized = await showPinVerificationModal(
+  // Valida igual que antes (Supervisor/Administrador) y además devuelve el
+  // PIN para que el servidor selle quién autorizó.
+  final pin = await showSupervisorPinCaptureModal(
     context,
     ref,
-    level: PinAccessLevel.supervisor,
     title: 'Autorización para eliminar',
     subtitle:
         'Se requiere PIN de Supervisor o Administrador para reducir o eliminar este producto.',
   );
-  return authorized;
+  return (allowed: pin != null, approverPin: pin);
 }
 
 const List<BoxShadow> _salesSoftShadow = [
@@ -3658,6 +3717,90 @@ class _CartView extends ConsumerWidget {
     return s != 'draft' && s != 'open' && s != 'void' && s != 'paid';
   }
 
+  /// `true` si los cambios a [row] no pueden ir directo al servidor y deben
+  /// pasar por la cola de la caja: sin red, caja cliente del Hub (WAN malo) u
+  /// orden que todavía es local.
+  bool _mustQueueItemEdits(WidgetRef ref, OrderItem row) =>
+      !ConnectivityService().isConnected ||
+      ref.read(hubModeProvider) == TerminalMode.hubClient ||
+      row.orderId.startsWith('local-order-');
+
+  /// Le quita unidades a UNA línea, sin borrarla, al eliminar «1 de N».
+  ///
+  /// Va en un solo UPDATE con la etiqueta `[REDUCCION:motivo]`: el trigger de
+  /// `order_item_removals` (20260919_0002) registra la reducción solo cuando
+  /// la cantidad baja y aparece una etiqueta nueva en la MISMA escritura. Las
+  /// notas y el descuento son los de ESA línea (no los del grupo), y el
+  /// descuento se prorratea para que una cortesía siga cubriendo justo lo que
+  /// queda. Devuelve `true` si la línea quedó con la cantidad nueva.
+  Future<bool> _trimLineForRemoval(
+    BuildContext context,
+    WidgetRef ref,
+    UnitRemovalStep step,
+    OrderItemRemovalDecision decision,
+  ) async {
+    final row = step.item;
+    final next = step.nextQuantity;
+    final orderNotifier = ref.read(currentOrderProvider.notifier);
+
+    // Sin red, caja cliente del Hub u orden local: la cantidad viaja por la
+    // cola de la caja. El registro del servidor no verá la etiqueta, pero el
+    // comprobante y el aviso al bar sí salen.
+    Future<bool> trimViaQueue() async {
+      await orderNotifier.updateItemQuantity(row.id, next);
+      for (final current in ref.read(currentOrderProvider).items) {
+        if (current.id == row.id) {
+          return (current.quantity - next).abs() < 0.0001;
+        }
+      }
+      return false;
+    }
+
+    if (_mustQueueItemEdits(ref, row)) return trimViaQueue();
+
+    final ratio = row.quantity > 0 ? next / row.quantity : 0.0;
+    final notes = [
+      if (row.notes?.trim().isNotEmpty == true) row.notes!.trim(),
+      '[REDUCCION:${decision.text}]',
+    ].join('\n');
+    try {
+      await ref
+          .read(salesRepositoryProvider)
+          .updateItemDetails(
+            itemId: row.id,
+            productName: row.productName,
+            quantity: next,
+            isTakeout: row.isTakeout,
+            discounts: double.parse((row.discounts * ratio).toStringAsFixed(2)),
+            notes: notes,
+          );
+    } catch (e) {
+      if (OfflinePosService.isTransportError(e)) return trimViaQueue();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showAppSnackBar(
+          SnackBar(
+            content: Text(
+              'No se pudo quitar ${row.productName}: '
+              '${FriendlyError.humanize(e.toString())}',
+            ),
+          ),
+        );
+      }
+      return false;
+    }
+    if (_itemAlreadySentToKitchen(row)) {
+      unawaited(
+        orderNotifier.noteItemRemoval(
+          row.id,
+          reason: decision.text,
+          reasonCode: decision.reason.code,
+          isWaste: decision.isWaste,
+        ),
+      );
+    }
+    return true;
+  }
+
   /// Agrega [qty] unidades de [source] como una línea DRAFT nueva, en el mismo
   /// check. Se usa al SUBIR la cantidad de un ítem ya enviado a cocina: la
   /// línea enviada conserva su qty y el incremento queda "por confirmar" →
@@ -3710,6 +3853,47 @@ class _CartView extends ConsumerWidget {
         : [item];
     final reduceFloor = _reduceFloor(ref, scopedItems);
 
+    // El PIN de supervisor vale para el modal entero: quien lo escribió para
+    // bajar la cantidad no lo vuelve a escribir al guardar ni al eliminar.
+    // El PIN queda guardado solo mientras el modal está abierto, para que el
+    // servidor selle quién autorizó cada retiro.
+    var supervisorAuthorized = false;
+    String? approverPin;
+    Future<bool> authorizeRemoval(
+      BuildContext dialogContext, {
+      required bool isDraft,
+    }) async {
+      if (isDraft || supervisorAuthorized) return true;
+      final authorization = await _requestRemovalAuthorization(
+        dialogContext,
+        ref,
+        isDraft: false,
+      );
+      if (authorization.allowed) {
+        supervisorAuthorized = true;
+        approverPin = authorization.approverPin;
+      }
+      return authorization.allowed;
+    }
+
+    // En «TODAS» el grupo junta líneas de varias subcuentas: el diálogo dice
+    // de cuál sale lo que se quita, en vez de tocar las otras a escondidas.
+    String? describeRemoval(double quantity) {
+      final checks = ref.read(currentOrderProvider).checks;
+      return describeRemovalAcrossChecks(
+        scopedItems,
+        quantity,
+        checkName: (checkId) {
+          for (final check in checks) {
+            if (check.id == checkId) {
+              return check.label.isEmpty ? 'C${check.position}' : check.label;
+            }
+          }
+          return 'Sin subcuenta';
+        },
+      );
+    }
+
     showDialog(
       context: context,
       builder: (context) => ProductDetailModal(
@@ -3720,6 +3904,10 @@ class _CartView extends ConsumerWidget {
         reduceBlockedReason:
             'Solo un supervisor puede quitar un producto que ya salió a '
             'cocina.',
+        onAuthorizeReduce: reduceFloor == null
+            ? null
+            : () => authorizeRemoval(context, isDraft: false),
+        describeRemoval: describeRemoval,
         // Aplicar un descuento manual o cortesía NUEVO requiere el permiso
         // `ventas.orden.descuento_aplicar`; si no, PIN de Supervisor. El mesero
         // (sin el permiso) no puede descontar sin autorización. El descuento
@@ -3794,11 +3982,7 @@ class _CartView extends ConsumerWidget {
             // no podría volver a 8 sin llamar a un supervisor.
             final sentQty = _sentQuantity(items);
             final eatsSentUnits = targetTotalQty < sentQty - 0.0001;
-            if (!await _ensureCanDeleteOrderItem(
-              context,
-              ref,
-              isDraft: !eatsSentUnits,
-            )) {
+            if (!await authorizeRemoval(context, isDraft: !eatsSentUnits)) {
               return;
             }
           }
@@ -3811,7 +3995,52 @@ class _CartView extends ConsumerWidget {
           // El target se redondea a entero porque el modal sólo permite
           // unidades enteras post-rediseño; el round es defensa.
           final isReducing = targetTotalQty < originalTotalQty;
+
+          // Una sola línea que no puede ir directo al servidor: el lote de
+          // abajo fallaría sin red, y `updateItem` sí sabe encolar. Es el
+          // camino que tomaba antes la reducción de una línea.
+          if (items.length == 1 && _mustQueueItemEdits(ref, items.single)) {
+            final row = items.single;
+            final notes = [
+              if (updatedItem.notes?.trim().isNotEmpty == true)
+                updatedItem.notes!.trim(),
+              if (reduction != null) '[REDUCCION:${reduction.text}]',
+            ].join('\n');
+            await orderNotifier.updateItem(
+              row.id,
+              updatedItem.copyWith(
+                quantity: targetTotalQty,
+                notes: notes.isEmpty ? null : notes,
+              ),
+            );
+            if (reduction == null || !context.mounted) return;
+            double? quantityNow;
+            for (final current in ref.read(currentOrderProvider).items) {
+              if (current.id == row.id) quantityNow = current.quantity;
+            }
+            if (quantityNow == null ||
+                (quantityNow - targetTotalQty).abs() > 0.0001) {
+              return;
+            }
+            await _afterRemoval(
+              context,
+              ref,
+              item: item,
+              quantity: row.quantity - targetTotalQty,
+              decision: reduction,
+              alreadySent: _itemAlreadySentToKitchen(row),
+              tableName: tableCode.isEmpty ? null : tableCode,
+              approverPin: approverPin,
+              removedItemIds: [row.id],
+            );
+            return;
+          }
+
           var remaining = targetTotalQty.round();
+          // Lo que DE VERDAD salió de la cuenta: un borrado que el servidor
+          // rechaza no cuenta para el comprobante.
+          var removedQty = 0.0;
+          final removedIds = <String>[];
 
           for (var index = 0; index < items.length; index++) {
             final current = items[index];
@@ -3873,12 +4102,16 @@ class _CartView extends ConsumerWidget {
             }
 
             if (nextQty <= 0.0001) {
-              await orderNotifier.deleteItem(
+              final deleted = await orderNotifier.deleteItem(
                 current.id,
                 reason: reduction?.text ?? 'Reducción de cantidad',
                 reasonCode: reduction?.reason.code,
                 isWaste: reduction?.isWaste,
               );
+              if (deleted) {
+                removedQty += current.quantity;
+                removedIds.add(current.id);
+              }
             } else {
               await salesRepo.updateItemDetails(
                 itemId: current.id,
@@ -3891,6 +4124,10 @@ class _CartView extends ConsumerWidget {
               // Línea ya enviada a la que se le bajó la cantidad: el
               // servidor la registra con el motivo de la etiqueta; acá va
               // quién fue y qué pasa con el inventario (merma o devolución).
+              if (nextQtyInt < currentQtyInt) {
+                removedQty += currentQtyInt - nextQtyInt;
+                removedIds.add(current.id);
+              }
               if (nextQtyInt < currentQtyInt &&
                   _itemAlreadySentToKitchen(current)) {
                 unawaited(
@@ -3912,52 +4149,78 @@ class _CartView extends ConsumerWidget {
 
           // Bajar la cantidad saca unidades de la cuenta igual que borrarlas:
           // mismo comprobante y mismo aviso al bar.
-          if (reduction != null && context.mounted) {
+          if (reduction != null && removedQty > 0 && context.mounted) {
             await _afterRemoval(
               context,
               ref,
               item: item,
-              quantity: originalTotalQty - targetTotalQty,
+              quantity: removedQty,
               decision: reduction,
               alreadySent: items.any(_itemAlreadySentToKitchen),
               tableName: tableCode.isEmpty ? null : tableCode,
+              approverPin: approverPin,
+              removedItemIds: removedIds,
             );
           }
         },
         onDelete: (decision) async {
-          // Fase 1 Toast redesign: si el modal se abrió desde TODAS (varias
-          // filas del mismo producto agrupadas porque están en distintos
-          // checks), borrar todo el grupo. Si se abrió desde una sub-cuenta
-          // (groupedItems == null o de tamaño 1), borrar sólo la fila actual.
-          // Esto evita el bug histórico donde "Eliminar" desde TODAS dejaba
-          // fantasmas en los otros checks.
+          // El grupo junta las líneas del producto: desde «TODAS», las de
+          // todas las subcuentas; desde una subcuenta, solo las suyas. Se
+          // quitan EXACTAMENTE las unidades que se escogieron en el diálogo
+          // (1 por defecto). Antes se borraba el grupo entero aunque el
+          // cajero quisiera quitar una, y si era lo único de la mesa la
+          // cuenta quedaba vacía y se liberaba al salir.
           final orderNotifier = ref.read(currentOrderProvider.notifier);
           final group = groupedItems;
           final rows = group != null && group.length > 1 ? group : [item];
-          for (final row in rows) {
-            await orderNotifier.deleteItem(
-              row.id,
-              reason: decision.text,
-              reasonCode: decision.reason.code,
-              isWaste: decision.isWaste,
-            );
+          final total = rows.fold<double>(0, (sum, r) => sum + r.quantity);
+          final wanted = decision.quantity;
+          final steps = wanted == null || wanted >= total - 0.0001
+              ? [
+                  for (final row in rows)
+                    UnitRemovalStep(item: row, nextQuantity: 0),
+                ]
+              : planUnitRemoval(rows, wanted);
+
+          var removedQty = 0.0;
+          var removedSent = false;
+          var trimmed = false;
+          final removedIds = <String>[];
+          for (final step in steps) {
+            final ok = step.deletesRow
+                ? await orderNotifier.deleteItem(
+                    step.item.id,
+                    reason: decision.text,
+                    reasonCode: decision.reason.code,
+                    isWaste: decision.isWaste,
+                  )
+                : await _trimLineForRemoval(context, ref, step, decision);
+            if (!ok) continue;
+            if (!step.deletesRow) trimmed = true;
+            removedQty += step.removedQuantity;
+            removedIds.add(step.item.id);
+            if (_itemAlreadySentToKitchen(step.item)) removedSent = true;
           }
-          if (!context.mounted) return;
-          final quitado = rows.fold<double>(0, (sum, r) => sum + r.quantity);
+          if (trimmed) await orderNotifier.refreshOrder();
+
+          // Si nada salió de la cuenta (el servidor lo rechazó), no hay
+          // comprobante ni aviso al bar: el error ya está en pantalla.
+          if (removedQty <= 0 || !context.mounted) return;
           await _afterRemoval(
             context,
             ref,
             item: item,
-            quantity: quitado <= 0 ? item.quantity : quitado,
+            quantity: removedQty,
             decision: decision,
-            alreadySent: rows.any(_itemAlreadySentToKitchen),
+            alreadySent: removedSent,
             tableName: tableCode.isEmpty ? null : tableCode,
+            approverPin: approverPin,
+            removedItemIds: removedIds,
           );
         },
-        onBeforeDelete: () => _ensureCanDeleteOrderItem(
+        onBeforeDelete: () => authorizeRemoval(
           context,
-          ref,
-          isDraft: item.status == 'draft',
+          isDraft: scopedItems.every((i) => i.status == 'draft'),
         ),
         // Agotar (86) esconde el producto del menu de TODAS las tablets y
         // solo se revierte desde Productos, asi que va detras de permiso.

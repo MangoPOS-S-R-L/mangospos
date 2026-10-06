@@ -9,6 +9,7 @@ import 'package:mangopos/presentation/cashier/viewmodel/cashier_viewmodel.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/utils/responsive_utils.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class OpenCashDialog extends ConsumerStatefulWidget {
   const OpenCashDialog({super.key});
@@ -114,33 +115,51 @@ class _OpenCashDialogState extends ConsumerState<OpenCashDialog> {
     });
 
     try {
-      final openedOffline =
-          await ref.read(cashierViewModelProvider).openBox(val);
+      final vm = ref.read(cashierViewModelProvider);
+      final outcome = await vm.openBox(val);
       HapticFeedback.mediumImpact();
       if (mounted) {
+        // Caja adoptada: no se abrio otra. Se dice de quien es para que el
+        // monto de apertura tecleado no se de por registrado.
+        final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+        final adoptedIsMine =
+            vm.lastSession?['user_id']?.toString() == currentUserId;
+        final (IconData icon, String text, Color color) = switch (outcome) {
+          CashOpenOutcome.opened => (
+            Icons.check_circle,
+            'Caja abierta exitosamente',
+            MangoColors.successGreen,
+          ),
+          CashOpenOutcome.openedOffline => (
+            Icons.sync_problem,
+            'Caja abierta sin conexión — pendiente de sincronizar',
+            MangoColors.primaryOrange,
+          ),
+          CashOpenOutcome.alreadyOpen => (
+            Icons.info,
+            adoptedIsMine
+                ? 'Ya tenías una caja abierta: se recuperó. No se abrió otra.'
+                : 'Ya había una caja abierta: trabajarás con ella. No se '
+                      'abrió otra.',
+            MangoColors.infoBlue,
+          ),
+        };
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showAppSnackBar(
           SnackBar(
             content: Row(
               children: [
-                Icon(
-                  openedOffline ? Icons.sync_problem : Icons.check_circle,
-                  color: Colors.white,
-                ),
+                Icon(icon, color: Colors.white),
                 SizedBox(width: context.wp(2)),
                 Expanded(
                   child: Text(
-                    openedOffline
-                        ? 'Caja abierta sin conexión — pendiente de sincronizar'
-                        : 'Caja abierta exitosamente',
+                    text,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
               ],
             ),
-            backgroundColor: openedOffline
-                ? MangoColors.primaryOrange
-                : MangoColors.successGreen,
+            backgroundColor: color,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),

@@ -134,6 +134,17 @@ class _CashierViewState extends ConsumerState<CashierView>
                 SizedBox(height: context.hp(1.5)),
               ],
 
+              // La caja que le toca esta en OTRO equipo (la suya, o la del
+              // negocio en "1 sola caja"). La caja es del equipo donde se
+              // abrio: desde aqui se toman pedidos pero no se cobra.
+              if (vm.cashElsewhere != null) ...[
+                _CashElsewhereBanner(
+                  message: vm.cashElsewhereMessage(),
+                  onMoveHere: _moveCashHere,
+                ),
+                SizedBox(height: context.hp(1.5)),
+              ],
+
               // Action Cards
               _ActionCardsSection(
                 isOpen: isOpen,
@@ -156,11 +167,75 @@ class _CashierViewState extends ConsumerState<CashierView>
   }
 
   void _showOpenCashDialog(BuildContext context) {
+    // Abrir aqui no sirve: el server no deja abrir otra (una caja por
+    // cajero / una por negocio en "1 sola caja"). Lo que si se puede es
+    // pasar esa caja a este equipo.
+    if (ref.read(cashierViewModelProvider).cashElsewhere != null) {
+      _moveCashHere();
+      return;
+    }
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => const OpenCashDialog(),
     );
+  }
+
+  /// "Caja pegada": pasa a este equipo la caja abierta en otro (apagado,
+  /// dañado o con la app reinstalada). El arqueo no cambia. Pide PIN de
+  /// supervisor salvo que la cuenta ya sea dueño/admin/supervisor; el server
+  /// lo vuelve a validar.
+  Future<void> _moveCashHere() async {
+    final vm = ref.read(cashierViewModelProvider);
+    if (vm.cashElsewhere == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pasar caja a este equipo'),
+        content: Text(
+          '${vm.cashElsewhereMessage()}\n\n'
+          'Si la pasas, la caja sigue con el mismo fondo y las mismas ventas, '
+          'pero solo este equipo podrá cobrar con ella. El otro equipo dejará '
+          'de poder usarla.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Pasar a este equipo'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    const selfApprovingRoles = {'owner', 'admin', 'manager'};
+    String? pin;
+    if (!selfApprovingRoles.contains(ref.read(sessionProvider).activeBusinessRole)) {
+      pin = await showSupervisorPinCaptureModal(
+        context,
+        ref,
+        title: 'Pasar caja a este equipo',
+        subtitle: 'Se requiere PIN de Supervisor o Administrador.',
+      );
+      if (pin == null || !mounted) return;
+    }
+
+    try {
+      await vm.moveCashElsewhereHere(approverPin: pin);
+      if (!mounted) return;
+      AppToast.success(context, 'La caja ahora está en este equipo.');
+    } on CashRegisterException catch (e) {
+      if (mounted) AppToast.error(context, e.message);
+    } catch (e) {
+      if (mounted) {
+        AppToast.error(context, 'No se pudo pasar la caja a este equipo.');
+      }
+    }
   }
 
   Future<void> _showCloseCashDialog() async {
@@ -754,6 +829,51 @@ class _OtherCashOpenBanner extends StatelessWidget {
   }
 }
 
+class _CashElsewhereBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback onMoveHere;
+
+  const _CashElsewhereBanner({required this.message, required this.onMoveHere});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.devices_other, color: AppColors.warning, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(fontSize: 13, height: 1.35),
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: onMoveHere,
+              icon: const Icon(Icons.move_down_rounded, size: 18),
+              label: const Text('Pasar caja a este equipo'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HeaderSection extends StatelessWidget {
   final CashierViewModel viewModel;
   final bool isOpen;
@@ -763,8 +883,8 @@ class _HeaderSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final session = viewModel.lastSession;
-    final registerName = viewModel.currentRegisterName.trim().isNotEmpty
-        ? viewModel.currentRegisterName.trim()
+    final registerName = viewModel.displayRegisterName.trim().isNotEmpty
+        ? viewModel.displayRegisterName.trim()
         : 'Caja sin configurar';
 
     // Format last closed date

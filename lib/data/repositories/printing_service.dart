@@ -1463,6 +1463,8 @@ class PrintingService {
     String? note,
     required bool isWaste,
     String? operatorName,
+    String? approverName,
+    bool approvedWithPin = false,
   }) async {
     final avisadas = <String>[];
     try {
@@ -1506,6 +1508,8 @@ class PrintingService {
               tableName: orderData['tableName']?.toString(),
               orderNumber: orderData['orderNumber']?.toString(),
               operatorName: operatorName,
+              approverName: approverName,
+              approvedWithPin: approvedWithPin,
               paperWidth: printer.paperWidth,
               forStation: true,
             ).escPosCommands;

@@ -2257,13 +2257,35 @@ class OfflinePosService {
         // remoto). Guardamos el mapping local→remoto para que los
         // payments encolados después con cashier_session_id local
         // puedan traducirse al remoto en su propio replay.
-        final response = await cashierRepository.openSession(
-          cashRegisterId: action['cash_register_id']?.toString() ?? '',
-          userId: action['user_id']?.toString() ?? '',
-          startAmount: ((action['start_amount'] ?? 0) as num).toDouble(),
-          deviceId: action['device_id']?.toString() ?? '',
-          deviceName: action['device_name']?.toString(),
-        );
+        Map<String, dynamic> response;
+        try {
+          response = await cashierRepository.openSession(
+            cashRegisterId: action['cash_register_id']?.toString() ?? '',
+            userId: action['user_id']?.toString() ?? '',
+            startAmount: ((action['start_amount'] ?? 0) as num).toDouble(),
+            deviceId: action['device_id']?.toString() ?? '',
+            deviceName: action['device_name']?.toString(),
+          );
+        } on CashRegisterException catch (e) {
+          // Mientras este equipo estaba sin red, ya habia una caja abierta en
+          // el server que le tocaba (modo "1 sola caja", o la del mismo
+          // cajero/equipo). Sin esto la apertura local moria y arrastraba
+          // cada cobro encolado contra su id local. Solo se adopta si el
+          // server confirma que esa caja es de ESTE negocio.
+          final existing = e.existingSessionId;
+          if (existing == null ||
+              existing.isEmpty ||
+              e.existingBusinessId != businessId) {
+            rethrow;
+          }
+          debugPrint(
+            '[offline] open_cash_session: ya habia caja abierta '
+            '($existing, ${e.errorCode}); los cobros locales se cuelgan de '
+            'ella. Monto de apertura local descartado: '
+            '${action['start_amount']}',
+          );
+          response = {'session_id': existing};
+        }
         final remoteSessionId = response['session_id']?.toString();
         final localSessionId = action['local_session_id']?.toString();
         if (remoteSessionId != null &&

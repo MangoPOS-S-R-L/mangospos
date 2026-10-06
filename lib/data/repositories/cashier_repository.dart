@@ -15,10 +15,18 @@ class CashRegisterException implements Exception {
   final String message;
   final int? openTablesCount;
 
+  /// En los rechazos de apertura por conflicto (dispositivo, usuario o modo
+  /// "1 sola caja"), la caja abierta que causo el rechazo y su negocio. Es lo
+  /// que permite adoptarla en vez de dejar al cajero sin caja.
+  final String? existingSessionId;
+  final String? existingBusinessId;
+
   const CashRegisterException({
     required this.errorCode,
     required this.message,
     this.openTablesCount,
+    this.existingSessionId,
+    this.existingBusinessId,
   });
 
   @override
@@ -105,54 +113,66 @@ class CashierRepository {
     }
   }
 
-  /// Sesión de caja con la que se debe registrar un cobro.
+  /// Sin caja con la que cobrar en el negocio.
+  static const String noCashSessionMessage =
+      'No hay sesión de caja abierta. Por favor, abre una sesión antes de '
+      'procesar pagos.';
+
+  /// Hay caja en el negocio, pero no en este equipo (y no es dueño/admin).
+  /// Conserva "sesión de caja" para que el modal de cobro ofrezca "IR A CAJA",
+  /// donde está el botón para pasar la caja a este equipo.
+  static const String cashOnOtherDeviceMessage =
+      'Este equipo no tiene la sesión de caja abierta. Para cobrar ve al '
+      'equipo donde está abierta la caja, o pásala a este equipo desde Caja.';
+
+  /// Sesión de caja con la que se registra un cobro desde ESTE equipo.
   ///
-  /// El modelo del POS es "una caja abierta por REGISTRADORA, visible para
-  /// todos los empleados del local" (ver `cashier_viewmodel`: la pantalla de
-  /// Caja usa `getActiveSessionForRegister`, sin filtro de usuario). Filtrar
-  /// aquí solo por `user_id` rompía ese modelo: si la caja la abrió otro
-  /// usuario (cambio de turno, cajero que abrió y admin que cobra), la
-  /// pantalla decía "Caja Abierta" y el modal de cobro respondía "No hay
-  /// sesión de caja abierta".
+  /// La caja es del equipo y la registradora donde se abrió: un cajero o
+  /// mesero solo cobra con la caja abierta en su equipo. Dueño y admin
+  /// ([canOperateAnyDevice]) cobran desde cualquier equipo. Ver
+  /// [pickChargeSession]. El arqueo no depende del dueño de la sesión:
+  /// `cash_transactions` se agrupan por `session_id`.
   ///
-  /// Orden de resolución: sesión propia primero (si tienes la tuya, cobras
-  /// contra la tuya); si no hay, la caja abierta desde ESTE equipo; y si
-  /// tampoco, la caja abierta del negocio. El arqueo no depende del dueño de
-  /// la sesión: `cash_transactions` se agrupan por `session_id`.
-  Future<CashRegisterSession> requireActiveSession({String? businessId}) async {
+  /// Sin [businessId] se conserva el camino viejo: la caja propia, en
+  /// cualquier negocio.
+  Future<CashRegisterSession> requireActiveSession({
+    String? businessId,
+    required bool canOperateAnyDevice,
+  }) async {
     final userId = _client.auth.currentUser?.id;
 
-    Map<String, dynamic>? data;
-
-    if (userId != null) {
-      // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
-      // bug previo de cierre), tomamos la más reciente en lugar de crashear
-      // con PostgrestException 406. Idem en las otras getActive* abajo.
-      data = await _client
-          .from('cash_register_sessions')
-          .select()
-          .eq('user_id', userId)
-          .eq('status', 'open')
-          .isFilter('closed_at', null)
-          .order('created_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-    }
-
-    if (data == null && businessId != null && businessId.isNotEmpty) {
-      final session = await getActiveSessionForBusiness(
-        businessId,
-        deviceId: await DeviceUtils.getDeviceId(),
+    if (businessId != null && businessId.isNotEmpty) {
+      final openSessions = await getOpenSessionsForBusiness(businessId);
+      String? deviceId;
+      try {
+        deviceId = await DeviceUtils.getDeviceId();
+      } catch (_) {}
+      final picked = pickChargeSession(
+        openSessions,
+        userId: userId,
+        deviceId: deviceId,
+        canOperateAnyDevice: canOperateAnyDevice,
       );
-      if (session != null) return session;
-    }
-
-    if (data == null) {
+      if (picked != null) return CashRegisterSession.fromMap(picked);
       throw Exception(
-        'No hay sesión de caja abierta. Por favor, abre una sesión antes de procesar pagos.',
+        openSessions.isEmpty ? noCashSessionMessage : cashOnOtherDeviceMessage,
       );
     }
 
+    if (userId == null) throw Exception(noCashSessionMessage);
+    // Defensive: si hay 2+ sesiones abiertas para el mismo user (drift por
+    // bug previo de cierre), tomamos la más reciente en lugar de crashear
+    // con PostgrestException 406. Idem en las otras getActive* abajo.
+    final data = await _client
+        .from('cash_register_sessions')
+        .select()
+        .eq('user_id', userId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+    if (data == null) throw Exception(noCashSessionMessage);
     return CashRegisterSession.fromMap(data);
   }
 
@@ -233,6 +253,8 @@ class CashierRepository {
       throw CashRegisterException(
         errorCode: response['error_code']?.toString() ?? 'CONFLICT',
         message: response['error']?.toString() ?? 'Error al abrir la caja.',
+        existingSessionId: response['session_id']?.toString(),
+        existingBusinessId: response['business_id']?.toString(),
       );
     }
 
@@ -649,37 +671,229 @@ class CashierRepository {
     return List<Map<String, dynamic>>.from(data);
   }
 
-  /// De las cajas abiertas de la registradora, la que le toca a este
-  /// usuario/equipo: la suya primero y, si no tiene, la abierta desde este
-  /// mismo dispositivo (turno heredado en la misma estacion).
+  /// Cajas abiertas de TODAS las registradoras del negocio, en crudo y de la
+  /// mas reciente a la mas vieja.
+  ///
+  /// La pantalla de Caja buscaba "mi caja" solo en la registradora de ESTE
+  /// equipo, mientras que el bloqueo de apertura (cliente y RPC) la busca en
+  /// todo el negocio. Si el equipo quedo atado a otra registradora (o a una
+  /// "Caja principal" duplicada), el cajero veia "no tienes caja", no podia
+  /// vender, y al abrir le respondian "ya tienes una caja abierta". Las dos
+  /// preguntas tienen que mirar el mismo universo.
+  ///
+  /// Cada fila trae `cash_register_name` (aplanado del join) para que la
+  /// pantalla diga de que caja es la sesion cuando no es la del equipo.
+  Future<List<Map<String, dynamic>>> getOpenSessionsForBusiness(
+    String businessId, {
+    int limit = 50,
+  }) async {
+    final data = await _client
+        .from('cash_register_sessions')
+        .select('*, cash_registers!inner(business_id, name)')
+        .eq('cash_registers.business_id', businessId)
+        .eq('status', 'open')
+        .isFilter('closed_at', null)
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return (data as List).map((raw) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      final register = row.remove('cash_registers');
+      if (register is Map) {
+        row['cash_register_name'] = register['name']?.toString();
+      }
+      return row;
+    }).toList();
+  }
+
+  /// De las cajas abiertas, la que le toca a este usuario/equipo. Orden:
+  ///
+  ///  1. la del usuario abierta desde ESTE equipo,
+  ///  2. la del usuario en la registradora del equipo,
+  ///  3. la del usuario en cualquier registradora del negocio (cambio de PC
+  ///     o equipo atado a otra registradora: es SU caja y el server no le
+  ///     deja abrir otra),
+  ///  4. la abierta desde este mismo dispositivo (turno heredado en la misma
+  ///     estacion).
+  ///
+  /// Los pasos 1-2 solo desempatan cuando el usuario tiene mas de una abierta
+  /// (el dueño esta exento de "una caja por usuario").
   ///
   /// Devolver null significa "no tengo caja abierta", y es lo que habilita
-  /// el boton "Abrir caja" a una segunda cajera mientras la primera opera la
-  /// suya en otro equipo. Antes la pantalla usaba la caja abierta mas
-  /// reciente de la registradora fuera de quien fuera, asi que la segunda
-  /// veia "Caja abierta" y el boton de cerrar apuntaba a la ajena.
+  /// el boton "Abrir caja" en modo multi caja.
   ///
   /// Funcion pura para poder testear la precedencia sin red.
   static Map<String, dynamic>? pickOwnOpenSession(
     List<Map<String, dynamic>> openSessions, {
     String? userId,
     String? deviceId,
+    String? registerId,
   }) {
     if (openSessions.isEmpty) return null;
 
+    bool hasValue(String? v) => v != null && v.isNotEmpty;
+    bool isUser(Map<String, dynamic> s) =>
+        hasValue(userId) && s['user_id']?.toString() == userId;
+    bool isDevice(Map<String, dynamic> s) =>
+        hasValue(deviceId) && s['device_id']?.toString() == deviceId;
+    bool isRegister(Map<String, dynamic> s) =>
+        hasValue(registerId) && s['cash_register_id']?.toString() == registerId;
+
+    Map<String, dynamic>? firstWhere(bool Function(Map<String, dynamic>) test) {
+      for (final session in openSessions) {
+        if (test(session)) return session;
+      }
+      return null;
+    }
+
+    return firstWhere((s) => isUser(s) && isDevice(s)) ??
+        firstWhere((s) => isUser(s) && isRegister(s)) ??
+        firstWhere(isUser) ??
+        firstWhere(isDevice);
+  }
+
+  /// Modo "1 sola caja": la caja del negocio con la que trabaja todo el que
+  /// entre, sea de quien sea. Prefiere la de la registradora del equipo y,
+  /// si no hay, la mas reciente del negocio ([openSessions] viene ordenada
+  /// de la mas reciente a la mas vieja).
+  ///
+  /// Funcion pura para poder testear la precedencia sin red.
+  static Map<String, dynamic>? pickSharedOpenSession(
+    List<Map<String, dynamic>> openSessions, {
+    String? registerId,
+  }) {
+    if (openSessions.isEmpty) return null;
+    if (registerId != null && registerId.isNotEmpty) {
+      for (final session in openSessions) {
+        if (session['cash_register_id']?.toString() == registerId) {
+          return session;
+        }
+      }
+    }
+    return openSessions.first;
+  }
+
+  /// Caja de ESTE equipo, de entre las abiertas del negocio.
+  ///
+  /// La caja es del equipo y la registradora donde se abrió:
+  ///  - Cajero/mesero/supervisor: `operable` es solo la abierta EN ESTE
+  ///    equipo (la suya primero; si no, la que quedó del turno anterior en
+  ///    la misma estación). Si no hay, `elsewhere` es su caja en otro equipo
+  ///    o, en "1 sola caja", la del negocio: se informa y se puede pasar a
+  ///    este equipo con PIN, pero no se cobra con ella desde aquí.
+  ///  - Dueño/admin ([canOperateAnyDevice]): operan desde cualquier equipo.
+  ///    `operable` es su caja en el negocio, la de este equipo o, en "1 sola
+  ///    caja", la del negocio. Nunca hay `elsewhere`.
+  ///
+  /// Función pura para poder testear la precedencia sin red.
+  static ({Map<String, dynamic>? operable, Map<String, dynamic>? elsewhere})
+  resolveDeviceCash(
+    List<Map<String, dynamic>> openSessions, {
+    String? userId,
+    String? deviceId,
+    String? registerId,
+    required bool singleMode,
+    required bool canOperateAnyDevice,
+  }) {
+    if (canOperateAnyDevice) {
+      final operable =
+          pickOwnOpenSession(
+            openSessions,
+            userId: userId,
+            deviceId: deviceId,
+            registerId: registerId,
+          ) ??
+          (singleMode
+              ? pickSharedOpenSession(openSessions, registerId: registerId)
+              : null);
+      return (operable: operable, elsewhere: null);
+    }
+
+    final onThisDevice = (deviceId == null || deviceId.isEmpty)
+        ? const <Map<String, dynamic>>[]
+        : openSessions
+              .where((s) => s['device_id']?.toString() == deviceId)
+              .toList();
+    final operable = pickOwnOpenSession(
+      onThisDevice,
+      userId: userId,
+      deviceId: deviceId,
+      registerId: registerId,
+    );
+    if (operable != null) return (operable: operable, elsewhere: null);
+
+    Map<String, dynamic>? own;
     if (userId != null && userId.isNotEmpty) {
       for (final session in openSessions) {
-        if (session['user_id']?.toString() == userId) return session;
+        if (session['user_id']?.toString() == userId) {
+          own = session;
+          break;
+        }
       }
     }
+    return (
+      operable: null,
+      elsewhere:
+          own ??
+          (singleMode
+              ? pickSharedOpenSession(openSessions, registerId: registerId)
+              : null),
+    );
+  }
 
-    if (deviceId != null && deviceId.isNotEmpty) {
-      for (final session in openSessions) {
-        if (session['device_id']?.toString() == deviceId) return session;
-      }
-    }
+  /// Caja contra la que puede COBRAR este equipo. Cajero/mesero: solo la de
+  /// este equipo. Dueño/admin: la suya, la de este equipo o, si no, la del
+  /// negocio (cobran desde cualquier equipo).
+  ///
+  /// Función pura para poder testear la precedencia sin red.
+  static Map<String, dynamic>? pickChargeSession(
+    List<Map<String, dynamic>> openSessions, {
+    String? userId,
+    String? deviceId,
+    String? registerId,
+    required bool canOperateAnyDevice,
+  }) {
+    final resolved = resolveDeviceCash(
+      openSessions,
+      userId: userId,
+      deviceId: deviceId,
+      registerId: registerId,
+      singleMode: true,
+      canOperateAnyDevice: canOperateAnyDevice,
+    );
+    return resolved.operable;
+  }
 
-    return null;
+  /// Pasa una caja abierta a ESTE equipo ("caja pegada" en un equipo
+  /// apagado, dañado o con la app reinstalada). El arqueo no cambia: mismas
+  /// ventas, mismo fondo. El equipo viejo deja de poder usarla.
+  ///
+  /// [approverPin]: PIN de supervisor/admin. El server lo valida y lo exige
+  /// salvo que la cuenta logueada ya sea dueño/admin/supervisor.
+  Future<void> moveSessionToDevice({
+    required String sessionId,
+    required String deviceId,
+    String? deviceName,
+    String? approverPin,
+  }) async {
+    final response = Map<String, dynamic>.from(
+      await _client.rpc(
+        'fn_move_cash_session_to_device',
+        params: {
+          'p_session_id': sessionId,
+          'p_device_id': deviceId,
+          'p_device_name': deviceName,
+          'p_approver_pin': approverPin,
+        },
+      ),
+    );
+    if (response['success'] == true) return;
+    throw CashRegisterException(
+      errorCode: response['error_code']?.toString() ?? 'MOVE_FAILED',
+      message: response['error']?.toString() ??
+          'No se pudo pasar la caja a este equipo.',
+      existingSessionId: response['session_id']?.toString(),
+      existingBusinessId: response['business_id']?.toString(),
+    );
   }
 
   Future<List<CashRegisterSession>> getSessionsByRegister(

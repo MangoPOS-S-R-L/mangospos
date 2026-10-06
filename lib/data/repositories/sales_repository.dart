@@ -2142,6 +2142,40 @@ class SalesRepository {
     }
   }
 
+  /// Deja constancia de QUIÉN autorizó con su PIN de Supervisor/Administrador
+  /// el retiro que esta cuenta acaba de hacer de [itemId]
+  /// (`order_item_removals.approved_by_*`, migración 20261005_0003).
+  ///
+  /// El servidor vuelve a validar [approverPin]: no le cree a la app. Llamar
+  /// DESPUÉS de borrar o reducir, cuando la fila del registro ya existe.
+  /// Devuelve el nombre del aprobador para el comprobante. Nunca lanza: sin
+  /// la migración, sin red o con el retiro todavía en cola, simplemente
+  /// devuelve `approved: false`.
+  Future<({bool approved, String? approverName})> approveItemRemoval({
+    required String itemId,
+    required String approverPin,
+  }) async {
+    try {
+      final result = await _client.rpc(
+        SalesQueries.rpcApproveItemRemoval,
+        params: {'p_item_id': itemId, 'p_approver_pin': approverPin},
+      );
+      if (result is Map && result['approved'] == true) {
+        final name = result['approver_name']?.toString().trim();
+        return (
+          approved: true,
+          approverName: name == null || name.isEmpty ? null : name,
+        );
+      }
+      if (result is Map) {
+        debugPrint('[removals] aprobación no sellada: ${result['error_code']}');
+      }
+    } catch (e) {
+      debugPrint('[removals] no se pudo sellar el aprobador: $e');
+    }
+    return (approved: false, approverName: null);
+  }
+
   /// Los motivos configurados para quitar un producto de la cuenta. Si el
   /// servidor todavía no tiene el catálogo (migración 20260920_0002), se
   /// devuelven los de fábrica: sin esto el cajero no podría borrar nada.

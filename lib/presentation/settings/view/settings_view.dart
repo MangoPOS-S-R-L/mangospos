@@ -612,7 +612,7 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
           ),
           const _SettingsOption(
             title: 'Cajas',
-            subtitle: 'Configuración de puntos de venta',
+            subtitle: 'Modo 1 sola caja o multi caja, impresora por caja',
             icon: Icons.point_of_sale_rounded,
             color: Color(0xFFE6F7EE),
             route: AppRoutes.settingsCashRegisters,

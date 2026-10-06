@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/presentation/sales/viewmodel/payment_split_viewmodel.dart';
 
 /// Con qué caja se cobra una mesa.
@@ -51,49 +52,60 @@ void main() {
     });
   });
 
-  group('pickRegisterSessionForCharge: qué caja de la registradora', () {
+  group('pickChargeSession: la caja es del equipo donde se abrió', () {
     final cajera = session('de-la-cajera', userId: 'u-cajera', deviceId: 'd1');
     final otra = session('de-otra', userId: 'u-otra', deviceId: 'd2');
 
+    String? charge(
+      List<Map<String, dynamic>> open, {
+      required String userId,
+      required String deviceId,
+      bool admin = false,
+    }) => PaymentSplitViewModel.openSessionIdOf(
+      CashierRepository.pickChargeSession(
+        open,
+        userId: userId,
+        deviceId: deviceId,
+        canOperateAnyDevice: admin,
+      ),
+    );
+
     test('sin cajas abiertas no hay con qué cobrar', () {
+      expect(charge(const [], userId: 'u-cajera', deviceId: 'd1'), isNull);
+    });
+
+    test('la cajera en SU equipo cobra con su caja', () {
       expect(
-        PaymentSplitViewModel.pickRegisterSessionForCharge(
-          const [],
-          userId: 'u-cajera',
-          deviceId: 'd1',
-        ),
+        charge([otra, cajera], userId: 'u-cajera', deviceId: 'd1'),
+        'de-la-cajera',
+      );
+    });
+
+    test('la cajera en OTRO equipo no cobra con su caja', () {
+      expect(charge([otra, cajera], userId: 'u-cajera', deviceId: 'd9'), isNull);
+    });
+
+    test('quien entra en el equipo de la caja cobra con ella', () {
+      expect(
+        charge([otra, cajera], userId: 'u-relevo', deviceId: 'd1'),
+        'de-la-cajera',
+      );
+    });
+
+    test('el mesero en su tableta NO cobra (pedidos sí, cobro no)', () {
+      expect(
+        charge([otra, cajera], userId: 'u-mesero', deviceId: 'd-tableta'),
         isNull,
       );
     });
 
-    test('la mía primero, aunque haya otra más reciente', () {
+    test('dueño/admin cobran desde cualquier equipo', () {
       expect(
-        PaymentSplitViewModel.pickRegisterSessionForCharge(
-          [otra, cajera],
-          userId: 'u-cajera',
-          deviceId: 'd9',
-        ),
-        'de-la-cajera',
-      );
-    });
-
-    test('sin caja propia, la abierta desde este equipo', () {
-      expect(
-        PaymentSplitViewModel.pickRegisterSessionForCharge(
+        charge(
           [otra, cajera],
           userId: 'u-dueno',
-          deviceId: 'd1',
-        ),
-        'de-la-cajera',
-      );
-    });
-
-    test('el mesero en su tableta cobra contra la más reciente', () {
-      expect(
-        PaymentSplitViewModel.pickRegisterSessionForCharge(
-          [otra, cajera],
-          userId: 'u-mesero',
           deviceId: 'd-tableta',
+          admin: true,
         ),
         'de-otra',
       );

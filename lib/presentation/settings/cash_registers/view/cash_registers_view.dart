@@ -5,6 +5,7 @@ import 'package:mangopos/app/router/routes.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
+import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/models/printing.dart' show PrinterConfig;
 import 'package:mangopos/data/utils/business_id_resolver.dart';
@@ -25,6 +26,9 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
   List<PrinterConfig> _printers = [];
   bool _loading = true;
   String? _error;
+  String? _businessId;
+  String _cashSessionMode = PosSettingsRepository.cashSessionSingle;
+  bool _savingMode = false;
 
   @override
   void initState() {
@@ -53,10 +57,15 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
 
       final registers = await cashierRepo.getCashRegistersWithPrinter(businessId);
       final printers = await printingRepo.getPrinters(businessId);
+      final mode = await ref
+          .read(posSettingsRepositoryProvider)
+          .getCashSessionMode(businessId);
 
       setState(() {
+        _businessId = businessId;
         _registers = registers;
         _printers = printers.where((p) => p.isActive).toList();
+        _cashSessionMode = mode;
         _loading = false;
       });
     } catch (e) {
@@ -137,14 +146,12 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
             name: name,
           );
       // Si es la registradora de este equipo, el nombre cacheado quedaria
-      // viejo en el encabezado de Caja hasta el proximo arranque.
-      final vm = ref.read(cashierViewModelProvider);
-      if (vm.currentRegisterId == registerId) {
-        await vm.selectRegisterForDevice(
-          registerId: registerId,
-          registerName: name,
-        );
-      }
+      // viejo en el encabezado de Caja hasta el proximo arranque. Solo se
+      // actualiza el nombre: re-atar la registradora falla con la caja
+      // abierta y el toast decia "Error al renombrar" aunque si se renombro.
+      ref
+          .read(cashierViewModelProvider)
+          .updateCurrentRegisterName(registerId, name);
       await _load();
       if (mounted) {
         AppToast.success(context, 'Caja renombrada.');
@@ -240,6 +247,81 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
     }
   }
 
+  /// "1 sola caja" vs multi caja. Pasar a "1 sola caja" con varias cajas
+  /// abiertas no cierra ninguna: se pide confirmacion para que nadie espere
+  /// que desaparezcan.
+  Future<void> _setCashSessionMode(String mode) async {
+    final businessId = _businessId;
+    if (businessId == null || _savingMode || mode == _cashSessionMode) return;
+
+    if (mode == PosSettingsRepository.cashSessionSingle) {
+      var openCount = 0;
+      try {
+        openCount = (await ref
+                .read(cashierRepositoryProvider)
+                .getOpenSessionsForBusiness(businessId))
+            .length;
+      } catch (_) {
+        // Sin el conteo se cambia igual: es solo para avisar.
+      }
+      if (openCount > 1) {
+        if (!mounted) return;
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Hay varias cajas abiertas'),
+            content: Text(
+              'Ahora mismo hay $openCount cajas abiertas en este negocio. '
+              'Siguen abiertas hasta que se cierren, cada una con su arqueo. '
+              'Desde ya nadie podrá abrir otra mientras quede alguna abierta.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Cambiar a 1 sola caja'),
+              ),
+            ],
+          ),
+        );
+        if (confirmed != true) return;
+      }
+    }
+
+    final previous = _cashSessionMode;
+    setState(() {
+      _cashSessionMode = mode;
+      _savingMode = true;
+    });
+    try {
+      await ref
+          .read(posSettingsRepositoryProvider)
+          .setCashSessionMode(businessId: businessId, mode: mode);
+      await ref.read(cashierViewModelProvider).applyCashSessionMode(mode);
+      if (!mounted) return;
+      setState(() => _savingMode = false);
+      AppToast.success(
+        context,
+        mode == PosSettingsRepository.cashSessionMulti
+            ? 'Modo multi caja: cada cajero abre su propia caja.'
+            : 'Modo 1 sola caja: todos trabajan con la misma caja.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _cashSessionMode = previous;
+        _savingMode = false;
+      });
+      AppToast.error(
+        context,
+        FriendlyError.humanize('No se pudo guardar el modo de caja: $e'),
+      );
+    }
+  }
+
   Future<String?> _promptName({
     required String title,
     required String initial,
@@ -288,6 +370,9 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
     if (activas.length < 2) return false;
     return activas.any((r) => r['receipt_printer_id'] == null);
   }
+
+  /// Tarjeta de modo de caja + aviso de impresoras (si aplica).
+  int get _leadingItems => 1 + (_showPrinterHint ? 1 : 0);
 
   @override
   Widget build(BuildContext context) {
@@ -348,20 +433,26 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
                       color: MangoColors.primaryOrange,
                       child: ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        // +1 por el aviso de cajas sin impresora, que va
-                        // como primer elemento cuando aplica.
-                        itemCount: _registers.length + (_showPrinterHint ? 1 : 0),
+                        // Antes de las cajas: el modo de caja y, cuando
+                        // aplica, el aviso de cajas sin impresora.
+                        itemCount: _registers.length + _leadingItems,
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, rawIndex) {
-                          if (_showPrinterHint && rawIndex == 0) {
+                          if (rawIndex == 0) {
+                            return _CashSessionModeCard(
+                              mode: _cashSessionMode,
+                              saving: _savingMode,
+                              onChanged: _setCashSessionMode,
+                            );
+                          }
+                          if (_showPrinterHint && rawIndex == 1) {
                             return _MissingPrinterHint(
                               total: _registers
                                   .where((r) => r['is_active'] == true)
                                   .length,
                             );
                           }
-                          final index =
-                              rawIndex - (_showPrinterHint ? 1 : 0);
+                          final index = rawIndex - _leadingItems;
                           final reg = _registers[index];
                           final regId = reg['id'] as String;
                           final regName = reg['name'] as String? ?? 'Caja';
@@ -553,6 +644,164 @@ class _CashRegistersViewState extends ConsumerState<CashRegistersView> {
                         },
                       ),
                     ),
+    );
+  }
+}
+
+/// Selector "1 sola caja" / "Multi caja" del negocio.
+class _CashSessionModeCard extends StatelessWidget {
+  final String mode;
+  final bool saving;
+  final ValueChanged<String> onChanged;
+
+  const _CashSessionModeCard({
+    required this.mode,
+    required this.saving,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Modo de caja',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+              ),
+              if (saving)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _CashSessionModeOption(
+            value: PosSettingsRepository.cashSessionSingle,
+            groupValue: mode,
+            title: '1 sola caja',
+            description:
+                'Hay una sola caja abierta para todo el negocio. Cualquier '
+                'usuario que entre, en cualquier equipo, trabaja con esa '
+                'misma caja hasta que se cierre. Nadie puede abrir una '
+                'segunda.',
+            onChanged: saving ? null : onChanged,
+          ),
+          const SizedBox(height: 8),
+          _CashSessionModeOption(
+            value: PosSettingsRepository.cashSessionMulti,
+            groupValue: mode,
+            title: 'Multi caja',
+            description:
+                'Cada cajero abre su propia caja, con su propio arqueo y '
+                'cierre. Úsalo solo si cobran 2 o más cajeros al mismo '
+                'tiempo, cada uno con su gaveta.',
+            onChanged: saving ? null : onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashSessionModeOption extends StatelessWidget {
+  final String value;
+  final String groupValue;
+  final String title;
+  final String description;
+  final ValueChanged<String>? onChanged;
+
+  const _CashSessionModeOption({
+    required this.value,
+    required this.groupValue,
+    required this.title,
+    required this.description,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = value == groupValue;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onChanged == null ? null : () => onChanged!(value),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(4, 4, 12, 8),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: selected
+                  ? MangoColors.primaryOrange
+                  : MangoColors.cardBorder,
+              width: selected ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Icon(
+                  selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  color: selected
+                      ? MangoColors.primaryOrange
+                      : MangoColors.muted,
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        description,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
