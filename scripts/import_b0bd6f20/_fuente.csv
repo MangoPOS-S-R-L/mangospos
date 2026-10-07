@@ -1,0 +1,196 @@
+,,,,,,,,Catalogo de productos (Transformados),,,,,,,
+,,,,,,,,,,,,,,,
+Usuario: Adriana Espaillat,,,,,,,,Generado: 07/10/2026 01:59 PM | País: Republica Dominicana,,,,,,,
+,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,
+Indentificador Unico,Codigo de integracion,Codigo,Producto,¿Transformado?,Área produccion,Álmacen,Categoria,Unidad de Medida,Costo,Precio,¿Presentación de compra?,¿Se usa en delivery?,¿Se controla por stock?,Stock minimo,¿Lleva ingredientes?
+5,5, -,Choriqueso - Choriqueso,Si,Cocina,Almacen Principal,Entradas,UNIDAD,0,650,No,Si,No,0,No
+2,2, -,Mini Flautas - Mini flautas,Si,Cocina,Almacen Principal,Entradas,UNIDAD,0,500,No,Si,No,0,No
+4,4, -,Mini Sopes - Mini sopes,Si,Cocina,Almacen Principal,Entradas,UNIDAD,0,600,No,Si,No,0,No
+3,3, -,Nachos 3 Compadres -,Si,Cocina,Almacen Principal,Entradas,UNIDAD,0,450,No,Si,No,0,No
+132,132, -,Nachos con guacamole - Nachos con guacamole,Si,Cocina,Almacen Principal,Entradas,UNIDAD,0,350,No,Si,No,0,No
+21,21, -,Burrito - Burrito,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,700,No,Si,No,0,No
+16,16, -,Chilaquiles - Chilaquiles,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,700,No,Si,No,0,No
+24,24, -,Chimichanga - Chimichanga,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,700,No,Si,No,0,No
+167,167, -,Enchilada pollo - Enchilada,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,800,No,Si,No,0,No
+190,190, -,Enchilada queso - A,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,800,No,Si,No,0,No
+146,146, -,Enchilada suiza - Enchilada suiza,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,800,No,Si,No,0,No
+28,28, -,Fajitas - Fajitas,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,850,No,Si,No,0,No
+9,9, -,Flauta de Papa y Chorizo - Flautas papa y chorizo,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,600,No,Si,No,0,No
+8,8, -,Flautas de Pollo - Flautas pollo,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,650,No,Si,No,0,No
+31,31, -,Gringa - Gringa,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,800,No,Si,No,0,No
+187,187, -,Gringa - gringa,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,800,No,Si,No,0,No
+6,6, -,Huevos Rancheros -,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,550,No,Si,No,0,No
+7,7, -,Huevos Rancheros Divorciados - Huevos ranch div,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,550,No,Si,No,0,No
+13,13, -,Quesadilla de Chorizo - Queda chorizo,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,650,No,Si,No,0,No
+15,15, -,Quesadilla de Pollo - Quesadillas,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,650,No,Si,No,0,No
+188,188, -,Sopa de Tortillas -,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,600,No,Si,No,0,No
+10,10, -,Sopes de Papa y Chorizo - Sope papa chorizo,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,650,No,Si,No,0,No
+11,11, -,Sopes de Pollo - Sope pollo,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,650,No,Si,No,0,No
+12,12, -,Sopes de Tinga de Pollo - Sope tinga,Si,Cocina,Almacen Principal,Platos Mexicanos,UNIDAD,0,700,No,Si,No,0,No
+35,35, -,Tostadas de Cerdo - Tostada cerdo,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,600,No,Si,No,0,No
+181,181, -,Tostadas de Cerdo - Tostadas,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,650,No,Si,No,0,No
+33,33, -,Tostadas de Chilorio - Tostada chilorio,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,650,No,Si,No,0,No
+36,36, -,Tostadas de Papa y Chorizo - Tostada papa chorizo,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,650,No,Si,No,0,No
+32,32, -,Tostadas de Pollo - Tost pollo,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,650,No,Si,No,0,No
+34,34, -,Tostadas de Tinga de Pollo - Tost tinga,Si,Cocina,Almacen Principal,Tostadas,UNIDAD,0,650,No,Si,No,0,No
+244,244, -,Cachetadas - Ribeye,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,800,No,Si,No,0,No
+245,245, -,Cachetadas - NY STEAK,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,700,No,Si,No,0,No
+246,246, -,Cachetadas - Tenderloin,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,600,No,Si,No,0,No
+51,51, -,Chamorro de Cerdo - Chamorro,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,1800,No,Si,No,0,No
+46,46, -,Tacos - Tacos,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,700,No,Si,No,0,No
+42,42, -,Tacos a la Zimbron - 3 und.,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,600,No,Si,No,0,No
+37,37, -,Tacos al Pastor - 4 und,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,700,No,Si,No,0,No
+183,183, -,Tacos Chilorio - Tacos de chilorio,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,750,No,Si,No,0,No
+43,43, -,Tacos de Birria - 4 und.,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,800,No,Si,No,0,No
+38,38, -,Tacos de Carnitas Michoacanas - 4 und,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,700,No,Si,No,0,No
+44,44, -,Tacos de Cochinita Pibil - 4 und.,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,750,No,Si,No,0,No
+41,41, -,Tacos de Tinga de Pollo - 4 und.,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,700,No,Si,No,0,No
+217,217, -,Unidad de taco - Unidad de taco,Si,Cocina,Almacen Principal,Tacos,UNIDAD,0,250,No,Si,No,0,No
+206,206, -,Brownie a la moda -,Si,Bar,Almacen Principal,Postres,UNIDAD,0,550,No,Si,No,0,No
+229,229, -,Churros -,Si,Bar,Almacen Principal,Postres,UNIDAD,0,400,No,Si,No,0,No
+52,52, -,Pie de Limon - Pie limon,Si,Bar,Almacen Principal,Postres,UNIDAD,0,400,No,Si,No,0,No
+57,57, -,Cantarito 1800 - Silver,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,500,No,Si,No,0,No
+58,58, -,Cantarito 1800 - Reposado,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,500,No,Si,No,0,No
+59,59, -,Cantarito 1800 - Añejo,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,550,No,Si,No,0,No
+60,60, -,Cantarito 1800 - Añejo Cristalino,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,650,No,Si,No,0,No
+186,186, -,Cantarito 400 conejos -,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,700,No,Si,No,0,No
+53,53, -,Cantarito Agavita - Silver,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,400,No,Si,No,0,No
+54,54, -,Cantarito Agavita - Gold,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,400,No,Si,No,0,No
+65,65, -,Cantarito Don Julio - Extra Añejo,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,700,No,Si,No,0,No
+66,66, -,Cantarito Don Julio - Añejo,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,650,No,Si,No,0,No
+67,67, -,Cantarito Don Julio - Reposado,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,550,No,Si,No,0,No
+68,68, -,Cantarito Gran Cava - Extra Añejo,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,900,No,Si,No,0,No
+69,69, -,Cantarito Grand Mayan - Extra Añejo,Si,Bar,Almacen Principal,Cantaritos,,0,900,No,Si,No,0,No
+61,61, -,Cantarito Herrtadura - Añejo,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,700,No,Si,No,0,No
+62,62, -,Cantarito Herrtadura - Cristalino Ultra,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,800,No,Si,No,0,No
+63,63, -,Cantarito Herrtadura - Reposado,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,650,No,Si,No,0,No
+64,64, -,Cantarito Herrtadura - 818 Reposado,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,650,No,Si,No,0,No
+55,55, -,Cantarito Jose Cuervo - Silver,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,450,No,Si,No,0,No
+56,56, -,Cantarito Jose Cuervo - Reposado,Si,Bar,Almacen Principal,Cantaritos,UNIDAD,0,450,No,Si,No,0,No
+184,184, -,Cantarito mezcal mitre -,Si,,,Cantaritos,,0,950,No,Si,No,0,No
+185,185, -,Cantarito montelobos -,Si,,,Cantaritos,,0,600,No,Si,No,0,No
+192,192, -,Margarita chinola -,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,450,No,Si,No,0,No
+193,193, -,Margarita Coco -,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,450,No,Si,No,0,No
+72,72, -,Margarita de Fresa - Fresa,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,500,No,Si,No,0,No
+70,70, -,Margarita de Limon - Limon,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,450,No,Si,No,0,No
+71,71, -,Margarita de Tamarindo - Tamarindo,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,450,No,Si,No,0,No
+209,209, -,Margarita limon roca -,Si,Bar,Almacen Principal,Margaritas,UNIDAD,0,450,No,Si,No,0,No
+76,76, -,Chelada -,Si,Bar,Almacen Principal,Micheladas,,0,350,No,Si,No,0,No
+75,75, -,Michelada de Tamarindo - Michelada tam,Si,Bar,Almacen Principal,Micheladas,,0,500,No,Si,No,0,No
+74,74, -,Michelada Mango - Michelada mango,Si,Bar,Almacen Principal,Micheladas,,0,500,No,Si,No,0,No
+73,73, -,Michelada Tradicional - Michelada trad,Si,Bar,Almacen Principal,Micheladas,,0,500,No,Si,No,0,No
+198,198, -,Mojito chinola -,Si,Bar,Almacen Principal,Mojitos,UNIDAD,0,400,No,Si,No,0,No
+79,79, -,Mojito de Coco - Mojito coco,Si,Bar,Almacen Principal,Mojitos,,0,400,No,Si,No,0,No
+80,80, -,Mojito de Fresa - Mojito fresa,Si,Bar,Almacen Principal,Mojitos,,0,400,No,Si,No,0,No
+78,78, -,Mojito de Jamaica - Mojito jamaica,Si,Bar,Almacen Principal,Mojitos,,0,400,No,Si,No,0,No
+77,77, -,Mojito de Limon - Mojito limon,Si,Bar,Almacen Principal,Mojitos,,0,400,No,Si,No,0,No
+201,201, -,Aperol spritz -,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,450,No,Si,No,0,No
+210,210, -,Averna -,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,200,No,Si,No,0,No
+189,189, -,Baileys -,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,300,No,Si,No,0,No
+216,216, -,Diego Rivera -,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,500,No,Si,No,0,No
+196,196, -,Mangonada - Con alcohol,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,550,No,Si,No,0,No
+197,197, -,Mangonada - Sin alcohol,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,500,No,Si,No,0,No
+148,148, -,Mezcalita - Nueva,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,500,No,No,No,0,No
+82,82, -,Paloma - Paloma,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,450,No,Si,No,0,No
+203,203, -,Piña colada - Con alcohol,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,400,No,Si,No,0,No
+204,204, -,Piña colada - Sin alcohol,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,400,No,Si,No,0,No
+81,81, -,Sangria de Jamaica - Sangria,Si,Bar,Almacen Principal,Cocteles,,0,450,No,Si,No,0,No
+202,202, -,Tequila sunrise -,Si,Bar,Almacen Principal,Cocteles,UNIDAD,0,400,No,Si,No,0,No
+84,84, -,Don Julio Añejo - Shot,Si,Bar,Almacen Principal,Don Julio Reserva,UNIDAD,0,700,No,Si,No,0,No
+83,83, -,Don Julio Reposado - Shot,Si,Bar,Almacen Principal,Don Julio Reserva,UNIDAD,0,600,No,Si,No,0,No
+85,85, -,Francisco Gonzales Extra Añejo - Shot,Si,Bar,Almacen Principal,Don Julio Reserva,,0,800,No,Si,No,0,No
+89,89, -,Amor mio blanco - Shot,Si,Bar,Almacen Principal,Otros Tequilas Exclusivos,,0,550,No,Si,No,0,No
+90,90, -,Clase Azul Reposado - Shot,Si,Bar,Almacen Principal,Otros Tequilas Exclusivos,,0,1450,No,Si,No,0,No
+88,88, -,Gran malo - Shot,Si,Bar,Almacen Principal,Otros Tequilas Exclusivos,UNIDAD,0,450,No,Si,No,0,No
+87,87, -,Grand Cava de Oro Extra Viejo - Shot,Si,Bar,Almacen Principal,Otros Tequilas Exclusivos,,0,900,No,Si,No,0,No
+86,86, -,Grand Mayan Extra Viejo - Shot,Si,Bar,Almacen Principal,Otros Tequilas Exclusivos,,0,800,No,Si,No,0,No
+97,97, -,1800 añejo - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,550,No,Si,No,0,No
+96,96, -,1800 Reposado - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,400,No,Si,No,0,No
+95,95, -,1800 Silver - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,400,No,Si,No,0,No
+98,98, -,1800 Ultra Añejo Cristalino - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,600,No,Si,No,0,No
+92,92, -,Agavita Reposado - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,300,No,Si,No,0,No
+91,91, -,Agavita Silver - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,300,No,Si,No,0,No
+227,227, -,Gran malo -,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,450,No,Si,No,0,No
+101,101, -,Herradura Añejo - Shot,Si,Bar,Almacen Principal,Otros Tequilas,,0,500,No,Si,No,0,No
+100,100, -,Herradura Reposado - Shot,Si,Bar,Almacen Principal,Otros Tequilas,,0,450,No,Si,No,0,No
+99,99, -,Herradura Silver - Shot,Si,Bar,Almacen Principal,Otros Tequilas,,0,400,No,Si,No,0,No
+102,102, -,Herradura Ultra Añejo - Shot,Si,Bar,Almacen Principal,Otros Tequilas,,0,600,No,Si,No,0,No
+94,94, -,Jose Cuervo Reposado - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,350,No,Si,No,0,No
+93,93, -,Jose Cuervo Silver - Shot,Si,Bar,Almacen Principal,Otros Tequilas,UNIDAD,0,350,No,Si,No,0,No
+218,218, -,Contraluz mezcal -,Si,Bar,Almacen Principal,Mezcal,UNIDAD,0,600,No,Si,No,0,No
+105,105, -,Mezcal 400 Conejos - Shot,Si,Bar,Almacen Principal,Mezcal,,0,550,No,Si,No,0,No
+219,219, -,Ojo de tigre -,Si,Bar,Almacen Principal,Mezcal,UNIDAD,0,450,No,Si,No,0,No
+115,115, -,Agua Dasani -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,50,No,Si,No,0,No
+112,112, -,Chinola Frozen -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+110,110, -,Fresa Frozen -,Si,Bar,Almacen Principal,Sin Alcohol,,0,300,No,Si,No,0,No
+107,107, -,Horchata -,Si,Bar,Almacen Principal,Sin Alcohol,,0,250,No,Si,No,0,No
+114,114, -,Jarritos - Tamarindo,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+134,134, -,Jarritos - Mandarina,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+135,135, -,Jarritos - Toronja,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+136,136, -,Jarritos - Fruit Punch,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+137,137, -,Jarritos - Limon,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+138,138, -,Jarritos - Piña,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+199,199, -,Jarritos - Guayaba,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+200,200, -,Jugo cereza -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,200,No,Si,No,0,No
+109,109, -,Jugo de Chinola -,Si,Bar,Almacen Principal,Sin Alcohol,,0,200,No,Si,No,0,No
+215,215, -,Jugo de fruit punch -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+108,108, -,Jugo de Limon -,Si,Bar,Almacen Principal,Sin Alcohol,,0,200,No,Si,No,0,No
+248,248, -,Limonada coco -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,300,No,Si,No,0,No
+111,111, -,Limonada Frozen -,Si,Bar,Almacen Principal,Sin Alcohol,,0,250,No,Si,No,0,No
+113,113, -,Refresco - Coca Cola,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,100,No,Si,No,0,No
+133,133, -,Refresco - Sprite,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,100,No,Si,No,0,No
+145,145, -,Refresco - Soda,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,100,No,No,No,0,No
+226,226, -,Refresco - Zero,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,100,No,Si,No,0,No
+230,230, -,Refresco - Squirt,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,150,No,Si,No,0,No
+231,231, -,Refresco - Sidral Manzana,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,200,No,Si,No,0,No
+232,232, -,Refresco - Sangría Señorial,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,200,No,Si,No,0,No
+233,233, -,Refresco - Boing Mango,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,200,No,Si,No,0,No
+205,205, -,Tamarindo frozen -,Si,Bar,Almacen Principal,Sin Alcohol,UNIDAD,0,250,No,Si,No,0,No
+106,106, -,Te de Jamaica -,Si,Bar,Almacen Principal,Sin Alcohol,,0,200,No,Si,No,0,No
+147,147, -,Clamato -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,100,No,Si,No,0,No
+119,119, -,Corona -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+120,120, -,Heineken -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+122,122, -,Modelo Negra -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+121,121, -,Modelo Rubia -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+117,117, -,Presidente Light - Presi,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+116,116, -,Presidente Normal - Presi,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+118,118, -,Stella Artois -,Si,Bar,Almacen Principal,Cerveza,UNIDAD,0,300,No,Si,No,0,No
+249,249, -,Carnes -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,700,No,Si,No,0,No
+159,159, -,Extra -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,100,No,Si,No,0,No
+191,191, -,Extra crema -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,50,No,Si,No,0,No
+124,124, -,Extra de pollo -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,200,No,Si,No,0,No
+126,126, -,Extra frijoles -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,100,No,Si,No,0,No
+125,125, -,Extra guacamole -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,100,No,Si,No,0,No
+228,228, -,Extra queso -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,150,No,Si,No,0,No
+128,128, -,Extra salsa ranchera -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,50,No,Si,No,0,No
+127,127, -,Extra tortillas -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,50,No,Si,No,0,No
+123,123, -,Pico de gallo -,Si,Cocina,Almacen Principal,Extra,UNIDAD,0,100,No,Si,No,0,No
+129,129, -,Cafe con leche -,Si,Bar,Almacen Principal,Café,UNIDAD,0,150,No,Si,No,0,No
+130,130, -,Cortadito -,Si,Bar,Almacen Principal,Café,UNIDAD,0,100,No,Si,No,0,No
+131,131, -,Espresso -,Si,Bar,Almacen Principal,Café,UNIDAD,0,100,No,Si,No,0,No
+213,213, -,A. Fieston de tacos -,Si,,,Delivery,,0,2000,No,Si,No,0,No
+214,214, -,Combo rosario -,Si,,,Delivery,,0,1100,No,Si,No,0,No
+158,158, -,Delivery 100 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,100,No,Si,No,0,No
+157,157, -,Delivery 150 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,150,No,Si,No,0,No
+156,156, -,Delivery 200 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,200,No,Si,No,0,No
+155,155, -,Delivery 250 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,250,No,Si,No,0,No
+154,154, -,Delivery 300 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,300,No,Si,No,0,No
+153,153, -,Delivery 350 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,350,No,Si,No,0,No
+152,152, -,Delivery 400 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,400,No,Si,No,0,No
+151,151, -,Delivery 450 -,Si,Cocina,Almacen Principal,Delivery,UNIDAD,0,450,No,Si,No,0,No
+195,195, -,Arizona All Natural - Ice Tea,Si,,,Bebidas,UNIDAD,0,200,No,Si,No,0,Si
+242,242, -,Arizona All Natural - Strawberry Kiwi,Si,,,Bebidas,UNIDAD,0,200,No,Si,No,0,Si
+220,220, -,Jarritos. - Guava,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,175,No,Si,No,0,No
+178,178, -,Jugos Naturales -,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,150,No,Si,No,0,No
+221,221, -,Refrescos Sabores - Rojo,Si,,,Bebidas,,0,50,No,Si,No,0,No
+222,222, -,Refrescos Sabores - Uva,Si,,,Bebidas,,0,50,No,Si,No,0,No
+223,223, -,Refrescos Sabores - Merengue,Si,,,Bebidas,,0,50,No,Si,No,0,No
+224,224, -,Refrescos Sabores - Soda,Si,,,Bebidas,,0,75,No,Si,No,0,No
+225,225, -,Refrescos Sabores - Sprite,Si,,,Bebidas,,0,50,No,Si,No,0,No
+236,236, -,Soda Can. - Canada Dry Ginger,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,100,No,Si,No,0,Si
+237,237, -,Soda Can. - Canada Dry Blackberry,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,100,No,Si,No,0,Si
+238,238, -,Soda Can. - Dr Pepper,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,125,No,Si,No,0,Si
+239,239, -,Soda Can. - Dr Pepper Blackberry,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,125,No,Si,No,0,Si
+240,240, -,Soda Can. - Dr Pepper Cherry,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,125,No,Si,No,0,Si
+241,241, -,Soda Can. - Squirt Toronja,Si,Bar,Almacen Principal,Bebidas,UNIDAD,0,150,No,Si,No,0,Si

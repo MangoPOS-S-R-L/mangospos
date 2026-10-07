@@ -11,6 +11,8 @@ import '../../../app/theme/mango_styles.dart';
 import '../../../core/business/business_features_provider.dart';
 import '../../../core/inventory/pack_conversion.dart';
 import '../../../data/repositories/credits_repository.dart';
+import '../../../data/repositories/purchases_repository.dart'
+    show CreatedPurchaseOrder;
 import '../../../services/session/session_controller.dart';
 import '../../sales/widgets/pos_barcode_scanner.dart' show BarcodeScanListener;
 import '../state/goods_receipt.dart';
@@ -182,6 +184,23 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
   /// Misma llave en cada reintento: un doble toque no postea dos veces las
   /// correcciones de stock.
   final String _editKey = const Uuid().v4();
+
+  /// Igual para el alta: si el primer intento sí llegó a la base (timeout,
+  /// error al refrescar), reintentar devuelve la misma compra en vez de
+  /// registrar la factura otra vez con el número siguiente.
+  final String _createKey = const Uuid().v4();
+
+  /// Candado del guardado. Se prende de forma SÍNCRONA al primer toque y no
+  /// se apaga hasta salir de la pantalla (o hasta que el guardado falle):
+  /// antes el botón volvía a quedar activo mientras se creaba la CxP y se
+  /// imprimía, y un segundo toque registraba la misma factura dos veces.
+  bool _submitting = false;
+
+  /// Paso que se le muestra al usuario sobre la pantalla tapada. Va aparte
+  /// del candado porque la corrección pregunta antes de guardar: mientras el
+  /// diálogo está abierto el botón ya no responde, pero tampoco se dice
+  /// «Guardando…» de algo que todavía no se confirmó.
+  String? _savingStep;
 
   bool get _isEditing => widget.editOrderId != null;
 
@@ -379,101 +398,106 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     }
 
     return BarcodeScanListener(
-      enabled: scannerEnabled,
+      // Escanear mientras se guarda metería líneas que no van en la compra
+      // guardada pero sí en el papel que se imprime después.
+      enabled: scannerEnabled && !_submitting,
       onScan: _handleScan,
       child: Scaffold(
         backgroundColor: AppColors.background,
-        body:
-            _loadingEdit ||
-                (state.loading &&
-                    state.suppliers.isEmpty &&
-                    state.warehouses.isEmpty)
-            ? const Center(child: CircularProgressIndicator())
-            : SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          onPressed: () => context.go(AppRoutes.purchasesList),
-                          icon: const Icon(Icons.arrow_back),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _isEditing
-                                    ? 'Editar compra'
-                                    : 'Registro de compra',
-                                style: const TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF0F172A),
+        body: _SavingBarrier(
+          step: _savingStep,
+          child:
+              _loadingEdit ||
+                  (state.loading &&
+                      state.suppliers.isEmpty &&
+                      state.warehouses.isEmpty)
+              ? const Center(child: CircularProgressIndicator())
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          IconButton(
+                            onPressed: () => context.go(AppRoutes.purchasesList),
+                            icon: const Icon(Icons.arrow_back),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _isEditing
+                                      ? 'Editar compra'
+                                      : 'Registro de compra',
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF0F172A),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                _isEditing
-                                    ? _editSubtitle()
-                                    : 'Registra la factura del proveedor y agrega sus productos',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Color(0xFF64748B),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _isEditing
+                                      ? _editSubtitle()
+                                      : 'Registra la factura del proveedor y agrega sus productos',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: Color(0xFF64748B),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
+                          ),
+                          _ScannerBadge(enabled: barcodeEnabled),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      if (_isEditing && _editLoadError != null) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFFECACA)),
+                          ),
+                          child: Text(
+                            _editLoadError!,
+                            style: const TextStyle(color: Color(0xFF991B1B)),
                           ),
                         ),
-                        _ScannerBadge(enabled: barcodeEnabled),
+                        const SizedBox(height: 16),
                       ],
-                    ),
-                    const SizedBox(height: 20),
-                    if (_isEditing && _editLoadError != null) ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF2F2),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFFECACA)),
+                      if (_isEditing && _receivedUnits > 0) ...[
+                        _stockWarningBanner(),
+                        const SizedBox(height: 16),
+                      ],
+                      if (state.error != null) ...[
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFFECACA)),
+                          ),
+                          child: Text(
+                            state.error!,
+                            style: const TextStyle(color: Color(0xFF991B1B)),
+                          ),
                         ),
-                        child: Text(
-                          _editLoadError!,
-                          style: const TextStyle(color: Color(0xFF991B1B)),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
+                        const SizedBox(height: 16),
+                      ],
+                      _card(child: _buildHeaderCard(state)),
+                      const SizedBox(height: 20),
+                      _card(child: _buildProductsCard(state)),
                     ],
-                    if (_isEditing && _receivedUnits > 0) ...[
-                      _stockWarningBanner(),
-                      const SizedBox(height: 16),
-                    ],
-                    if (state.error != null) ...[
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF2F2),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFFECACA)),
-                        ),
-                        child: Text(
-                          state.error!,
-                          style: const TextStyle(color: Color(0xFF991B1B)),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    _card(child: _buildHeaderCard(state)),
-                    const SizedBox(height: 20),
-                    _card(child: _buildProductsCard(state)),
-                  ],
+                  ),
                 ),
-              ),
+        ),
       ),
     );
   }
@@ -1142,9 +1166,9 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       SizedBox(
         width: double.infinity,
         child: FilledButton.icon(
-          onPressed: state.saving ? null : _submit,
-          icon: const Icon(Icons.save_outlined, size: 18),
-          label: Text(_saveButtonLabel),
+          onPressed: state.saving || _submitting ? null : _submit,
+          icon: _saveButtonIcon,
+          label: Text(_savingStep != null ? 'Guardando…' : _saveButtonLabel),
         ),
       ),
       if (consequences.isNotEmpty) ...[
@@ -1187,10 +1211,14 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       SizedBox(
         width: double.infinity,
         child: FilledButton.icon(
-          onPressed: state.saving || _editing == null ? null : _submitEdit,
-          icon: const Icon(Icons.save_outlined, size: 18),
+          onPressed: state.saving || _submitting || _editing == null
+              ? null
+              : _submitEdit,
+          icon: _saveButtonIcon,
           label: Text(
-            _receivedUnits > 0
+            _savingStep != null
+                ? 'Guardando…'
+                : _receivedUnits > 0
                 ? 'Guardar y ajustar inventario'
                 : 'Guardar cambios',
           ),
@@ -1220,6 +1248,17 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     }
     return entersStock ? 'Guardar e ingresar stock' : 'Guardar orden';
   }
+
+  Widget get _saveButtonIcon => _savingStep != null
+      ? const SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Colors.white,
+          ),
+        )
+      : const Icon(Icons.save_outlined, size: 18);
 
   /// Unidades digitadas (en unidad de COMPRA, que es como se cuentan las
   /// cajas contra el papel).
@@ -2146,12 +2185,41 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
       )
       .toList(growable: false);
 
+  /// Candado de los dos guardados. La bandera se prende ANTES del primer
+  /// `await`, así que un segundo toque que llegue en el mismo frame —antes de
+  /// que el botón se redibuje deshabilitado— rebota acá. Se apaga solo si el
+  /// guardado no salió de la pantalla (validación, error): al terminar bien se
+  /// navega y el candado muere con ella.
+  Future<void> _guardedSave(Future<void> Function() save) async {
+    if (_submitting) return;
+    setState(() => _submitting = true);
+    try {
+      await save();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _submitting = false;
+          _savingStep = null;
+        });
+      }
+    }
+  }
+
+  void _setSavingStep(String step) {
+    if (!mounted || !_submitting) return;
+    setState(() => _savingStep = step);
+  }
+
+  Future<void> _submitEdit() => _guardedSave(_saveCorrection);
+
+  Future<void> _submit() => _guardedSave(_registerPurchase);
+
   /// Guarda la corrección de una compra ya registrada.
   ///
   /// Se pide confirmación SOLO cuando la corrección va a mover el almacén:
   /// arreglar un NCF no debería costar un diálogo, y corregir una cantidad ya
   /// recibida no debería pasar sin uno.
-  Future<void> _submitEdit() async {
+  Future<void> _saveCorrection() async {
     final orderId = widget.editOrderId;
     final before = _editing;
     if (orderId == null || before == null) return;
@@ -2201,6 +2269,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     if (_receivedUnits > 0 && !await _confirmStockEdit(before)) return;
     if (!mounted) return;
 
+    _setSavingStep('Guardando cambios…');
     final PurchaseOrderUpdateResult result;
     try {
       result = await ref
@@ -2260,7 +2329,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     return ok == true;
   }
 
-  Future<void> _submit() async {
+  Future<void> _registerPurchase() async {
     if (_supplierId == null || _warehouseId == null) {
       _snack('Selecciona proveedor y almacén.');
       return;
@@ -2313,16 +2382,16 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
         DiscountInput.parse(_orderDiscountCtrl.text).amountOn(grossTotal);
 
     final notes = _notesCtrl.text.trim();
-    final orderNumber = _orderNumberCtrl.text.trim();
 
-    final String orderId;
+    _setSavingStep('Guardando compra…');
+    final CreatedPurchaseOrder created;
     try {
-      orderId = await ref
+      created = await ref
           .read(purchasesViewModelProvider)
           .createPurchaseOrder(
             supplierId: _supplierId!,
             warehouseId: _warehouseId!,
-            orderNumber: orderNumber,
+            orderNumber: _orderNumberCtrl.text.trim(),
             status: _status,
             expectedDate: _expectedDate,
             notes: notes,
@@ -2334,6 +2403,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
             // postear el movimiento de compra). Una orden en Borrador o
             // cancelada ya no deja el costo movido.
             discount: orderDiscount,
+            idempotencyKey: _createKey,
           );
     } catch (_) {
       // El motivo ya quedó en state.error, que la pantalla pinta arriba.
@@ -2343,6 +2413,11 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     if (!mounted) return;
     if (ref.read(purchasesViewModelProvider).state.error != null) return;
 
+    final orderId = created.id;
+    // El número que quedó en la base: si otro equipo tomó el que mostraba la
+    // pantalla, la base asignó el siguiente, y el papel y la CxP llevan ESE.
+    final orderNumber = created.orderNumber;
+
     // Compra a crédito → cuenta por pagar vinculada a la orden. La orden ya
     // quedó registrada; si la CxP falla queda un estado partido (mercancía
     // dentro, deuda sin registrar) que NO puede ser silencioso: se marca la
@@ -2350,6 +2425,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     if (isCredit) {
       // La CxP nace por lo realmente adeudado: total menos descuento global.
       final total = grossTotal - orderDiscount;
+      _setSavingStep('Creando cuenta por pagar…');
       try {
         final businessId =
             ref.read(purchasesViewModelProvider).state.businessId;
@@ -2384,6 +2460,7 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
     // El papel de la compra sale solo: quien la registró no debería tener que
     // pedirlo. Va de último y no puede tumbar nada — la compra ya está
     // guardada y la CxP ya nació.
+    _setSavingStep('Imprimiendo orden de compra…');
     await _printPurchaseDocument(
       orderId: orderId,
       orderNumber: orderNumber,
@@ -2525,6 +2602,89 @@ class _PurchasesRegisterViewState extends ConsumerState<PurchasesRegisterView> {
 }
 
 // ─────────────────────────────────────────────────────── Widgets aux ──
+
+/// Mientras se guarda, tapa el formulario entero (también la flecha de
+/// volver) y dice en qué paso va: el usuario ve que la compra está entrando y
+/// no tiene dónde volver a tocar «Guardar». El «atrás» del sistema también se
+/// bloquea: salir a medias deja la compra sin su cuenta por pagar.
+///
+/// La barrera solo frena toques; el teclado se corta aparte (`ExcludeFocus`):
+/// un Enter en el renglón de captura agregaría una línea que no va en la
+/// compra guardada pero sí en el papel que se imprime al final.
+class _SavingBarrier extends StatelessWidget {
+  final String? step;
+  final Widget child;
+
+  const _SavingBarrier({required this.step, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final step = this.step;
+    return PopScope(
+      canPop: step == null,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ExcludeFocus(excluding: step != null, child: child),
+          ),
+          if (step != null) ...[
+            const Positioned.fill(
+              child: ModalBarrier(
+                dismissible: false,
+                color: Color(0x55000000),
+              ),
+            ),
+            Center(
+              child: Material(
+                borderRadius: BorderRadius.circular(14),
+                color: Colors.white,
+                elevation: 6,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 20,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2.5),
+                          ),
+                          const SizedBox(width: 14),
+                          Text(
+                            step,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'No cierres esta pantalla.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class _AddIconButton extends StatelessWidget {
   final String tooltip;

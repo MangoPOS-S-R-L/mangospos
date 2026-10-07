@@ -37,9 +37,16 @@ class OfflineQueueDao {
   /// Lee toda la cola de un business en orden cronológico (FIFO).
   /// Reemplaza `storage.readList(offline_queue_{businessId})`.
   Future<List<Map<String, dynamic>>> readQueue(String businessId) async {
+    // queued_at se guarda con precisión de SEGUNDOS y SQLite no garantiza el
+    // orden entre empates: agregar y enviar a cocina en el mismo segundo
+    // podían leerse al revés. El rowid desempata en orden FIFO: writeQueue
+    // reescribe la lista en orden y enqueue agrega al final.
     final query = _db.select(_db.queueActions)
       ..where((t) => t.businessId.equals(businessId))
-      ..orderBy([(t) => OrderingTerm(expression: t.queuedAt)]);
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.queuedAt),
+        (t) => OrderingTerm(expression: t.rowId),
+      ]);
     final rows = await query.get();
     return Future.wait(rows.map(_rowToActionMap));
   }

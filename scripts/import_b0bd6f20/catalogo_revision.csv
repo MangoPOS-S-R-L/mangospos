@@ -1,0 +1,210 @@
+filas_csv,que_es,en_la_caja,categoria,area,nombre,precio,modificador,opcion,precio_opcion,nota
+5,producto,"ya subido como ""CHORIQUESO"", antes $600",ENTRADAS 🥨,cocina,CHORIQUESO,650.00,,,,
+2,producto,"ya subido como ""MINI FLAUTAS""",ENTRADAS 🥨,cocina,MINI FLAUTAS,500.00,,,,
+4,producto,nuevo,ENTRADAS 🥨,cocina,MINI SOPES,600.00,,,,
+3,producto,nuevo,ENTRADAS 🥨,cocina,NACHOS 3 COMPADRES,450.00,,,,
+132,producto,"ya subido como ""NACHOS CON GUACAMOLE"", antes $250",ENTRADAS 🥨,cocina,NACHOS CON GUACAMOLE,350.00,,,,
+246,producto con modificador,nuevo,TACOS 🌮,cocina,CACHETADAS,600.00,Cachetadas · Corte,Tenderloin,0.00,
+245,producto con modificador,nuevo,TACOS 🌮,cocina,CACHETADAS,600.00,Cachetadas · Corte,NY Steak,100.00,
+244,producto con modificador,nuevo,TACOS 🌮,cocina,CACHETADAS,600.00,Cachetadas · Corte,Ribeye,200.00,
+51,producto,nuevo,TACOS 🌮,cocina,CHAMORRO DE CERDO,1800.00,,,,
+46,producto,"ya subido como ""TACOS"", antes $650",TACOS 🌮,cocina,TACOS,700.00,,,,
+42,producto,nuevo,TACOS 🌮,cocina,TACOS A LA ZIMBRON,600.00,,,,descripción: 3 unidades
+37,producto,"ya subido como ""TACOS AL PASTOR""",TACOS 🌮,cocina,TACOS AL PASTOR,700.00,,,,descripción: 4 unidades
+43,producto,"ya subido como ""TACOS DE BIRRIA"", antes $750",TACOS 🌮,cocina,TACOS DE BIRRIA,800.00,,,,descripción: 4 unidades
+38,producto,"ya subido como ""TACOS DE CARNITA MICHOACAN"", antes $650",TACOS 🌮,cocina,TACOS DE CARNITA MICHOACAN,700.00,,,,descripción: 4 unidades
+183,producto,"ya subido como ""TACOS CHILORIO"", antes $700",TACOS 🌮,cocina,TACOS CHILORIO,750.00,,,,
+44,producto,nuevo,TACOS 🌮,cocina,TACOS DE COCHINITA PIBIL,750.00,,,,descripción: 4 unidades
+41,producto,nuevo,TACOS 🌮,cocina,TACOS DE TINGA DE POLLO,700.00,,,,descripción: 4 unidades
+217,producto,"ya subido como ""UNIDAD DE TACO""",TACOS 🌮,cocina,UNIDAD DE TACO,250.00,,,,
+21,producto,"ya subido como ""BURRITO"", antes $650",PLATOS MEXICANOS 🌯,cocina,BURRITO,700.00,,,,
+16,producto,"ya subido como ""CHILAQUILES""",PLATOS MEXICANOS 🌯,cocina,CHILAQUILES,700.00,,,,
+24,producto,"ya subido como ""CHIMICHANGA""",PLATOS MEXICANOS 🌯,cocina,CHIMICHANGA,700.00,,,,
+167,producto con modificador,"ya subido como ""ENCHILADA""",PLATOS MEXICANOS 🌯,cocina,ENCHILADA,800.00,Enchilada · Tipo,Pollo,0.00,
+190,producto con modificador,"ya subido como ""ENCHILADA""",PLATOS MEXICANOS 🌯,cocina,ENCHILADA,800.00,Enchilada · Tipo,Queso,0.00,"en el CSV: ""Enchilada queso - A"""
+146,producto con modificador,"ya subido como ""ENCHILADA""",PLATOS MEXICANOS 🌯,cocina,ENCHILADA,800.00,Enchilada · Tipo,Suiza,0.00,la ENCHILADA SUIZA suelta (inactiva) no se toca
+28,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,FAJITAS,850.00,,,,
+9,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,FLAUTAS DE PAPA Y CHORIZO,600.00,,,,
+8,producto,"ya subido como ""FLAUTAS DE POLLO"", antes $600",PLATOS MEXICANOS 🌯,cocina,FLAUTAS DE POLLO,650.00,,,,
+31,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,GRINGA,800.00,,,,la 187 es la misma (mismo precio): se carga una
+6,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,HUEVOS RANCHEROS,550.00,,,,
+7,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,HUEVOS RANCHEROS DIVORCIADOS,550.00,,,,
+13,producto,"ya subido como ""QUESADILLA DE CHORIZO""",PLATOS MEXICANOS 🌯,cocina,QUESADILLA DE CHORIZO,650.00,,,,
+15,producto,"ya subido como ""QUESADILLA DE POLLO"", antes $600",PLATOS MEXICANOS 🌯,cocina,QUESADILLA DE POLLO,650.00,,,,
+188,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,SOPA DE TORTILLAS,600.00,,,,
+10,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,SOPES DE PAPA Y CHORIZO,650.00,,,,
+11,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,SOPES DE POLLO,650.00,,,,
+12,producto,nuevo,PLATOS MEXICANOS 🌯,cocina,SOPES DE TINGA DE POLLO,700.00,,,,
+181,producto con modificador,"ya subido como ""TOSTADAS""",PLATOS MEXICANOS 🌯,cocina,TOSTADAS,650.00,Tostadas · Tipo,Cerdo,0.00,la 35 es la misma a $600: se deja $650 (el código más nuevo)
+33,producto con modificador,"ya subido como ""TOSTADAS""",PLATOS MEXICANOS 🌯,cocina,TOSTADAS,650.00,Tostadas · Tipo,Chilorio,0.00,
+36,producto con modificador,"ya subido como ""TOSTADAS""",PLATOS MEXICANOS 🌯,cocina,TOSTADAS,650.00,Tostadas · Tipo,Papa y Chorizo,0.00,
+32,producto con modificador,"ya subido como ""TOSTADAS""",PLATOS MEXICANOS 🌯,cocina,TOSTADAS,650.00,Tostadas · Tipo,Pollo,0.00,
+34,producto con modificador,"ya subido como ""TOSTADAS""",PLATOS MEXICANOS 🌯,cocina,TOSTADAS,650.00,Tostadas · Tipo,Tinga de Pollo,0.00,
+195,producto con modificador,nuevo,BEBIDAS🥤,bar,ARIZONA,200.00,Arizona · Sabor,Ice Tea,0.00,área vacía en el CSV → Bar
+242,producto con modificador,nuevo,BEBIDAS🥤,bar,ARIZONA,200.00,Arizona · Sabor,Strawberry Kiwi,0.00,área vacía en el CSV → Bar
+114,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Tamarindo,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+134,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Mandarina,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+135,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Toronja,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+136,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Fruit Punch,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+137,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Limón,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+138,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Piña,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+199,producto con modificador,"ya subido como ""JARRITOS""",BEBIDAS🥤,bar,JARRITOS,175.00,Jarritos · Sabor,Guayaba,0.00,"el CSV trae los sabores a $250 (Sin Alcohol) y ""Jarritos. - Guava"" a $175 (Bebidas, código más nuevo); el usuario lo subió a $175"
+178,producto,"ya subido como ""JUGOS NATURALES"", antes $0",BEBIDAS🥤,bar,JUGOS NATURALES,150.00,,,,
+221,producto con modificador,"ya subido como ""REFRESCOS"", antes $0",BEBIDAS🥤,bar,REFRESCOS,50.00,Refrescos Sabores · Sabor,Rojo,0.00,área vacía en el CSV → Bar
+222,producto con modificador,"ya subido como ""REFRESCOS"", antes $0",BEBIDAS🥤,bar,REFRESCOS,50.00,Refrescos Sabores · Sabor,Uva,0.00,área vacía en el CSV → Bar
+223,producto con modificador,"ya subido como ""REFRESCOS"", antes $0",BEBIDAS🥤,bar,REFRESCOS,50.00,Refrescos Sabores · Sabor,Merengue,0.00,área vacía en el CSV → Bar
+225,producto con modificador,"ya subido como ""REFRESCOS"", antes $0",BEBIDAS🥤,bar,REFRESCOS,50.00,Refrescos Sabores · Sabor,Sprite,0.00,área vacía en el CSV → Bar
+224,producto con modificador,"ya subido como ""REFRESCOS"", antes $0",BEBIDAS🥤,bar,REFRESCOS,50.00,Refrescos Sabores · Sabor,Soda,25.00,área vacía en el CSV → Bar
+236,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Canada Dry Ginger,0.00,
+237,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Canada Dry Blackberry,0.00,
+238,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Dr Pepper,25.00,
+239,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Dr Pepper Blackberry,25.00,
+240,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Dr Pepper Cherry,25.00,
+241,producto con modificador,"ya subido como ""SODA CAN"", antes $0",BEBIDAS🥤,bar,SODA CAN,100.00,Soda Can · Sabor,Squirt Toronja,50.00,
+115,producto,"ya subido como ""AGUA""",SIN ALCOHOL,bar,AGUA,50.00,,,,"es el AGUA ya subido; sin ITBIS, como en Ágora; solo Ley (sin ITBIS)"
+112,producto,nuevo,SIN ALCOHOL,bar,CHINOLA FROZEN,250.00,,,,
+110,producto,nuevo,SIN ALCOHOL,bar,FRESA FROZEN,300.00,,,,
+107,producto,nuevo,SIN ALCOHOL,bar,HORCHATA,250.00,,,,
+200,producto,nuevo,SIN ALCOHOL,bar,JUGO DE CEREZA,200.00,,,,
+109,producto,nuevo,SIN ALCOHOL,bar,JUGO DE CHINOLA,200.00,,,,
+215,producto,nuevo,SIN ALCOHOL,bar,JUGO DE FRUIT PUNCH,250.00,,,,
+108,producto,nuevo,SIN ALCOHOL,bar,JUGO DE LIMÓN,200.00,,,,
+248,producto,nuevo,SIN ALCOHOL,bar,LIMONADA DE COCO,300.00,,,,
+111,producto,nuevo,SIN ALCOHOL,bar,LIMONADA FROZEN,250.00,,,,
+113,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Coca Cola,0.00,
+133,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Sprite,0.00,
+145,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Soda,0.00,
+226,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Zero,0.00,
+230,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Squirt,50.00,
+231,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Sidral Manzana,100.00,
+232,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Sangría Señorial,100.00,
+233,producto con modificador,nuevo,SIN ALCOHOL,bar,REFRESCO,100.00,Refresco · Sabor,Boing Mango,100.00,
+205,producto,nuevo,SIN ALCOHOL,bar,TAMARINDO FROZEN,250.00,,,,
+106,producto,nuevo,SIN ALCOHOL,bar,TÉ DE JAMAICA,200.00,,,,
+147,producto,nuevo,CERVEZA,bar,CLAMATO,100.00,,,,
+119,producto,nuevo,CERVEZA,bar,CORONA,300.00,,,,
+120,producto,nuevo,CERVEZA,bar,HEINEKEN,300.00,,,,
+122,producto,nuevo,CERVEZA,bar,MODELO NEGRA,300.00,,,,
+121,producto,nuevo,CERVEZA,bar,MODELO RUBIA,300.00,,,,
+117,producto,nuevo,CERVEZA,bar,PRESIDENTE LIGHT,300.00,,,,
+116,producto,nuevo,CERVEZA,bar,PRESIDENTE NORMAL,300.00,,,,
+118,producto,nuevo,CERVEZA,bar,STELLA ARTOIS,300.00,,,,
+129,producto,nuevo,CAFÉ,bar,CAFÉ CON LECHE,150.00,,,,
+130,producto,nuevo,CAFÉ,bar,CORTADITO,100.00,,,,
+131,producto,nuevo,CAFÉ,bar,ESPRESSO,100.00,,,,
+57,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO 1800,500.00,Cantarito 1800 · Tequila,Silver,0.00,
+58,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO 1800,500.00,Cantarito 1800 · Tequila,Reposado,0.00,
+59,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO 1800,500.00,Cantarito 1800 · Tequila,Añejo,50.00,
+60,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO 1800,500.00,Cantarito 1800 · Tequila,Añejo Cristalino,150.00,
+186,producto,nuevo,CANTARITOS,bar,CANTARITO 400 CONEJOS,700.00,,,,
+53,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO AGAVITA,400.00,Cantarito Agavita · Tequila,Silver,0.00,
+54,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO AGAVITA,400.00,Cantarito Agavita · Tequila,Gold,0.00,
+67,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO DON JULIO,550.00,Cantarito Don Julio · Tequila,Reposado,0.00,
+66,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO DON JULIO,550.00,Cantarito Don Julio · Tequila,Añejo,100.00,
+65,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO DON JULIO,550.00,Cantarito Don Julio · Tequila,Extra Añejo,150.00,
+68,producto,nuevo,CANTARITOS,bar,CANTARITO GRAN CAVA EXTRA AÑEJO,900.00,,,,
+69,producto,nuevo,CANTARITOS,bar,CANTARITO GRAND MAYAN EXTRA AÑEJO,900.00,,,,
+63,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO HERRADURA,650.00,Cantarito Herradura · Tequila,Reposado,0.00,"en el CSV: ""Herrtadura"""
+64,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO HERRADURA,650.00,Cantarito Herradura · Tequila,818 Reposado,0.00,"en el CSV: ""Herrtadura"""
+61,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO HERRADURA,650.00,Cantarito Herradura · Tequila,Añejo,50.00,"en el CSV: ""Herrtadura"""
+62,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO HERRADURA,650.00,Cantarito Herradura · Tequila,Cristalino Ultra,150.00,"en el CSV: ""Herrtadura"""
+55,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO JOSÉ CUERVO,450.00,Cantarito José Cuervo · Tequila,Silver,0.00,
+56,producto con modificador,nuevo,CANTARITOS,bar,CANTARITO JOSÉ CUERVO,450.00,Cantarito José Cuervo · Tequila,Reposado,0.00,
+184,producto,nuevo,CANTARITOS,bar,CANTARITO MEZCAL MITRE,950.00,,,,área vacía en el CSV → Bar
+185,producto,nuevo,CANTARITOS,bar,CANTARITO MONTELOBOS,600.00,,,,área vacía en el CSV → Bar
+192,producto,nuevo,MARGARITAS,bar,MARGARITA DE CHINOLA,450.00,,,,
+193,producto,nuevo,MARGARITAS,bar,MARGARITA DE COCO,450.00,,,,
+72,producto,nuevo,MARGARITAS,bar,MARGARITA DE FRESA,500.00,,,,
+70,producto,nuevo,MARGARITAS,bar,MARGARITA DE LIMÓN,450.00,,,,
+209,producto,nuevo,MARGARITAS,bar,MARGARITA DE LIMÓN A LA ROCA,450.00,,,,
+71,producto,nuevo,MARGARITAS,bar,MARGARITA DE TAMARINDO,450.00,,,,
+76,producto,nuevo,MICHELADAS,bar,CHELADA,350.00,,,,
+74,producto,nuevo,MICHELADAS,bar,MICHELADA DE MANGO,500.00,,,,
+75,producto,nuevo,MICHELADAS,bar,MICHELADA DE TAMARINDO,500.00,,,,
+73,producto,nuevo,MICHELADAS,bar,MICHELADA TRADICIONAL,500.00,,,,
+198,producto,nuevo,MOJITOS,bar,MOJITO DE CHINOLA,400.00,,,,
+79,producto,nuevo,MOJITOS,bar,MOJITO DE COCO,400.00,,,,
+80,producto,nuevo,MOJITOS,bar,MOJITO DE FRESA,400.00,,,,
+78,producto,nuevo,MOJITOS,bar,MOJITO DE JAMAICA,400.00,,,,
+77,producto,nuevo,MOJITOS,bar,MOJITO DE LIMÓN,400.00,,,,
+201,producto,nuevo,COCTELES,bar,APEROL SPRITZ,450.00,,,,
+210,producto,nuevo,COCTELES,bar,AVERNA,200.00,,,,
+189,producto,nuevo,COCTELES,bar,BAILEYS,300.00,,,,
+216,producto,nuevo,COCTELES,bar,DIEGO RIVERA,500.00,,,,
+197,producto con modificador,nuevo,COCTELES,bar,MANGONADA,500.00,Mangonada · Alcohol,Sin alcohol,0.00,
+196,producto con modificador,nuevo,COCTELES,bar,MANGONADA,500.00,Mangonada · Alcohol,Con alcohol,50.00,
+148,producto,nuevo,COCTELES,bar,MEZCALITA,500.00,,,,"en el CSV: ""Mezcalita - Nueva"""
+82,producto,nuevo,COCTELES,bar,PALOMA,450.00,,,,
+203,producto con modificador,nuevo,COCTELES,bar,PIÑA COLADA,400.00,Piña Colada · Alcohol,Con alcohol,0.00,
+204,producto con modificador,nuevo,COCTELES,bar,PIÑA COLADA,400.00,Piña Colada · Alcohol,Sin alcohol,0.00,
+81,producto,nuevo,COCTELES,bar,SANGRÍA DE JAMAICA,450.00,,,,
+202,producto,nuevo,COCTELES,bar,TEQUILA SUNRISE,400.00,,,,
+218,producto,nuevo,MEZCAL,bar,CONTRALUZ MEZCAL,600.00,,,,
+105,producto,nuevo,MEZCAL,bar,MEZCAL 400 CONEJOS (SHOT),550.00,,,,
+219,producto,nuevo,MEZCAL,bar,OJO DE TIGRE,450.00,,,,
+206,producto,nuevo,Postres,bar,BROWNIE A LA MODA,550.00,,,,
+229,producto,nuevo,Postres,bar,CHURROS,400.00,,,,
+52,producto,nuevo,Postres,bar,PIE DE LIMÓN,400.00,,,,
+84,producto,nuevo,DON JULIO RESERVA,bar,DON JULIO AÑEJO (SHOT),700.00,,,,
+83,producto,nuevo,DON JULIO RESERVA,bar,DON JULIO REPOSADO (SHOT),600.00,,,,
+85,producto,nuevo,DON JULIO RESERVA,bar,FRANCISCO GONZALES EXTRA AÑEJO (SHOT),800.00,,,,
+89,producto,nuevo,OTROS TEQUILAS EXCLUSIVOS,bar,AMOR MÍO BLANCO (SHOT),550.00,,,,
+90,producto,nuevo,OTROS TEQUILAS EXCLUSIVOS,bar,CLASE AZUL REPOSADO (SHOT),1450.00,,,,
+87,producto,nuevo,OTROS TEQUILAS EXCLUSIVOS,bar,GRAN CAVA DE ORO EXTRA VIEJO (SHOT),900.00,,,,"en el CSV: ""Grand Cava""; el cantarito dice ""Gran Cava"""
+86,producto,nuevo,OTROS TEQUILAS EXCLUSIVOS,bar,GRAND MAYAN EXTRA VIEJO (SHOT),800.00,,,,
+97,producto,nuevo,OTROS TEQUILAS,bar,1800 AÑEJO (SHOT),550.00,,,,
+96,producto,nuevo,OTROS TEQUILAS,bar,1800 REPOSADO (SHOT),400.00,,,,
+95,producto,nuevo,OTROS TEQUILAS,bar,1800 SILVER (SHOT),400.00,,,,
+98,producto,nuevo,OTROS TEQUILAS,bar,1800 ULTRA AÑEJO CRISTALINO (SHOT),600.00,,,,
+92,producto,nuevo,OTROS TEQUILAS,bar,AGAVITA REPOSADO (SHOT),300.00,,,,
+91,producto,nuevo,OTROS TEQUILAS,bar,AGAVITA SILVER (SHOT),300.00,,,,
+227,producto,nuevo,OTROS TEQUILAS,bar,GRAN MALO (SHOT),450.00,,,,"la 88 es la misma (mismo precio, en Otros Tequilas Exclusivos): se carga una"
+101,producto,nuevo,OTROS TEQUILAS,bar,HERRADURA AÑEJO (SHOT),500.00,,,,
+100,producto,nuevo,OTROS TEQUILAS,bar,HERRADURA REPOSADO (SHOT),450.00,,,,
+99,producto,nuevo,OTROS TEQUILAS,bar,HERRADURA SILVER (SHOT),400.00,,,,
+102,producto,nuevo,OTROS TEQUILAS,bar,HERRADURA ULTRA AÑEJO (SHOT),600.00,,,,
+94,producto,nuevo,OTROS TEQUILAS,bar,JOSÉ CUERVO REPOSADO (SHOT),350.00,,,,
+93,producto,nuevo,OTROS TEQUILAS,bar,JOSÉ CUERVO SILVER (SHOT),350.00,,,,
+214,producto,nuevo,DELIVERY,cocina,COMBO ROSARIO,1100.00,,,,área vacía en el CSV → Cocina
+213,producto,nuevo,DELIVERY,cocina,FIESTÓN DE TACOS,2000.00,,,,"en el CSV: ""A. Fieston de tacos""; área vacía → Cocina"
+249,producto,nuevo,EXTRAS,cocina,CARNES,700.00,,,,queda como producto (no como extra)
+191,opción de Extras,,,cocina,,,Extras,Extra crema,50.00,grupo opcional en los productos de cocina
+128,opción de Extras,,,cocina,,,Extras,Extra salsa ranchera,50.00,grupo opcional en los productos de cocina
+127,opción de Extras,,,cocina,,,Extras,Extra tortillas,50.00,grupo opcional en los productos de cocina
+126,opción de Extras,,,cocina,,,Extras,Extra frijoles,100.00,grupo opcional en los productos de cocina
+125,opción de Extras,,,cocina,,,Extras,Extra guacamole,100.00,grupo opcional en los productos de cocina
+—,opción de Extras,,,cocina,,,Extras,Extra nachos,100.00,"grupo opcional en los productos de cocina; no está en el CSV, lo subió el usuario"
+159,opción de Extras,,,cocina,,,Extras,Otro extra,100.00,grupo opcional en los productos de cocina
+123,opción de Extras,,,cocina,,,Extras,Pico de gallo,100.00,grupo opcional en los productos de cocina
+—,opción de Extras,,,cocina,,,Extras,Extra de carne,150.00,"grupo opcional en los productos de cocina; no está en el CSV, lo subió el usuario"
+228,opción de Extras,,,cocina,,,Extras,Extra queso,150.00,grupo opcional en los productos de cocina
+124,opción de Extras,,,cocina,,,Extras,Extra de pollo,200.00,grupo opcional en los productos de cocina
+187,NO SE CARGA,,,,Gringa - gringa,800.00,,,,"repetida de la 31 (Gringa, $800)"
+35,NO SE CARGA,,,,Tostadas de Cerdo - Tostada cerdo,600.00,,,,"repetida de la 181 (Tostadas de Cerdo); esta a $600, se deja la de $650"
+88,NO SE CARGA,,,,Gran malo - Shot,450.00,,,,"repetida de la 227 (Gran Malo, $450)"
+220,NO SE CARGA,,,,Jarritos. - Guava,175.00,,,,Jarritos Guava = Jarritos Guayaba; su precio ($175) es el de todos los sabores
+158,NO SE CARGA,,,,Delivery 100 -,100.00,,,,cargo de delivery: se cobra con el delivery de la caja
+157,NO SE CARGA,,,,Delivery 150 -,150.00,,,,cargo de delivery: se cobra con el delivery de la caja
+156,NO SE CARGA,,,,Delivery 200 -,200.00,,,,cargo de delivery: se cobra con el delivery de la caja
+155,NO SE CARGA,,,,Delivery 250 -,250.00,,,,cargo de delivery: se cobra con el delivery de la caja
+154,NO SE CARGA,,,,Delivery 300 -,300.00,,,,cargo de delivery: se cobra con el delivery de la caja
+153,NO SE CARGA,,,,Delivery 350 -,350.00,,,,cargo de delivery: se cobra con el delivery de la caja
+152,NO SE CARGA,,,,Delivery 400 -,400.00,,,,cargo de delivery: se cobra con el delivery de la caja
+151,NO SE CARGA,,,,Delivery 450 -,450.00,,,,cargo de delivery: se cobra con el delivery de la caja
+,ya estaba en la caja,ENCHILADA SUIZA,,,ENCHILADA SUIZA,,,,,no se toca
+,ya estaba en la caja,DELIVERY 100,,,DELIVERY 100,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 150,,,DELIVERY 150,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 200,,,DELIVERY 200,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 250,,,DELIVERY 250,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 300,,,DELIVERY 300,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 350,,,DELIVERY 350,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 400,,,DELIVERY 400,,,,,se DESACTIVA
+,ya estaba en la caja,DELIVERY 450,,,DELIVERY 450,,,,,se DESACTIVA
+,ya estaba en la caja,EXTRA GUACAMOLE,,,EXTRA GUACAMOLE,,,,,se DESACTIVA
+,ya estaba en la caja,Extra Queso,,,Extra Queso,,,,,se DESACTIVA
+,ya estaba en la caja,EXTRA DE CARNE,,,EXTRA DE CARNE,,,,,se DESACTIVA
+,ya estaba en la caja,Extra Nachos,,,Extra Nachos,,,,,se DESACTIVA
+,ya estaba en la caja,TACO DOBLE DECKERS,,cocina,TACO DOBLE DECKERS,,,,,no está en el CSV: se queda; área cocina; impuestos itbis_ley; con Extras
+,ya estaba en la caja,TACOS FIESTAS,,cocina,TACOS FIESTAS,,,,,no está en el CSV: se queda; área cocina; impuestos itbis_ley; con Extras
+,ya estaba en la caja,GANSITO MARINELA GRANDE,,bar,GANSITO MARINELA GRANDE,,,,,no está en el CSV: se queda; área bar; impuestos itbis_ley
+,ya estaba en la caja,Carne Cocida Natural xlb,,cocina,Carne Cocida Natural xlb,,,,,no está en el CSV: se queda; área cocina; impuestos no_tocar

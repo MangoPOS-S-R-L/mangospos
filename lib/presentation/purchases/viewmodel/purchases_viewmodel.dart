@@ -218,9 +218,14 @@ class PurchasesViewModel extends ChangeNotifier {
     }
   }
 
-  /// Devuelve el id de la orden creada (para vincular la CxP en compras a
-  /// crédito).
-  Future<String> createPurchaseOrder({
+  /// Devuelve la orden creada: el id vincula la CxP en compras a crédito y el
+  /// número es el que asignó la base (puede no ser el que se pidió si otro
+  /// equipo lo tomó antes).
+  ///
+  /// [idempotencyKey] la genera la pantalla y la reusa en cada reintento: un
+  /// doble toque o un reenvío tras un timeout devuelven la MISMA orden en vez
+  /// de registrar la factura dos veces.
+  Future<CreatedPurchaseOrder> createPurchaseOrder({
     required String supplierId,
     required String warehouseId,
     required String orderNumber,
@@ -231,6 +236,7 @@ class PurchasesViewModel extends ChangeNotifier {
     String? ncf,
     required List<PurchaseDraftItem> items,
     double discount = 0,
+    String? idempotencyKey,
   }) async {
     final businessId = _state.businessId;
     if (businessId == null) {
@@ -241,7 +247,7 @@ class PurchasesViewModel extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final orderId = await _repository.createPurchaseOrder(
+      final created = await _repository.createPurchaseOrderWithNumber(
         businessId: businessId,
         supplierId: supplierId,
         warehouseId: warehouseId,
@@ -253,10 +259,11 @@ class PurchasesViewModel extends ChangeNotifier {
         ncf: ncf,
         items: items,
         discount: discount,
+        idempotencyKey: idempotencyKey,
       );
       _state = _state.copyWith(saving: false);
       await refresh();
-      return orderId;
+      return created;
     } catch (e) {
       _state = _state.copyWith(
         saving: false,

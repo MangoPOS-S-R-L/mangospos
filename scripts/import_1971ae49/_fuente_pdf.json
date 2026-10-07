@@ -1,0 +1,890 @@
+[
+ {
+  "code": "000105",
+  "name": "AGUA CARBONATADA",
+  "cost": 35.0,
+  "price": 50.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000037",
+  "name": "ALITAS DE POLLO",
+  "cost": 200.0,
+  "price": 395.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000098",
+  "name": "APEROL SPRITZ CLASICO",
+  "cost": 120.0,
+  "price": 254.24,
+  "exist": 3.0,
+  "total": 360.0
+ },
+ {
+  "code": "000008",
+  "name": "AROS DE CEBOLLA",
+  "cost": 15.0,
+  "price": 195.0,
+  "exist": 157.0,
+  "total": 2355.0
+ },
+ {
+  "code": "000063",
+  "name": "BACON CHESSE BURGER",
+  "cost": 150.0,
+  "price": 400.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000020",
+  "name": "BANDEJA DE 4 PERSONAS MIXTAS",
+  "cost": 700.0,
+  "price": 1500.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000109",
+  "name": "BANDEJA PARA 2 PERSONAS",
+  "cost": 300.0,
+  "price": 720.34,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000021",
+  "name": "BANDEJA PARA 6 PERSONAS MIXTAS",
+  "cost": 950.0,
+  "price": 2000.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000022",
+  "name": "BANDEJA PARA 8 PERSONAS MIXTAS",
+  "cost": 2650.0,
+  "price": 2800.0,
+  "exist": 1.0,
+  "total": 2650.0
+ },
+ {
+  "code": "000107",
+  "name": "BLODY MARRY",
+  "cost": 150.0,
+  "price": 271.19,
+  "exist": 8.0,
+  "total": 1200.0
+ },
+ {
+  "code": "000095",
+  "name": "BLUE LAGON TROPICAL",
+  "cost": 125.0,
+  "price": 290.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "0000100",
+  "name": "BOTELLA DE AGUA",
+  "cost": 7.0,
+  "price": 25.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000009",
+  "name": "BROCHETAS MIXTAS",
+  "cost": 15.0,
+  "price": 330.0,
+  "exist": 7.0,
+  "total": 105.0
+ },
+ {
+  "code": "000059",
+  "name": "BURGER CLASICA ANGUS",
+  "cost": 150.0,
+  "price": 375.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000060",
+  "name": "BURGER CLASICA POLLO",
+  "cost": 120.0,
+  "price": 300.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000069",
+  "name": "BURRITO DE PIERNA",
+  "cost": 150.0,
+  "price": 330.0,
+  "exist": 4.0,
+  "total": 600.0
+ },
+ {
+  "code": "000067",
+  "name": "BURRITO DE POLLO",
+  "cost": 150.0,
+  "price": 300.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000068",
+  "name": "BURRITO DE RES",
+  "cost": 120.0,
+  "price": 300.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000070",
+  "name": "BURRITO MIXTO",
+  "cost": 175.0,
+  "price": 350.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000024",
+  "name": "CAMARONES A LA CREMA",
+  "cost": 400.0,
+  "price": 675.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000025",
+  "name": "CAMARONES A LA CRIOLLA",
+  "cost": 400.0,
+  "price": 675.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000026",
+  "name": "CAMARONES A LA DIABLA",
+  "cost": 350.0,
+  "price": 595.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000023",
+  "name": "CAMARONES AL AJILLO",
+  "cost": 400.0,
+  "price": 675.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000065",
+  "name": "CARNE SALADA",
+  "cost": 100.0,
+  "price": 375.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000082",
+  "name": "CASA AMIGOS SANDIA SMASH",
+  "cost": 220.0,
+  "price": 485.0,
+  "exist": 11.0,
+  "total": 2420.0
+ },
+ {
+  "code": "000084",
+  "name": "CASAAMIGOS PINEAPPLE FIZZ",
+  "cost": 150.0,
+  "price": 495.0,
+  "exist": 11.0,
+  "total": 1650.0
+ },
+ {
+  "code": "000132",
+  "name": "CERDO ASADO + CASABE",
+  "cost": 366.67,
+  "price": 533.33,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000032",
+  "name": "CHIVO GUISADO",
+  "cost": 350.0,
+  "price": 620.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000045",
+  "name": "CHURRASCO ANGUS",
+  "cost": 500.0,
+  "price": 1101.69,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000052",
+  "name": "CLUB SANDWICH",
+  "cost": 150.0,
+  "price": 330.51,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000104",
+  "name": "COPA DE VINO PRIMALROOTS",
+  "cost": 138.83,
+  "price": 279.66,
+  "exist": 10.0,
+  "total": 1388.3
+ },
+ {
+  "code": "000005",
+  "name": "CORONA",
+  "cost": 120.0,
+  "price": 190.68,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000093",
+  "name": "COSMOPOLITAN",
+  "cost": 150.0,
+  "price": 320.0,
+  "exist": 18.0,
+  "total": 2700.0
+ },
+ {
+  "code": "000042",
+  "name": "COSTILLA BBQ",
+  "cost": 210.0,
+  "price": 600.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000007",
+  "name": "CROQUETAS DE POLLO",
+  "cost": 15.0,
+  "price": 220.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000058",
+  "name": "CUBANO",
+  "cost": 120.0,
+  "price": 320.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000061",
+  "name": "DOMINICANA BURGER",
+  "cost": 120.0,
+  "price": 485.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000047",
+  "name": "DULCE DE PIÑA CON LECHE",
+  "cost": 100.0,
+  "price": 127.81,
+  "exist": 8.0,
+  "total": 800.0
+ },
+ {
+  "code": "000091",
+  "name": "EL DIABLO",
+  "cost": 130.0,
+  "price": 395.0,
+  "exist": 18.0,
+  "total": 2340.0
+ },
+ {
+  "code": "000012",
+  "name": "ENSALADA CESAR",
+  "cost": 15.0,
+  "price": 325.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000062",
+  "name": "EXTRANJERA BURGER",
+  "cost": 250.0,
+  "price": 650.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000044",
+  "name": "FILETE DE CERDO",
+  "cost": 250.0,
+  "price": 600.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000043",
+  "name": "FILETE DE RES",
+  "cost": 350.0,
+  "price": 635.59,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000051",
+  "name": "HOTDOG",
+  "cost": 75.0,
+  "price": 150.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000106",
+  "name": "JACK DANIEL HONEY",
+  "cost": 187.5,
+  "price": 310.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000114",
+  "name": "JACK DANIEL OLD NO.7",
+  "cost": 187.5,
+  "price": 315.0,
+  "exist": 14.0,
+  "total": 2625.0
+ },
+ {
+  "code": "000099",
+  "name": "JUGOS NATURALES",
+  "cost": 45.0,
+  "price": 110.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000066",
+  "name": "LONGANIZA",
+  "cost": 100.0,
+  "price": 350.0,
+  "exist": 5.0,
+  "total": 500.0
+ },
+ {
+  "code": "000085",
+  "name": "MARGARITA DE CHINOLA",
+  "cost": 150.0,
+  "price": 350.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000086",
+  "name": "MARGARITA TRADICIONAL",
+  "cost": 150.0,
+  "price": 300.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000064",
+  "name": "MARICELAS BURGER",
+  "cost": 150.0,
+  "price": 466.1,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000090",
+  "name": "MARICELAS MARGARITA",
+  "cost": 120.0,
+  "price": 370.0,
+  "exist": 15.0,
+  "total": 1800.0
+ },
+ {
+  "code": "000029",
+  "name": "MERO A LA CRIOLLA",
+  "cost": 10.0,
+  "price": 450.0,
+  "exist": 3.0,
+  "total": 30.0
+ },
+ {
+  "code": "000027",
+  "name": "MERO A LA PLANCHA",
+  "cost": 300.0,
+  "price": 450.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000028",
+  "name": "MERO FRITO",
+  "cost": 350.0,
+  "price": 450.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000089",
+  "name": "MEXICAN MULE",
+  "cost": 120.0,
+  "price": 350.0,
+  "exist": 17.0,
+  "total": 2040.0
+ },
+ {
+  "code": "000035",
+  "name": "MOFONGO DE CAMARONES",
+  "cost": 200.0,
+  "price": 595.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000034",
+  "name": "MOFONGO DE CHICHARRON REBOZADO",
+  "cost": 200.0,
+  "price": 495.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000033",
+  "name": "MOFONGO DE POLLO",
+  "cost": 350.0,
+  "price": 450.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000036",
+  "name": "MOFONGO MIXTO",
+  "cost": 250.0,
+  "price": 550.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000080",
+  "name": "MOJITO DE CHINOLA",
+  "cost": 75.0,
+  "price": 260.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000078",
+  "name": "MOJITO DE COCO",
+  "cost": 75.0,
+  "price": 275.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000077",
+  "name": "MOJITO DE FRESA",
+  "cost": 100.0,
+  "price": 275.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000079",
+  "name": "MOJITO DE LIMON",
+  "cost": 100.0,
+  "price": 271.19,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000014",
+  "name": "MONDONGO",
+  "cost": 50.0,
+  "price": 296.61,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000006",
+  "name": "MOZZARELLA STICKS",
+  "cost": 15.0,
+  "price": 350.0,
+  "exist": 18.0,
+  "total": 270.0
+ },
+ {
+  "code": "000097",
+  "name": "MUSCOW MULE",
+  "cost": 120.0,
+  "price": 320.0,
+  "exist": 4.0,
+  "total": 480.0
+ },
+ {
+  "code": "000011",
+  "name": "NACHOS",
+  "cost": 15.0,
+  "price": 325.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000113",
+  "name": "OLD PARR",
+  "cost": 179.46,
+  "price": 320.0,
+  "exist": 10.0,
+  "total": 1794.6
+ },
+ {
+  "code": "000083",
+  "name": "PALOMA CASAAMIGOS",
+  "cost": 10.0,
+  "price": 455.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "0000010",
+  "name": "PAPAS SAZONADAS",
+  "cost": 15.0,
+  "price": 250.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000016",
+  "name": "PASTA ALFREDO",
+  "cost": 150.0,
+  "price": 500.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000017",
+  "name": "PASTA CARBONARA",
+  "cost": 100.0,
+  "price": 495.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000019",
+  "name": "PASTA CON CAMARONES",
+  "cost": 150.0,
+  "price": 550.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000018",
+  "name": "PASTA CUATRO QUESO",
+  "cost": 150.0,
+  "price": 495.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000076",
+  "name": "PATACON",
+  "cost": 185.0,
+  "price": 370.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000040",
+  "name": "PECHUGA A LA TROPICAL",
+  "cost": 200.0,
+  "price": 508.47,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000039",
+  "name": "PECHUGA A LA CREMA",
+  "cost": 200.0,
+  "price": 475.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000038",
+  "name": "PECHUGA A LA PLANCHA",
+  "cost": 250.0,
+  "price": 420.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000041",
+  "name": "PECHUGA CORDON BLEU",
+  "cost": 250.0,
+  "price": 550.85,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000030",
+  "name": "PESCADO FRITO",
+  "cost": 300.0,
+  "price": 500.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000081",
+  "name": "PIÑA COLADA",
+  "cost": 120.0,
+  "price": 255.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000002",
+  "name": "PRESIDENTE LIGHT",
+  "cost": 89.58,
+  "price": 152.54,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "1",
+  "name": "PRESIDENTE NORMAL",
+  "cost": 89.58,
+  "price": 152.54,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000073",
+  "name": "QUESADILLA DE PIERNA",
+  "cost": 125.0,
+  "price": 288.14,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000071",
+  "name": "QUESADILLA DE POLLO",
+  "cost": 130.0,
+  "price": 288.14,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000072",
+  "name": "QUESADILLA DE RES",
+  "cost": 120.0,
+  "price": 288.14,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000074",
+  "name": "QUESADILLA MIXTA",
+  "cost": 150.0,
+  "price": 300.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000046",
+  "name": "QUESILLO",
+  "cost": 45.0,
+  "price": 169.92,
+  "exist": 2.0,
+  "total": 90.0
+ },
+ {
+  "code": "000031",
+  "name": "RABO ENCENDIDO",
+  "cost": 300.0,
+  "price": 600.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000096",
+  "name": "RASPBERRY RUM FIZZ",
+  "cost": 125.0,
+  "price": 320.0,
+  "exist": 190.0,
+  "total": 23750.0
+ },
+ {
+  "code": "000101",
+  "name": "REFRESCO",
+  "cost": 25.0,
+  "price": 60.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000094",
+  "name": "RUN PUNCH",
+  "cost": 150.0,
+  "price": 280.0,
+  "exist": 10.0,
+  "total": 1500.0
+ },
+ {
+  "code": "000050",
+  "name": "SALCHIPAPA",
+  "cost": 100.0,
+  "price": 275.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000057",
+  "name": "SANDWICH DE PIERNA",
+  "cost": 80.0,
+  "price": 225.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000055",
+  "name": "SANDWICH DE POLLO",
+  "cost": 65.0,
+  "price": 169.49,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000056",
+  "name": "SANDWICH JAMON Y QUESO",
+  "cost": 75.0,
+  "price": 120.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000003",
+  "name": "SANTO LIBRE",
+  "cost": 80.0,
+  "price": 270.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000004",
+  "name": "SMIRNOFF",
+  "cost": 138.0,
+  "price": 194.92,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000015",
+  "name": "SOPA DE CAMARONES",
+  "cost": 15.0,
+  "price": 508.47,
+  "exist": 3.0,
+  "total": 45.0
+ },
+ {
+  "code": "000013",
+  "name": "SOPA DE POLLO",
+  "cost": 20.0,
+  "price": 220.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000088",
+  "name": "TEQUILA SOUR",
+  "cost": 150.0,
+  "price": 350.0,
+  "exist": 13.0,
+  "total": 1950.0
+ },
+ {
+  "code": "000087",
+  "name": "TEQUILA SUNRISE",
+  "cost": 125.0,
+  "price": 300.0,
+  "exist": 1.0,
+  "total": 125.0
+ },
+ {
+  "code": "000138",
+  "name": "TITO'S VODKA",
+  "cost": 1300.0,
+  "price": 2055.0,
+  "exist": 3.0,
+  "total": 3900.0
+ },
+ {
+  "code": "000053",
+  "name": "TOSTADAS DE JAMON Y QUESO",
+  "cost": 45.0,
+  "price": 60.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000054",
+  "name": "TOSTADAS DE POLLO",
+  "cost": 55.0,
+  "price": 80.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000075",
+  "name": "TRIO DE TACOS",
+  "cost": 125.0,
+  "price": 350.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000135",
+  "name": "VINO FRONTERA",
+  "cost": 500.0,
+  "price": 974.58,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000048",
+  "name": "YAROA DE PAPA",
+  "cost": 150.0,
+  "price": 350.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000049",
+  "name": "YAROA DE PLATANO MADURO",
+  "cost": 150.0,
+  "price": 350.0,
+  "exist": 0.0,
+  "total": 0.0
+ },
+ {
+  "code": "000092",
+  "name": "ZOMBIE",
+  "cost": 200.0,
+  "price": 350.0,
+  "exist": 19.0,
+  "total": 3800.0
+ }
+]

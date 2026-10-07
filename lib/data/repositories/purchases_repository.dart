@@ -576,13 +576,26 @@ class PurchasesRepository {
     // el movimiento —último precio, mig 20260714_0001, aplicada en prod—, y
     // así una orden que quede en Borrador o se cancele no deja el costo
     // movido. Antes esta función pisaba `inventory_items.cost` al guardar.
-    // Una orden REUSADA (misma llave de idempotencia) ya pasó por acá: no se
-    // vuelve a recibir.
-    if (receiveNow && !created.reused) {
+    // Una orden REUSADA (misma llave de idempotencia) ya pasó por acá, pero la
+    // recepción pudo haber fallado DESPUÉS de crearla (red, permisos) y por
+    // eso se reintentó: se recibe solo si sigue pendiente.
+    if (receiveNow &&
+        (!created.reused || await _isAwaitingReceipt(created.id))) {
       await receivePurchaseOrder(created.id, notes: notes);
     }
 
     return created;
+  }
+
+  /// La orden quedó 'sent' (creada pero sin recibir): es el estado que deja
+  /// una recepción que falló justo después de crear la orden.
+  Future<bool> _isAwaitingReceipt(String orderId) async {
+    final row = await _client
+        .from(PurchasesQueries.tablePurchaseOrders)
+        .select('status')
+        .eq('id', orderId)
+        .maybeSingle();
+    return row?['status']?.toString() == 'sent';
   }
 
   /// Corrige una compra YA registrada: cabecera y líneas en una sola

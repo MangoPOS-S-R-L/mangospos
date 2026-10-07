@@ -2113,6 +2113,24 @@ class OfflinePosService {
       fingerprint.startsWith('op:') &&
       completed.contains(fingerprint);
 
+  /// ¿Hay un envío a cocina en la cola DESPUÉS del alta en [addIndex]?
+  ///
+  /// No filtra por orden a propósito: la misma orden puede ir con id local o
+  /// del servidor según la acción. Si el envío era de otra orden, el ítem
+  /// llega como borrador y se borra como borrador: sin registro ni aviso.
+  static bool _kitchenSentAfter(
+    List<Map<String, dynamic>> queue,
+    int addIndex,
+  ) {
+    for (var i = addIndex + 1; i < queue.length; i++) {
+      final type = queue[i]['type'];
+      if (type == 'send_to_kitchen' || type == 'confirm_local_order') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   List<Map<String, dynamic>> _compactQueue(List<Map<String, dynamic>> queue) {
     final result = <Map<String, dynamic>>[];
 
@@ -2147,11 +2165,16 @@ class OfflinePosService {
 
         if (addIndex >= 0) {
           final base = Map<String, dynamic>.from(result[addIndex]);
-          if (type == 'delete_item') {
+          // Si la comanda ya salió (impresa en local) después del alta,
+          // quitar el producto o bajarle la cantidad NO se funde con el alta
+          // como si nunca hubiera existido: viaja al servidor tal cual, que
+          // lo registra y le avisa al dueño (20261007_0001).
+          final sentToKitchen = _kitchenSentAfter(result, addIndex);
+          if (type == 'delete_item' && !sentToKitchen) {
             result.removeAt(addIndex);
             continue;
           }
-          if (type == 'update_item_quantity') {
+          if (type == 'update_item_quantity' && !sentToKitchen) {
             base['qty'] = action['quantity'] ?? action['qty'] ?? base['qty'];
             result[addIndex] = base;
             continue;
@@ -2202,6 +2225,14 @@ class OfflinePosService {
               entry['type'] == type &&
               entry['item_id']?.toString() == itemId,
         );
+        // Una cantidad nueva no reemplaza a una de ANTES del envío a cocina:
+        // quedaría aplicada antes del envío y el servidor nunca vería que se
+        // quitó algo que cocina ya imprimió.
+        if (type == 'update_item_quantity' &&
+            existingIndex >= 0 &&
+            _kitchenSentAfter(result, existingIndex)) {
+          existingIndex = -1;
+        }
       }
 
       if (existingIndex >= 0) {
