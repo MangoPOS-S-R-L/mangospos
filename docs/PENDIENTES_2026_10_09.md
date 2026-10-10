@@ -372,6 +372,22 @@ estados de `print_jobs` (962 trabajos en 7 días, solo 160 impresos).
      `order_opener_name_alias`, `ecf_test_set_replace` y la prueba nueva de R6.
 3. [ ] Commits separados por tema: ventas; impresión y agente; e-CF; y lo que haya
    de otras sesiones (por ejemplo `azul-charge-subscription`).
+4a0. **10-oct, tarde: el dueño aplicó `20261010_0006`, `0008`, `0010` y `0009`** (en ese orden), tras revisar que no afectan a la app instalada (0006/0008 solo agregan; 0010 envuelve la función viva con candado por orden; el guard de 0009 solo actúa con ecf_status 'uncertain'). Huellas esperadas: `fn_apply_order_edit` `da095ade…`, `fn_replay_offline_payment` `4976e9a0…`, `fn_resolve_uncertain_emission` `c775df5e…`, `consume_inventory_from_order` `42bad147…` (+ `_unlocked` `5448d7fa…`, el cuerpo vivo de siempre renombrado). **Verificadas por el dueño el 10-oct: las 5 huellas coinciden.** Salud en producción tras aplicarlas: 97 pedidos y 212 productos en 30 min, 15 líneas editadas (versión > 1), 180 movimientos de inventario y 119 cobros en 1 h, 0 esperas de candado, e-CF sin `uncertain` (done=1, failed=2, pending=1 en 24 h, a revisar aparte), cron del barrido OK. Suites locales: 15 SQL (~270 comprobaciones) y Flutter 2593 ok sobre 3a9e2e4b. Siguen SIN aplicar: 0007 (solo con la app nueva en TODOS los equipos) y 0030 (T02, decisión del dueño). Falta publicar `emit-document` y `alanube-webhook` nuevas (van con 0009).
+4a1. [ ] **Lo que sigue tras 4a0 (en este orden):**
+   1. Funciones (las corre el dueño; pide la clave SSH): primero
+      `CHECK=1 ./scripts/deploy_edge_functions.sh emit-document alanube-webhook`. Lo esperado es que difieran solo
+      `_shared/emission-outcome.ts` (nuevo), `emit-document/index.ts` y `alanube-webhook/index.ts`. Si sale otro
+      archivo de `_shared`, publicar con `SKIP_SHARED` para que no viaje; emit-document solo necesita
+      `alanube-client`, `dgii-rounding`, `ecf-payload`, `ecf-tax-lines` y `emission-outcome`. OJO:
+      `ecf-onboarding.ts` cambió el 10-oct y su función no se publica aquí. Después, la misma línea sin `CHECK=1`. Nunca llamar
+      emit-document para probar: mirar el log en la próxima venta electrónica. Lo nuevo: un envío con respuesta
+      dudosa (caída, 5xx, 409, «ya existe») queda `uncertain` y no se reenvía. El webhook lo adopta solo si
+      Alanube lo tiene. Si no, se resuelve con `fn_resolve_uncertain_emission`; el panel admin aún no lo conoce.
+   2. App (commit 3a9e2e4b en adelante): subir la versión (`pubspec` dice 2.0.20+20020 desde 77b5b036, que no
+      traía T04) para poder distinguir los equipos actualizados en `device_sessions.app_version`. Actualizar
+      cada equipo con su cola en 0. Las ediciones que la app vieja dejó en cola sin subir quedan «por revisar»
+      («Cambio hecho con una versión anterior de la app»), no se aplican solas. Los cobros en cola no se afectan.
+   3. 0007: solo cuando `device_sessions` no muestre equipos activos con una versión anterior.
 4a. [ ] **Migraciones del 10-oct (integridad, todas SIN aplicar), en este orden:**
    - `20261010_0006_versioned_order_edits` (T04) ANTES de publicar la app nueva (sin ella la app nueva no
      edita cuentas; la vieja sigue igual).

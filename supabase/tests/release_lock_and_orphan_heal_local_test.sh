@@ -3,7 +3,7 @@
 # Prueba 20261010_0023: la salida de una mesa vacía toma el candado por mesa de
 # fn_open_table (comprobado con una segunda conexión real, dblink) y el candado
 # de ítems cura la orden viva colgada de una sesión cerrada. Línea base =
-# fn_release_empty_table viva (reversa de T02) + candado de 20261010_0020.
+# fn_release_empty_table viva previa (reversa de 0023) + candado de 20261010_0020.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 M=$REPO/supabase/migrations
@@ -183,7 +183,9 @@ python3 - "$M" "$D/release_live.sql" <<'PY2'
 from pathlib import Path
 import sys
 m, out = Path(sys.argv[1]), Path(sys.argv[2])
-s = (m / '20261010_0030_table_release_acks_ROLLBACK.sql').read_text()
+# El cuerpo vivo previo a 0023 (md5 5dc47a35…) lo guarda la reversa de 0023;
+# la de T02 (0030) ahora restaura la versión de 0023.
+s = (m / '20261010_0023_release_lock_and_orphan_heal_ROLLBACK.sql').read_text()
 a = s.index('CREATE OR REPLACE FUNCTION public.fn_release_empty_table(p_order_id uuid)')
 out.write_text(s[a:s.index('$function$;', a) + len('$function$;')] + '\n')
 PY2
