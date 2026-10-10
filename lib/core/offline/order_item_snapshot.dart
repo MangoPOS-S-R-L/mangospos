@@ -28,6 +28,7 @@ class OrderItemSnapshot {
     'created_at': item.createdAt.toIso8601String(),
     'created_by_employee_id': item.createdByEmployeeId,
     'created_by_employee_name': item.createdByEmployeeName,
+    'version': item.version,
     'modifiers': item.modifiers
         .map(
           (m) => {

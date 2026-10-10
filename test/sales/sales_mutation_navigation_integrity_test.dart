@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
@@ -114,20 +115,26 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> deleteItem({required String itemId}) {
+  Future<OrderEditResult> deleteItem({
+    required String itemId,
+    required OrderEdit edit,
+  }) async {
     final result = deletions.putIfAbsent(itemId, Completer<void>.new);
     start('delete-$itemId');
-    return result.future;
+    await result.future;
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
-  Future<void> updateItemQuantity({
+  Future<OrderEditResult> updateItemQuantity({
     required String itemId,
     required double quantity,
-  }) {
+    required OrderEdit edit,
+  }) async {
     final result = quantities.putIfAbsent(quantity, Completer<void>.new);
     start('qty-$quantity');
-    return result.future;
+    await result.future;
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
@@ -434,12 +441,15 @@ void main() {
       final vm = container.read(currentOrderProvider.notifier);
       final first = vm.updateItemQuantity('item-A', 2);
       await repository.waitFor('qty-2.0');
+      // T04: la segunda edición de la misma línea espera en fila a la
+      // primera (manda la versión que esta deje).
       final second = vm.updateItemQuantity('item-A', 3);
+      repository.quantities[2]!.completeError(StateError('old qty rejected'));
+      await first;
+      expect(container.read(currentOrderProvider).items.single.quantity, 3);
       await repository.waitFor('qty-3.0');
       repository.quantities[3]!.complete();
       await second;
-      repository.quantities[2]!.completeError(StateError('old qty rejected'));
-      await first;
       expect(container.read(currentOrderProvider).items.single.quantity, 3);
       expect(
         (await offline.loadSnapshot(
@@ -452,7 +462,7 @@ void main() {
   );
 
   test(
-    'cantidad vieja que falla por red después de confirmar otra no se encola',
+    'cantidad vieja que falla por red con otra más nueva en fila no se encola',
     () async {
       const biz = 'quantity-stale-not-queued';
       final repository = _Repository(client);
@@ -461,14 +471,15 @@ void main() {
       final first = vm.updateItemQuantity('item-A', 2);
       await repository.waitFor('qty-2.0');
       final second = vm.updateItemQuantity('item-A', 3);
-      await repository.waitFor('qty-3.0');
-      repository.quantities[3]!.complete();
-      await second;
-      // El 2 llegó tarde y sin respuesta: encolarlo dejaría 2 al sincronizar.
+      // El 2 se queda sin respuesta: encolarlo dejaría 2 al sincronizar,
+      // encima del 3 que va detrás.
       repository.quantities[2]!.completeError(
         Exception('ClientException: Connection reset by peer'),
       );
       await first;
+      await repository.waitFor('qty-3.0');
+      repository.quantities[3]!.complete();
+      await second;
 
       expect(container.read(currentOrderProvider).items.single.quantity, 3);
       final queued = (await offline.unsettledActions(

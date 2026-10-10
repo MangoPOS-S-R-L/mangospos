@@ -100,6 +100,11 @@ class Order extends Equatable {
   final DateTime? closedAt;
   final String origin;
 
+  /// T04 (20261010_0006): versión de la cuenta en el servidor (delivery,
+  /// impuestos excluidos, cliente, nota…). Null si no se conoce (orden local
+  /// o servidor sin la migración).
+  final int? version;
+
   const Order({
     required this.id,
     required this.sessionId,
@@ -113,6 +118,7 @@ class Order extends Equatable {
     required this.createdAt,
     this.closedAt,
     this.origin = 'table',
+    this.version,
   });
 
   factory Order.fromMap(Map<String, dynamic> map) {
@@ -131,6 +137,7 @@ class Order extends Equatable {
           ? DateTime.tryParse(map['closed_at'])
           : null,
       origin: map['origin'] ?? 'table',
+      version: (map['version'] as num?)?.toInt(),
     );
   }
 
@@ -147,6 +154,7 @@ class Order extends Equatable {
     'created_at': createdAt.toIso8601String(),
     'closed_at': closedAt?.toIso8601String(),
     'origin': origin,
+    'version': version,
   };
 
   Order copyWith({
@@ -162,6 +170,7 @@ class Order extends Equatable {
     DateTime? createdAt,
     DateTime? closedAt,
     String? origin,
+    int? version,
   }) {
     return Order(
       id: id ?? this.id,
@@ -176,6 +185,7 @@ class Order extends Equatable {
       createdAt: createdAt ?? this.createdAt,
       closedAt: closedAt ?? this.closedAt,
       origin: origin ?? this.origin,
+      version: version ?? this.version,
     );
   }
 
@@ -197,6 +207,7 @@ class Order extends Equatable {
     deliveryFee,
     createdAt,
     closedAt,
+    version,
   ];
 }
 
@@ -235,6 +246,11 @@ class OrderItem extends Equatable {
   /// las carga; en `fromMap` queda vacío y el repo la popla aparte.
   final List<OrderItemTaxLine> taxLines;
 
+  /// T04 (20261010_0006): versión de la línea en el servidor. Cada edición
+  /// manda la que el operador estaba viendo. Null si no se conoce (línea
+  /// creada sin red, o servidor sin la migración).
+  final int? version;
+
   const OrderItem({
     required this.id,
     required this.orderId,
@@ -260,6 +276,7 @@ class OrderItem extends Equatable {
     this.createdByEmployeeName,
     this.modifiers = const [],
     this.taxLines = const [],
+    this.version,
   });
 
 
@@ -333,6 +350,7 @@ class OrderItem extends Equatable {
       createdByEmployeeId: map['created_by_employee_id']?.toString(),
       createdByEmployeeName: employeeName,
       modifiers: [], // Se cargan aparte
+      version: (map['version'] as num?)?.toInt(),
     );
   }
 
@@ -362,6 +380,7 @@ class OrderItem extends Equatable {
     String? createdByEmployeeName,
     List<OrderItemModifier>? modifiers,
     List<OrderItemTaxLine>? taxLines,
+    int? version,
   }) {
 
     return OrderItem(
@@ -389,6 +408,7 @@ class OrderItem extends Equatable {
       createdByEmployeeName: createdByEmployeeName ?? this.createdByEmployeeName,
       modifiers: modifiers ?? this.modifiers,
       taxLines: taxLines ?? this.taxLines,
+      version: version ?? this.version,
     );
   }
 
@@ -418,6 +438,7 @@ class OrderItem extends Equatable {
     createdByEmployeeName,
     modifiers,
     taxLines,
+    version,
   ];
 }
 
@@ -735,7 +756,9 @@ class FiscalDocument extends Equatable {
 
   // === e-CF (DGII via Alanube). Solo populado cuando isElectronic == true ===
   final bool isElectronic;
-  final String ecfStatus; // 'pending' | 'sent' | 'accepted' | 'rejected'
+  // 'pending' | 'sent' | 'accepted' | 'rejected' | 'uncertain' (T07: no se
+  // sabe si Alanube lo recibió; no se reenvía solo).
+  final String ecfStatus;
   final String? alanubeDocumentId;
   final String? ecfTrackingNumber;
   final String? ecfSecurityCode;
@@ -843,6 +866,10 @@ class FiscalDocument extends Equatable {
       case 'sent':
         // Si ecfSecurityCode esta vacio aun no llego respuesta de Alanube.
         return 'En proceso DGII (esperando confirmacion)';
+      case 'uncertain':
+        // T07: el envío a Alanube no tuvo respuesta clara. Se concilia en el
+        // servidor; para el cliente sigue en proceso.
+        return 'En proceso DGII (verificando envio)';
       case 'rejected':
         // NUNCA el payload crudo. `lastError` trae la respuesta de Alanube
         // tal cual — vista en un ticket real de un cliente:

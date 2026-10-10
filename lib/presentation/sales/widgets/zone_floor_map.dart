@@ -9,9 +9,11 @@ import '../../../core/currency/business_currency_provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../data/models/dining_table.dart';
 import '../../../data/models/table_status.dart';
-import '../../../domain/models/ventas_table.dart' show VentasTable, TableStatusX;
+import '../../../domain/models/ventas_table.dart'
+    show VentasTable, TableStatusX;
 import '../view/theme/table_status_style.dart';
 import 'floor_map_geometry.dart';
+import 'review_accounts_badge.dart';
 import 'floor_seats.dart';
 
 /// Floor map de una zona: dibuja cada mesa en su posición/forma reales,
@@ -149,8 +151,9 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
                             decoration: BoxDecoration(
                               color: const Color(0xFFF1F3F9),
                               borderRadius: BorderRadius.circular(16),
-                              border:
-                                  Border.all(color: const Color(0xFFE5E7EB)),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
                             ),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(16),
@@ -233,7 +236,8 @@ class _ZoneFloorMapState extends State<ZoneFloorMap> {
             onTap: (isOpening || !widget.enabled || widget.onTapTable == null)
                 ? null
                 : () => widget.onTapTable!(ts),
-            onLongPress: (isOpening ||
+            onLongPress:
+                (isOpening ||
                     !widget.enabled ||
                     widget.onLongPressTable == null ||
                     ts.sessionId == null)
@@ -379,8 +383,9 @@ class _TableCard extends StatelessWidget {
         alignment: isCircle ? Alignment.center : Alignment.centerLeft,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment:
-              isCircle ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+          crossAxisAlignment: isCircle
+              ? CrossAxisAlignment.center
+              : CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             if (isOpening)
@@ -412,6 +417,12 @@ class _TableCard extends StatelessWidget {
                   color: color, // el estado se lee en su propio color
                 ),
               ),
+              // Cuentas en revisión: llegaron de otro equipo o tarde; al tocar
+              // la mesa se elige cuál abrir.
+              if (vt.reviewAccounts > 0) ...[
+                const SizedBox(height: 4),
+                ReviewAccountsBadge(table: vt, fontSize: 11),
+              ],
               // Saldo abonado. Va pegado a la identidad y no con los datos de
               // la sesión: una mesa LIBRE puede tener saldo de anoche.
               if ((depositBalance ?? 0) > 0.005) ...[
@@ -534,6 +545,9 @@ class _TableCard extends StatelessWidget {
       );
     }
 
-    return Container(decoration: decoration, child: Center(child: content));
+    return Container(
+      decoration: decoration,
+      child: Center(child: content),
+    );
   }
 }

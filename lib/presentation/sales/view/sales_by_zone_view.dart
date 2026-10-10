@@ -24,6 +24,7 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/presentation/sales/widgets/transfer_session_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/reassign_waiter_dialog.dart';
+import 'package:mangopos/presentation/sales/widgets/review_accounts_sheet.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
@@ -1504,6 +1505,13 @@ Future<void> _handleMergeTable(
     WidgetRef ref,
     TableStatus ts,
   ) async {
+    // Cuentas en revisión (20261010_0020): se resuelven o se elige abrir la
+    // cuenta de la mesa ANTES de abrirla. Nunca se cobran ni se mezclan solas.
+    if (ts.reviewOrdersCount > 0) {
+      final openTable = await showReviewAccountsSheet(context, ref, ts);
+      if (!openTable || !context.mounted) return;
+    }
+
     final cashierVm = ref.read(cashierViewModelProvider);
     final isCashOpen = await cashierVm.ensureCashOpenFast();
     if (!isCashOpen) {
@@ -1680,11 +1688,6 @@ Future<void> _handleMergeTable(
       if (sessionId != null && sessionId.isNotEmpty) {
         try {
           final repo = ref.read(salesRepositoryProvider);
-          final currentSession = await repo.getSessionCustomer(
-            sessionId,
-            businessId: session.activeBusinessId,
-          );
-          final currentNote = currentSession.note?.trim();
           final actorName = session.userName?.trim().isNotEmpty == true
               ? session.userName!.trim()
               : 'Usuario';
@@ -1692,14 +1695,10 @@ Future<void> _handleMergeTable(
               ? ts.waiterName!.trim()
               : 'otro mesero';
           final stamp = DateTime.now().toLocal().toIso8601String();
-          final auditLine =
-              '[ACCESO_MESA][$stamp] $actorName accedió a la mesa ${ts.code} asignada a $ownerName';
-          final nextNote = (currentNote == null || currentNote.isEmpty)
-              ? auditLine
-              : '$currentNote\n$auditLine';
-          await repo.updateSessionNote(
+          await repo.appendSessionNoteLine(
             sessionId: sessionId,
-            note: nextNote,
+            line:
+                '[ACCESO_MESA][$stamp] $actorName accedió a la mesa ${ts.code} asignada a $ownerName',
             businessId: session.activeBusinessId,
           );
         } catch (_) {

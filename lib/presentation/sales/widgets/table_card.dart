@@ -7,6 +7,7 @@ import '../../../domain/models/ventas_table.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_text_styles.dart';
 import '../view/theme/table_status_style.dart';
+import 'review_accounts_badge.dart';
 
 /// Ancho mínimo que el card necesita para dibujar su contenido sin truncar.
 ///
@@ -31,6 +32,7 @@ class TableCard extends StatefulWidget {
   final VentasTable table;
   final String? currentUserId;
   final VoidCallback? onTap;
+
   /// PRD-12 F3: long-press en una mesa OCUPADA abre el menú "Unir
   /// con otra mesa…". El padre decide si lo conecta (típicamente solo
   /// en sales_by_zone_view, no en selectores tipo modal).
@@ -89,9 +91,7 @@ class _TableCardState extends State<TableCard> {
               duration: const Duration(milliseconds: 200),
               curve: Curves.easeInOut,
               height: 140, // FIJO - NO cambia
-              constraints: const BoxConstraints(
-                minWidth: kTableCardMinWidth,
-              ),
+              constraints: const BoxConstraints(minWidth: kTableCardMinWidth),
               decoration: BoxDecoration(
                 // Solo cambia el color: el fondo va tintado según el estado.
                 color: palette.surface,
@@ -198,44 +198,58 @@ class _TableCardState extends State<TableCard> {
               ),
             ),
 
-            // Saldo abonado. Va en la identidad y no en el contexto porque
-            // la mesa puede estar LIBRE y tener saldo: es una propiedad de
-            // la mesa, no de la visita.
-            if ((widget.depositBalance ?? 0) > 0.005) ...[
+            // Cuentas en revisión (llegaron de otro equipo o tarde) y saldo
+            // abonado, en una sola fila: la card tiene alto fijo.
+            if (widget.table.reviewAccounts > 0 ||
+                (widget.depositBalance ?? 0) > 0.005) ...[
               const SizedBox(height: 4),
-              Consumer(
-                builder: (context, ref, _) {
-                  final currency = currentBusinessCurrencyOrFallback(ref);
-                  return Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDCFCE7),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.account_balance_wallet_outlined,
-                          size: 11,
-                          color: Color(0xFF15803D),
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          'Abono ${_formatCurrency(currency, widget.depositBalance!)}',
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF15803D),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget.table.reviewAccounts > 0)
+                    ReviewAccountsBadge(table: widget.table),
+                  if (widget.table.reviewAccounts > 0 &&
+                      (widget.depositBalance ?? 0) > 0.005)
+                    const SizedBox(width: 4),
+                  // Saldo abonado. Va en la identidad y no en el contexto porque
+                  // la mesa puede estar LIBRE y tener saldo: es una propiedad de
+                  // la mesa, no de la visita.
+                  if ((widget.depositBalance ?? 0) > 0.005)
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final currency = currentBusinessCurrencyOrFallback(ref);
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
                           ),
-                        ),
-                      ],
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFDCFCE7),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.account_balance_wallet_outlined,
+                                size: 11,
+                                color: Color(0xFF15803D),
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                'Abono ${_formatCurrency(currency, widget.depositBalance!)}',
+                                style: const TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF15803D),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
+                ],
               ),
             ],
           ],

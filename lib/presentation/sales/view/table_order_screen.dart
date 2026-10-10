@@ -15,6 +15,7 @@ import 'package:mangopos/core/offline/hub/hub_client.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/theme/app_breakpoints.dart';
 import 'package:mangopos/core/widgets/min_extent_grid_delegate.dart';
@@ -23,6 +24,7 @@ import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
+import 'package:mangopos/presentation/sales/widgets/edit_conflict_dialog.dart';
 import 'package:mangopos/presentation/sales/widgets/reassign_waiter_dialog.dart';
 import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
@@ -717,9 +719,19 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (terminalMode != TerminalMode.hubClient &&
         ConnectivityService().isConnected) {
       try {
+        // T02: el equipo que sale confirma con lo que tenga de esa cuenta.
+        final offline = OfflinePosService();
         final released = await repo.releaseEmptyTableIfNeeded(
           orderId,
           businessId: businessId,
+          deviceId: await DeviceUtils.getDeviceId(),
+          hasPendingWork: businessId == null || businessId.isEmpty
+              ? true
+              : await offline.hasPendingWorkForOrders(
+                  businessId,
+                  {orderId},
+                  includeHubOpLog: terminalMode == TerminalMode.hubHost,
+                ),
         );
         _mirrorEmptyReleaseToHub(
           released: released,
@@ -1696,8 +1708,48 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
   }
 
+  // T04: aviso de conflicto abierto (uno a la vez; el siguiente se muestra
+  // al cerrar este).
+  bool _editConflictDialogOpen = false;
+
+  /// Otro equipo cambió lo que el operador editaba: decide si se queda con
+  /// lo de ahora o aplica su cambio (ver SalesViewModel.resolveEditConflict).
+  Future<void> _showEditConflicts() async {
+    if (_editConflictDialogOpen) return;
+    _editConflictDialogOpen = true;
+    try {
+      final notifier = ref.read(currentOrderProvider.notifier);
+      String? shownId;
+      while (mounted) {
+        final notice = ref.read(currentOrderProvider).editConflict;
+        if (notice == null || notice.id == shownId) return;
+        shownId = notice.id;
+        final applyMine = await showEditConflictDialog(
+          context,
+          notice: notice,
+          canApplyMine: notifier.canApplyConflictingEdit,
+        );
+        if (!mounted) return;
+        await notifier.resolveEditConflict(
+          applyMine: applyMine,
+          noticeId: notice.id,
+        );
+      }
+    } finally {
+      _editConflictDialogOpen = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<EditConflictNotice?>(
+      currentOrderProvider.select((s) => s.editConflict),
+      (prev, next) {
+        if (next != null && next.id != prev?.id) {
+          unawaited(_showEditConflicts());
+        }
+      },
+    );
     // Mantener al día el snapshot que usa dispose() para liberar la mesa vacía.
     // ref.listen no provoca rebuild; solo actualiza los campos cuando cambia la
     // orden. El repo y el businessId se capturan por lectura directa.
@@ -3930,16 +3982,17 @@ class _CartView extends ConsumerWidget {
       '[REDUCCION:${decision.text}]',
     ].join('\n');
     try {
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemDetails(
-            itemId: row.id,
-            productName: row.productName,
-            quantity: next,
-            isTakeout: row.isTakeout,
-            discounts: double.parse((row.discounts * ratio).toStringAsFixed(2)),
-            notes: notes,
-          );
+      // T04: con la versión que veía el operador; si otro equipo la cambió,
+      // queda el aviso y no se quita nada.
+      final applied = await orderNotifier.updateItemDetailsVersioned(
+        row,
+        productName: row.productName,
+        quantity: next,
+        isTakeout: row.isTakeout,
+        discounts: double.parse((row.discounts * ratio).toStringAsFixed(2)),
+        notes: notes,
+      );
+      if (!applied) return false;
     } catch (e) {
       if (OfflinePosService.isTransportError(e)) return trimViaQueue();
       if (context.mounted) {
@@ -4127,7 +4180,6 @@ class _CartView extends ConsumerWidget {
           }
         },
         onSaveBatch: (items, updatedItem, reduction) async {
-          final salesRepo = ref.read(salesRepositoryProvider);
           final orderNotifier = ref.read(currentOrderProvider.notifier);
           final totalBase = items.fold<double>(
             0,
@@ -4248,14 +4300,18 @@ class _CartView extends ConsumerWidget {
                 nextQtyInt > currentQtyInt &&
                 _itemAlreadySentToKitchen(current) &&
                 current.productId != null) {
-              await salesRepo.updateItemDetails(
-                itemId: current.id,
+              final applied = await orderNotifier.updateItemDetailsVersioned(
+                current,
                 productName: updatedItem.productName,
                 quantity: currentQtyInt.toDouble(),
                 isTakeout: updatedItem.isTakeout,
                 discounts: discountShare,
                 notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
+                partOfGroup: items.length > 1,
               );
+              // T04: otro equipo cambió la línea; el aviso ya está y el
+              // resto del grupo no se toca.
+              if (!applied) break;
               await _addUnitsAsNewDraftLine(
                 ref,
                 current,
@@ -4279,14 +4335,16 @@ class _CartView extends ConsumerWidget {
                 removedIds.add(current.id);
               }
             } else {
-              await salesRepo.updateItemDetails(
-                itemId: current.id,
+              final applied = await orderNotifier.updateItemDetailsVersioned(
+                current,
                 productName: updatedItem.productName,
                 quantity: nextQty,
                 isTakeout: updatedItem.isTakeout,
                 discounts: discountShare,
                 notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
+                partOfGroup: items.length > 1,
               );
+              if (!applied) break;
               // Línea ya enviada a la que se le bajó la cantidad: el
               // servidor la registra con el motivo de la etiqueta; acá va
               // quién fue y qué pasa con el inventario (merma o devolución).

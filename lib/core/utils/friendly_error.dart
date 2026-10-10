@@ -267,6 +267,11 @@ class FriendlyError {
         return 'Conflicto de datos. Intenta de nuevo.';
       case '53300':
         return serverUnavailable;
+      case 'MP440':
+        // T07 (20261010_0009): e-CF con envío incierto; no se anula la venta
+        // hasta saber si llegó a la DGII.
+        return 'No se sabe todavía si el comprobante electrónico de esta venta '
+            'llegó a la DGII. Resuélvelo antes de anularla.';
       default:
         return null;
     }

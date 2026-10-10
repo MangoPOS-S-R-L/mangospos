@@ -66,7 +66,8 @@ class _Repository extends SalesRepository {
   bool deferClose = true;
   bool deferNote = false;
   final closedIds = <String>[];
-  final notes = <({String sessionId, String? note, String? businessId})>[];
+  final notes =
+      <({String orderId, String reason, String? userName, String? businessId})>[];
 
   // closeRetailCart lee el servidor antes de anular en línea (una pantalla
   // vieja puede mostrar abierta una venta ya cobrada): aquí confirma que la
@@ -101,13 +102,22 @@ class _Repository extends SalesRepository {
         code: 'PGRST202',
       );
 
+  // T04: la línea de anulación se agrega a la nota del servidor (no se
+  // reescribe la nota con lo de la pantalla).
   @override
-  Future<void> updateSessionNote({
-    required String sessionId,
-    String? note,
+  Future<void> appendVoidAuditNote({
+    required String orderId,
+    required String reason,
+    String? userName,
+    DateTime? voidedAt,
     String? businessId,
   }) async {
-    notes.add((sessionId: sessionId, note: note, businessId: businessId));
+    notes.add((
+      orderId: orderId,
+      reason: reason,
+      userName: userName,
+      businessId: businessId,
+    ));
     noteStarted.complete();
     if (deferNote) await noteRelease.future;
   }
@@ -278,13 +288,10 @@ void main() {
       await cancelling;
 
       expect(repository.closedIds, ['order-A']);
-      expect(repository.notes.single.sessionId, 'session-order-A');
+      expect(repository.notes.single.orderId, 'order-A');
       expect(repository.notes.single.businessId, businessId);
-      expect(repository.notes.single.note, startsWith('Nota A\n[ANULACION]'));
-      expect(
-        repository.notes.single.note,
-        contains('Cajero A: Cliente retiró el pedido'),
-      );
+      expect(repository.notes.single.userName, 'Cajero A');
+      expect(repository.notes.single.reason, 'Cliente retiró el pedido');
       final visible = container.read(currentOrderProvider);
       expect(visible.order?.id, 'order-B');
       expect(visible.sessionNote, 'Nota B');

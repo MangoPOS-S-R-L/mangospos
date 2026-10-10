@@ -93,6 +93,18 @@ class _Repository extends SalesRepository {
   }
 
   @override
+  Future<Map<String, dynamic>> openLocalTableOrder({
+    required String clientOrderId,
+    required String tableId,
+    int peopleCount = 1,
+    String? openedByEmployeeId,
+  }) => openTable(
+    tableId: tableId,
+    peopleCount: peopleCount,
+    openedByEmployeeId: openedByEmployeeId,
+  );
+
+  @override
   Future<Map<String, dynamic>> openTable({
     required String tableId,
     String? userId,
@@ -146,7 +158,7 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> replaceOrderItemModifiers({
+  Future<void> replaceModifiersOfNewItem({
     required String itemId,
     required List<Map<String, dynamic>> modifiers,
   }) async {

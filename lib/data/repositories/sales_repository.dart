@@ -7,6 +7,8 @@ import 'package:uuid/uuid.dart';
 import '../../core/utils/app_time.dart';
 import '../datasources/queries/sales_queries.dart';
 import '../models/credit_note_result.dart';
+import '../models/offline_payment_replay.dart';
+import '../models/order_edit.dart';
 import '../models/order_item_removal_reason.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
@@ -101,6 +103,12 @@ class SalesRepository {
   // `order_items_created_by_employee_fk`.
   static const _itemFields =
       'id,order_id,product_id,product_name,sku,quantity,qty,unit_price,subtotal,discounts,tax,total,check_id,is_takeout,status,notes,tax_mode,tax_rate,original_tax_rate,print_area_code,created_at,created_by_employee_id,employees(first_name,last_name)';
+
+  // T04: la versión de la línea (20261010_0006). Sin la migración la columna
+  // no existe (42703): se carga sin ella y la edición va por valores.
+  static bool _itemVersionColumnMissing = false;
+  static String get _itemFieldsWithVersion =>
+      _itemVersionColumnMissing ? _itemFields : '$_itemFields,version';
 
   /// Carga las `order_item_tax_lines` de una lista de items en una sola query
   /// y las devuelve agrupadas por `order_item_id`. Producto del PRD 2: la
@@ -713,6 +721,47 @@ class SalesRepository {
     }
   }
 
+  /// Sube a su mesa una cuenta creada en este equipo (`local-order-…`)
+  /// conservando su identidad (`fn_open_local_table_order`, 20261010_0020):
+  /// la misma identidad devuelve la misma cuenta, y si la mesa ya tiene otra
+  /// cuenta con productos la guarda APARTE en revisión en vez de mezclarla
+  /// (`fn_open_table` devuelve la cuenta abierta actual de la mesa). Sin la
+  /// migración (PGRST202) cae a [openTable], el comportamiento anterior.
+  Future<Map<String, dynamic>> openLocalTableOrder({
+    required String clientOrderId,
+    required String tableId,
+    int peopleCount = 1,
+    String? openedByEmployeeId,
+  }) async {
+    cancelPendingEmptyTableRelease(tableId);
+    try {
+      final response = await _client.rpc(
+        'fn_open_local_table_order',
+        params: {
+          'p_client_order_id': clientOrderId,
+          'p_table_id': tableId,
+          'p_people_count': peopleCount,
+          'p_opened_by_employee_id': openedByEmployeeId,
+        },
+      );
+      if (response == null) {
+        throw Exception('No se pudo abrir la mesa');
+      }
+      return Map<String, dynamic>.from(response as Map);
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202') {
+        return openTable(
+          tableId: tableId,
+          peopleCount: peopleCount,
+          openedByEmployeeId: openedByEmployeeId,
+        );
+      }
+      throw Exception('Error al abrir mesa: $e');
+    } catch (e) {
+      throw Exception('Error al abrir mesa: $e');
+    }
+  }
+
   /// Abre/reanuda una mesa y retorna el bundle COMPLETO en un solo
   /// round-trip — combina `fn_open_table` + `fn_get_order_bundle` +
   /// modifiers + tax_lines, todo embebido en items. Reduce la apertura
@@ -1143,26 +1192,116 @@ class SalesRepository {
   /// tomando FOR UPDATE sobre la fila de la mesa (ver migración
   /// 20260814_0001). Como cierra con `now()` del servidor, también acaba con
   /// las sesiones guardadas 4 h en el pasado.
+  ///
+  /// T02 (20261010_0030): [deviceId] es el equipo que sale y
+  /// [hasPendingWork] si tiene algo de esa cuenta sin subir. Si otra terminal
+  /// participó, la mesa se libera recién cuando ella confirme (o la conserva
+  /// el barrido). Sin el equipo no se libera. Sin la migración (PGRST202) se
+  /// libera al instante con `fn_release_empty_table` si este equipo no tiene
+  /// nada pendiente de esa cuenta: regla del dueño (10-oct) y lo tardío de
+  /// otro equipo vuelve como cuenta en revisión (20261010_0020).
   Future<bool> releaseEmptyTableIfNeeded(
     String orderId, {
     String? businessId,
+    String? deviceId,
+    bool hasPendingWork = true,
   }) async {
     if (orderId.isEmpty || orderId.startsWith('local-order-')) return false;
+    if (deviceId == null || deviceId.isEmpty) return false;
     try {
       await _assertOrderInBusinessScope(orderId, businessId: businessId);
 
       final response = await _client.rpc(
-        'fn_release_empty_table',
-        params: {'p_order_id': orderId},
+        SalesQueries.rpcReleaseEmptyTableV2,
+        params: {
+          'p_order_id': orderId,
+          'p_device_id': deviceId,
+          'p_has_pending': hasPendingWork,
+        },
       );
 
       if (response is Map) {
         return response['released'] == true;
       }
       return false;
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202') {
+        // Sin 20261010_0030: salir de una mesa SIN productos la libera al
+        // instante con la función vigente (regla del dueño, 10-oct). Lo que
+        // otro equipo tuviera sin subir no se pierde: vuelve como cuenta en
+        // revisión (20261010_0020). Con trabajo propio pendiente, no.
+        if (hasPendingWork) return false;
+        try {
+          return await _releaseEmptyTableNow(orderId);
+        } catch (e) {
+          throw Exception('Error al liberar mesa vacia: $e');
+        }
+      }
+      throw Exception('Error al liberar mesa vacia: $e');
     } catch (e) {
       throw Exception('Error al liberar mesa vacia: $e');
     }
+  }
+
+  Future<bool> _releaseEmptyTableNow(String orderId) async {
+    final response = await _client.rpc(
+      'fn_release_empty_table',
+      params: {'p_order_id': orderId},
+    );
+    return response is Map && response['released'] == true;
+  }
+
+  /// T02: este equipo participa en la sesión de [orderId] (la cargó en
+  /// línea). Las liberaciones automáticas esperan su confirmación.
+  Future<void> registerSessionParticipant(
+    String orderId,
+    String deviceId,
+  ) async {
+    await _client.rpc(
+      SalesQueries.rpcRegisterSessionParticipant,
+      params: {'p_order_id': orderId, 'p_device_id': deviceId},
+    );
+  }
+
+  /// T02: pedidos de liberación que esperan la confirmación de este equipo.
+  Future<List<({String sessionId, int version, List<String> orderIds})>>
+  pendingReleaseRequests(String businessId, String deviceId) async {
+    final rows = await _client.rpc(
+      SalesQueries.rpcPendingReleaseRequests,
+      params: {'p_business_id': businessId, 'p_device_id': deviceId},
+    );
+    if (rows is! List) return const [];
+    return [
+      for (final row in rows.whereType<Map>())
+        (
+          sessionId: row['session_id'].toString(),
+          version: (row['version'] as num).toInt(),
+          orderIds: [
+            for (final id in (row['order_ids'] as List? ?? const []))
+              id.toString(),
+          ],
+        ),
+    ];
+  }
+
+  /// T02: confirma (con o sin pendientes) la versión [version] de la sesión.
+  /// Si era la última confirmación, el servidor libera en el mismo paso.
+  Future<Map<String, dynamic>?> ackSessionRelease({
+    required String sessionId,
+    required String deviceId,
+    required int version,
+    required bool hasPendingWork,
+  }) async {
+    final response = await _client.rpc(
+      SalesQueries.rpcAckSessionRelease,
+      params: {
+        'p_session_id': sessionId,
+        'p_device_id': deviceId,
+        'p_version': version,
+        'p_has_pending': hasPendingWork,
+      },
+    );
+    return response is Map ? Map<String, dynamic>.from(response) : null;
   }
 
   Future<({String? customerId, String? customerName, String? note})>
@@ -1192,52 +1331,29 @@ class SalesRepository {
     }
   }
 
-  Future<void> assignCustomerToSession({
+  /// Cliente de la cuenta (vive en la sesión; [OrderEdit.orderId] es la
+  /// orden que el operador editaba).
+  Future<OrderEditResult> assignCustomerToSession({
     required String sessionId,
     required String customerId,
     required String customerName,
     String? businessId,
+    required OrderEdit edit,
   }) async {
-    try {
-      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
-
-      await _client.rpc(
-        'fn_assign_customer_to_session',
-        params: {
-          'p_session_id': sessionId,
-          'p_customer_id': customerId,
-          'p_customer_name': customerName.trim().isEmpty
+    await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+    return _editOrThrow(
+      'Error al asignar cliente',
+      () => applyOrderEdit(
+        edit: edit,
+        kind: 'session_customer',
+        args: {
+          'customer_id': customerId,
+          'customer_name': customerName.trim().isEmpty
               ? null
               : customerName.trim(),
         },
-      );
-    } catch (e) {
-      throw Exception('Error al asignar cliente: $e');
-    }
-  }
-
-  Future<void> updateSessionNote({
-    required String sessionId,
-    String? note,
-    String? businessId,
-  }) async {
-    try {
-      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
-
-      var query = _client
-          .from('table_sessions')
-          .update({'note': note?.trim().isEmpty == true ? null : note?.trim()})
-          .eq('id', sessionId);
-
-      final scopedBusinessId = businessId?.trim();
-      if (scopedBusinessId != null && scopedBusinessId.isNotEmpty) {
-        query = query.eq('business_id', scopedBusinessId);
-      }
-
-      await query;
-    } catch (e) {
-      throw Exception('Error al actualizar nota de la sesión: $e');
-    }
+      ),
+    );
   }
 
   /// Actualiza la dirección de entrega del pedido de delivery. Update
@@ -1483,7 +1599,6 @@ class SalesRepository {
   static void debugResetIdempotentAddProbe() {
     _idempotentAddMissingAt = null;
     _idempotentDealMissingAt = null;
-    _atomicModifiersMissingAt = null;
   }
 
   /// Alta de ítem con UN solo efecto por [clientOpId]: un reintento con el
@@ -1838,44 +1953,106 @@ class SalesRepository {
     throw Exception('Error al guardar modificadores del item: $firstError');
   }
 
-  static DateTime? _atomicModifiersMissingAt;
-
-  /// Deja EXACTAMENTE [modifiers] en el ítem. Con la migración 20260929_0001 es
-  /// una sola transacción (antes: DELETE y luego INSERT; un corte entre ambos
-  /// dejaba el ítem sin extras). Repetirlo con la misma lista no duplica.
-  Future<void> replaceOrderItemModifiers({
+  /// Deja EXACTAMENTE [modifiers] en un ítem RECIÉN creado (alta en línea,
+  /// proxy del Hub, replay de add_item). No es una edición concurrente: el
+  /// ítem acaba de nacer. Repetirlo con la misma lista no duplica.
+  Future<void> replaceModifiersOfNewItem({
     required String itemId,
     required List<Map<String, dynamic>> modifiers,
   }) async {
-    final missingAt = _atomicModifiersMissingAt;
-    final skipRpc =
-        missingAt != null &&
-        DateTime.now().difference(missingAt) < _idempotentAddRecheck;
-    if (!skipRpc) {
-      try {
-        await _client.rpc(
-          SalesQueries.rpcReplaceOrderItemModifiers,
-          params: {'p_item_id': itemId, 'p_modifiers': modifiers},
-        );
-        _atomicModifiersMissingAt = null;
-        return;
-      } on PostgrestException catch (e) {
-        if (e.code != 'PGRST202') {
-          throw Exception('Error al reemplazar modificadores del item: $e');
-        }
-        _atomicModifiersMissingAt = DateTime.now();
-      } catch (e) {
-        throw Exception('Error al reemplazar modificadores del item: $e');
-      }
-    }
     try {
-      await _client.from('order_item_modifiers').delete().eq('item_id', itemId);
-      if (modifiers.isEmpty) return;
-      await addOrderItemModifiers(itemId: itemId, modifiers: modifiers);
+      await _client.rpc(
+        SalesQueries.rpcReplaceOrderItemModifiers,
+        params: {'p_item_id': itemId, 'p_modifiers': modifiers},
+      );
     } catch (e) {
-      throw Exception('Error al reemplazar modificadores del item: $e');
+      throw Exception('Error al guardar modificadores del item: $e');
     }
   }
+
+  // ============================================================
+  // ✏️ EDICIONES VERSIONADAS (T04, 20261010_0006)
+  // ============================================================
+
+  /// Única entrada para editar una cuenta o una línea: fn_apply_order_edit
+  /// toma el candado del cobro, reconoce reintentos por [OrderEdit.opId] y
+  /// rechaza versiones viejas. Devuelve el resultado aplicado; un conflicto
+  /// lanza [OrderEditConflict] (no se aplicó nada) y sin la migración
+  /// [OrderEditServerOutdated]. No hay respaldo de escritura directa.
+  Future<OrderEditResult> applyOrderEdit({
+    required OrderEdit edit,
+    required String kind,
+    String? targetId,
+    Map<String, dynamic> args = const {},
+  }) async {
+    final Object? response;
+    try {
+      response = await _client.rpc(
+        SalesQueries.rpcApplyOrderEdit,
+        params: {
+          'p_op_id': edit.opId,
+          'p_order_id': edit.orderId,
+          'p_kind': kind,
+          'p_target_id': targetId,
+          'p_base_version': edit.base.version,
+          'p_expected': edit.base.expected,
+          'p_args': args,
+          'p_force': edit.base.force,
+        },
+      );
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202') throw const OrderEditServerOutdated();
+      rethrow;
+    }
+    if (response is! Map) {
+      throw StateError('Respuesta inesperada de fn_apply_order_edit');
+    }
+    final result = OrderEditResult.fromMap(Map<String, dynamic>.from(response));
+    if (!result.applied) throw OrderEditConflict(result);
+    return result;
+  }
+
+  /// Versión de la cuenta en el servidor (null sin la migración).
+  Future<int?> getOrderVersion(String orderId) async {
+    final row = await _client
+        .from('orders')
+        .select('version')
+        .eq('id', orderId)
+        .maybeSingle();
+    return (row?['version'] as num?)?.toInt();
+  }
+
+  Future<OrderEditResult> _editOrThrow(
+    String failure,
+    Future<OrderEditResult> Function() run,
+  ) async {
+    try {
+      return await run();
+    } on OrderEditConflict {
+      rethrow;
+    } on OrderEditServerOutdated {
+      rethrow;
+    } catch (e) {
+      final blocked = closedOrderErrorMessage(e);
+      if (blocked != null) throw Exception(blocked);
+      throw Exception('$failure: $e');
+    }
+  }
+
+  /// Edición de los extras de una línea existente.
+  Future<OrderEditResult> replaceOrderItemModifiers({
+    required String itemId,
+    required List<Map<String, dynamic>> modifiers,
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al reemplazar modificadores del item',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'modifiers',
+      targetId: itemId,
+      args: {'modifiers': modifiers},
+    ),
+  );
 
   Future<void> updateOfflineKitchenItemStatus({
     required String itemId,
@@ -1896,119 +2073,62 @@ class SalesRepository {
   }
 
   /// Actualizar cantidad de item
-  Future<void> updateItemQuantity({
+  Future<OrderEditResult> updateItemQuantity({
     required String itemId,
     required double quantity,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcUpdateItemQty,
-        params: {'p_item_id': itemId, 'p_qty': quantity},
-      );
-    } catch (e) {
-      throw Exception('Error al actualizar cantidad: $e');
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al actualizar cantidad',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'qty',
+      targetId: itemId,
+      args: {'qty': quantity},
+    ),
+  );
 
   /// Actualizar notas de item
-  Future<void> updateItemNotes({
+  Future<OrderEditResult> updateItemNotes({
     required String itemId,
     required String notes,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcUpdateItemNotes,
-        params: {'p_item_id': itemId, 'p_notes': notes},
-      );
-    } catch (e) {
-      throw Exception('Error al actualizar notas: $e');
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al actualizar notas',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'notes',
+      targetId: itemId,
+      args: {'notes': notes},
+    ),
+  );
 
   /// Actualizar detalle completo del item
-  Future<void> updateItemDetails({
+  Future<OrderEditResult> updateItemDetails({
     required String itemId,
     required String productName,
     required double quantity,
     required bool isTakeout,
     required double discounts,
     String? notes,
+    required OrderEdit edit,
   }) async {
     try {
-      final normalizedQty = quantity <= 0 ? 1.0 : quantity;
-      try {
-        await _client.rpc(
-          SalesQueries.rpcUpdateItemDetails,
-          params: {
-            'p_item_id': itemId,
-            'p_product_name': productName,
-            'p_qty': normalizedQty,
-            'p_is_takeout': isTakeout,
-            'p_discounts': discounts,
-            'p_notes': notes,
-          },
-        );
-      } catch (rpcError) {
-        // Detectar ITEM_NOT_FOUND (P0001) del RPC y exponerlo limpio. Sin
-        // esto, el fallback tira PGRST116 y la UI ve un mensaje opaco con
-        // "result contains 0 rows" en vez de "el item ya no existe".
-        if (rpcError.toString().contains('ITEM_NOT_FOUND')) {
-          throw Exception('ITEM_NOT_FOUND');
-        }
-        // Fallback solo si el RPC fallo por otro motivo (ej. RPC no migrado).
-        // IMPORTANTE: el UPDATE directo NO dispara el recompute de tax_rate
-        // ni repuebla tax_lines (lo hace fn_update_item_details). Si
-        // is_takeout cambió y este fallback se ejecuta, el order.service_fee
-        // queda stale — el cliente seguiría viendo el 10% de propina aunque
-        // ya marcó takeout. Para mitigar, leemos el is_takeout previo y
-        // si cambió, después del UPDATE invocamos manualmente
-        // fn_toggle_item_takeout, que sí re-resuelve tax_rate + repuebla
-        // tax_lines + recalcula totals (existe desde 20260502_0002).
-        bool? previousIsTakeout;
-        try {
-          final prev = await _client
-              .from('order_items')
-              .select('is_takeout')
-              .eq('id', itemId)
-              .maybeSingle();
-          previousIsTakeout = prev?['is_takeout'] as bool?;
-        } catch (_) {
-          // No bloqueamos el fallback si la lectura previa falla — el
-          // problema mínimo es que NO disparamos la recompute auxiliar.
-        }
-        final updated = await _client
-            .from('order_items')
-            .update({
-              'product_name': productName,
-              'quantity': normalizedQty.round(),
-              'qty': normalizedQty,
-              'is_takeout': isTakeout,
-            })
-            .eq('id', itemId)
-            .select('id')
-            .maybeSingle();
-        if (updated == null) {
-          throw Exception('ITEM_NOT_FOUND');
-        }
-        // Si is_takeout cambió, disparar el toggle dedicado para
-        // re-resolver tax_rate y repoblar tax_lines + recalc totals.
-        // Es idempotente — flipea al mismo valor.
-        if (previousIsTakeout != null && previousIsTakeout != isTakeout) {
-          try {
-            await toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
-          } catch (e) {
-            // Última línea de defensa: si toggle también falla, registramos
-            // pero no rompemos el flow — el UPDATE básico ya se hizo.
-            // ignore: avoid_print
-            print('[updateItemDetails fallback] toggleItemTakeout failed: $e');
-          }
-        }
-        await updateItemDiscountAndNotes(
-          itemId: itemId,
-          discounts: discounts,
-          notes: notes,
-        );
-      }
+      return await applyOrderEdit(
+        edit: edit,
+        kind: 'details',
+        targetId: itemId,
+        args: {
+          'product_name': productName,
+          'qty': quantity <= 0 ? 1.0 : quantity,
+          'is_takeout': isTakeout,
+          'discounts': discounts,
+          'notes': notes,
+        },
+      );
+    } on OrderEditConflict {
+      rethrow;
+    } on OrderEditServerOutdated {
+      rethrow;
     } catch (e) {
       final raw = e.toString();
       if (raw.contains('ITEM_NOT_FOUND') || raw.contains('PGRST116')) {
@@ -2022,118 +2142,49 @@ class SalesRepository {
   }
 
   /// Actualiza solo el descuento del item (sin tocar qty/quantity).
-  Future<void> updateItemDiscount({
+  Future<OrderEditResult> updateItemDiscount({
     required String itemId,
     required double discounts,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcUpdateItemDiscount,
-        params: {'p_item_id': itemId, 'p_discounts': discounts},
-      );
-    } catch (e) {
-      // Fallback temporal si el RPC aún no está migrado.
-      try {
-        await _client
-            .from('order_items')
-            .update({'discounts': discounts})
-            .eq('id', itemId);
-      } catch (_) {
-        throw Exception('Error al actualizar descuento del item: $e');
-      }
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al actualizar descuento del item',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'discount',
+      targetId: itemId,
+      args: {'discounts': discounts},
+    ),
+  );
 
-  /// Actualiza descuento y notas del item en una sola escritura.
-  /// Actualiza descuento + notas de una línea.
-  ///
-  /// Cuando [writePromotion] es true, además escribe la atribución estructurada
-  /// `order_items.promotion_id` ([promotionId], o null al limpiar la promo) vía
-  /// la RPC de 4 args (migración 20260605_0001). Si esa RPC aún no está aplicada,
-  /// degrada al path legacy de 3 args (solo discount+notes) para NO romper la
-  /// aplicación del descuento — la atribución por marcador en `notes` sigue
-  /// funcionando hasta que la migración se aplique. Los callers no-promo
-  /// (cortesía, descuento manual) dejan [writePromotion] en false y conservan el
-  /// comportamiento exacto previo.
-  Future<void> updateItemDiscountAndNotes({
+  /// Actualiza descuento y notas de una línea en una sola escritura. La
+  /// atribución de la promoción viaja en el marcador de [notes] (la versión
+  /// viva de fn_update_item_discount_and_notes no tiene p_promotion_id).
+  Future<OrderEditResult> updateItemDiscountAndNotes({
     required String itemId,
     required double discounts,
     String? notes,
     bool writePromotion = false,
     String? promotionId,
-  }) async {
-    if (writePromotion) {
-      try {
-        await _client.rpc(
-          SalesQueries.rpcUpdateItemDiscountAndNotes,
-          params: {
-            'p_item_id': itemId,
-            'p_discounts': discounts,
-            'p_notes': notes,
-            'p_promotion_id': promotionId,
-          },
-        );
-        return;
-      } catch (_) {
-        // RPC de 4 args no disponible aún (migración 20260605_0001 sin aplicar).
-        // Caemos al path legacy para no bloquear el descuento de la promo.
-      }
-    }
-    try {
-      await _client.rpc(
-        SalesQueries.rpcUpdateItemDiscountAndNotes,
-        params: {
-          'p_item_id': itemId,
-          'p_discounts': discounts,
-          'p_notes': notes,
-        },
-      );
-    } catch (e) {
-      // Fallback temporal si el RPC aún no está migrado.
-      try {
-        await _client
-            .from('order_items')
-            .update({'discounts': discounts, 'notes': notes})
-            .eq('id', itemId);
-      } catch (_) {
-        throw Exception('Error al actualizar descuento/notas del item: $e');
-      }
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al actualizar descuento/notas del item',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'discount_notes',
+      targetId: itemId,
+      args: {'discounts': discounts, 'notes': notes},
+    ),
+  );
 
-  /// Eliminar item (Directo para evitar timeout en RPC)
-  Future<void> deleteItem({required String itemId}) async {
-    try {
-      // Intentar directo primero para rapidez y evitar timeout de funcion compleja
-      final deleted = await _client
-          .from('order_items')
-          .delete()
-          .eq('id', itemId)
-          .select('id');
-      if (deleted.isNotEmpty) return;
-      // Un DELETE de cero filas también puede ser RLS. No lo tratamos como
-      // éxito: el RPC distingue permisos de un ítem realmente inexistente.
-      throw StateError('ITEM_NOT_FOUND: no se elimino el producto $itemId');
-    } catch (e) {
-      // El candado de cuentas facturadas (MP404) NO es un fallo transitorio:
-      // es una negativa deliberada. Si cayéramos al RPC de respaldo lo
-      // esquivaríamos —corre como SECURITY DEFINER, o sea fuera del alcance
-      // del trigger— y el ítem se borraría igual. Cortar aquí.
-      final blocked = closedOrderErrorMessage(e);
-      if (blocked != null) {
-        throw Exception(blocked);
-      }
-      // Fallback a RPC si falla por permisos o triggers complejos (aunque delete directo suele ser mejor)
-      try {
-        await _client.rpc(
-          SalesQueries.rpcDeleteItem,
-          params: {'p_item_id': itemId},
-        );
-      } catch (_) {
-        throw Exception('Error al eliminar item: $e');
-      }
-    }
-  }
+  /// Eliminar item. Si otro equipo ya lo quitó, la intención se cumplió. El
+  /// candado de cuentas facturadas (MP404) llega con su mensaje.
+  Future<OrderEditResult> deleteItem({
+    required String itemId,
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al eliminar item',
+    () => applyOrderEdit(edit: edit, kind: 'delete', targetId: itemId),
+  );
 
   /// Anota el motivo y el operador (PIN) de un producto que se quitó de la
   /// cuenta después de enviarse a cocina: el borrado lo registra un trigger
@@ -2311,19 +2362,19 @@ class SalesRepository {
   }
 
   /// Toggle takeout de item
-  Future<void> toggleItemTakeout({
+  Future<OrderEditResult> toggleItemTakeout({
     required String itemId,
     required bool isTakeout,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcToggleItemTakeout,
-        params: {'p_item_id': itemId, 'p_takeout': isTakeout},
-      );
-    } catch (e) {
-      throw Exception('Error al cambiar takeout: $e');
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al cambiar takeout',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'takeout',
+      targetId: itemId,
+      args: {'is_takeout': isTakeout},
+    ),
+  );
 
   // ============================================================
   // 🧾 DETALLE DE ORDEN
@@ -2574,18 +2625,29 @@ class SalesRepository {
         }
       }
 
-      var query = _client
-          .from('order_items')
-          .select(_itemFields)
-          .eq('order_id', orderId);
-
-      if (onlyOpen) {
-        query = query.not('status', 'in', '(paid,void)');
+      Future<List<dynamic>> fetch() {
+        var query = _client
+            .from('order_items')
+            .select(_itemFieldsWithVersion)
+            .eq('order_id', orderId);
+        if (onlyOpen) {
+          query = query.not('status', 'in', '(paid,void)');
+        }
+        return query.order('created_at', ascending: true).limit(limit);
       }
 
-      final data = await query
-          .order('created_at', ascending: true)
-          .limit(limit);
+      List<dynamic> data;
+      try {
+        data = await fetch();
+      } on PostgrestException catch (e) {
+        if (_itemVersionColumnMissing ||
+            e.code != '42703' ||
+            !e.message.contains('version')) {
+          rethrow;
+        }
+        _itemVersionColumnMissing = true;
+        data = await fetch();
+      }
       final items = data
           .map(
             (json) => OrderItem.fromMap(Map<String, dynamic>.from(json as Map)),
@@ -2761,15 +2823,17 @@ class SalesRepository {
     if (check == null || check['order_id'] == null) return;
     final orderId = check['order_id'] as String;
 
+    // T04: los productos NO se borran aquí (el operador ya los movió). Uno
+    // que haya entrado desde otro equipo queda sin subcuenta (FK ON DELETE
+    // SET NULL, que sube su versión) en vez de perderse.
     try {
-      await _client.from('order_items').delete().eq('check_id', checkId);
+      await _client.from('order_checks').delete().eq('id', checkId);
     } catch (e) {
       // Misma negativa que en deleteItem: si la subcuenta ya tiene NCF, no se
       // vacía. Se anula.
       final blocked = closedOrderErrorMessage(e);
       throw Exception(blocked ?? 'Error al eliminar la cuenta: $e');
     }
-    await _client.from('order_checks').delete().eq('id', checkId);
     await _recomputeOrderTotals(orderId);
   }
 
@@ -2986,19 +3050,32 @@ class SalesRepository {
   /// Fee de delivery propio (cargo EXENTO): fija `orders.delivery_fee` y
   /// recomputa el total en backend. El monto se redondea/clampa a ≥0 dentro
   /// del RPC. Ver docs/PRD_DELIVERY_FEE_PROPIO.md.
-  Future<void> setDeliveryFee({
+  Future<OrderEditResult> setDeliveryFee({
     required String orderId,
     required double amount,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcSetDeliveryFee,
-        params: {'p_order_id': orderId, 'p_amount': amount},
-      );
-    } catch (e) {
-      throw Exception('Error al fijar el fee de delivery: $e');
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al fijar el fee de delivery',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'delivery_fee',
+      args: {'amount': amount},
+    ),
+  );
+
+  /// Impuestos que no se cobran en esta cuenta (fn_set_order_excluded_taxes).
+  Future<OrderEditResult> setExcludedTaxes({
+    required List<String> taxIds,
+    String? employeeId,
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al quitar impuestos de la orden',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'excluded_taxes',
+      args: {'tax_ids': taxIds, 'employee_id': employeeId},
+    ),
+  );
 
   // ============================================================
   // 📄 DIVISIÓN DE CUENTA (SPLIT BILL)
@@ -3061,197 +3138,107 @@ class SalesRepository {
   }
 
   /// Mover item a otro check
-  Future<void> moveItemToCheck({
+  Future<OrderEditResult> moveItemToCheck({
     required String itemId,
     required int checkPosition,
-  }) async {
-    try {
-      await _client.rpc(
-        SalesQueries.rpcMoveItemToCheck,
-        params: {'p_item_id': itemId, 'p_check_position': checkPosition},
-      );
-    } catch (e) {
-      throw Exception('Error al mover item a check: $e');
-    }
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al mover item a check',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'move',
+      targetId: itemId,
+      args: {'check_position': checkPosition},
+    ),
+  );
 
-  /// Mover múltiples items a un mismo check (batch).
-  Future<int> moveItemsToCheckBatch({
-    required List<String> itemIds,
+  /// Mover múltiples items a un mismo check (batch). Cada línea viaja con la
+  /// versión que se veía: si una cambió, no se mueve ninguna.
+  Future<OrderEditResult?> moveItemsToCheckBatch({
+    required List<OrderItem> items,
     required int checkPosition,
+    required String orderId,
+    String? opId,
+    bool force = false,
   }) async {
-    if (itemIds.isEmpty) return 0;
-    try {
-      final response = await _client.rpc(
-        SalesQueries.rpcMoveItemsToCheckBatch,
-        params: {'p_item_ids': itemIds, 'p_check_position': checkPosition},
-      );
-      if (response == null) return 0;
-      return (response as num).toInt();
-    } catch (e) {
-      throw Exception('Error al mover items en lote: $e');
-    }
+    if (items.isEmpty) return null;
+    return _editOrThrow(
+      'Error al mover items en lote',
+      () => applyOrderEdit(
+        edit: OrderEdit(
+          orderId: orderId,
+          opId: opId,
+          base: force ? OrderEditBase.forced : OrderEditBase.ofVersion(null),
+        ),
+        kind: 'move_batch',
+        args: {
+          'check_position': checkPosition,
+          'items': [
+            for (final item in items) {'id': item.id, 'version': item.version},
+          ],
+        },
+      ),
+    );
   }
 
-  /// Consolida líneas duplicadas dentro de una subcuenta.
-  /// Útil después de unir cuentas para no terminar con items duplicados.
-  Future<void> consolidateCheckItems({
+  /// Consolida líneas duplicadas dentro de una subcuenta. T04: lo calcula
+  /// el servidor con lo vigente y bajo el candado de la orden
+  /// (fn_apply_order_edit 'consolidate_check'); nunca con lo que leyó este
+  /// equipo, que pisaría un cambio de otro.
+  Future<OrderEditResult> consolidateCheckItems({
+    required String orderId,
     required String checkId,
     bool normalizeQtyToInteger = false,
-  }) async {
-    try {
-      final rawItems = await _client
-          .from('order_items')
-          .select(
-            'id,product_id,product_name,sku,unit_price,is_takeout,status,notes,qty,quantity,discounts,created_at',
-          )
-          .eq('check_id', checkId)
-          .not('status', 'in', '(paid,void)')
-          .order('created_at', ascending: true);
-
-      final items = List<Map<String, dynamic>>.from(rawItems as List);
-      if (items.length < 2) return;
-
-      final itemIds = items
-          .map((i) => i['id']?.toString())
-          .whereType<String>()
-          .toList(growable: false);
-      if (itemIds.length < 2) return;
-
-      // Chunking inFilter (ver _loadTaxLinesByItem) — protege contra 414.
-      const inChunkSize = 100;
-      final itemIdsWithMods = <String>{};
-      for (var i = 0; i < itemIds.length; i += inChunkSize) {
-        final end = (i + inChunkSize > itemIds.length)
-            ? itemIds.length
-            : i + inChunkSize;
-        final chunk = itemIds.sublist(i, end);
-
-        final rawMods = await _client
-            .from('order_item_modifiers')
-            .select('item_id')
-            .inFilter('item_id', chunk);
-        for (final m in (rawMods as List)) {
-          final id = (m as Map)['item_id']?.toString();
-          if (id != null) itemIdsWithMods.add(id);
-        }
-      }
-
-      final groups = <String, List<Map<String, dynamic>>>{};
-      for (final item in items) {
-        final id = item['id']?.toString();
-        if (id == null || id.isEmpty) continue;
-
-        // Si tiene modificadores, no consolidamos para evitar mezclar recetas distintas.
-        if (itemIdsWithMods.contains(id)) {
-          groups['id:$id'] = [item];
-          continue;
-        }
-
-        final key =
-            '${item['product_id'] ?? ''}|${item['product_name'] ?? ''}|${item['sku'] ?? ''}|'
-            '${item['unit_price'] ?? 0}|${item['is_takeout'] ?? false}|${item['status'] ?? ''}|'
-            '${item['notes'] ?? ''}';
-        groups.putIfAbsent(key, () => <Map<String, dynamic>>[]).add(item);
-      }
-
-      for (final grouped in groups.values) {
-        if (grouped.length < 2) continue;
-
-        final keeper = grouped.first;
-        final keeperId = keeper['id']?.toString();
-        if (keeperId == null || keeperId.isEmpty) continue;
-
-        double sumQty = 0;
-        double sumDiscounts = 0;
-        final removeIds = <String>[];
-
-        for (var idx = 0; idx < grouped.length; idx++) {
-          final row = grouped[idx];
-          final qtyRaw = row['qty'];
-          final quantityRaw = row['quantity'];
-          final qty = (qtyRaw is num)
-              ? qtyRaw.toDouble()
-              : (quantityRaw is num)
-              ? quantityRaw.toDouble()
-              : double.tryParse(qtyRaw?.toString() ?? '') ??
-                    double.tryParse(quantityRaw?.toString() ?? '') ??
-                    1.0;
-          final discountsRaw = row['discounts'];
-          final discounts = (discountsRaw is num)
-              ? discountsRaw.toDouble()
-              : double.tryParse(discountsRaw?.toString() ?? '') ?? 0.0;
-
-          sumQty += qty;
-          sumDiscounts += discounts;
-
-          if (idx > 0) {
-            final id = row['id']?.toString();
-            if (id != null && id.isNotEmpty) removeIds.add(id);
-          }
-        }
-
-        final normalizedQty = normalizeQtyToInteger
-            ? sumQty.roundToDouble()
-            : sumQty;
-
-        // RPC atómica: UPDATE keeper + DELETE duplicados + refresh tax_lines
-        // en una sola transacción Postgres. Reemplaza el patrón previo de
-        // dos llamadas separadas que podía perder items si el UPDATE fallaba
-        // silenciosamente y el DELETE corría igual.
-        await _client.rpc(
-          'fn_consolidate_keeper_atomic',
-          params: {
-            'p_keeper_id': keeperId,
-            'p_remove_ids': removeIds,
-            'p_sum_qty': normalizedQty,
-            'p_sum_discounts': sumDiscounts,
-          },
-        );
-      }
-    } catch (e) {
-      throw Exception('Error al consolidar items de subcuenta: $e');
-    }
+  }) {
+    return _editOrThrow(
+      'Error al consolidar items de subcuenta',
+      () => applyOrderEdit(
+        edit: OrderEdit(orderId: orderId, base: OrderEditBase.ofVersion(null)),
+        kind: 'consolidate_check',
+        targetId: checkId,
+        args: {'normalize_qty_to_integer': normalizeQtyToInteger},
+      ),
+    );
   }
 
-  Future<void> assignCustomerToCheck({
+  Future<OrderEditResult> assignCustomerToCheck({
     required String checkId,
     required String customerId,
     required String customerName,
     String? customerRnc,
-  }) async {
-    try {
-      // El RNC se persiste por sub-cuenta (order_checks.customer_rnc) para
-      // que `fn_process_payment_v3` lo herede al cobrar el check (param > check
-      // > default). Necesario para emitir Crédito Fiscal por sub-cuenta.
-      final rnc = customerRnc?.trim();
-      await _client
-          .from('order_checks')
-          .update({
-            'customer_id': customerId,
-            'customer_name': customerName.trim(),
-            'customer_rnc': (rnc == null || rnc.isEmpty) ? null : rnc,
-          })
-          .eq('id', checkId);
-    } catch (e) {
-      throw Exception('Error al asignar cliente al check: $e');
-    }
+    required OrderEdit edit,
+  }) {
+    // El RNC se persiste por sub-cuenta (order_checks.customer_rnc) para
+    // que `fn_process_payment_v3` lo herede al cobrar el check (param > check
+    // > default). Necesario para emitir Crédito Fiscal por sub-cuenta.
+    final rnc = customerRnc?.trim();
+    return _editOrThrow(
+      'Error al asignar cliente al check',
+      () => applyOrderEdit(
+        edit: edit,
+        kind: 'check_customer',
+        targetId: checkId,
+        args: {
+          'customer_id': customerId,
+          'customer_name': customerName.trim(),
+          'customer_rnc': (rnc == null || rnc.isEmpty) ? null : rnc,
+        },
+      ),
+    );
   }
 
-  Future<void> clearCustomerFromCheck(String checkId) async {
-    try {
-      await _client
-          .from('order_checks')
-          .update({
-            'customer_id': null,
-            'customer_name': null,
-            'customer_rnc': null,
-          })
-          .eq('id', checkId);
-    } catch (e) {
-      throw Exception('Error al limpiar cliente del check: $e');
-    }
-  }
+  Future<OrderEditResult> clearCustomerFromCheck(
+    String checkId, {
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al limpiar cliente del check',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'check_customer',
+      targetId: checkId,
+      args: {'customer_id': null, 'customer_name': null, 'customer_rnc': null},
+    ),
+  );
 
   /// Asigna el tipo de comprobante a una sub-cuenta. Al pagar ese check, el
   /// RPC `fn_process_payment_v3` hereda este tipo si el modal de pago no lo
@@ -3416,6 +3403,98 @@ class SalesRepository {
         'No se pudo confirmar el resultado del pago. No asumas que fue cancelado: $e',
       );
     }
+  }
+
+  /// T07 (20261010_0008): sube un cobro hecho sin red con su identidad
+  /// ([paymentKey], estable por acción de la cola), su caja y su fecha. Si no
+  /// puede aplicarse tal cual (caja cerrada, cuenta cambiada o ya cobrada…)
+  /// el servidor no lo aplica ni lo mueve: devuelve `needs_resolution` y lo
+  /// guarda para decidir. Null si el servidor no tiene la migración (el
+  /// llamador sube con [processPayment], como antes).
+  Future<OfflinePaymentReplayResult?> replayOfflinePayment({
+    required String paymentKey,
+    required String orderId,
+    String? checkId,
+    required String paymentMethodId,
+    required double amount,
+    String? reference,
+    String? customerId,
+    String? customerRnc,
+    String? fiscalType,
+    String? cashierSessionId,
+    double changeAmount = 0,
+    bool closeOrder = true,
+    bool closeCheck = true,
+    int splitSequence = 0,
+    DateTime? paidAt,
+    String? offlineNcf,
+    String? deviceId,
+    String? originSessionRef,
+  }) async {
+    final Object? response;
+    try {
+      response = await _client
+          .rpc(
+            SalesQueries.rpcReplayOfflinePayment,
+            params: {
+              'p_payment_key': paymentKey,
+              'p_order_id': orderId,
+              'p_check_id': checkId,
+              'p_payment_method_id': paymentMethodId,
+              'p_amount': amount,
+              'p_reference': reference,
+              'p_customer_id': customerId,
+              'p_customer_rnc': customerRnc,
+              'p_cashier_session_id': cashierSessionId,
+              'p_change_amount': changeAmount,
+              'p_requested_ncf_type': fiscalType,
+              'p_close_order': closeOrder,
+              'p_split_sequence': splitSequence,
+              'p_close_check': closeCheck,
+              'p_paid_at': paidAt?.toUtc().toIso8601String(),
+              'p_offline_ncf': (offlineNcf != null && offlineNcf.isNotEmpty)
+                  ? offlineNcf
+                  : null,
+              'p_device_id': deviceId,
+              'p_origin_session_ref': originSessionRef,
+            },
+          )
+          .timeout(const Duration(seconds: 20));
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202') return null;
+      rethrow;
+    }
+    if (response is! Map) {
+      throw StateError('Respuesta inesperada de fn_replay_offline_payment');
+    }
+    return OfflinePaymentReplayResult.fromMap(
+      Map<String, dynamic>.from(response),
+    );
+  }
+
+  /// La decisión explícita sobre un cobro «por resolver» (dueño, admin o
+  /// gerente; el servidor lo valida).
+  Future<OfflinePaymentReplayResult> resolveOfflinePayment({
+    required String paymentKey,
+    required String resolution,
+    String? targetSessionId,
+    String? note,
+  }) async {
+    final response = await _client.rpc(
+      SalesQueries.rpcResolveOfflinePayment,
+      params: {
+        'p_payment_key': paymentKey,
+        'p_resolution': resolution,
+        'p_target_session_id': targetSessionId,
+        'p_note': note,
+      },
+    );
+    if (response is! Map) {
+      throw StateError('Respuesta inesperada de fn_resolve_offline_payment');
+    }
+    return OfflinePaymentReplayResult.fromMap(
+      Map<String, dynamic>.from(response),
+    );
   }
 
   Future<Payment?> _recoverCompletedPaymentAfterUniqueViolation({
@@ -3828,25 +3907,55 @@ class SalesRepository {
     final sessionId = orderRow?['session_id']?.toString();
     if (sessionId == null || sessionId.isEmpty) return;
 
-    final sessionRow = await _client
-        .from('table_sessions')
-        .select('note')
-        .eq('id', sessionId)
-        .maybeSingle();
-    final current = (sessionRow?['note']?.toString() ?? '').trim();
-
     final stamp = (voidedAt ?? DateTime.now()).toLocal().toIso8601String();
     final actor = (userName == null || userName.trim().isEmpty)
         ? 'Usuario'
         : userName.trim();
-    final auditLine = '[ANULACION][$stamp] $actor: $trimmed';
-    final nextNote = current.isEmpty ? auditLine : '$current\n$auditLine';
-
-    await updateSessionNote(
+    await appendSessionNoteLine(
       sessionId: sessionId,
-      note: nextNote,
+      line: '[ANULACION][$stamp] $actor: $trimmed',
       businessId: businessId,
     );
+  }
+
+  /// Agrega una línea de auditoría a la nota de la sesión (anulación, acceso
+  /// a mesa ajena). T04: en una sola sentencia del servidor
+  /// (fn_append_session_note); la nota nunca se reescribe entera, así dos
+  /// líneas a la vez no se pierden una a la otra. No es una edición del
+  /// operador: no pasa por fn_apply_order_edit (la cuenta puede estar
+  /// cerrada).
+  Future<void> appendSessionNoteLine({
+    required String sessionId,
+    required String line,
+    String? businessId,
+  }) async {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return;
+    try {
+      await _assertSessionInBusinessScope(sessionId, businessId: businessId);
+      await _client.rpc(
+        SalesQueries.rpcAppendSessionNote,
+        params: {'p_session_id': sessionId, 'p_line': trimmed},
+      );
+    } on PostgrestException catch (e) {
+      if (e.code != 'PGRST202') {
+        throw Exception('Error al anotar en la cuenta: $e');
+      }
+      // Servidor sin 20261010_0006: la línea se agrega como antes (solo es
+      // auditoría; ninguna edición del operador escribe la nota).
+      final row = await _client
+          .from('table_sessions')
+          .select('note')
+          .eq('id', sessionId)
+          .maybeSingle();
+      final current = (row?['note']?.toString() ?? '').trim();
+      await _client
+          .from('table_sessions')
+          .update({'note': current.isEmpty ? trimmed : '$current\n$trimmed'})
+          .eq('id', sessionId);
+    } catch (e) {
+      throw Exception('Error al anotar en la cuenta: $e');
+    }
   }
 
   // ============================================================
@@ -3888,15 +3997,18 @@ class SalesRepository {
   }
 
   /// Marcar orden como takeout (LEGACY)
-  Future<void> markOrderTakeout({
+  Future<OrderEditResult> markOrderTakeout({
     required String orderId,
     required bool takeout,
-  }) async {
-    await _client.rpc(
-      'fn_mark_order_takeout',
-      params: {'p_order_id': orderId, 'p_takeout': takeout},
-    );
-  }
+    required OrderEdit edit,
+  }) => _editOrThrow(
+    'Error al marcar la orden para llevar',
+    () => applyOrderEdit(
+      edit: edit,
+      kind: 'order_takeout',
+      args: {'is_takeout': takeout},
+    ),
+  );
 
   // ============================================================
   // 🚚 DELIVERY

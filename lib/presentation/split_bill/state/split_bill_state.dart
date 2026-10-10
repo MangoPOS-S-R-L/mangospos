@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import '../../../data/models/sales_models.dart';
+import '../../sales/state/sales_state.dart' show EditConflictNotice;
 
 /// 📄 Estado del proceso de división de cuenta
 class SplitBillState extends Equatable {
@@ -31,6 +32,10 @@ class SplitBillState extends Equatable {
   /// en el check cerrado existente.
   final Set<int> reservedPositions;
 
+  /// T04: otro equipo cambió la cuenta mientras se dividía; el operador
+  /// decide (ver SplitBillViewModel.resolveEditConflict).
+  final EditConflictNotice? editConflict;
+
   const SplitBillState({
     this.loading = false,
     this.error,
@@ -43,6 +48,7 @@ class SplitBillState extends Equatable {
     this.splitApplied = false,
     this.pendingDeletedCheckIds = const {},
     this.reservedPositions = const {},
+    this.editConflict,
   });
 
   SplitBillState copyWith({
@@ -57,6 +63,8 @@ class SplitBillState extends Equatable {
     bool? splitApplied,
     Set<String>? pendingDeletedCheckIds,
     Set<int>? reservedPositions,
+    EditConflictNotice? editConflict,
+    bool clearEditConflict = false,
   }) {
     return SplitBillState(
       loading: loading ?? this.loading,
@@ -71,6 +79,9 @@ class SplitBillState extends Equatable {
       pendingDeletedCheckIds:
           pendingDeletedCheckIds ?? this.pendingDeletedCheckIds,
       reservedPositions: reservedPositions ?? this.reservedPositions,
+      editConflict: clearEditConflict
+          ? null
+          : (editConflict ?? this.editConflict),
     );
   }
 
@@ -137,5 +148,6 @@ class SplitBillState extends Equatable {
     splitApplied,
     pendingDeletedCheckIds,
     reservedPositions,
+    editConflict,
   ];
 }

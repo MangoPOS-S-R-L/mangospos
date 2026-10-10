@@ -4,6 +4,8 @@ import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
+import 'package:mangopos/data/models/offline_payment_replay.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -89,7 +91,7 @@ class ProbeSales extends SalesRepository {
   }
 
   @override
-  Future<void> replaceOrderItemModifiers({
+  Future<void> replaceModifiersOfNewItem({
     required String itemId,
     required List<Map<String, dynamic>> modifiers,
   }) async {
@@ -98,8 +100,12 @@ class ProbeSales extends SalesRepository {
   }
 
   @override
-  Future<void> deleteItem({required String itemId}) async {
+  Future<OrderEditResult> deleteItem({
+    required String itemId,
+    required OrderEdit edit,
+  }) async {
     deleted.add(itemId);
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
@@ -112,11 +118,13 @@ class ProbeSales extends SalesRepository {
   }) async {}
 
   @override
-  Future<void> updateItemQuantity({
+  Future<OrderEditResult> updateItemQuantity({
     required String itemId,
     required double quantity,
+    required OrderEdit edit,
   }) async {
     quantities.add(itemId);
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
@@ -127,6 +135,38 @@ class ProbeSales extends SalesRepository {
   }) async {
     kitchenStates.add(status);
     if (failKitchen) throw TimeoutException('kitchen network unavailable');
+  }
+
+  // T07: el replay sube por la entrada nueva; aquí se observan sus mismos
+  // datos y se corta en el borde, como con la v3.
+  @override
+  Future<OfflinePaymentReplayResult?> replayOfflinePayment({
+    required String paymentKey,
+    required String orderId,
+    String? checkId,
+    required String paymentMethodId,
+    required double amount,
+    String? reference,
+    String? customerId,
+    String? customerRnc,
+    String? fiscalType,
+    String? cashierSessionId,
+    double changeAmount = 0,
+    bool closeOrder = true,
+    bool closeCheck = true,
+    int splitSequence = 0,
+    DateTime? paidAt,
+    String? offlineNcf,
+    String? deviceId,
+    String? originSessionRef,
+  }) async {
+    calls.add({
+      'split': splitSequence,
+      'close': closeOrder,
+      'close_check': closeCheck,
+      'amount': amount,
+    });
+    throw StateError('audit probe: no real payment executed');
   }
 
   @override
@@ -501,6 +541,9 @@ void main() {
             'order_id': 'remote-order-$type',
             'item_id': 'tmp_missing_$type',
             'quantity': 2,
+            // T04: la base que manda la app (aquí falla la identidad, no
+            // la versión).
+            'base_version': 1,
           },
         );
       }
@@ -549,6 +592,7 @@ void main() {
           'type': 'delete_item',
           'order_id': 'other-order',
           'item_id': 'other-real-item',
+          'base_version': 1,
         },
       );
       final first = await sync(biz);
@@ -618,6 +662,13 @@ void main() {
           'type': 'delete_item',
           'order_id': 'remote-order',
           'item_id': 'tmp_partial',
+          // Línea creada sin red: sin versión, con lo que se veía.
+          'expected': {
+            'qty': 1,
+            'notes': null,
+            'is_takeout': false,
+            'discounts': 0,
+          },
         },
       );
       expect(await service.unsettledActions(biz), hasLength(2));

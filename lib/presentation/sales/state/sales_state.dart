@@ -2,6 +2,26 @@ import 'package:equatable/equatable.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
 
+/// T04 (20261010_0006): otro equipo cambió lo que el operador estaba
+/// editando y su cambio no se aplicó. La intención queda guardada en el VM: el
+/// operador decide quedarse con lo de ahora o aplicar su cambio.
+class EditConflictNotice extends Equatable {
+  const EditConflictNotice({
+    required this.id,
+    required this.message,
+    this.detail,
+  });
+
+  final String id;
+  final String message;
+
+  /// Lo que hay ahora en el servidor, en palabras.
+  final String? detail;
+
+  @override
+  List<Object?> get props => [id, message, detail];
+}
+
 class CurrentOrderState extends Equatable {
   final bool loading;
   final String? error;
@@ -41,6 +61,9 @@ class CurrentOrderState extends Equatable {
   /// desglose), esto existe para que la UI no parpadee esperando el round-trip.
   final Set<String> excludedTaxIds;
 
+  /// Conflicto de edición pendiente de la decisión del operador (T04).
+  final EditConflictNotice? editConflict;
+
   const CurrentOrderState({
     this.loading = false,
     this.error,
@@ -68,6 +91,7 @@ class CurrentOrderState extends Equatable {
     this.taxConfigError,
     this.fiscalSequencesLoadError,
     this.excludedTaxIds = const {},
+    this.editConflict,
   });
 
   CurrentOrderState copyWith({
@@ -106,6 +130,8 @@ class CurrentOrderState extends Equatable {
     String? fiscalSequencesLoadError,
     bool clearFiscalSequencesLoadError = false,
     Set<String>? excludedTaxIds,
+    EditConflictNotice? editConflict,
+    bool clearEditConflict = false,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -149,6 +175,9 @@ class CurrentOrderState extends Equatable {
           ? null
           : (fiscalSequencesLoadError ?? this.fiscalSequencesLoadError),
       excludedTaxIds: excludedTaxIds ?? this.excludedTaxIds,
+      editConflict: clearEditConflict
+          ? null
+          : (editConflict ?? this.editConflict),
     );
   }
 
@@ -180,5 +209,6 @@ class CurrentOrderState extends Equatable {
     taxConfigError,
     fiscalSequencesLoadError,
     excludedTaxIds,
+    editConflict,
   ];
 }

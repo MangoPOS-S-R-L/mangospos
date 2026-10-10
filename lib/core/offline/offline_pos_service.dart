@@ -18,12 +18,15 @@ import 'package:mangopos/core/offline/hub/hub_projection_cache.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/security/secure_blob_cipher.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
+import 'package:mangopos/data/models/offline_payment_replay.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
 class OfflineQueueSyncResult {
@@ -118,6 +121,33 @@ class _KitchenRoundHold implements Exception {
   final String message;
   final bool countsAttempt;
   final bool terminal;
+  @override
+  String toString() => message;
+}
+
+/// T04 (20261010_0006): la edición encolada choca con un cambio de otro equipo
+/// (o es de una versión anterior de la app, sin la versión que se veía). No se
+/// aplica sola: va a dead-letter con el estado actual y bloquea lo que sigue
+/// de su orden (un cobro posterior se calculó sobre este cambio). «Reintentar»
+/// la aplica sobre lo vigente (decisión explícita); «Limpiar cola» la descarta.
+class _EditConflict implements Exception {
+  const _EditConflict(this.message, {this.current});
+  final String message;
+  final Map<String, dynamic>? current;
+  @override
+  String toString() => message;
+}
+
+/// T07 (20261010_0008): el servidor no aplicó el cobro sin red tal cual (caja
+/// cerrada, cuenta cambiada o ya cobrada por otro equipo…). No se reintenta
+/// solo ni se mueve: queda en dead-letter con el motivo, bloqueando lo que
+/// sigue de su orden, hasta que alguien lo resuelva
+/// ([OfflinePosService.resolveOfflinePayment]).
+class _PaymentNeedsResolution implements Exception {
+  const _PaymentNeedsResolution(this.reason, this.detail);
+  final String? reason;
+  final Map<String, dynamic>? detail;
+  String get message => OfflinePaymentResolution.reasonMessage(reason);
   @override
   String toString() => message;
 }
@@ -1318,12 +1348,34 @@ class OfflinePosService {
     var revived = 0;
     final next = queue
         .map((action) {
+          if (_isHubQuarantine(action)) {
+            // Conflicto de edición que subió por el Hub: el cajero decide
+            // aplicar su cambio. Lo reaplica el Hub (conoce los ids de la
+            // caja cliente), nunca la cola local; sigue en cuarentena hasta
+            // que se aplique.
+            if (action['edit_conflict'] != true ||
+                action['force_apply'] == true) {
+              return action;
+            }
+            revived++;
+            return Map<String, dynamic>.from(action)
+              ..['force_apply'] = true
+              ..['last_error'] =
+                  'Se aplicará tu cambio sobre lo que hay ahora en la próxima '
+                  'subida del Hub.';
+          }
           if (!_isDead(action)) return action;
           revived++;
           final reset = Map<String, dynamic>.from(action)
             ..['status'] = _statusPending
             ..['attempts'] = 0
             ..['last_error'] = null;
+          // Conflicto de edición: el cajero decide aplicar su cambio sobre lo
+          // vigente (T04).
+          if (action['edit_conflict'] == true) {
+            reset['force_apply'] = true;
+            reset.remove('edit_conflict');
+          }
           reset.remove('next_retry_at');
           reset.remove('dead_at');
           reset.remove('failed_at');
@@ -1344,7 +1396,17 @@ class OfflinePosService {
   Future<int> clearDeadActions(String businessId) async {
     if (businessId.isEmpty) return 0;
     final queue = await _readQueue(businessId);
-    final survivors = queue.where((a) => !_isDead(a)).toList(growable: false);
+    // La cuarentena del Hub solo sale por «Limpiar cola», que la respalda.
+    // El dinero nunca se descarta aquí (T07: un cobro se resuelve, no se
+    // borra).
+    final survivors = queue
+        .where(
+          (a) =>
+              !_isDead(a) ||
+              _isHubQuarantine(a) ||
+              _moneyActionTypes.contains(a['type']),
+        )
+        .toList(growable: false);
     final removed = queue.length - survivors.length;
     if (removed > 0) {
       await _writeQueue(businessId, survivors);
@@ -1426,6 +1488,54 @@ class OfflinePosService {
     }
     return (unsettled: unsettled, revivingAdds: false);
   }
+
+  /// T02: ¿este equipo tiene algo sin subir de [orderIds] (ids del servidor)?
+  /// Cuenta toda la cola sin completar (también muertas y retenidas: son
+  /// datos que aún no llegaron) y, en el Hub, su op-log. La liberación de mesa
+  /// pendiente no cuenta. Si no se puede leer todo, responde que sí.
+  Future<bool> hasPendingWorkForOrders(
+    String businessId,
+    Set<String> orderIds, {
+    bool includeHubOpLog = false,
+  }) async {
+    if (orderIds.isEmpty) return false;
+    try {
+      final orderMap = await _readOrderMap(businessId);
+      bool matches(Map<String, dynamic> action) {
+        if (action['type'] == 'release_empty_order') return false;
+        final raw = action['order_id']?.toString();
+        if (raw == null || raw.isEmpty) return false;
+        if (orderIds.contains(raw)) return true;
+        final mapped = orderMap[raw]?.toString();
+        return mapped != null && orderIds.contains(mapped);
+      }
+
+      if ((await unsettledActions(businessId)).any(matches)) return true;
+      if (includeHubOpLog &&
+          (await unsettledHubActions(businessId)).any(matches)) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[OfflinePos] pendientes por orden: $e');
+      return true;
+    }
+  }
+
+  @visibleForTesting
+  Future<void> debugSaveOrderMapping({
+    required String businessId,
+    required String localOrderId,
+    required String remoteOrderId,
+  }) => _saveOrderMapping(
+    businessId: businessId,
+    localOrderId: localOrderId,
+    remoteOrderId: remoteOrderId,
+  );
+
+  /// ¿Este equipo es el Hub del negocio (su op-log cuenta como pendiente)?
+  Future<bool> isHubHostDevice(String businessId) async =>
+      await HubConfigService().getDeviceRole(businessId) == HubDeviceRole.hub;
 
   /// Alta en línea terminada: guarda `tmp_` → id real si esa línea está en
   /// una comanda local, para que el replay de la comanda confirme exactamente
@@ -1827,6 +1937,14 @@ class OfflinePosService {
       split.discard,
       discardedBy: discardedBy,
     );
+    // Comandas del Hub en cuarentena: el cajero las resolvió (quedan en el
+    // respaldo). El op-log ya puede soltarlas y el respaldo del Hub también.
+    for (final action in split.discard) {
+      final opId = action['id']?.toString();
+      if (_isHubQuarantine(action) && opId != null && opId.isNotEmpty) {
+        await _markOpCompleted(businessId: businessId, opId: opId);
+      }
+    }
     if (kIsWeb) {
       final queue = await _readQueue(businessId);
       await _writeQueue(
@@ -2112,6 +2230,35 @@ class OfflinePosService {
             fingerprint: fingerprint,
           );
         }
+      } on _PaymentNeedsResolution catch (pending) {
+        lastError = pending.message;
+        final now = DateTime.now().toIso8601String();
+        queue[i] = Map<String, dynamic>.from(processing)
+          ..['attempts'] = ((processing['attempts'] as num?)?.toInt() ?? 0) + 1
+          ..['last_error'] = pending.message
+          ..['failed_at'] = now
+          ..['status'] = _statusDead
+          ..['dead_at'] = now
+          ..['payment_resolution'] = pending.reason
+          ..['payment_resolution_detail'] = pending.detail
+          ..remove('next_retry_at');
+        failed++;
+        if (orderId != null) blockedOrders.add(orderId);
+      } on _EditConflict catch (conflict) {
+        lastError = conflict.message;
+        final updated = Map<String, dynamic>.from(processing)
+          ..['attempts'] = ((processing['attempts'] as num?)?.toInt() ?? 0) + 1
+          ..['last_error'] = conflict.message
+          ..['failed_at'] = DateTime.now().toIso8601String()
+          ..['status'] = _statusDead
+          ..['dead_at'] = DateTime.now().toIso8601String()
+          ..['edit_conflict'] = true
+          ..['conflict_current'] = conflict.current
+          ..remove('next_retry_at')
+          ..remove('force_apply');
+        queue[i] = updated;
+        failed++;
+        if (orderId != null) blockedOrders.add(orderId);
       } on _KitchenRoundHold catch (hold) {
         // Comanda sin confirmar todavía: se conserva sin bloquear su orden.
         final attempts =
@@ -2344,6 +2491,8 @@ class OfflinePosService {
     final conflicts = <OfflineSyncConflict>[];
 
     final blockedOrders = <String>{};
+    final quarantined = await _hubQuarantinedOps(businessId);
+    final forced = await _hubForcedEditOps(businessId);
     for (final op in ops) {
       final opId = op['op_id']?.toString() ?? op['id']?.toString();
       final fingerprint = op['fingerprint']?.toString();
@@ -2360,13 +2509,19 @@ class OfflinePosService {
         completed++;
         continue;
       }
+      // En cuarentena (ver _quarantineHubKitchenOp): ni se sube ni falla.
+      // Salvo un conflicto de edición que el cajero decidió aplicar encima.
+      final forcedEdit = opId != null && forced.contains(opId);
+      if (opId != null && quarantined.containsKey(opId) && !forcedEdit) {
+        continue;
+      }
       final orderId = op['order_id']?.toString();
       if (orderId != null && blockedOrders.contains(orderId)) continue;
       processed++;
       try {
         final mapped = await _replayAction(
           businessId: businessId,
-          action: op,
+          action: forcedEdit ? {...op, 'force_apply': true} : op,
           salesRepository: salesRepository,
           printingService: printingService,
           inventoryRepository: inventoryRepository,
@@ -2384,9 +2539,63 @@ class OfflinePosService {
             fingerprint: fingerprint,
           );
         }
+        if (forcedEdit) {
+          await _resolveHubQuarantine(businessId, opId);
+          quarantined.remove(opId);
+        }
+      } on _PaymentNeedsResolution catch (pending) {
+        // Cobro de una caja cliente que no se aplica tal cual: cuarentena con
+        // el motivo; se resuelve en el servidor (resolveOfflinePayment).
+        if (opId != null && opId.isNotEmpty) {
+          await _quarantineHubKitchenOp(
+            businessId,
+            opId,
+            op,
+            pending.message,
+            paymentResolution: pending.reason,
+            paymentDetail: pending.detail,
+          );
+          quarantined[opId] = orderId;
+        } else {
+          failed++;
+        }
+        conflicts.add(
+          OfflineSyncConflict(
+            actionType: op['type']?.toString() ?? 'unknown',
+            actionId: opId,
+            reason: pending.message,
+          ),
+        );
+        lastError = pending.message;
+        if (orderId != null) blockedOrders.add(orderId);
+      } on _EditConflict catch (conflict) {
+        if (opId != null && opId.isNotEmpty) {
+          await _quarantineHubKitchenOp(
+            businessId,
+            opId,
+            op,
+            conflict.message,
+            editConflict: true,
+            current: conflict.current,
+          );
+          quarantined[opId] = orderId;
+        } else {
+          failed++;
+        }
+        conflicts.add(
+          OfflineSyncConflict(
+            actionType: op['type']?.toString() ?? 'unknown',
+            actionId: opId,
+            reason: conflict.message,
+          ),
+        );
+        lastError = conflict.message;
       } on _KitchenRoundHold catch (hold) {
-        if (hold.terminal) {
-          // El Hub no tiene dead-letter: se reporta sin confirmar nada.
+        if (hold.terminal && opId != null && opId.isNotEmpty) {
+          // No se confirma nada y NO se da por subida: pasa a la cuarentena
+          // durable, visible para recuperarla a mano.
+          await _quarantineHubKitchenOp(businessId, opId, op, hold.message);
+          quarantined[opId] = orderId;
           conflicts.add(
             OfflineSyncConflict(
               actionType: op['type']?.toString() ?? 'unknown',
@@ -2394,10 +2603,7 @@ class OfflinePosService {
               reason: hold.message,
             ),
           );
-          completed++;
-          if (opId != null && opId.isNotEmpty) {
-            await _markOpCompleted(businessId: businessId, opId: opId);
-          }
+          lastError = hold.message;
         } else {
           // Se reintenta en la próxima subida, sin frenar su orden.
           failed++;
@@ -2416,6 +2622,10 @@ class OfflinePosService {
         completed++;
         if (opId != null && opId.isNotEmpty) {
           await _markOpCompleted(businessId: businessId, opId: opId);
+        }
+        if (forcedEdit) {
+          await _resolveHubQuarantine(businessId, opId);
+          quarantined.remove(opId);
         }
       } catch (e) {
         failed++;
@@ -2437,7 +2647,12 @@ class OfflinePosService {
     var pruned = false;
     if (failed == 0) {
       final remaining = await _hubOpLog.since(businessId, seq: 0);
-      final keep = HubOrderProjector.openOrderIds(remaining);
+      // Las órdenes con una comanda en cuarentena se conservan (op-log y
+      // réplica) aunque ya estén cerradas, hasta que se resuelva.
+      final keep = {
+        ...HubOrderProjector.openOrderIds(remaining),
+        ...quarantined.values.whereType<String>(),
+      };
       // Tope `uplinkSeq`: lo que entró DURANTE esta subida todavía no subió y no
       // se puede podar, aunque su orden ya esté cerrada (venta rápida) o no
       // tenga orden (movimiento de caja). Antes se borraba sin llegar a Supabase.
@@ -2599,6 +2814,299 @@ class OfflinePosService {
         .where((op) => !_isHubOpUploaded(op, doneOps, doneFingerprints))
         .map((op) => Map<String, dynamic>.unmodifiable(op))
         .toList(growable: false);
+  }
+
+  static const _hubQuarantineSource = 'hub_oplog';
+
+  /// T07: identidad del cobro sin red en el servidor (offline_payment_receipts),
+  /// derivada del id de su acción: cada reintento manda la misma.
+  static String offlinePaymentKey(String actionId) =>
+      _uuid.v5(Namespace.url.value, 'mangopos-offline-payment:$actionId');
+
+  static String _adoptedCashSessionsKey(String businessId) =>
+      'offline_cash_session_adopted_$businessId';
+
+  /// Cajas abiertas sin red que, al sincronizar, se colgaron de la caja que
+  /// ya estaba abierta en el servidor. El recibo de cada cobro lo dice.
+  Future<Set<String>> _adoptedCashSessions(String businessId) async {
+    try {
+      final storage = await _storage;
+      final map = await storage.readJson(_adoptedCashSessionsKey(businessId));
+      return {...?map?.keys};
+    } catch (_) {
+      return const <String>{};
+    }
+  }
+
+  Future<void> _rememberAdoptedCashSession(
+    String businessId,
+    String localSessionId,
+  ) async {
+    try {
+      final storage = await _storage;
+      final map =
+          await storage.readJson(_adoptedCashSessionsKey(businessId)) ??
+          <String, dynamic>{};
+      map[localSessionId] = DateTime.now().toIso8601String();
+      await storage.writeJson(_adoptedCashSessionsKey(businessId), map);
+    } catch (_) {}
+  }
+
+  /// T07: decisión explícita sobre un cobro «por resolver» (también los que
+  /// llegaron del Hub en cuarentena): la toma el servidor con su recibo
+  /// (dueño, admin o gerente) y la acción sale de la cola como completada.
+  Future<OfflinePaymentReplayResult> resolveOfflinePayment({
+    required String businessId,
+    required String actionId,
+    required String resolution,
+    required SalesRepository salesRepository,
+    String? targetSessionId,
+    String? note,
+  }) async {
+    final result = await salesRepository.resolveOfflinePayment(
+      paymentKey: offlinePaymentKey(actionId),
+      resolution: resolution,
+      targetSessionId: targetSessionId,
+      note: note,
+    );
+    if (result.needsResolution) return result;
+    await _withQueueMutation(businessId, () async {
+      final queue = await _readQueue(businessId);
+      for (final action in queue) {
+        if (action['id']?.toString() != actionId) continue;
+        await _upsertActionUnlocked(
+          businessId,
+          Map<String, dynamic>.from(action)
+            ..['status'] = _statusCompleted
+            ..['completed_at'] = DateTime.now().toIso8601String()
+            ..['payment_resolved'] = resolution
+            ..['last_error'] = null,
+        );
+      }
+    });
+    await _markOpCompleted(businessId: businessId, opId: actionId);
+    return result;
+  }
+
+  // Ediciones de la cola que son de la cuenta (no de una línea).
+  static const _orderLevelEditTypes = {'mark_order_takeout', 'set_delivery_fee'};
+
+  static const _unknownBaseMessage =
+      'No se sabe qué veía el operador al hacer este cambio (el producto no '
+      'estaba en pantalla): no se aplica solo. «Reintentar» lo aplica sobre lo '
+      'que hay ahora; «Limpiar cola» lo descarta.';
+
+  static const _legacyEditMessage =
+      'Cambio hecho con una versión anterior de la app, sin la versión que se '
+      'veía: no se aplica solo. «Reintentar» lo aplica sobre lo que hay ahora; '
+      '«Limpiar cola» lo descarta.';
+
+  /// T04: la edición de una acción de la cola. El id de operación sale del id
+  /// de la acción: cada reintento manda el mismo y el servidor no la aplica
+  /// dos veces.
+  Future<OrderEdit> _orderEditForAction({
+    required String businessId,
+    required Map<String, dynamic> action,
+    required String orderId,
+    required SalesRepository salesRepository,
+  }) async {
+    final actionId = (action['op_id'] ?? action['id'])?.toString() ?? '';
+    final opId = _uuid.v5(Namespace.url.value, 'mangopos-order-edit:$actionId');
+    final hasBase =
+        action.containsKey('base_version') ||
+        action['expected'] is Map ||
+        action['force_apply'] == true;
+    if (!hasBase) throw const _EditConflict(_legacyEditMessage);
+    var base = OrderEditBase.fromAction(action);
+    if (!base.force && base.version == null && base.expected == null) {
+      if (!_orderLevelEditTypes.contains(action['type'])) {
+        // Una línea sin versión ni valores: no hay con qué comparar.
+        throw const _EditConflict(_unknownBaseMessage);
+      }
+      // Cambio de la cuenta sin su versión: cuenta creada sin red por ESTE
+      // equipo (nadie más la conocía) o vista por el Hub, que no la trae. Va
+      // sobre la vigente, como la edición en línea (SalesViewModel._runEdit).
+      base = OrderEditBase.ofVersion(
+        await salesRepository.getOrderVersion(orderId),
+      );
+    }
+    return OrderEdit(orderId: orderId, opId: opId, base: base);
+  }
+
+  /// Conflicto del servidor en el replay: lo que ya no aplica se salta (como
+  /// antes); un cambio de otro equipo es un conflicto a resolver.
+  Never _replayEditConflict(OrderEditConflict conflict, String what) {
+    switch (conflict.result.reason) {
+      case 'item_missing':
+        throw _OfflineSyncSkip(
+          'No se pudo $what: ya fue eliminado por otro terminal.',
+        );
+      case 'item_closed':
+        throw _OfflineSyncSkip('No se pudo $what: ya se cobró o se anuló.');
+      case 'order_closed':
+        throw _OfflineSyncSkip('No se pudo $what: la cuenta ya se cerró.');
+      default:
+        throw _EditConflict(
+          'Otro equipo cambió esto antes de que subiera tu cambio ($what). '
+          '«Reintentar» aplica el tuyo sobre lo que hay ahora; «Limpiar cola» '
+          'lo descarta.',
+          current: conflict.result.current,
+        );
+    }
+  }
+
+  /// Aplica una edición del replay. Si se aplicó sobre la versión [from], las
+  /// ediciones siguientes de ESTE equipo sobre lo mismo que venían de esa
+  /// versión pasan a la nueva: eran cambios encadenados del mismo operador,
+  /// no un conflicto con otro equipo.
+  Future<void> _replayEdit({
+    required String businessId,
+    required Map<String, dynamic> action,
+    required String what,
+    required String orderId,
+    required SalesRepository salesRepository,
+    required Future<OrderEditResult> Function(OrderEdit edit) apply,
+  }) async {
+    final edit = await _orderEditForAction(
+      businessId: businessId,
+      action: action,
+      orderId: orderId,
+      salesRepository: salesRepository,
+    );
+    final OrderEditResult result;
+    try {
+      result = await apply(edit);
+    } on OrderEditConflict catch (conflict) {
+      _replayEditConflict(conflict, what);
+    }
+    final from = edit.base.version;
+    final to = result.version;
+    if (from != null && to != null && to != from) {
+      await _rebaseFollowingEdits(
+        businessId: businessId,
+        after: action,
+        from: from,
+        to: to,
+      );
+    }
+  }
+
+  Future<void> _rebaseFollowingEdits({
+    required String businessId,
+    required Map<String, dynamic> after,
+    required int from,
+    required int to,
+  }) async {
+    final itemId = after['item_id']?.toString();
+    final orderId = after['order_id']?.toString();
+    await _withQueueMutation(businessId, () async {
+      final queue = await _readQueue(businessId);
+      var seen = false;
+      for (final action in queue) {
+        if (action['id'] == after['id']) {
+          seen = true;
+          continue;
+        }
+        if (!seen || _isSettled(action)) continue;
+        final sameTarget = itemId != null && itemId.isNotEmpty
+            ? action['item_id']?.toString() == itemId
+            : action['item_id'] == null &&
+                  action['order_id']?.toString() == orderId;
+        if (!sameTarget || (action['base_version'] as num?)?.toInt() != from) {
+          continue;
+        }
+        final rebased = Map<String, dynamic>.from(action)
+          ..['base_version'] = to;
+        await _upsertActionUnlocked(businessId, rebased);
+      }
+    });
+  }
+
+  static bool _isHubQuarantine(Map<String, dynamic> action) =>
+      action['quarantined_from'] == _hubQuarantineSource;
+
+  /// Comanda del op-log del Hub que no se confirma sola (versión anterior,
+  /// sin los ids de sus productos). Queda en la cola de este equipo como
+  /// dead-letter con el MISMO id: se ve en el visor y en el aviso de
+  /// operaciones sin resolver. No se da por subida: el op-log y su réplica
+  /// conservan su orden hasta que «Limpiar cola» la respalde y la resuelva.
+  Future<void> _quarantineHubKitchenOp(
+    String businessId,
+    String opId,
+    Map<String, dynamic> op,
+    String message, {
+    // T04: edición que chocó con otro equipo; «Reintentar» la reaplica
+    // encima por el Hub (ver retryDeadActions).
+    bool editConflict = false,
+    Map<String, dynamic>? current,
+    String? paymentResolution,
+    Map<String, dynamic>? paymentDetail,
+  }) async {
+    await _withQueueMutation(businessId, () async {
+      final now = DateTime.now().toIso8601String();
+      final action = _normalizeAction({...op, 'id': opId})
+        ..['status'] = _statusDead
+        ..['dead_at'] = now
+        ..['attempts'] = 0
+        ..['last_error'] = message
+        ..['kitchen_hold'] = true
+        ..['quarantined_from'] = _hubQuarantineSource
+        ..['quarantined_at'] = now;
+      action.remove('next_retry_at');
+      action.remove('force_apply');
+      if (editConflict) {
+        action['edit_conflict'] = true;
+        action['conflict_current'] = current;
+      }
+      if (paymentResolution != null) {
+        action['payment_resolution'] = paymentResolution;
+        action['payment_resolution_detail'] = paymentDetail;
+      }
+      await _upsertActionUnlocked(businessId, action);
+    });
+  }
+
+  /// op_id → order_id de las comandas del Hub en cuarentena sin resolver.
+  Future<Map<String, String?>> _hubQuarantinedOps(String businessId) async {
+    final result = <String, String?>{};
+    for (final action in await unsettledActions(businessId)) {
+      final id = action['id']?.toString();
+      if (_isHubQuarantine(action) && id != null && id.isNotEmpty) {
+        result[id] = action['order_id']?.toString();
+      }
+    }
+    return result;
+  }
+
+  /// Conflictos de edición del Hub que el cajero decidió aplicar encima
+  /// («Reintentar»): el ciclo del Hub los reaplica con force_apply.
+  Future<Set<String>> _hubForcedEditOps(String businessId) async => {
+    for (final action in await unsettledActions(businessId))
+      if (_isHubQuarantine(action) &&
+          action['edit_conflict'] == true &&
+          action['force_apply'] == true)
+        ?action['id']?.toString(),
+  };
+
+  /// La edición en cuarentena ya se aplicó en el servidor: sale de la cola
+  /// local (su op ya está marcada como subida).
+  Future<void> _resolveHubQuarantine(String businessId, String opId) async {
+    await _withQueueMutation(businessId, () async {
+      final queue = await _readQueue(businessId);
+      for (final action in queue) {
+        if (action['id']?.toString() != opId || !_isHubQuarantine(action)) {
+          continue;
+        }
+        await _upsertActionUnlocked(
+          businessId,
+          Map<String, dynamic>.from(action)
+            ..['status'] = _statusCompleted
+            ..['completed_at'] = DateTime.now().toIso8601String()
+            ..remove('force_apply')
+            ..remove('edit_conflict'),
+        );
+      }
+    });
   }
 
   static String? _hubOpId(Map<String, dynamic> op) {
@@ -2949,7 +3457,18 @@ class OfflinePosService {
       }
 
       if (existingIndex >= 0) {
-        result[existingIndex] = action;
+        // T04: la edición que queda conserva la base de la PRIMERA (lo que el
+        // operador veía antes de empezar a cambiarla). Sin base en la vieja
+        // (versión anterior de la app), tampoco en la fusionada.
+        final older = result[existingIndex];
+        final merged = Map<String, dynamic>.from(action)
+          ..remove('base_version')
+          ..remove('expected');
+        if (older.containsKey('base_version')) {
+          merged['base_version'] = older['base_version'];
+        }
+        if (older['expected'] != null) merged['expected'] = older['expected'];
+        result[existingIndex] = merged;
       } else {
         result.add(action);
       }
@@ -3004,6 +3523,12 @@ class OfflinePosService {
       return _ReplayGate.hubOwned;
     }
     final kitchenHold = action['kitchen_hold'] == true;
+    // Comanda del Hub en cuarentena: solo se resuelve a mano. Reproducirla
+    // por la cola local podría crear en el servidor la orden de una caja
+    // cliente (su id local no está en el mapa de este equipo).
+    if (action['quarantined_from'] == _hubQuarantineSource) {
+      return _ReplayGate.dead;
+    }
     if (!force && _isDead(action)) {
       if (orderId != null && !kitchenHold) blockedOrders.add(orderId);
       return _ReplayGate.dead;
@@ -3103,6 +3628,10 @@ class OfflinePosService {
             '${action['start_amount']}',
           );
           response = {'session_id': existing};
+          final adoptedLocal = action['local_session_id']?.toString();
+          if (adoptedLocal != null && adoptedLocal.isNotEmpty) {
+            await _rememberAdoptedCashSession(businessId, adoptedLocal);
+          }
         }
         final remoteSessionId = response['session_id']?.toString();
         final localSessionId = action['local_session_id']?.toString();
@@ -3365,7 +3894,7 @@ class OfflinePosService {
             try {
               // Retry the initial snapshot on the SAME mapped item, rather
               // than inserting the item or its modifiers a second time.
-              await salesRepository.replaceOrderItemModifiers(
+              await salesRepository.replaceModifiersOfNewItem(
                 itemId: createdItemId,
                 modifiers: modifiers,
               );
@@ -3402,7 +3931,19 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          await salesRepository.deleteItem(itemId: resolvedItemId);
+          await _replayEdit(
+            businessId: businessId,
+            action: action,
+            what: 'eliminar un item',
+            orderId: await _resolveOrderIdForAction(
+              businessId: businessId,
+              action: action,
+              salesRepository: salesRepository,
+            ),
+            salesRepository: salesRepository,
+            apply: (edit) =>
+                salesRepository.deleteItem(itemId: resolvedItemId, edit: edit),
+          );
           // Motivo y operador del borrado (20260919_0002). Nunca lanza.
           await salesRepository.noteItemRemoval(
             itemId: resolvedItemId,
@@ -3430,10 +3971,22 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          await salesRepository.updateItemQuantity(
-            itemId: resolvedItemId,
-            quantity: ((action['quantity'] ?? action['qty'] ?? 1) as num)
-                .toDouble(),
+          await _replayEdit(
+            businessId: businessId,
+            action: action,
+            what: 'actualizar la cantidad de un item',
+            orderId: await _resolveOrderIdForAction(
+              businessId: businessId,
+              action: action,
+              salesRepository: salesRepository,
+            ),
+            salesRepository: salesRepository,
+            apply: (edit) => salesRepository.updateItemQuantity(
+              itemId: resolvedItemId,
+              quantity: ((action['quantity'] ?? action['qty'] ?? 1) as num)
+                  .toDouble(),
+              edit: edit,
+            ),
           );
         } catch (e) {
           if (_isItemMissingError(e)) {
@@ -3459,9 +4012,21 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          await salesRepository.updateItemNotes(
-            itemId: resolvedItemId,
-            notes: action['notes']?.toString() ?? '',
+          await _replayEdit(
+            businessId: businessId,
+            action: action,
+            what: 'actualizar la nota de un item',
+            orderId: await _resolveOrderIdForAction(
+              businessId: businessId,
+              action: action,
+              salesRepository: salesRepository,
+            ),
+            salesRepository: salesRepository,
+            apply: (edit) => salesRepository.updateItemNotes(
+              itemId: resolvedItemId,
+              notes: action['notes']?.toString() ?? '',
+              edit: edit,
+            ),
           );
         } catch (e) {
           if (_isItemMissingError(e)) {
@@ -3487,9 +4052,21 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          await salesRepository.toggleItemTakeout(
-            itemId: resolvedItemId,
-            isTakeout: action['is_takeout'] == true,
+          await _replayEdit(
+            businessId: businessId,
+            action: action,
+            what: 'cambiar para-llevar de un item',
+            orderId: await _resolveOrderIdForAction(
+              businessId: businessId,
+              action: action,
+              salesRepository: salesRepository,
+            ),
+            salesRepository: salesRepository,
+            apply: (edit) => salesRepository.toggleItemTakeout(
+              itemId: resolvedItemId,
+              isTakeout: action['is_takeout'] == true,
+              edit: edit,
+            ),
           );
         } catch (e) {
           if (_isItemMissingError(e)) {
@@ -3515,9 +4092,21 @@ class OfflinePosService {
             action: action,
             salesRepository: salesRepository,
           );
-          await salesRepository.moveItemToCheck(
-            itemId: resolvedItemId,
-            checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
+          await _replayEdit(
+            businessId: businessId,
+            action: action,
+            what: 'mover un item a otra cuenta',
+            orderId: await _resolveOrderIdForAction(
+              businessId: businessId,
+              action: action,
+              salesRepository: salesRepository,
+            ),
+            salesRepository: salesRepository,
+            apply: (edit) => salesRepository.moveItemToCheck(
+              itemId: resolvedItemId,
+              checkPosition: (action['check_pos'] as num?)?.toInt() ?? 1,
+              edit: edit,
+            ),
           );
         } catch (e) {
           if (_isItemMissingError(e)) {
@@ -3542,9 +4131,17 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
-        await salesRepository.markOrderTakeout(
+        await _replayEdit(
+          businessId: businessId,
+          action: action,
+          what: 'marcar la orden para llevar',
           orderId: resolvedOrderId,
-          takeout: action['takeout'] == true,
+          salesRepository: salesRepository,
+          apply: (edit) => salesRepository.markOrderTakeout(
+            orderId: resolvedOrderId,
+            takeout: action['takeout'] == true,
+            edit: edit,
+          ),
         );
         return resolvedOrderId;
       case 'void_order':
@@ -3644,13 +4241,26 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
+        // T02: el equipo confirma con lo que todavía tiene de esa cuenta.
         await salesRepository.releaseEmptyTableIfNeeded(
           releaseOrderId,
           businessId: businessId,
+          deviceId: await DeviceUtils.getDeviceId(),
+          hasPendingWork: await hasPendingWorkForOrders(
+            businessId,
+            {releaseOrderId, ?action['order_id']?.toString()},
+            includeHubOpLog: await isHubHostDevice(businessId),
+          ),
         );
         return releaseOrderId;
       case 'send_to_kitchen':
       case 'confirm_local_order':
+        // Primero los ids de la ronda: una comanda retenida no toca el
+        // servidor (ni siquiera crea su orden).
+        final roundItemIds = await _kitchenRoundItemIds(
+          businessId: businessId,
+          action: action,
+        );
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,
           action: action,
@@ -3674,10 +4284,6 @@ class OfflinePosService {
           // pasaba a 'pending' también lo agregado después de imprimirla, que
           // quedaba «enviado» sin haber salido a cocina. Sin todos sus ids,
           // o sin la migración, la acción se conserva (_KitchenRoundHold).
-          final roundItemIds = await _kitchenRoundItemIds(
-            businessId: businessId,
-            action: action,
-          );
           try {
             await salesRepository.confirmItemsToKitchen(
               resolvedOrderId,
@@ -3697,10 +4303,6 @@ class OfflinePosService {
 
         // Áreas que no salieron: se imprimen y confirman SOLO las líneas de
         // esta comanda, nunca lo agregado después (ver arriba).
-        final roundItemIds = await _kitchenRoundItemIds(
-          businessId: businessId,
-          action: action,
-        );
         try {
           final printResult = await printingService.sendOrderToKitchen(
             orderId: resolvedOrderId,
@@ -3776,9 +4378,17 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
-        await salesRepository.setDeliveryFee(
+        await _replayEdit(
+          businessId: businessId,
+          action: action,
+          what: 'fijar el fee de delivery',
           orderId: resolvedOrderId,
-          amount: ((action['amount'] ?? 0) as num).toDouble(),
+          salesRepository: salesRepository,
+          apply: (edit) => salesRepository.setDeliveryFee(
+            orderId: resolvedOrderId,
+            amount: ((action['amount'] ?? 0) as num).toDouble(),
+            edit: edit,
+          ),
         );
         return resolvedOrderId;
       case 'process_payment':
@@ -3829,7 +4439,12 @@ class OfflinePosService {
             value: action['is_sales_note'] == true,
           );
         }
-        await salesRepository.processPayment(
+        // T07: identidad propia (estable por acción), su caja y su fecha. Si
+        // no puede aplicarse tal cual, el servidor no lo mueve: queda por
+        // resolver. Sin la migración, el camino de siempre.
+        final originalSession = action['cashier_session_id']?.toString();
+        final replayed = await salesRepository.replayOfflinePayment(
+          paymentKey: offlinePaymentKey(action['id']?.toString() ?? ''),
           orderId: resolvedOrderId,
           checkId: action['check_id']?.toString(),
           paymentMethodId: action['payment_method_id']?.toString() ?? '',
@@ -3844,10 +4459,37 @@ class OfflinePosService {
           cashierSessionId: cashierSessionId,
           changeAmount: ((action['change_amount'] ?? 0) as num).toDouble(),
           paidAt: paidAt,
-          offlineNcf: (offlineNcf != null && offlineNcf.isNotEmpty)
-              ? offlineNcf
+          offlineNcf: offlineNcf,
+          deviceId: action['device_id']?.toString(),
+          originSessionRef:
+              originalSession != null && originalSession != cashierSessionId
+              ? '$originalSession'
+                    '${(await _adoptedCashSessions(businessId)).contains(originalSession) ? ' (caja ya abierta adoptada)' : ''}'
               : null,
         );
+        if (replayed == null) {
+          await salesRepository.processPayment(
+            orderId: resolvedOrderId,
+            checkId: action['check_id']?.toString(),
+            paymentMethodId: action['payment_method_id']?.toString() ?? '',
+            amount: ((action['amount'] ?? 0) as num).toDouble(),
+            splitSequence: (action['split_sequence'] as num?)?.toInt() ?? 0,
+            closeOrder: action['close_order'] != false,
+            closeCheck: action['close_check'] != false,
+            reference: action['reference']?.toString(),
+            customerId: action['customer_id']?.toString(),
+            customerRnc: action['customer_rnc']?.toString(),
+            fiscalType: action['requested_ncf_type']?.toString(),
+            cashierSessionId: cashierSessionId,
+            changeAmount: ((action['change_amount'] ?? 0) as num).toDouble(),
+            paidAt: paidAt,
+            offlineNcf: (offlineNcf != null && offlineNcf.isNotEmpty)
+                ? offlineNcf
+                : null,
+          );
+        } else if (replayed.needsResolution) {
+          throw _PaymentNeedsResolution(replayed.reason, replayed.detail);
+        }
         return resolvedOrderId;
       default:
         throw UnsupportedError('Offline action no soportada: $type');
@@ -3902,9 +4544,12 @@ class OfflinePosService {
             orderId: originalOrderId,
           ))?.employeeId;
       try {
-        created = await salesRepository.openTable(
+        // Con SU identidad (20261010_0020): si mientras tanto otro equipo
+        // abrió la mesa y cargó productos, esta cuenta queda aparte en
+        // revisión en vez de sumarse a la cuenta actual de la mesa.
+        created = await salesRepository.openLocalTableOrder(
+          clientOrderId: originalOrderId,
           tableId: tableId,
-          userId: null,
           peopleCount: 1,
           openedByEmployeeId: openedByEmployeeId,
         );
@@ -3912,9 +4557,9 @@ class OfflinePosService {
         // La atribución nunca detiene una venta. Si el servidor ya no acepta
         // a ese mesero (lo desactivaron o borraron mientras no había red:
         // EMPLOYEE_NOT_IN_BUSINESS), sus ítems y su cobro quedaban detrás de
-        // esta acción hasta el dead-letter. fn_open_table valida al empleado
-        // antes de tomar el candado y de escribir nada, así que reabrir sin
-        // él no duplica la mesa. Se pierde solo la atribución en el servidor
+        // esta acción hasta el dead-letter. fn_open_local_table_order (como
+        // fn_open_table) valida al empleado antes de tomar el candado y de
+        // escribir nada, así que reabrir sin él no duplica la mesa. Se pierde solo la atribución en el servidor
         // (la mesa queda a nombre de la cuenta que sincroniza, como antes de
         // registrar al mesero); la anotación local de quién la abrió se
         // conserva para lo que este equipo imprime sin red.
@@ -3926,10 +4571,16 @@ class OfflinePosService {
           '[OfflinePos] El servidor rechazó al mesero $openedByEmployeeId '
           'de $originalOrderId: la mesa se abre sin él. $e',
         );
-        created = await salesRepository.openTable(
+        created = await salesRepository.openLocalTableOrder(
+          clientOrderId: originalOrderId,
           tableId: tableId,
-          userId: null,
           peopleCount: 1,
+        );
+      }
+      if (created['review'] == true) {
+        debugPrint(
+          '[OfflinePos] $originalOrderId llegó a una mesa con otra cuenta: '
+          'queda aparte en revisión (${created['order_id']}).',
         );
       }
     } else {

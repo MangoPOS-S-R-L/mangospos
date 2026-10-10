@@ -88,9 +88,16 @@ void main() {
       ),
     );
 
+    // T02: la liberación lleva el equipo que sale y si tiene pendientes (la
+    // pantalla siempre la arma así); sin eso no se libera.
     repository.scheduleEmptyTableRelease(
       'order-result',
       tableId: 'mesa-result',
+      release: () => repository.releaseEmptyTableIfNeeded(
+        'order-result',
+        deviceId: 'tablet-A',
+        hasPendingWork: false,
+      ),
       onResult: confirmed.complete,
     );
     repository.scheduleEmptyTableRelease(

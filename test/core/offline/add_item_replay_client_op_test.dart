@@ -49,7 +49,7 @@ class _Sales extends SalesRepository {
   }) => throw StateError('el replay no debe usar el alta sin client_op_id');
 
   @override
-  Future<void> replaceOrderItemModifiers({
+  Future<void> replaceModifiersOfNewItem({
     required String itemId,
     required List<Map<String, dynamic>> modifiers,
   }) async {

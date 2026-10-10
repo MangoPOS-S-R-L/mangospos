@@ -138,13 +138,28 @@ async function processWebhook(
     return;
   }
 
-  const { data: docRow, error: docErr } = await supabase
+  let { data: docRow, error: docErr } = await supabase
     .from("fiscal_documents")
     .select("id, ecf_status")
     .eq("alanube_document_id", alanubeDocId)
     .maybeSingle();
 
   if (docErr) throw new Error(`db error finding doc: ${docErr.message}`);
+  // T07 (20261010_0009): el envío quedó incierto (se perdió la respuesta y no
+  // tenemos su id). El webhook trae el e-NCF: si coincide con UN solo
+  // documento incierto, es ese — se adopta su id y sigue el camino normal.
+  if (!docRow && typeof data.documentNumber === "string") {
+    const { data: adoptedId, error: adoptErr } = await supabase.rpc(
+      "fn_alanube_adopt_uncertain",
+      { p_ncf_number: data.documentNumber, p_alanube_document_id: alanubeDocId },
+    );
+    if (adoptErr) {
+      console.error(`adopt uncertain failed for ${data.documentNumber}:`, adoptErr);
+    } else if (typeof adoptedId === "string" && adoptedId.length > 0) {
+      console.log(`doc incierto ${adoptedId} conciliado por e-NCF ${data.documentNumber}`);
+      docRow = { id: adoptedId, ecf_status: "sent" };
+    }
+  }
   if (!docRow) {
     console.log(
       `fiscal_document no encontrado para alanube_id=${alanubeDocId} — posible doc creado en otro entorno`,

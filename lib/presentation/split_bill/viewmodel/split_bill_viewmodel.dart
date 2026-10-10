@@ -4,11 +4,15 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
+import 'package:uuid/uuid.dart';
+
+import '../../../data/models/order_edit.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/repositories/sales_repository.dart';
 import '../../../data/utils/order_pricing_utils.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import '../../../services/session/session_controller.dart';
+import '../../sales/state/sales_state.dart' show EditConflictNotice;
 import '../../sales/viewmodel/sales_viewmodel.dart';
 import '../state/split_bill_state.dart';
 
@@ -41,12 +45,13 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     // await en dispose, pero capturamos las refs ANTES de super.dispose()
     // y dejamos la tarea correr en background.
     final repo = _salesRepo;
+    final orderId = state.order?.id;
     final checkIds = state.checks
         .where((c) => !c.isClosed && _isUuid(c.id))
         .map((c) => c.id)
         .toList(growable: false);
-    if (checkIds.isNotEmpty && !state.splitApplied) {
-      unawaited(_consolidateChecksInBackground(repo, checkIds));
+    if (orderId != null && checkIds.isNotEmpty && !state.splitApplied) {
+      unawaited(_consolidateChecksInBackground(repo, orderId, checkIds));
     }
     super.dispose();
   }
@@ -56,11 +61,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Errores se loguean pero no se propagan (el modal ya no existe).
   static Future<void> _consolidateChecksInBackground(
     SalesRepository repo,
+    String orderId,
     List<String> checkIds,
   ) async {
     for (final checkId in checkIds) {
       try {
-        await repo.consolidateCheckItems(checkId: checkId);
+        await repo.consolidateCheckItems(orderId: orderId, checkId: checkId);
       } catch (e) {
         debugPrint(
           '[SplitBill] consolidate background para $checkId falló (no crítico): $e',
@@ -81,6 +87,129 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   String? get _activeBusinessId => _ref.read(sessionProvider).activeBusinessId;
+
+  // ============================================================
+  // T04 (20261010_0006): ediciones versionadas
+  // ============================================================
+
+  // Versión de la cuenta que ve el operador (la del bundle más las que
+  // dejaron sus propias ediciones).
+  int? _orderVersion;
+
+  // Ediciones de cuenta en fila: cada una manda la versión que dejó la
+  // anterior (el operador no choca consigo).
+  Future<void> _orderEditChain = Future<void>.value();
+
+  // La intención del operador ante el último conflicto.
+  Future<void> Function()? _conflictApplyMine;
+  Future<void> Function()? _conflictKeepCurrent;
+
+  Future<OrderEditResult> _runOrderEdit({
+    required String orderId,
+    bool force = false,
+    required Future<OrderEditResult> Function(OrderEdit edit) send,
+  }) {
+    final run = _orderEditChain.then((_) async {
+      final version = force
+          ? null
+          : (_orderVersion ?? await _salesRepo.getOrderVersion(orderId));
+      final result = await send(
+        OrderEdit(
+          orderId: orderId,
+          base: force
+              ? OrderEditBase.forced
+              : OrderEditBase.ofVersion(version),
+        ),
+      );
+      if (result.version != null) _orderVersion = result.version;
+      return result;
+    });
+    _orderEditChain = run.then<void>((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  /// Versiones que dejaron cambios de este operador (mover, unir líneas).
+  void _adoptItemVersions(OrderEditResult? result) {
+    if (result == null || !mounted) return;
+    if (result.versions.isEmpty && result.removedIds.isEmpty) return;
+    final removed = result.removedIds.toSet();
+    state = state.copyWith(
+      error: state.error,
+      allItems: [
+        for (final item in state.allItems)
+          if (!removed.contains(item.id))
+            result.versions[item.id] != null
+                ? item.copyWith(version: result.versions[item.id])
+                : item,
+      ],
+    );
+  }
+
+  /// Vuelve a cargar lo que hay en el servidor (descarta lo no aplicado).
+  Future<void> _reloadFromServer() async {
+    final order = state.order;
+    if (!mounted || order == null) return;
+    await initialize(order);
+  }
+
+  void _onEditConflict(
+    OrderEditConflict conflict, {
+    required String what,
+    required Future<void> Function() applyMine,
+    Future<void> Function()? keepCurrent,
+  }) {
+    if (!mounted) return;
+    final canApply =
+        conflict.result.reason != 'order_closed' &&
+        conflict.result.reason != 'item_missing' &&
+        conflict.result.reason != 'item_closed';
+    _conflictApplyMine = canApply ? applyMine : null;
+    _conflictKeepCurrent = keepCurrent ?? _reloadFromServer;
+    state = state.copyWith(
+      loading: false,
+      error: state.error,
+      editConflict: EditConflictNotice(
+        id: const Uuid().v4(),
+        message: '${conflict.message} Tu cambio: $what.',
+        detail: conflict.currentDescription,
+      ),
+    );
+  }
+
+  /// ¿Se puede aplicar el cambio del operador ante el conflicto actual?
+  bool get canApplyConflictingEdit => _conflictApplyMine != null;
+
+  /// La decisión del operador ante el conflicto [noticeId]: [applyMine]
+  /// aplica su cambio sobre lo vigente; si no, se muestra lo que hay ahora.
+  Future<void> resolveEditConflict({
+    required bool applyMine,
+    required String noticeId,
+  }) async {
+    if (!mounted || state.editConflict?.id != noticeId) return;
+    final apply = _conflictApplyMine;
+    final keep = _conflictKeepCurrent;
+    _conflictApplyMine = null;
+    _conflictKeepCurrent = null;
+    if (!mounted) return;
+    state = state.copyWith(error: state.error, clearEditConflict: true);
+    try {
+      if (applyMine && apply != null) {
+        await apply();
+      } else if (keep != null) {
+        await keep();
+      }
+    } on OrderEditConflict catch (conflict) {
+      // Otro cambio más mientras decidía: se vuelve a preguntar.
+      _onEditConflict(
+        conflict,
+        what: 'el mismo cambio',
+        applyMine: apply ?? () async {},
+        keepCurrent: keep,
+      );
+    } catch (e) {
+      if (mounted) _setErrorWithAutoDismiss('No se pudo aplicar tu cambio: $e');
+    }
+  }
 
   // ============================================================
   // 🚀 INICIALIZACIÓN
@@ -158,6 +287,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         for (final check in existingChecks) check.position,
       };
 
+      _orderVersion = effectiveOrder.version;
       state = state.copyWith(
         loading: false,
         order: effectiveOrder,
@@ -226,6 +356,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     required String customerId,
     required String customerName,
   }) async {
+    final previous = state.checks.where((c) => c.id == checkId).firstOrNull;
     final updatedChecks = state.checks
         .map((check) {
           if (check.id != checkId) return check;
@@ -238,17 +369,61 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     state = state.copyWith(checks: updatedChecks, error: null);
 
-    if (_isUuid(checkId)) {
+    final orderId = state.order?.id;
+    if (_isUuid(checkId) && orderId != null) {
+      Future<OrderEditResult> send(OrderEdit edit) =>
+          _salesRepo.assignCustomerToCheck(
+            checkId: checkId,
+            customerId: customerId,
+            customerName: customerName,
+            edit: edit,
+          );
       try {
-        await _salesRepo.assignCustomerToCheck(
-          checkId: checkId,
-          customerId: customerId,
-          customerName: customerName,
+        await _runOrderEdit(orderId: orderId, send: send);
+      } on OrderEditConflict catch (conflict) {
+        _restoreCheckCustomer(checkId, previous);
+        _onEditConflict(
+          conflict,
+          what: 'cliente $customerName en la subcuenta',
+          applyMine: () async {
+            await _runOrderEdit(orderId: orderId, force: true, send: send);
+            _setCheckCustomer(checkId, customerId, customerName);
+          },
+          keepCurrent: () async {},
         );
       } catch (e) {
         _setErrorWithAutoDismiss('Error asignando cliente: $e');
       }
     }
+  }
+
+  void _setCheckCustomer(String checkId, String customerId, String name) {
+    if (!mounted) return;
+    state = state.copyWith(
+      checks: state.checks
+          .map(
+            (check) => check.id == checkId
+                ? check.copyWith(customerId: customerId, customerName: name)
+                : check,
+          )
+          .toList(growable: false),
+    );
+  }
+
+  void _restoreCheckCustomer(String checkId, OrderCheck? previous) {
+    if (!mounted) return;
+    state = state.copyWith(
+      checks: state.checks
+          .map((check) {
+            if (check.id != checkId) return check;
+            final id = previous?.customerId;
+            final name = previous?.customerName;
+            return (id == null || id.isEmpty)
+                ? check.copyWith(clearCustomer: true)
+                : check.copyWith(customerId: id, customerName: name);
+          })
+          .toList(growable: false),
+    );
   }
 
   /// Asigna o limpia el tipo de comprobante de una sub-cuenta.
@@ -278,6 +453,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   }
 
   Future<void> clearCustomerFromCheck(String checkId) async {
+    final previous = state.checks.where((c) => c.id == checkId).firstOrNull;
     final updatedChecks = state.checks
         .map((check) {
           if (check.id != checkId) return check;
@@ -287,9 +463,23 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     state = state.copyWith(checks: updatedChecks, error: null);
 
-    if (_isUuid(checkId)) {
+    final orderId = state.order?.id;
+    if (_isUuid(checkId) && orderId != null) {
+      Future<OrderEditResult> send(OrderEdit edit) =>
+          _salesRepo.clearCustomerFromCheck(checkId, edit: edit);
       try {
-        await _salesRepo.clearCustomerFromCheck(checkId);
+        await _runOrderEdit(orderId: orderId, send: send);
+      } on OrderEditConflict catch (conflict) {
+        _restoreCheckCustomer(checkId, previous);
+        _onEditConflict(
+          conflict,
+          what: 'quitar el cliente de la subcuenta',
+          applyMine: () async {
+            await _runOrderEdit(orderId: orderId, force: true, send: send);
+            _restoreCheckCustomer(checkId, null);
+          },
+          keepCurrent: () async {},
+        );
       } catch (e) {
         _setErrorWithAutoDismiss('Error limpiando cliente: $e');
       }
@@ -343,28 +533,46 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       error: null,
     );
 
-    if (_isUuid(checkId)) {
-      Future(() async {
-        try {
-          final itemIdsToMove = previousItems
-              .where((i) => i.checkId == checkId)
-              .map((i) => i.id)
-              .toList(growable: false);
-
-          if (itemIdsToMove.isNotEmpty) {
-            await _salesRepo.moveItemsToCheckBatch(
-              itemIds: itemIdsToMove,
-              checkPosition: 1,
-            );
-          }
-
-          await _salesRepo.deleteCheck(checkId);
-          if (mainCheck.id.isNotEmpty && _isUuid(mainCheck.id)) {
+    final orderId = state.order?.id;
+    if (_isUuid(checkId) && orderId != null) {
+      final itemsToMove = previousItems
+          .where((i) => i.checkId == checkId)
+          .toList(growable: false);
+      // T04: cada línea con la versión que veía el operador; si otra cambió,
+      // no se mueve ninguna ni se borra la subcuenta.
+      Future<void> syncDelete({bool force = false}) async {
+        _adoptItemVersions(
+          await _salesRepo.moveItemsToCheckBatch(
+            items: itemsToMove,
+            checkPosition: 1,
+            orderId: orderId,
+            force: force,
+          ),
+        );
+        await _salesRepo.deleteCheck(checkId);
+        if (mainCheck.id.isNotEmpty && _isUuid(mainCheck.id)) {
+          _adoptItemVersions(
             await _salesRepo.consolidateCheckItems(
+              orderId: orderId,
               checkId: mainCheck.id,
               normalizeQtyToInteger: true,
-            );
-          }
+            ),
+          );
+        }
+      }
+
+      Future(() async {
+        try {
+          await syncDelete();
+        } on OrderEditConflict catch (conflict) {
+          _onEditConflict(
+            conflict,
+            what: 'eliminar la subcuenta',
+            applyMine: () async {
+              await syncDelete(force: true);
+              await _reloadFromServer();
+            },
+          );
         } catch (e) {
           // Manejo de error silencioso o notificación global
           // Por ahora, solo log en consola o update de error si aún montado
@@ -470,16 +678,36 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     );
 
     // Si ambas cuentas existen en DB, sincronizamos de una vez.
-    if (_isUuid(sourceCheckId) && _isUuid(targetCheckId)) {
-      try {
-        if (sourceItems.isNotEmpty) {
-          await _salesRepo.moveItemsToCheckBatch(
-            itemIds: sourceItems.map((i) => i.id).toList(),
-            checkPosition: targetCheck.position,
-          );
-        }
+    final orderId = state.order?.id;
+    if (_isUuid(sourceCheckId) && _isUuid(targetCheckId) && orderId != null) {
+      Future<void> syncMerge({bool force = false}) async {
+        await _salesRepo.moveItemsToCheckBatch(
+          items: sourceItems,
+          checkPosition: targetCheck.position,
+          orderId: orderId,
+          force: force,
+        );
         await _salesRepo.deleteCheck(sourceCheckId);
-        await _salesRepo.consolidateCheckItems(checkId: targetCheckId);
+        await _salesRepo.consolidateCheckItems(
+          orderId: orderId,
+          checkId: targetCheckId,
+        );
+      }
+
+      try {
+        try {
+          await syncMerge();
+        } on OrderEditConflict catch (conflict) {
+          _onEditConflict(
+            conflict,
+            what: 'unir las subcuentas',
+            applyMine: () async {
+              await syncMerge(force: true);
+              await _reloadFromServer();
+            },
+          );
+          return;
+        }
         if (!mounted) return;
         final order = state.order;
         if (order != null) {
@@ -810,8 +1038,9 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   // ✅ APLICAR DIVISIÓN (PERSISTENCIA)
   // ============================================================
 
-  /// Aplicar y confirmar la división
-  Future<void> applySplit() async {
+  /// Aplicar y confirmar la división. [force]: el operador decidió aplicar
+  /// su división sobre lo que cambió otro equipo (T04).
+  Future<void> applySplit({bool force = false}) async {
     if (!state.canApplySplit) {
       _setErrorWithAutoDismiss('No hay cambios para aplicar.');
       return;
@@ -825,8 +1054,9 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         for (final check in state.checks) check.id: check.position,
       };
 
-      // Mover solo los items cuyo destino cambió en esta sesión.
-      final itemsByTargetPosition = <int, List<String>>{};
+      // Mover solo los items cuyo destino cambió en esta sesión, cada uno con
+      // la versión que veía el operador.
+      final itemsByTargetPosition = <int, List<OrderItem>>{};
       final affectedPositions = <int>{};
       for (final item in state.allItems) {
         var targetPosition = 1; // Main Check (unassigned)
@@ -843,20 +1073,34 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         }
 
         itemsByTargetPosition
-            .putIfAbsent(targetPosition, () => <String>[])
-            .add(item.id);
+            .putIfAbsent(targetPosition, () => <OrderItem>[])
+            .add(item);
         affectedPositions.add(targetPosition);
       }
 
       if (itemsByTargetPosition.isNotEmpty) {
-        await Future.wait(
-          itemsByTargetPosition.entries.map((entry) {
-            return _salesRepo.moveItemsToCheckBatch(
-              itemIds: entry.value,
-              checkPosition: entry.key,
-            );
-          }),
-        );
+        try {
+          final moved = await Future.wait(
+            itemsByTargetPosition.entries.map((entry) {
+              return _salesRepo.moveItemsToCheckBatch(
+                items: entry.value,
+                checkPosition: entry.key,
+                orderId: orderId,
+                force: force,
+              );
+            }),
+          );
+          moved.forEach(_adoptItemVersions);
+        } on OrderEditConflict catch (conflict) {
+          // La división queda en pantalla (la intención); el operador
+          // decide si la aplica sobre lo que cambió el otro equipo.
+          _onEditConflict(
+            conflict,
+            what: 'la división de la cuenta',
+            applyMine: () => applySplit(force: true),
+          );
+          return;
+        }
       }
 
       final pendingDeletes = state.pendingDeletedCheckIds
@@ -886,7 +1130,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
         if (affectedCheckIds.isNotEmpty) {
           await Future.wait(
             affectedCheckIds.map((checkId) {
-              return _salesRepo.consolidateCheckItems(checkId: checkId);
+              return _salesRepo.consolidateCheckItems(
+                orderId: orderId,
+                checkId: checkId,
+              );
             }),
           );
         }
@@ -911,10 +1158,15 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
                   realIdByPosition.containsKey(c.position),
             )
             .map(
-              (c) => _salesRepo.assignCustomerToCheck(
-                checkId: realIdByPosition[c.position]!,
-                customerId: c.customerId!,
-                customerName: c.customerName!,
+              (c) => _runOrderEdit(
+                orderId: orderId,
+                force: force,
+                send: (edit) => _salesRepo.assignCustomerToCheck(
+                  checkId: realIdByPosition[c.position]!,
+                  customerId: c.customerId!,
+                  customerName: c.customerName!,
+                  edit: edit,
+                ),
               ),
             )
             .toList(growable: false);

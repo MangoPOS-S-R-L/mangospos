@@ -5,6 +5,7 @@
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { createAlanubeClient, AlanubeClient, AlanubeError } from "../_shared/alanube-client.ts";
 import { EcfTaxLine, summarizeEcfTaxLines } from "../_shared/ecf-tax-lines.ts";
+import { classifyAlanubeFailure } from "../_shared/emission-outcome.ts";
 import {
   buildAlanubePayload,
   EcfTaxBreakdown,
@@ -26,6 +27,25 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 const BATCH_SIZE = 10;
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MINUTES = [1, 5, 15, 60, 240];
+// T07 (20261010_0009): un reclamo 'processing' vence a los 5 min. Si el POST
+// ya había salido (send_started_at), queda incierto; si no, vuelve a pending.
+const LEASE_MS = 5 * 60_000;
+
+// Resultado de un intento. 'uncertain' = Alanube pudo haberlo recibido: NO se
+// reenvía solo (ver _shared/emission-outcome.ts).
+type SubmitResult =
+  | { ok: true }
+  | {
+    ok: false;
+    outcome: "retry" | "dead" | "uncertain";
+    error: string;
+    httpStatus?: number;
+    response?: unknown;
+  };
+
+function leaseUntil(): string {
+  return new Date(Date.now() + LEASE_MS).toISOString();
+}
 
 interface OutboxRow {
   id: string;
@@ -110,6 +130,8 @@ async function claimBatch(supabase: SupabaseClient): Promise<OutboxRow[]> {
         status: "processing",
         attempts: c.attempts + 1,
         last_attempt_at: now,
+        lease_expires_at: leaseUntil(),
+        send_started_at: null,
       })
       .eq("id", c.id)
       .eq("status", "pending")
@@ -322,10 +344,10 @@ async function submitOne(
   supabase: SupabaseClient,
   alanube: AlanubeClient,
   outbox: OutboxRow,
-): Promise<{ ok: true } | { ok: false; retryable: boolean; error: string }> {
+): Promise<SubmitResult> {
   const ctx = await loadContext(supabase, outbox);
   if (!ctx) {
-    return { ok: false, retryable: false, error: "context load failed" };
+    return { ok: false, outcome: "dead", error: "context load failed" };
   }
   const { doc, settings, sender, items, modifiedDoc } = ctx;
 
@@ -343,21 +365,21 @@ async function submitOne(
   const cancelledError = cancelledBeforeSendError(doc);
   if (cancelledError) {
     console.warn(`doc ${doc.id} (${doc.ncf_number}) anulado antes de enviarse: no se envia`);
-    return { ok: false, retryable: false, error: cancelledError };
+    return { ok: false, outcome: "dead", error: cancelledError };
   }
 
   if (!doc.is_electronic) {
-    return { ok: false, retryable: false, error: "doc is not electronic" };
+    return { ok: false, outcome: "dead", error: "doc is not electronic" };
   }
   if (settings.mode === "physical") {
-    return { ok: false, retryable: false, error: "settings.mode=physical, should not be in queue" };
+    return { ok: false, outcome: "dead", error: "settings.mode=physical, should not be in queue" };
   }
 
   const path = alanubeEndpointForNcfType(doc.ncf_type);
   if (!path) {
     return {
       ok: false,
-      retryable: false,
+      outcome: "dead",
       error: `unsupported ncf_type=${doc.ncf_type}: no Alanube endpoint mapped`,
     };
   }
@@ -371,7 +393,7 @@ async function submitOne(
   if (needsDueDate && !sequenceDueDate) {
     return {
       ok: false,
-      retryable: true,
+      outcome: "retry",
       error:
         `La secuencia ${doc.ncf_type} no tiene fecha de vencimiento cargada ` +
         `(ncf_sequences.expiration_date). La DGII la valida contra la autorizacion ` +
@@ -386,7 +408,7 @@ async function submitOne(
   if (isCreditNoteType(doc.ncf_type) && !modifiedDoc) {
     return {
       ok: false,
-      retryable: true,
+      outcome: "retry",
       error:
         "La nota de credito no tiene el comprobante que anula " +
         "(fiscal_documents.related_document_id). No se puede declarar sin el.",
@@ -405,6 +427,36 @@ async function submitOne(
   );
   const idemKey = doc.idempotency_key ?? doc.id;
 
+  // T07: se guarda ANTES del POST. Si este proceso muere después, el reclamo
+  // vencido queda incierto (pudo llegar) en vez de reenviarse a ciegas.
+  const { error: startErr } = await supabase
+    .from("alanube_emit_outbox")
+    .update({ send_started_at: new Date().toISOString(), lease_expires_at: leaseUntil() })
+    .eq("id", outbox.id)
+    .eq("status", "processing");
+  if (startErr) {
+    return { ok: false, outcome: "retry", error: `no se pudo marcar el envio: ${startErr.message}` };
+  }
+
+  try {
+    return await sendAndPersist(supabase, alanube, doc, path, payload, idemKey, settings);
+  } catch (e) {
+    // Cualquier falla DESPUES de enviar: no se sabe si Alanube lo tiene.
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error(`doc ${doc.id}: falla despues de enviar (incierto):`, e);
+    return { ok: false, outcome: "uncertain", error: errMsg };
+  }
+}
+
+async function sendAndPersist(
+  supabase: SupabaseClient,
+  alanube: AlanubeClient,
+  doc: FiscalDocument,
+  path: string,
+  payload: unknown,
+  idemKey: string,
+  settings: Settings,
+): Promise<SubmitResult> {
   let resp: AlanubeSubmitResponse;
   try {
     resp = await alanube.request<AlanubeSubmitResponse>({
@@ -416,18 +468,19 @@ async function submitOne(
     });
   } catch (e) {
     const err = e as AlanubeError;
+    const status = typeof err.status === "number" ? err.status : 0;
     const bodyStr = JSON.stringify(err.body ?? "");
-    const isDgiiTransient =
-      bodyStr.includes("AEP2009") ||
-      bodyStr.includes("DGII service") ||
-      bodyStr.includes("network path") ||
-      bodyStr.includes("timed out");
-    const retryable = err.isRetryable || isDgiiTransient;
+    const outcome = classifyAlanubeFailure(status, bodyStr);
 
     console.error(
-      `Alanube error for doc ${doc.id}: status=${err.status} retryable=${retryable} (orig=${err.isRetryable}, dgii_transient=${isDgiiTransient}) body=${bodyStr}`,
+      `Alanube error for doc ${doc.id}: status=${status} outcome=${outcome} body=${bodyStr}`,
     );
-    return { ok: false, retryable, error: `${err.message} | ${bodyStr}` };
+    return {
+      ok: false,
+      outcome,
+      error: `${err.message ?? String(e)} | ${bodyStr}`,
+      httpStatus: status,
+    };
   }
 
   const mappedStatus = mapAlanubeStatus(resp.status);
@@ -451,8 +504,16 @@ async function submitOne(
     .eq("id", doc.id);
 
   if (updErr) {
+    // Alanube YA lo aceptó: reenviarlo lo duplicaría. Queda incierto con la
+    // respuesta guardada en la outbox para conciliarlo.
     console.error(`Failed to persist Alanube response for doc ${doc.id}:`, updErr);
-    return { ok: false, retryable: true, error: `persist failed: ${updErr.message}` };
+    return {
+      ok: false,
+      outcome: "uncertain",
+      error: `persist failed after Alanube accepted it: ${updErr.message}`,
+      httpStatus: 200,
+      response: resp,
+    };
   }
 
   await supabase.from("fiscal_document_status_events").insert({
@@ -479,36 +540,85 @@ function mapAlanubeStatus(raw: string | undefined): "pending" | "sent" | "accept
 async function completeOutbox(
   supabase: SupabaseClient,
   outbox: OutboxRow,
-  result: { ok: true } | { ok: false; retryable: boolean; error: string },
+  result: SubmitResult,
 ) {
+  const logIfFailed = (what: string, error: { message: string } | null) => {
+    if (error) console.error(`completeOutbox ${outbox.id}: ${what} failed:`, error);
+  };
+
   if (result.ok) {
-    await supabase
+    const { error } = await supabase
       .from("alanube_emit_outbox")
-      .update({ status: "done", error: null, next_attempt_at: null })
+      .update({ status: "done", error: null, next_attempt_at: null, last_outcome: "sent" })
       .eq("id", outbox.id);
+    logIfFailed("done", error);
     return;
   }
 
-  const isDead = !result.retryable || outbox.attempts >= MAX_ATTEMPTS;
-  if (isDead) {
-    await supabase
-      .from("alanube_emit_outbox")
-      .update({ status: "failed", error: result.error.slice(0, 2000) })
-      .eq("id", outbox.id);
+  const message = result.error.slice(0, 2000);
 
-    await supabase
+  // T07: pudo llegar a Alanube. Ni se reenvía ni se marca rechazado (un
+  // 'rejected' no recibe nota de crédito al anular): queda incierto hasta
+  // conciliarlo (webhook) o que una persona lo decida.
+  if (result.outcome === "uncertain") {
+    const { error: outboxErr } = await supabase
+      .from("alanube_emit_outbox")
+      .update({
+        status: "uncertain",
+        error: message,
+        next_attempt_at: null,
+        last_http_status: result.httpStatus ?? null,
+        last_outcome: "uncertain",
+        response: result.response ?? null,
+      })
+      .eq("id", outbox.id);
+    logIfFailed("uncertain outbox", outboxErr);
+    const { error: docErr } = await supabase
       .from("fiscal_documents")
-      .update({ last_error: result.error.slice(0, 2000), ecf_status: "rejected" })
+      .update({
+        ecf_status: "uncertain",
+        last_error:
+          `No se sabe si Alanube recibió este comprobante (${message.slice(0, 1500)}). ` +
+          "No se reenvía solo.",
+      })
+      .eq("id", outbox.fiscal_document_id)
+      .is("alanube_document_id", null);
+    logIfFailed("uncertain doc", docErr);
+    return;
+  }
+
+  const isDead = result.outcome === "dead" || outbox.attempts >= MAX_ATTEMPTS;
+  if (isDead) {
+    // Rechazos ANTES de procesar o del contenido: el documento no existe en
+    // Alanube.
+    const { error: outboxErr } = await supabase
+      .from("alanube_emit_outbox")
+      .update({
+        status: "failed",
+        error: message,
+        last_http_status: result.httpStatus ?? null,
+        last_outcome: result.outcome,
+      })
+      .eq("id", outbox.id);
+    logIfFailed("failed outbox", outboxErr);
+
+    const { error: docErr } = await supabase
+      .from("fiscal_documents")
+      .update({ last_error: message, ecf_status: "rejected" })
       .eq("id", outbox.fiscal_document_id);
+    logIfFailed("rejected doc", docErr);
   } else {
-    await supabase
+    const { error } = await supabase
       .from("alanube_emit_outbox")
       .update({
         status: "pending",
-        error: result.error.slice(0, 2000),
+        error: message,
         next_attempt_at: nextAttemptAt(outbox.attempts),
+        last_http_status: result.httpStatus ?? null,
+        last_outcome: "retry",
       })
       .eq("id", outbox.id);
+    logIfFailed("retry", error);
   }
 }
 
@@ -542,6 +652,8 @@ async function claimSingle(
       status: "processing",
       attempts: candidate.attempts + 1,
       last_attempt_at: now,
+      lease_expires_at: leaseUntil(),
+      send_started_at: null,
     })
     .eq("id", candidate.id)
     .eq("status", "pending")
@@ -633,13 +745,15 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    let result: { ok: true } | { ok: false; retryable: boolean; error: string };
+    let result: SubmitResult;
     try {
       result = await submitOne(supabase, alanube, claimed);
     } catch (e) {
+      // submitOne no lanza después de enviar (lo convierte en incierto): esto
+      // es anterior al POST, reintentar es seguro.
       const errMsg = e instanceof Error ? e.message : String(e);
       console.error(`sync: unexpected error for outbox ${claimed.id}:`, e);
-      result = { ok: false, retryable: true, error: errMsg };
+      result = { ok: false, outcome: "retry", error: errMsg };
     }
     await completeOutbox(supabase, claimed, result);
     const snapshot = await loadDocSnapshotForResponse(supabase, targetDocId);
@@ -651,7 +765,7 @@ Deno.serve(async (req: Request) => {
         claimed: true,
         fiscal_document_id: targetDocId,
         doc: snapshot,
-        ...(result.ok ? {} : { retryable: result.retryable, error: result.error }),
+        ...(result.ok ? {} : { outcome: result.outcome, error: result.error }),
         duration_ms: Date.now() - startedAt,
       }, null, 2),
       { headers: { "Content-Type": "application/json" } },
@@ -659,8 +773,13 @@ Deno.serve(async (req: Request) => {
   }
 
   // ─── Modo batch (cron / fallback) ───────────────────────────────────────
+  // T07: primero los reclamos vencidos (una invocación cortada a la mitad):
+  // sin envío → pending; con envío → uncertain. Sin la migración, se sigue.
+  const { error: recoverErr } = await supabase.rpc("fn_alanube_outbox_recover_stale");
+  if (recoverErr) console.error("recover stale claims failed:", recoverErr);
+
   const claimed = await claimBatch(supabase);
-  const results: Array<{ outbox_id: string; doc_id: string; ok: boolean; retryable?: boolean; error?: string }> = [];
+  const results: Array<{ outbox_id: string; doc_id: string; ok: boolean; outcome?: string; error?: string }> = [];
 
   for (const row of claimed) {
     try {
@@ -670,13 +789,13 @@ Deno.serve(async (req: Request) => {
         outbox_id: row.id,
         doc_id: row.fiscal_document_id,
         ok: r.ok,
-        ...(r.ok ? {} : { retryable: r.retryable, error: r.error }),
+        ...(r.ok ? {} : { outcome: r.outcome, error: r.error }),
       });
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       console.error(`unexpected error processing outbox ${row.id}:`, e);
-      await completeOutbox(supabase, row, { ok: false, retryable: true, error: errMsg });
-      results.push({ outbox_id: row.id, doc_id: row.fiscal_document_id, ok: false, retryable: true, error: errMsg });
+      await completeOutbox(supabase, row, { ok: false, outcome: "retry", error: errMsg });
+      results.push({ outbox_id: row.id, doc_id: row.fiscal_document_id, ok: false, outcome: "retry", error: errMsg });
     }
   }
 

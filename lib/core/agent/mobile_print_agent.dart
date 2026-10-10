@@ -742,7 +742,7 @@ class MobilePrintAgent {
       // Reemplazar (no insertar) deja los extras exactos aunque este POST
       // sea un reintento de uno que ya los había guardado.
       if (modifiers.isNotEmpty && added.itemExists) {
-        await repo.replaceOrderItemModifiers(
+        await repo.replaceModifiersOfNewItem(
           itemId: added.itemId,
           modifiers: modifiers,
         );

@@ -6,7 +6,6 @@
 // sucursales ni usuarios.
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +14,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
@@ -129,6 +129,22 @@ class _Repository extends SalesRepository {
   final removals = <(String, String?)>[];
   final events = <String>[];
   final loaded = <String>[];
+  final excludedTaxCalls =
+      <({List<String> taxIds, String? employeeId, OrderEdit edit})>[];
+
+  // T04: quitar impuestos es una edición versionada de la cuenta.
+  @override
+  Future<int?> getOrderVersion(String orderId) async => 1;
+
+  @override
+  Future<OrderEditResult> setExcludedTaxes({
+    required List<String> taxIds,
+    String? employeeId,
+    required OrderEdit edit,
+  }) async {
+    excludedTaxCalls.add((taxIds: taxIds, employeeId: employeeId, edit: edit));
+    return const OrderEditResult(status: 'applied', version: 2);
+  }
 
   int get attributionCalls =>
       openerLookups.length + currentEmployeeLookups.length + stamps.length;
@@ -236,10 +252,14 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> deleteItem({required String itemId}) {
+  Future<OrderEditResult> deleteItem({
+    required String itemId,
+    required OrderEdit edit,
+  }) async {
     final result = deletions.putIfAbsent(itemId, Completer<void>.new);
     start('delete-$itemId');
-    return result.future;
+    await result.future;
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
@@ -654,18 +674,15 @@ void main() {
       );
       if (withPin) pin(c, biz);
       final vm = c.read(currentOrderProvider.notifier);
-      directRequests.clear();
 
       final error = await vm.setExcludedTaxes({'tax-itbis'});
 
       expect(error, isNull);
-      final rpc = directRequests
-          .where((r) => r.path.endsWith('/fn_set_order_excluded_taxes'))
-          .single;
-      final body = jsonDecode(rpc.body) as Map<String, dynamic>;
-      expect(body['p_order_id'], 'order-A');
-      expect(body['p_tax_ids'], ['tax-itbis']);
-      expect(body['p_employee_id'], withPin ? 'emp-pin' : 'emp-cashier');
+      final call = repo.excludedTaxCalls.single;
+      expect(call.edit.orderId, 'order-A');
+      expect(call.edit.base.version, 1);
+      expect(call.taxIds, ['tax-itbis']);
+      expect(call.employeeId, withPin ? 'emp-pin' : 'emp-cashier');
       expect(repo.openerLookups, isEmpty);
     }
   });

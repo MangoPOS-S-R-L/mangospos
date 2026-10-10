@@ -43,6 +43,7 @@ import 'shell_destinations.dart';
 import 'update_available_banner.dart';
 import 'offline_preparation_banner.dart';
 import 'performance_diagnostics_dialog.dart';
+import 'offline_payment_resolution_dialog.dart';
 import '../../core/performance/performance_diagnostics.dart';
 import '../../core/theme/app_colors.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
@@ -815,8 +816,23 @@ Future<void> showOfflineQueueDetailDialog(
                         shrinkWrap: true,
                         itemCount: actions.length,
                         separatorBuilder: (_, _) => const Divider(height: 16),
-                        itemBuilder: (_, i) =>
-                            _OfflineQueueActionRow(action: actions[i]),
+                        itemBuilder: (_, i) => _OfflineQueueActionRow(
+                          action: actions[i],
+                          // T07: cobro sin red que espera una decisión.
+                          onResolve: actions[i]['payment_resolution'] == null
+                              ? null
+                              : () async {
+                                  final resolved =
+                                      await showOfflinePaymentResolutionDialog(
+                                        dialogContext,
+                                        ref,
+                                        actions[i],
+                                      );
+                                  if (resolved && dialogContext.mounted) {
+                                    Navigator.of(dialogContext).pop();
+                                  }
+                                },
+                        ),
                       ),
                     ),
                   ),
@@ -849,9 +865,12 @@ Future<void> showOfflineQueueDetailDialog(
 /// Fila del visor: tipo legible + contexto (producto/monto), estado,
 /// intentos y último error de la operación encolada.
 class _OfflineQueueActionRow extends StatelessWidget {
-  const _OfflineQueueActionRow({required this.action});
+  const _OfflineQueueActionRow({required this.action, this.onResolve});
 
   final Map<String, dynamic> action;
+
+  /// Cobro sin red «por resolver» (T07): abre la decisión.
+  final VoidCallback? onResolve;
 
   static String _label(String? type) {
     switch (type) {
@@ -918,7 +937,21 @@ class _OfflineQueueActionRow extends StatelessWidget {
     }
     final amount = (a['amount'] as num?)?.toDouble();
     if (amount != null && amount > 0) {
-      return 'Monto: ${amount.toStringAsFixed(2)}';
+      // Cobro: también de cuándo es (conserva su fecha al sincronizar).
+      final paidAt = DateTime.tryParse(a['paid_at']?.toString() ?? '')?.toLocal();
+      return paidAt == null
+          ? 'Monto: ${amount.toStringAsFixed(2)}'
+          : 'Monto: ${amount.toStringAsFixed(2)} · cobrado '
+                '${_two(paidAt.day)}/${_two(paidAt.month)} '
+                '${_two(paidAt.hour)}:${_two(paidAt.minute)}';
+    }
+    // Comanda retenida: de qué mesa es y, si vino del Hub, que la retuvo él.
+    if (a['kitchen_hold'] == true) {
+      final table = a['table_name']?.toString().trim();
+      final where = table == null || table.isEmpty ? 'Comanda' : 'Comanda · $table';
+      return a['quarantined_from'] == 'hub_oplog'
+          ? '$where · retenida del Hub'
+          : where;
     }
     return null;
   }
@@ -937,7 +970,10 @@ class _OfflineQueueActionRow extends StatelessWidget {
 
     final String chipLabel;
     final Color chipColor;
-    if (isDead) {
+    if (isDead && action['payment_resolution'] != null) {
+      chipLabel = 'Por decidir';
+      chipColor = const Color(0xFFB91C1C);
+    } else if (isDead) {
       chipLabel = 'Sin resolver';
       chipColor = const Color(0xFFB91C1C);
     } else if (status == 'failed') {
@@ -1027,6 +1063,15 @@ class _OfflineQueueActionRow extends StatelessWidget {
                       fontSize: 11.5,
                       color: Color(0xFFB91C1C),
                     ),
+                  ),
+                ),
+              if (onResolve != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.gavel_rounded, size: 16),
+                    label: const Text('Resolver'),
+                    onPressed: onResolve,
                   ),
                 ),
             ],

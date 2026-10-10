@@ -28,6 +28,13 @@ class TableStatus {
   /// grid para que la mesa no desaparezca al recargar desde el server. Las
   /// filas de `v_zone_table_status` nunca lo traen → siempre false para ellas.
   final bool isPendingSync;
+
+  /// Cuentas en revisión abiertas en la sesión de la mesa
+  /// (`v_zone_table_status.review_orders_count`, 20261010_0020): llegaron de
+  /// un equipo sin conexión o tarde, y no se cobran ni se mezclan hasta
+  /// resolverlas. [total] no las incluye; su importe va en [reviewTotal].
+  final int reviewOrdersCount;
+  final double reviewTotal;
   TableStatus({
     required this.tableId,
     required this.zoneId,
@@ -45,6 +52,8 @@ class TableStatus {
     this.customerName,
     this.isOwn = false,
     this.isPendingSync = false,
+    this.reviewOrdersCount = 0,
+    this.reviewTotal = 0,
   });
   factory TableStatus.fromMap(Map<String, dynamic> r) => TableStatus(
     tableId: r['table_id'],
@@ -63,5 +72,14 @@ class TableStatus {
     customerName: r['customer_name'],
     isOwn: r['is_own'] ?? false,
     // El server no expone este flag; solo lo setea el overlay offline.
+    // Sin 20261010_0020 (o en una copia vieja) las columnas no vienen: 0.
+    reviewOrdersCount: _asInt(r['review_orders_count']),
+    reviewTotal: _asDouble(r['review_total']),
   );
+
+  static int _asInt(Object? v) =>
+      v is num ? v.toInt() : int.tryParse('${v ?? ''}') ?? 0;
+
+  static double _asDouble(Object? v) =>
+      v is num ? v.toDouble() : double.tryParse('${v ?? ''}') ?? 0;
 }

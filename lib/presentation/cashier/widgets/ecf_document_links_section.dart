@@ -205,6 +205,10 @@ class _EcfDocumentLinksSectionState
         return ('En proceso DGII', MangoColors.infoBlue);
       case 'rejected':
         return ('Rechazada', Colors.redAccent);
+      case 'uncertain':
+        // T07: no se sabe si llegó a Alanube; no se reenvía sola y no se
+        // puede anular hasta resolverla.
+        return ('Envío por verificar', MangoColors.primaryOrange);
       default:
         return ('Pendiente', MangoColors.primaryOrange);
     }

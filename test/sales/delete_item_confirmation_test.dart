@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -32,36 +33,65 @@ void main() {
 
   setUp(() => requests = []);
 
-  test('DELETE confirmado elimina exactamente el item solicitado', () async {
+  // T04: borrar es una edición versionada; nunca un DELETE directo.
+  test('borra por la entrada versionada con la versión que se veía', () async {
     final repo = repository((request) async {
-      expect(request.method, 'DELETE');
-      expect(request.url.queryParameters['id'], 'eq.item-1');
-      return jsonResponse(request, [
-        {'id': 'item-1'},
-      ], 200);
+      expect(request.url.path, endsWith('/rpc/fn_apply_order_edit'));
+      return jsonResponse(request, {'status': 'applied', 'version': 5}, 200);
     });
+    final edit = OrderEdit(orderId: 'order-1', base: OrderEditBase.ofVersion(4));
 
-    await repo.deleteItem(itemId: 'item-1');
+    await repo.deleteItem(itemId: 'item-1', edit: edit);
+
     expect(requests, hasLength(1));
-    expect(requests.single.url.queryParameters['select'], 'id');
+    final body = jsonDecode(requests.single.body) as Map<String, dynamic>;
+    expect(body['p_op_id'], edit.opId);
+    expect(body['p_kind'], 'delete');
+    expect(body['p_target_id'], 'item-1');
+    expect(body['p_base_version'], 4);
   });
 
-  test('DELETE sin filas no se reporta como éxito', () async {
-    final repo = repository((request) async {
-      if (request.method == 'DELETE') {
-        return jsonResponse(request, [], 200);
-      }
-      expect(request.url.path, endsWith('/rpc/fn_delete_item'));
-      return jsonResponse(request, {
-        'code': 'P0001',
-        'message': 'ITEM_NOT_FOUND',
-      }, 400);
-    });
+  test('otro equipo cambió la línea: no se reporta como éxito', () async {
+    final repo = repository(
+      (request) async => jsonResponse(request, {
+        'status': 'conflict',
+        'reason': 'stale_version',
+        'current_version': 6,
+        'current': {'qty': 3},
+      }, 200),
+    );
 
     await expectLater(
-      repo.deleteItem(itemId: 'item-1'),
-      throwsA(isA<Exception>()),
+      repo.deleteItem(
+        itemId: 'item-1',
+        edit: OrderEdit(orderId: 'order-1', base: OrderEditBase.ofVersion(4)),
+      ),
+      throwsA(
+        isA<OrderEditConflict>().having(
+          (conflict) => conflict.currentDescription,
+          'currentDescription',
+          'Ahora: cantidad 3.',
+        ),
+      ),
     );
-    expect(requests, hasLength(2));
+    expect(requests, hasLength(1));
+  });
+
+  test('servidor sin 20261010_0006: no hay DELETE de respaldo', () async {
+    final repo = repository(
+      (request) async => jsonResponse(request, {
+        'code': 'PGRST202',
+        'message': 'Could not find the function',
+      }, 404),
+    );
+
+    await expectLater(
+      repo.deleteItem(
+        itemId: 'item-1',
+        edit: OrderEdit(orderId: 'order-1', base: OrderEditBase.ofVersion(4)),
+      ),
+      throwsA(isA<OrderEditServerOutdated>()),
+    );
+    expect(requests.where((r) => r.method == 'DELETE'), isEmpty);
   });
 }

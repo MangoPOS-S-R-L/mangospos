@@ -6,6 +6,7 @@ import 'package:mangopos/core/offline/zones_offline_cache.dart';
 import '../models/zone.dart';
 import '../models/table_status.dart';
 import '../models/dining_table.dart';
+import 'order_review_repository.dart';
 
 class ZonesRepository {
   final SupabaseClient sb;
@@ -402,6 +403,23 @@ class ZonesRepository {
     required String targetTableId,
     List<String>? itemIds,
   }) async {
+    // fn_transfer_table_session elige «la orden más nueva» de cada sesión: con
+    // una cuenta en revisión (20261010_0020) movería una y dejaría la otra
+    // huérfana. Hasta que el servidor la contemple, se resuelve primero.
+    final targetSession = await sb
+        .from('table_sessions')
+        .select('id')
+        .eq('table_id', targetTableId)
+        .isFilter('closed_at', null)
+        .maybeSingle();
+    final reviewRepo = OrderReviewRepository(sb);
+    if (await reviewRepo.anyOpenReview([
+      sourceSessionId,
+      if (targetSession?['id'] != null) targetSession!['id'].toString(),
+    ])) {
+      throw const ReviewPendingException();
+    }
+
     final res = await sb.rpc(
       'fn_transfer_table_session',
       params: {

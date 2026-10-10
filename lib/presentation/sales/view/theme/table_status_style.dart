@@ -16,7 +16,10 @@ import '../../../../domain/models/ventas_table.dart' as ventas;
 /// "ocupada fantasma" — el cajero la abrió, no agregó productos y se
 /// salió. La consideramos disponible visualmente; el sweep del viewmodel
 /// cierra la sesión huérfana en background.
+/// Una cuenta en revisión nunca deja la mesa «vacía»: tiene productos que
+/// alguien debe revisar aunque la cuenta principal ya se haya cobrado.
 bool isTableEffectivelyEmpty(TableStatus ts) {
+  if (ts.reviewOrdersCount > 0) return false;
   return ts.sessionId == null || (ts.itemsCount == 0 && ts.ordersCount == 0);
 }
 
@@ -113,9 +116,7 @@ ventas.VentasTable ventasTableFromStatus(TableStatus ts) {
   if (openedAt == null && ts.minutesOpen != null && ts.minutesOpen! >= 0) {
     openedAt = AppTime.nowAst().subtract(Duration(minutes: ts.minutesOpen!));
   }
-  final time = openedAt == null
-      ? null
-      : DateFormat('hh:mm a').format(openedAt);
+  final time = openedAt == null ? null : DateFormat('hh:mm a').format(openedAt);
 
   return ventas.VentasTable(
     id: ts.tableId,
@@ -129,5 +130,7 @@ ventas.VentasTable ventasTableFromStatus(TableStatus ts) {
     waiterName: ts.waiterName,
     customerName: ts.customerName,
     isPendingSync: ts.isPendingSync,
+    reviewAccounts: ts.reviewOrdersCount,
+    reviewTotal: ts.reviewTotal,
   );
 }

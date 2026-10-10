@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/core/fiscal/sales_note_policy.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
@@ -122,6 +123,17 @@ class _Repository extends SalesRepository {
   Completer<void>? deferredOffer;
   final tableOpens = <String, OpenTableResult>{};
 
+  /// T02: órdenes por las que este equipo se registró como participante.
+  final participations = <String>[];
+
+  @override
+  Future<void> registerSessionParticipant(
+    String orderId,
+    String deviceId,
+  ) async {
+    participations.add(orderId);
+  }
+
   @override
   Future<Map<String, dynamic>> openManualOrQuick({
     required String origin,
@@ -159,23 +171,27 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> assignCustomerToSession({
+  Future<OrderEditResult> assignCustomerToSession({
     required String sessionId,
     required String customerId,
     required String customerName,
     String? businessId,
+    required OrderEdit edit,
   }) async {
     await deferredAssignCustomer?.future;
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
-  Future<void> assignCustomerToCheck({
+  Future<OrderEditResult> assignCustomerToCheck({
     required String checkId,
     required String customerId,
     required String customerName,
     String? customerRnc,
+    required OrderEdit edit,
   }) async {
     await deferredAssignCheck?.future;
+    return const OrderEditResult(status: 'applied');
   }
 
   @override
@@ -879,6 +895,17 @@ void main() {
       'item-order-A',
       'item-order-A-2',
     ]);
+  });
+
+  test('T02: cargar una cuenta en línea registra a este equipo como '
+      'participante, una sola vez', () async {
+    const biz = 'session-participant-register';
+    final repository = _Repository(repoClient);
+    final c = await withTableA(biz, repository);
+    await _waitUntil(() => repository.participations.isNotEmpty);
+    await c.read(currentOrderProvider.notifier).reloadOrderNow();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(repository.participations, ['order-A']);
   });
 
   group('cierre de una venta cobrada', () {

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -312,10 +313,10 @@ void main() {
       {'name': 'Queso', 'qty': 1, 'price': 50},
     ];
 
-    test('una sola RPC atómica, sin DELETE suelto', () async {
+    test('ítem recién creado: una sola RPC atómica, sin DELETE suelto', () async {
       handler = (_) async => json(1);
 
-      await repo().replaceOrderItemModifiers(
+      await repo().replaceModifiersOfNewItem(
         itemId: 'item-1',
         modifiers: modifiers,
       );
@@ -330,31 +331,50 @@ void main() {
       expect(body['p_modifiers'], modifiers);
     });
 
-    test('migración sin aplicar: cae al DELETE + INSERT de antes', () async {
-      handler = (request) async {
-        if (request.url.path.endsWith('/fn_replace_order_item_modifiers')) {
-          return json({
-            'code': 'PGRST202',
-            'message': 'Could not find the function',
-            'details': null,
-            'hint': null,
-          }, 404);
-        }
-        return json([]);
-      };
+    test('edición: pasa por la entrada versionada con la versión vista', () async {
+      handler = (_) async => json({'status': 'applied', 'version': 4});
+      final edit = OrderEdit(
+        orderId: 'order-1',
+        base: OrderEditBase.ofVersion(3),
+      );
 
-      await repo().replaceOrderItemModifiers(
+      final result = await repo().replaceOrderItemModifiers(
         itemId: 'item-1',
         modifiers: modifiers,
+        edit: edit,
       );
 
-      expect(
-        requests.where((r) => r.method == 'DELETE').map((r) => r.url.path),
-        [endsWith('/order_item_modifiers')],
+      expect(result.version, 4);
+      expect(requests, hasLength(1));
+      expect(requests.single.url.path, endsWith('/fn_apply_order_edit'));
+      final body = jsonDecode(requests.single.body) as Map<String, dynamic>;
+      expect(body['p_op_id'], edit.opId);
+      expect(body['p_kind'], 'modifiers');
+      expect(body['p_target_id'], 'item-1');
+      expect(body['p_base_version'], 3);
+      expect(body['p_args'], {'modifiers': modifiers});
+    });
+
+    test('servidor sin 20261010_0006: avisa y no escribe directo', () async {
+      handler = (_) async => json({
+        'code': 'PGRST202',
+        'message': 'Could not find the function',
+        'details': null,
+        'hint': null,
+      }, 404);
+
+      await expectLater(
+        repo().replaceOrderItemModifiers(
+          itemId: 'item-1',
+          modifiers: modifiers,
+          edit: OrderEdit(orderId: 'order-1', base: OrderEditBase.ofVersion(3)),
+        ),
+        throwsA(isA<OrderEditServerOutdated>()),
       );
+      expect(requests, hasLength(1));
       expect(
-        requests.where((r) => r.method == 'POST').map((r) => r.url.path).last,
-        endsWith('/order_item_modifiers'),
+        requests.where((r) => r.url.path.endsWith('/order_item_modifiers')),
+        isEmpty,
       );
     });
 
@@ -362,7 +382,7 @@ void main() {
       handler = (_) async => throw TimeoutException('ack perdido');
 
       await expectLater(
-        repo().replaceOrderItemModifiers(
+        repo().replaceModifiersOfNewItem(
           itemId: 'item-1',
           modifiers: modifiers,
         ),

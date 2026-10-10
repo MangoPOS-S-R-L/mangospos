@@ -70,6 +70,11 @@ class VentasTable {
   /// no llegó al servidor.
   final bool isPendingSync;
 
+  /// Cuentas en revisión de la mesa (llegaron de otro equipo o tarde). El card
+  /// muestra «N cuentas · revisar» y al tocar la mesa se elige cuál abrir.
+  final int reviewAccounts;
+  final double reviewTotal;
+
   const VentasTable({
     required this.id,
     required this.code,
@@ -82,6 +87,8 @@ class VentasTable {
     this.waiterName,
     this.customerName,
     this.isPendingSync = false,
+    this.reviewAccounts = 0,
+    this.reviewTotal = 0,
   });
 
   /// Verifica si la mesa está ocupada
@@ -121,6 +128,8 @@ class VentasTable {
     String? waiterName,
     String? customerName,
     bool? isPendingSync,
+    int? reviewAccounts,
+    double? reviewTotal,
   }) {
     return VentasTable(
       id: id ?? this.id,
@@ -134,6 +143,8 @@ class VentasTable {
       waiterName: waiterName ?? this.waiterName,
       customerName: customerName ?? this.customerName,
       isPendingSync: isPendingSync ?? this.isPendingSync,
+      reviewAccounts: reviewAccounts ?? this.reviewAccounts,
+      reviewTotal: reviewTotal ?? this.reviewTotal,
     );
   }
 
@@ -150,6 +161,8 @@ class VentasTable {
       waiterId: map['waiter_id'],
       waiterName: map['waiter_name'],
       customerName: map['customer_name'],
+      reviewAccounts: (map['review_orders_count'] as num?)?.toInt() ?? 0,
+      reviewTotal: (map['review_total'] as num?)?.toDouble() ?? 0,
     );
   }
 
@@ -166,6 +179,8 @@ class VentasTable {
       if (waiterId != null) 'waiter_id': waiterId,
       if (waiterName != null) 'waiter_name': waiterName,
       if (customerName != null) 'customer_name': customerName,
+      if (reviewAccounts > 0) 'review_orders_count': reviewAccounts,
+      if (reviewAccounts > 0) 'review_total': reviewTotal,
     };
   }
 

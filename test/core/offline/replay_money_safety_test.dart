@@ -110,6 +110,18 @@ class _Sales extends SalesRepository {
   }) async => {'order_id': 'remote-$slot'};
 
   @override
+  Future<Map<String, dynamic>> openLocalTableOrder({
+    required String clientOrderId,
+    required String tableId,
+    int peopleCount = 1,
+    String? openedByEmployeeId,
+  }) => openTable(
+    tableId: tableId,
+    peopleCount: peopleCount,
+    openedByEmployeeId: openedByEmployeeId,
+  );
+
+  @override
   Future<Map<String, dynamic>> openTable({
     required String tableId,
     String? userId,

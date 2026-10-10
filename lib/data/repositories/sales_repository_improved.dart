@@ -10,7 +10,6 @@ import '../models/sales_models.dart';
 import '../utils/payment_recovery.dart';
 import '../utils/business_id_resolver.dart';
 import '../../core/network/database_operation_wrapper.dart';
-import 'sales_repository.dart' show closedOrderErrorMessage;
 
 /// 🥭 MangoPOS - Sales Repository (Mejorado)
 /// Repositorio con manejo robusto de errores, timeouts y reintentos
@@ -154,35 +153,6 @@ class SalesRepositoryImproved {
     );
   }
 
-  /// Actualizar cantidad de item con reintentos
-  Future<void> updateItemQuantity({
-    required String itemId,
-    required double quantity,
-  }) async {
-    return DatabaseOperationWrapper.rpc(
-      operationName: 'Actualizar Cantidad',
-      operation: () async {
-        await _client.rpc(
-          SalesQueries.rpcUpdateItemQty,
-          params: {'p_item_id': itemId, 'p_qty': quantity},
-        );
-      },
-    );
-  }
-
-  /// Eliminar item con reintentos
-  Future<void> deleteItem({required String itemId}) async {
-    return DatabaseOperationWrapper.rpc(
-      operationName: 'Eliminar Item',
-      operation: () async {
-        await _client.rpc(
-          SalesQueries.rpcDeleteItem,
-          params: {'p_item_id': itemId},
-        );
-      },
-    );
-  }
-
   // ============================================================
   // 🧾 DETALLE DE ORDEN
   // ============================================================
@@ -262,54 +232,6 @@ class SalesRepositoryImproved {
       'sin registrar un pago. Usa processPayment() para cobrar o deleteCheck() '
       'para eliminar la subcuenta despues de mover sus items.',
     );
-  }
-
-  Future<void> _recomputeOrderTotals(String orderId) async {
-    final rows = await _client
-        .from('order_items')
-        .select('subtotal, discounts, tax, total')
-        .eq('order_id', orderId)
-        .neq('status', 'void');
-
-    double subtotal = 0, discounts = 0, tax = 0, total = 0;
-    for (final r in rows) {
-      subtotal += (r['subtotal'] ?? 0).toDouble();
-      discounts += (r['discounts'] ?? 0).toDouble();
-      tax += (r['tax'] ?? 0).toDouble();
-      total += (r['total'] ?? 0).toDouble();
-    }
-
-    await _client
-        .from('orders')
-        .update({
-          'subtotal': subtotal,
-          'discounts': discounts,
-          'tax': tax,
-          'total': total,
-        })
-        .eq('id', orderId);
-  }
-
-  /// Eliminar un check y sus items
-  Future<void> deleteCheck(String checkId) async {
-    final check = await _client
-        .from('order_checks')
-        .select('order_id')
-        .eq('id', checkId)
-        .maybeSingle();
-    if (check == null || check['order_id'] == null) return;
-    final orderId = check['order_id'] as String;
-
-    try {
-      await _client.from('order_items').delete().eq('check_id', checkId);
-    } catch (e) {
-      // Candado de cuentas facturadas (MP404): si la subcuenta ya tiene NCF,
-      // no se vacía. Se anula.
-      final blocked = closedOrderErrorMessage(e);
-      throw Exception(blocked ?? 'Error al eliminar la cuenta: $e');
-    }
-    await _client.from('order_checks').delete().eq('id', checkId);
-    await _recomputeOrderTotals(orderId);
   }
 
   // ============================================================

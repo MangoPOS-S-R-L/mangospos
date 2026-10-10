@@ -173,6 +173,24 @@ class SalesQueries {
   /// Enviar orden a cocina
   static const String rpcConfirmOrderToKitchen = 'fn_confirm_order_to_kitchen';
 
+  /// T04 (20261010_0006): única entrada para editar cuentas y líneas.
+  /// T07 (20261010_0008): cobro hecho sin red, con su identidad, caja y fecha.
+  static const String rpcReplayOfflinePayment = 'fn_replay_offline_payment';
+  static const String rpcResolveOfflinePayment = 'fn_resolve_offline_payment';
+  static const String rpcOrderMoneyState = 'fn_order_money_state';
+
+  /// T04 (20261010_0006): línea de auditoría en la nota de la sesión.
+  static const String rpcAppendSessionNote = 'fn_append_session_note';
+  static const String rpcApplyOrderEdit = 'fn_apply_order_edit';
+
+  /// T02 (20261010_0030): liberaciones de mesas con confirmación de las
+  /// terminales participantes.
+  static const String rpcReleaseEmptyTableV2 = 'fn_release_empty_table_v2';
+  static const String rpcRegisterSessionParticipant =
+      'fn_register_session_participant';
+  static const String rpcPendingReleaseRequests = 'fn_pending_release_requests';
+  static const String rpcAckSessionRelease = 'fn_ack_session_release';
+
   /// Confirmar a cocina solo las líneas de una comanda impresa por la LAN
   /// (replay de 'confirm_local_order', 20261010_0002).
   static const String rpcConfirmOrderItemsToKitchen =

@@ -15,6 +15,8 @@ import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dar
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/models/sales_models.dart';
+import '../../sales/state/sales_state.dart' show EditConflictNotice;
+import '../../sales/widgets/edit_conflict_dialog.dart';
 import '../../../data/utils/order_pricing_utils.dart';
 import '../viewmodel/split_bill_viewmodel.dart';
 import '../state/split_bill_state.dart';
@@ -208,6 +210,35 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
     });
   }
 
+  // T04: aviso de conflicto abierto (uno a la vez).
+  bool _editConflictDialogOpen = false;
+
+  Future<void> _showEditConflicts() async {
+    if (_editConflictDialogOpen) return;
+    _editConflictDialogOpen = true;
+    try {
+      final viewModel = ref.read(splitBillViewModelProvider.notifier);
+      String? shownId;
+      while (mounted) {
+        final notice = ref.read(splitBillViewModelProvider).editConflict;
+        if (notice == null || notice.id == shownId) return;
+        shownId = notice.id;
+        final applyMine = await showEditConflictDialog(
+          context,
+          notice: notice,
+          canApplyMine: viewModel.canApplyConflictingEdit,
+        );
+        if (!mounted) return;
+        await viewModel.resolveEditConflict(
+          applyMine: applyMine,
+          noticeId: notice.id,
+        );
+      }
+    } finally {
+      _editConflictDialogOpen = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(splitBillViewModelProvider);
@@ -227,6 +258,16 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
     // Header/banner compactos también para tablets 8" en landscape
     // (siguen siendo dispositivos chicos en términos de UX táctil).
     final compactChrome = deviceClass != DeviceClass.largeTablet;
+
+    // T04: otro equipo cambió la cuenta mientras se dividía.
+    ref.listen<EditConflictNotice?>(
+      splitBillViewModelProvider.select((s) => s.editConflict),
+      (prev, next) {
+        if (next != null && next.id != prev?.id) {
+          _showEditConflicts();
+        }
+      },
+    );
 
     // Listener para cierre exitoso
     ref.listen(splitBillViewModelProvider.select((s) => s.splitApplied), (

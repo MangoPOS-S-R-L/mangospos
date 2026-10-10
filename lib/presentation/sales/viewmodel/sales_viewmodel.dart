@@ -35,6 +35,7 @@ import 'retail_carts_provider.dart';
 import 'menu_browser_viewmodel.dart' show MenuProduct;
 import 'sales_by_zone_viewmodel.dart' show byZoneVmProvider;
 import '../state/sales_state.dart';
+import '../../../data/models/order_edit.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/order_item_tax_line.dart';
 import '../../cashier/viewmodel/cashier_viewmodel.dart'
@@ -43,6 +44,7 @@ import '../../inventory/viewmodel/inventory_viewmodel.dart'
     show inventoryRepositoryProvider;
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
+import 'package:mangopos/core/utils/device_utils.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 import 'package:mangopos/core/utils/display_name_utils.dart';
 
@@ -137,12 +139,21 @@ class _OrderCustomer {
 /// Cliente ya aplicado en pantalla que el servidor todavía no confirma (ver
 /// `SalesViewModel._pendingCustomers`).
 class _PendingOrderCustomer {
-  _PendingOrderCustomer(this.customer) : at = DateTime.now();
+  _PendingOrderCustomer(this.customer, {this.baseVersion})
+    : at = DateTime.now();
 
   final _OrderCustomer customer;
   final DateTime at;
+
+  /// T04: versión de la cuenta que veía el operador al elegirlo (null en
+  /// una orden local: se toma la del servidor al subirlo).
+  final int? baseVersion;
   bool savedOnServer = false;
   bool pushing = false;
+
+  /// Otro equipo cambió la cuenta: espera a que el operador la abra y
+  /// decida (no se reintenta en cada sincronización).
+  bool conflicted = false;
 }
 
 /// Respuesta del servidor sobre la sesión de una venta rápida/manual que se
@@ -1286,9 +1297,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   /// Fija el conjunto COMPLETO de impuestos excluidos de la orden.
   ///
-  /// Se manda el estado final de los checkboxes (no un toggle) para que dos
-  /// cajas tocando la misma orden converjan al último envío en vez de
-  /// acumular toggles cruzados.
+  /// Se manda el estado final de los checkboxes (no un toggle), sobre la
+  /// versión de la cuenta que veía el operador (T04): si otro equipo la
+  /// cambió entre tanto, no se pisa; el operador decide.
   ///
   /// Devuelve null si salió bien, o el mensaje de error para mostrar.
   Future<String?> setExcludedTaxes(Set<String> taxIds) async {
@@ -1304,6 +1315,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     final previous = state.excludedTaxIds;
+    final editBase = _orderBase();
     state = state.copyWith(excludedTaxIds: taxIds);
     try {
       // `excluded_by` responde «quién quitó este impuesto»: es quien HIZO la
@@ -1315,14 +1327,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: _activeBusinessId,
             userId: ref.read(sessionProvider).userId,
           );
-      await Supabase.instance.client.rpc(
-        'fn_set_order_excluded_taxes',
-        params: {
-          'p_order_id': orderId,
-          'p_tax_ids': taxIds.toList(growable: false),
-          'p_employee_id': employeeId,
-        },
-      );
+      final repository = ref.read(salesRepositoryProvider);
+      Future<OrderEditResult> sendTaxes(OrderEdit edit) =>
+          repository.setExcludedTaxes(
+            taxIds: taxIds.toList(growable: false),
+            employeeId: employeeId,
+            edit: edit,
+          );
+      try {
+        await _runEdit(orderId: orderId, base: editBase, send: sendTaxes);
+      } on OrderEditConflict catch (conflict) {
+        state = state.copyWith(excludedTaxIds: previous);
+        _onEditConflict(
+          conflict,
+          what: 'impuestos de la cuenta',
+          applyMine: () async {
+            await _runEdit(
+              orderId: orderId,
+              base: OrderEditBase.forced,
+              send: sendTaxes,
+            );
+          },
+        );
+        return null;
+      }
       // El RPC ya reescribió tasas, tax_lines y totales: hay que releer para
       // que el carrito muestre los números del servidor y no la predicción.
       await reloadOrderNow();
@@ -1335,6 +1363,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   String _humanizeExcludedTaxError(Object e) {
+    if (e is OrderEditServerOutdated) return OrderEditServerOutdated.message;
     final raw = e.toString();
     if (raw.contains('comprobante fiscal')) {
       return 'Esta orden ya tiene comprobante fiscal emitido; sus impuestos '
@@ -3009,7 +3038,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       legalName: state.customerLegalName,
       taxId: state.customerTaxId,
     );
-    final pending = _PendingOrderCustomer(customer);
+    final pending = _PendingOrderCustomer(
+      customer,
+      baseVersion: order.version,
+    );
     _pendingCustomers.removeWhere(
       (_, p) => DateTime.now().difference(p.at) > const Duration(hours: 12),
     );
@@ -3029,18 +3061,41 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     pending.pushing = true;
+    final repository = ref.read(salesRepositoryProvider);
+    final businessId = _activeBusinessId;
+    Future<OrderEditResult> sendCustomer(OrderEdit edit) =>
+        repository.assignCustomerToSession(
+          sessionId: order.sessionId,
+          customerId: customerId,
+          customerName: customerName,
+          businessId: businessId,
+          edit: edit,
+        );
     try {
-      await ref
-          .read(salesRepositoryProvider)
-          .assignCustomerToSession(
-            sessionId: order.sessionId,
-            customerId: customerId,
-            customerName: customerName,
-            businessId: _activeBusinessId,
-          )
-          .timeout(const Duration(seconds: 10));
+      await _runEdit(
+        orderId: order.id,
+        base: OrderEditBase.ofVersion(order.version),
+        send: sendCustomer,
+      ).timeout(const Duration(seconds: 10));
       pending.savedOnServer = true;
       pending.pushing = false;
+    } on OrderEditConflict catch (conflict) {
+      // T04: otro equipo cambió la cuenta. Se muestra lo vigente y el
+      // operador decide si aplica su cliente.
+      pending.pushing = false;
+      if (identical(_pendingCustomers[order.id], pending)) {
+        _pendingCustomers.remove(order.id);
+      }
+      _onEditConflict(
+        conflict,
+        what: 'cliente ${customer.name}',
+        applyMine: () => _runEdit(
+          orderId: order.id,
+          base: OrderEditBase.forced,
+          send: sendCustomer,
+        ),
+      );
+      return null;
     } catch (e) {
       pending.pushing = false;
       if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
@@ -3107,6 +3162,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> _pushPendingCustomer(String orderId, {String? sessionId}) async {
     final pending = _pendingCustomers[orderId];
     if (pending == null || pending.savedOnServer || pending.pushing) return;
+    if (pending.conflicted && state.order?.id != orderId) return;
     if (orderId.startsWith('local-order-') || !_connectivity.isConnected) {
       return;
     }
@@ -3121,15 +3177,53 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: _activeBusinessId,
           ))?.sessionId;
       if (resolvedSessionId == null || resolvedSessionId.isEmpty) return;
-      await repo
-          .assignCustomerToSession(
+      // T04: la versión que veía el operador; en una orden local (no
+      // existía en el servidor) la vigente, como la cola offline.
+      final baseVersion =
+          pending.baseVersion ?? await repo.getOrderVersion(orderId);
+      final businessId = _activeBusinessId;
+      Future<OrderEditResult> sendCustomer(OrderEdit edit) =>
+          repo.assignCustomerToSession(
             sessionId: resolvedSessionId,
             customerId: pending.customer.id,
             customerName: pending.customer.name,
-            businessId: _activeBusinessId,
-          )
-          .timeout(const Duration(seconds: 10));
+            businessId: businessId,
+            edit: edit,
+          );
+      await _runEdit(
+        orderId: orderId,
+        base: OrderEditBase.ofVersion(baseVersion),
+        send: sendCustomer,
+      ).timeout(const Duration(seconds: 10));
       pending.savedOnServer = true;
+    } on OrderEditConflict catch (conflict) {
+      pending.conflicted = true;
+      if (state.order?.id != orderId) return;
+      // En pantalla: el operador decide con lo vigente a la vista.
+      if (identical(_pendingCustomers[orderId], pending)) {
+        _pendingCustomers.remove(orderId);
+      }
+      final sessionId = state.order?.sessionId;
+      _onEditConflict(
+        conflict,
+        what: 'cliente ${pending.customer.name}',
+        applyMine: () async {
+          if (sessionId == null || sessionId.isEmpty) return;
+          await _runEdit(
+            orderId: orderId,
+            base: OrderEditBase.forced,
+            send: (edit) => ref
+                .read(salesRepositoryProvider)
+                .assignCustomerToSession(
+                  sessionId: sessionId,
+                  customerId: pending.customer.id,
+                  customerName: pending.customer.name,
+                  businessId: _activeBusinessId,
+                  edit: edit,
+                ),
+          );
+        },
+      );
     } catch (e) {
       if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
         return;
@@ -3286,15 +3380,44 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       rnc: customerTaxId,
     );
 
+    final repository = ref.read(salesRepositoryProvider);
+    final editBase = _orderBase();
+    Future<OrderEditResult> sendCheckCustomer(OrderEdit edit) =>
+        repository.assignCustomerToCheck(
+          checkId: checkId,
+          customerId: customerId,
+          customerName: customerName,
+          customerRnc: customerTaxId,
+          edit: edit,
+        );
     try {
-      await ref
-          .read(salesRepositoryProvider)
-          .assignCustomerToCheck(
-            checkId: checkId,
-            customerId: customerId,
-            customerName: customerName,
-            customerRnc: customerTaxId,
-          );
+      try {
+        await _runEdit(
+          orderId: order.id,
+          base: editBase,
+          send: sendCheckCustomer,
+        );
+      } on OrderEditConflict catch (conflict) {
+        _checkCustomerOverride.remove(checkId);
+        if (!stillSelected()) return;
+        _onEditConflict(
+          conflict,
+          what: 'cliente $customerName en la subcuenta',
+          applyMine: () async {
+            await _runEdit(
+              orderId: order.id,
+              base: OrderEditBase.forced,
+              send: sendCheckCustomer,
+            );
+            _checkCustomerOverride[checkId] = (
+              id: customerId,
+              name: customerName,
+              rnc: customerTaxId,
+            );
+          },
+        );
+        return;
+      }
       if (!stillSelected()) return;
       // Reflejar de inmediato en el check local para que el chip del header
       // y los tabs muestren el nombre/RNC sin esperar al reload del bundle.
@@ -3320,7 +3443,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } catch (e) {
       if (!stillSelected()) return;
       state = state.copyWith(
-        error: 'Error al asignar cliente a la subcuenta: $e',
+        error: _editErrorMessage(e, 'Error al asignar cliente a la subcuenta'),
       );
     }
   }
@@ -3368,48 +3491,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         error: 'Error al asignar comprobante a la subcuenta: $e',
       );
     }
-  }
-
-  Future<void> updateCurrentSessionNote(String? note) async {
-    final order = state.order;
-    if (order == null) return;
-
-    try {
-      await ref
-          .read(salesRepositoryProvider)
-          .updateSessionNote(
-            sessionId: order.sessionId,
-            note: note,
-            businessId: _activeBusinessId,
-          );
-      state = state.copyWith(
-        sessionNote: note?.trim(),
-        clearSessionNote: note == null,
-      );
-    } catch (e) {
-      state = state.copyWith(error: 'Error al actualizar nota de sesión: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> appendVoidAuditNote({required String reason}) async {
-    final order = state.order;
-    if (order == null) return;
-
-    final trimmedReason = reason.trim();
-    if (trimmedReason.isEmpty) return;
-
-    final userName = ref.read(sessionProvider).userName?.trim() ?? '';
-    final stamp = DateTime.now().toLocal().toIso8601String();
-    final auditLine =
-        '[ANULACION][$stamp] ${userName.isEmpty ? 'Usuario' : userName}: $trimmedReason';
-
-    final current = state.sessionNote?.trim();
-    final nextNote = (current == null || current.isEmpty)
-        ? auditLine
-        : '$current\n$auditLine';
-
-    await updateCurrentSessionNote(nextNote);
   }
 
   /// Pantalla de venta rápida/manual mientras abre su cuenta: ninguna orden en
@@ -4168,7 +4249,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // Un alta repetida pudo haber guardado ya los extras: reemplazar deja
         // exactamente los elegidos, sin duplicarlos.
         if (added.replayed) {
-          await repo.replaceOrderItemModifiers(
+          await repo.replaceModifiersOfNewItem(
             itemId: itemId,
             modifiers: modifiers,
           );
@@ -4583,7 +4664,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (orderId == null) return;
 
     final previousTakeout = state.takeout;
+    final base = _orderBase();
     state = state.copyWith(takeout: value, error: null);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> send(OrderEdit edit) =>
+        repository.markOrderTakeout(orderId: orderId, takeout: value, edit: edit);
 
     try {
       if (_isHubMode) {
@@ -4591,10 +4676,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .markOrderTakeout(orderId: orderId, takeout: value);
+      await _runEdit(orderId: orderId, base: base, send: send);
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      state = state.copyWith(takeout: previousTakeout);
+      _onEditConflict(
+        conflict,
+        what: value ? 'toda la orden para llevar' : 'toda la orden para aquí',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          base: OrderEditBase.forced,
+          send: send,
+        ),
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -4606,6 +4700,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'origin': state.origin,
             'order_id': orderId,
             'takeout': value,
+            ...base.toAction(),
           },
         );
         await _persistCurrentState(localOnly: true);
@@ -4720,6 +4815,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     final mutation = _captureOrderMutation(orderId);
     final previousPosition = state.items.indexOf(targetItem);
+    // T04: la versión que se veía al tocar «quitar».
+    final editBase = OrderEditBase.ofItem(targetItem);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendDelete(OrderEdit edit) =>
+        repository.deleteItem(itemId: itemId, edit: edit);
     String? mappedItemId;
     CurrentOrderState removeTarget(CurrentOrderState source) =>
         _mutationItemsState(source, source.items
@@ -4750,7 +4850,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendDelete,
+      );
       deletedOnServer = true;
 
       // El borrado ya pasó: el motivo y el operador se anotan aparte, sin
@@ -4795,6 +4900,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       });
       }
       return true;
+    } on OrderEditConflict catch (conflict) {
+      // Otro equipo cambió (o quitó) este producto: no se borró. Vuelve a la
+      // pantalla y el operador decide.
+      _pendingDeletedItemIds.remove(itemId);
+      _applyOrderMutation(mutation, restoreTarget);
+      await _persistOrderMutation(mutation, restoreTarget);
+      if (_isMutationOrderActive(mutation)) {
+        _onEditConflict(
+          conflict,
+          what: 'quitar ${targetItem.productName}',
+          applyMine: () async {
+            await _runEdit(
+              orderId: orderId,
+              itemId: itemId,
+              base: OrderEditBase.forced,
+              send: sendDelete,
+            );
+            unawaited(
+              _noteItemRemovalFor(
+                mutation,
+                itemId,
+                reason: reason,
+                reasonCode: reasonCode,
+                isWaste: isWaste,
+              ),
+            );
+          },
+        );
+      }
+      return false;
     } catch (e) {
       final businessId = mutation.businessId;
       if (deletedOnServer) {
@@ -4827,6 +4962,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               'is_waste': isWaste,
               'employee_id':
                   mutation.actorEmployeeId,
+              ...editBase.toAction(),
             },
           );
         } catch (queueError) {
@@ -4918,6 +5054,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     final mutation = _captureOrderMutation(orderId);
     final originalItem = targetItem;
+    // T04: la versión (o los valores) que se veían antes de este toque.
+    final editBase = OrderEditBase.ofItem(originalItem);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendQuantity(OrderEdit edit) => repository
+        .updateItemQuantity(itemId: itemId, quantity: quantity, edit: edit);
     final mutationKey = '${mutation.businessId}|$orderId|$itemId';
     final quantityVersion = (_itemQuantityMutationVersions[mutationKey] ?? 0) + 1;
     _itemQuantityMutationVersions[mutationKey] = quantityVersion;
@@ -5021,9 +5162,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemQuantity(itemId: itemId, quantity: quantity);
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendQuantity,
+      );
       quantitySavedOnServer = true;
       if (_isMutationOrderActive(mutation)) refreshOrder();
 
@@ -5035,6 +5179,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         'item_id': itemId,
         'quantity': quantity,
       });
+      }
+    } on OrderEditConflict catch (conflict) {
+      // Otro equipo cambió esta línea: la cantidad no se aplicó.
+      if (_itemQuantityMutationVersions[mutationKey] == quantityVersion &&
+          _pendingItemQty[itemId] == quantity) {
+        _pendingItemQty.remove(itemId);
+      }
+      _applyOrderMutation(mutation, rollbackQuantity);
+      await _persistOrderMutation(mutation, rollbackQuantity);
+      if (_isMutationOrderActive(mutation)) {
+        final shown = quantity % 1 == 0
+            ? quantity.toInt().toString()
+            : quantity.toString();
+        _onEditConflict(
+          conflict,
+          what: 'cantidad $shown de ${originalItem.productName}',
+          applyMine: () => _runEdit(
+            orderId: orderId,
+            itemId: itemId,
+            base: OrderEditBase.forced,
+            send: sendQuantity,
+          ),
+        );
       }
     } catch (e) {
       final businessId = mutation.businessId;
@@ -5062,6 +5229,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'product_name': targetItem.productName,
             'notes': targetItem.notes,
             'is_takeout': targetItem.isTakeout,
+            ...editBase.toAction(),
           },
         );
         } catch (queueError) {
@@ -5123,16 +5291,34 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    final editBase = _itemBase(itemId);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendNotes(OrderEdit edit) =>
+        repository.updateItemNotes(itemId: itemId, notes: notes, edit: edit);
     try {
       if (_isHubMode) {
         // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemNotes(itemId: itemId, notes: notes);
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendNotes,
+      );
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: 'nota de ${targetItem?.productName ?? 'un producto'}',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: itemId,
+          base: OrderEditBase.forced,
+          send: sendNotes,
+        ),
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -5155,6 +5341,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'product_id': targetItem?.productId,
             'product_name': targetItem?.productName,
             'is_takeout': targetItem?.isTakeout,
+            ...editBase.toAction(),
           },
         );
         await _persistCurrentState(localOnly: true);
@@ -5180,15 +5367,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    final editBase = _itemBase(itemId);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendTakeout(OrderEdit edit) => repository
+        .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout, edit: edit);
     try {
       if (_isHubMode) {
         // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .toggleItemTakeout(itemId: itemId, isTakeout: isTakeout);
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendTakeout,
+      );
       // Defensa client-side antes del refresh: actualizar is_takeout local y
       // filtrar tax_lines del item para que el cajero NO vea Ley en items
       // takeout aunque el backend RPC sea viejo (no recomputa tax_lines).
@@ -5203,6 +5397,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           .toList(growable: false);
       state = state.copyWith(items: _filterTaxLinesByTakeout(patchedItems));
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what:
+            '${targetItem?.productName ?? 'un producto'} '
+            '${isTakeout ? 'para llevar' : 'para aquí'}',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: itemId,
+          base: OrderEditBase.forced,
+          send: sendTakeout,
+        ),
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -5228,6 +5435,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'product_id': targetItem?.productId,
             'product_name': targetItem?.productName,
             'notes': targetItem?.notes,
+            ...editBase.toAction(),
           },
         );
         await _persistCurrentState(localOnly: true);
@@ -5317,16 +5525,39 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String itemId,
     required List<SelectedModifierInput> selectedModifiers,
   }) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return;
+    final editBase = _itemBase(itemId);
+    final repository = ref.read(salesRepositoryProvider);
+    final modifiers = selectedModifiers
+        .map((modifier) => modifier.toMap())
+        .toList(growable: false);
+    Future<OrderEditResult> sendModifiers(OrderEdit edit) => repository
+        .replaceOrderItemModifiers(
+          itemId: itemId,
+          modifiers: modifiers,
+          edit: edit,
+        );
     try {
-      await ref
-          .read(salesRepositoryProvider)
-          .replaceOrderItemModifiers(
-            itemId: itemId,
-            modifiers: selectedModifiers
-                .map((modifier) => modifier.toMap())
-                .toList(growable: false),
-          );
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendModifiers,
+      );
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: 'extras de un producto',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: itemId,
+          base: OrderEditBase.forced,
+          send: sendModifiers,
+        ),
+      );
+      rethrow;
     } catch (e) {
       state = state.copyWith(error: 'Error actualizando modificadores: $e');
       rethrow;
@@ -5414,20 +5645,44 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       resolvedId = realCandidate.id;
     }
 
+    // T04: la versión con la que se abrió el modal (si la línea cambió
+    // mientras estaba abierto, es un conflicto); sin ella, lo que se ve.
+    final editBase = updatedItem.version != null && resolvedId == itemId
+        ? OrderEditBase.ofVersion(updatedItem.version)
+        : _itemBase(resolvedId);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendDetails(OrderEdit edit) =>
+        repository.updateItemDetails(
+          itemId: resolvedId,
+          productName: updatedItem.productName,
+          quantity: updatedItem.quantity,
+          isTakeout: updatedItem.isTakeout,
+          discounts: updatedItem.discounts,
+          notes: updatedItem.notes?.trim().isEmpty ?? true
+              ? null
+              : updatedItem.notes?.trim(),
+          edit: edit,
+        );
     try {
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemDetails(
-            itemId: resolvedId,
-            productName: updatedItem.productName,
-            quantity: updatedItem.quantity,
-            isTakeout: updatedItem.isTakeout,
-            discounts: updatedItem.discounts,
-            notes: updatedItem.notes?.trim().isEmpty ?? true
-                ? null
-                : updatedItem.notes?.trim(),
-          );
+      await _runEdit(
+        orderId: orderId,
+        itemId: resolvedId,
+        base: editBase,
+        send: sendDetails,
+      );
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: 'cambios en ${updatedItem.productName}',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: resolvedId,
+          base: OrderEditBase.forced,
+          send: sendDetails,
+        ),
+      );
+      rethrow;
     } catch (e) {
       if (OfflinePosService.isTransportError(e)) {
         unawaited(_connectivity.forceReachabilityCheck());
@@ -5511,31 +5766,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     try {
       final discountByItemId = <String, double>{};
 
-      await Future.wait(
-        targetItems.map((item) {
-          // Una línea con premio de la tarjeta de sellos conserva su unidad
-          // gratis: el porcentaje va sobre lo que el cliente sí paga. Sin
-          // premio es exactamente base × %.
-          final discount = discountKeepingLoyaltyReward(
-            subtotal: item.subtotal,
-            tax: item.tax,
-            quantity: item.quantity,
-            notes: item.notes,
-            manualOnRest: (rest) => rest * (clampedPercent / 100),
-          );
-          discountByItemId[item.id] = discount;
-          final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
-          return ref
-              .read(salesRepositoryProvider)
-              .updateItemDiscountAndNotes(
-                itemId: item.id,
-                discounts: discount,
-                notes: notesWithoutCourtesy.isEmpty
-                    ? null
-                    : notesWithoutCourtesy,
-              );
-        }),
-      );
+      final edits = targetItems.map((item) {
+        // Una línea con premio de la tarjeta de sellos conserva su unidad
+        // gratis: el porcentaje va sobre lo que el cliente sí paga. Sin
+        // premio es exactamente base × %.
+        final discount = discountKeepingLoyaltyReward(
+          subtotal: item.subtotal,
+          tax: item.tax,
+          quantity: item.quantity,
+          notes: item.notes,
+          manualOnRest: (rest) => rest * (clampedPercent / 100),
+        );
+        discountByItemId[item.id] = discount;
+        final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
+        return (
+          item: item,
+          discounts: discount,
+          notes: notesWithoutCourtesy.isEmpty ? null : notesWithoutCourtesy,
+        );
+      }).toList(growable: false);
+      if (!await _editDiscountAndNotes(
+        edits,
+        what: 'descuento de ${clampedPercent.toStringAsFixed(0)}%',
+      )) {
+        state = state.copyWith(loading: false);
+        return;
+      }
 
       state = state.copyWith(
         loading: false,
@@ -5636,20 +5892,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     state = state.copyWith(loading: true, error: null);
     try {
-      await Future.wait(
-        targetItems.map((item) {
-          final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
-          return ref
-              .read(salesRepositoryProvider)
-              .updateItemDiscountAndNotes(
-                itemId: item.id,
-                discounts: discountByItemId[item.id]!,
-                notes: notesWithoutCourtesy.isEmpty
-                    ? null
-                    : notesWithoutCourtesy,
-              );
-        }),
-      );
+      final edits = targetItems.map((item) {
+        final notesWithoutCourtesy = _stripCourtesyFromNotes(item.notes);
+        return (
+          item: item,
+          discounts: discountByItemId[item.id]!,
+          notes: notesWithoutCourtesy.isEmpty ? null : notesWithoutCourtesy,
+        );
+      }).toList(growable: false);
+      if (!await _editDiscountAndNotes(
+        edits,
+        what: 'descuento de ${amount.toStringAsFixed(2)}',
+      )) {
+        state = state.copyWith(loading: false);
+        return;
+      }
 
       state = state.copyWith(
         loading: false,
@@ -5725,22 +5982,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final cleanedReason = reason.trim();
     state = state.copyWith(loading: true, error: null);
     try {
-      await Future.wait(
-        targetItems.map((item) {
-          final base = _courtesyLineAmount(item);
-          final notes = _buildCourtesyNotes(
-            originalNotes: item.notes,
-            reason: cleanedReason,
-          );
-          return ref
-              .read(salesRepositoryProvider)
-              .updateItemDiscountAndNotes(
-                itemId: item.id,
-                discounts: base,
-                notes: notes,
-              );
-        }),
-      );
+      final edits = targetItems
+          .map(
+            (item) => (
+              item: item,
+              discounts: _courtesyLineAmount(item),
+              notes: _buildCourtesyNotes(
+                originalNotes: item.notes,
+                reason: cleanedReason,
+              ),
+            ),
+          )
+          .toList(growable: false);
+      if (!await _editDiscountAndNotes(edits, what: 'cortesía')) {
+        state = state.copyWith(loading: false);
+        return;
+      }
       refreshOrder();
     } catch (e) {
       state = state.copyWith(
@@ -5763,16 +6020,34 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    final editBase = _itemBase(itemId);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendMove(OrderEdit edit) => repository
+        .moveItemToCheck(itemId: itemId, checkPosition: pos, edit: edit);
     try {
       if (_isHubMode) {
         // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .moveItemToCheck(itemId: itemId, checkPosition: pos);
+      await _runEdit(
+        orderId: orderId,
+        itemId: itemId,
+        base: editBase,
+        send: sendMove,
+      );
       refreshOrder();
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: 'mover ${targetItem?.productName ?? 'un producto'} de cuenta',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: itemId,
+          base: OrderEditBase.forced,
+          send: sendMove,
+        ),
+      );
     } catch (e) {
       final businessId = _activeBusinessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
@@ -5789,6 +6064,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'product_name': targetItem?.productName,
             'notes': targetItem?.notes,
             'is_takeout': targetItem?.isTakeout,
+            ...editBase.toAction(),
           },
         );
         await _persistCurrentState(localOnly: true);
@@ -5799,7 +6075,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return;
       }
 
-      state = state.copyWith(error: 'Error moviendo item a subcuenta: $e');
+      state = state.copyWith(
+        error: _editErrorMessage(e, 'Error moviendo item a subcuenta'),
+      );
     }
   }
 
@@ -5936,10 +6214,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     // La nota también pertenece a la cuenta que se está anulando. Una
     // navegación durante el cierre nunca debe escribir la nota en otra mesa.
-    final cancelledSessionId = cancellingState.order!.sessionId;
     final noteAtCancellation = cancellingState.sessionNote?.trim();
     final actorAtCancellation = ref.read(sessionProvider).userName?.trim() ?? '';
-    final cancellationStamp = DateTime.now().toLocal().toIso8601String();
+    final cancellationAt = DateTime.now();
+    final cancellationStamp = cancellationAt.toLocal().toIso8601String();
 
     // Venta cobrada sin internet: su cobro espera en la cola. Anularla o
     // descartarla lo borraba junto con la venta (orden local) o lo dejaba sin
@@ -6119,11 +6397,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               noteAtCancellation == null || noteAtCancellation.isEmpty
               ? auditLine
               : '$noteAtCancellation\n$auditLine';
+          // T04: la línea se agrega a la nota que hay en el servidor (no a
+          // la de la pantalla, que otro equipo pudo haber cambiado).
           await ref
               .read(salesRepositoryProvider)
-              .updateSessionNote(
-                sessionId: cancelledSessionId,
-                note: nextNote,
+              .appendVoidAuditNote(
+                orderId: orderId,
+                reason: trimmedReason,
+                userName: actor,
+                voidedAt: cancellationAt,
                 businessId: businessId,
               );
           if (stillSelected()) state = state.copyWith(sessionNote: nextNote);
@@ -6440,6 +6722,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final tableId = _activeTableId;
     final slotId = _resolvePersistSlotId(origin ?? 'delivery', tableId);
     final clamped = amount < 0 ? 0.0 : amount;
+    // T04: la versión de la cuenta que veía el operador.
+    final editBase = _orderBase();
 
     // Optimista: reflejar el fee y el nuevo total localmente (clave offline,
     // para que el cobro use el total correcto sin esperar al server).
@@ -6473,6 +6757,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'origin': origin,
             'table_id': tableId,
             'slot_id': slotId,
+            ...editBase.toAction(),
           },
         );
       }
@@ -6481,9 +6766,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     // Online: el backend fija el fee y recomputa el total; recargamos para
     // tener los totales autoritativos (y que la factura/NCF cuadren).
-    await ref
-        .read(salesRepositoryProvider)
-        .setDeliveryFee(orderId: orderId, amount: clamped);
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> sendFee(OrderEdit edit) =>
+        repository.setDeliveryFee(orderId: orderId, amount: clamped, edit: edit);
+    try {
+      await _runEdit(orderId: orderId, base: editBase, send: sendFee);
+    } on OrderEditConflict catch (conflict) {
+      if (_activeBusinessId != businessId || state.order?.id != orderId) {
+        return;
+      }
+      _onEditConflict(
+        conflict,
+        what: 'delivery de ${clamped.toStringAsFixed(2)}',
+        applyMine: () async {
+          await _runEdit(
+            orderId: orderId,
+            base: OrderEditBase.forced,
+            send: sendFee,
+          );
+        },
+      );
+      return;
+    }
     if (_activeBusinessId == businessId && state.order?.id == orderId) {
       await reloadOrderNow();
     }
@@ -6580,6 +6884,294 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// internet: offline en una sola caja ya es fresco; la frescura multi-caja
   /// sin internet la da el Hub/LAN (F3). Tolerante: un fallo de recarga no
   /// debe trabar la impresión (el caller decide), así que captura y sigue.
+  // ---------------------------------------------------------------------------
+  // T04 (20261010_0006): ediciones versionadas
+  // ---------------------------------------------------------------------------
+
+  // Una edición de la misma línea (o de la cuenta) espera a la anterior: así
+  // manda la versión que dejó la anterior y el operador no choca consigo.
+  final Map<String, Future<void>> _editChains = {};
+
+  // Versiones que dejaron las ediciones de ESTE operador, por destino: una
+  // edición tomada sobre la versión anterior (toque rápido) va sobre la nueva.
+  // Un cambio de otro equipo sigue siendo conflicto.
+  final Map<String, Map<int, int>> _ownEditVersions = {};
+
+  // La intención del operador ante el último conflicto.
+  Future<void> Function()? _conflictApplyMine;
+
+  Future<T> _serializeEdit<T>(String key, Future<T> Function() run) {
+    final previous = _editChains[key] ?? Future<void>.value();
+    final next = previous.then((_) => run());
+    _editChains[key] = next.then<void>((_) {}, onError: (Object _) {});
+    return next;
+  }
+
+  OrderEditBase _resolveOwnBase(String key, OrderEditBase base) {
+    final version = base.version;
+    if (base.force || version == null) return base;
+    final latest = _ownEditVersions[key]?[version];
+    return latest == null ? base : OrderEditBase.ofVersion(latest);
+  }
+
+  void _rememberOwnEdit(String key, OrderEditBase base, OrderEditResult result) {
+    final from = base.version;
+    final to = result.version;
+    if (from == null || to == null || from == to) return;
+    final aliases = _ownEditVersions.putIfAbsent(key, () => {});
+    for (final entry in aliases.entries.toList()) {
+      if (entry.value == from) aliases[entry.key] = to;
+    }
+    aliases[from] = to;
+  }
+
+  /// Una edición versionada de una línea ([itemId]) o de la cuenta: en fila
+  /// con las anteriores del mismo destino, con la base que veía el operador
+  /// (ajustada a sus propias ediciones) y adoptando la versión nueva.
+  Future<OrderEditResult> _runEdit({
+    required String orderId,
+    String? itemId,
+    required OrderEditBase base,
+    required Future<OrderEditResult> Function(OrderEdit edit) send,
+  }) {
+    final key = itemId != null ? 'item:$itemId' : 'order:$orderId';
+    return _serializeEdit(key, () async {
+      var effective = _resolveOwnBase(key, base);
+      if (itemId == null && !effective.force && effective.version == null) {
+        // Cuenta en pantalla sin versión (venía de una orden local o de un
+        // caché previo a la migración): la vigente, como la cola offline.
+        effective = OrderEditBase.ofVersion(
+          await ref.read(salesRepositoryProvider).getOrderVersion(orderId),
+        );
+      }
+      final result = await send(OrderEdit(orderId: orderId, base: effective));
+      _rememberOwnEdit(key, effective, result);
+      _adoptEditVersion(
+        itemId: itemId,
+        orderId: orderId,
+        version: result.version,
+      );
+      return result;
+    });
+  }
+
+  void _adoptEditVersion({
+    String? itemId,
+    required String orderId,
+    int? version,
+  }) {
+    final order = state.order;
+    if (version == null || order == null) return;
+    if (itemId != null) {
+      if (!state.items.any((item) => item.id == itemId)) return;
+      state = state.copyWith(
+        error: state.error,
+        syncStatus: state.syncStatus,
+        items: [
+          for (final item in state.items)
+            item.id == itemId ? item.copyWith(version: version) : item,
+        ],
+      );
+    } else if (order.id == orderId) {
+      state = state.copyWith(
+        error: state.error,
+        syncStatus: state.syncStatus,
+        order: order.copyWith(version: version),
+      );
+    }
+  }
+
+  /// La base de una edición de cuenta: la versión que se ve en pantalla.
+  OrderEditBase _orderBase() => OrderEditBase.ofOrder(state.order);
+
+  /// La base de una edición de línea: la versión (o los valores) que se ven.
+  OrderEditBase _itemBase(String itemId) {
+    for (final item in state.items) {
+      if (item.id == itemId) return OrderEditBase.ofItem(item);
+    }
+    return OrderEditBase.ofVersion(null);
+  }
+
+  /// Otro equipo cambió lo que el operador editaba: se muestra lo vigente
+  /// (recarga) y se guarda su intención ([applyMine]) para que decida.
+  void _onEditConflict(
+    OrderEditConflict conflict, {
+    required String what,
+    required Future<void> Function() applyMine,
+  }) {
+    final canApply =
+        conflict.result.reason != 'order_closed' &&
+        conflict.result.reason != 'item_missing' &&
+        conflict.result.reason != 'item_closed';
+    _conflictApplyMine = canApply ? applyMine : null;
+    state = state.copyWith(
+      error: state.error,
+      syncStatus: state.syncStatus,
+      editConflict: EditConflictNotice(
+        id: const Uuid().v4(),
+        message: '${conflict.message} Tu cambio: $what.',
+        detail: conflict.currentDescription,
+      ),
+    );
+    unawaited(reloadOrderNow());
+  }
+
+  /// ¿Se puede aplicar el cambio del operador ante el conflicto actual?
+  bool get canApplyConflictingEdit => _conflictApplyMine != null;
+
+  /// La decisión del operador ante el conflicto [noticeId]: [applyMine]
+  /// aplica su cambio sobre lo vigente (decisión explícita); si no, se queda
+  /// lo de ahora. Si entre tanto llegó otro conflicto, esta decisión no vale
+  /// para él (se le pregunta aparte).
+  Future<void> resolveEditConflict({
+    required bool applyMine,
+    required String noticeId,
+  }) async {
+    if (state.editConflict?.id != noticeId) return;
+    final retry = _conflictApplyMine;
+    _conflictApplyMine = null;
+    state = state.copyWith(
+      error: state.error,
+      syncStatus: state.syncStatus,
+      clearEditConflict: true,
+    );
+    if (!applyMine || retry == null) return;
+    try {
+      await retry();
+    } catch (e) {
+      state = state.copyWith(error: 'No se pudo aplicar tu cambio: $e');
+    }
+    await reloadOrderNow();
+  }
+
+  /// Detalle de una línea ([row] es lo que veía el operador) por la entrada
+  /// versionada. Si otro equipo la cambió, deja el aviso y devuelve false.
+  /// [partOfGroup]: la línea es parte de un cambio de varias; aplicar solo
+  /// esta dejaría el grupo a medias, así que no se ofrece «Aplicar mi
+  /// cambio» (el operador lo rehace sobre lo vigente).
+  Future<bool> updateItemDetailsVersioned(
+    OrderItem row, {
+    required String productName,
+    required double quantity,
+    required bool isTakeout,
+    required double discounts,
+    String? notes,
+    bool partOfGroup = false,
+  }) async {
+    final orderId = state.order?.id;
+    if (orderId == null) return false;
+    final repository = ref.read(salesRepositoryProvider);
+    Future<OrderEditResult> send(OrderEdit edit) =>
+        repository.updateItemDetails(
+          itemId: row.id,
+          productName: productName,
+          quantity: quantity,
+          isTakeout: isTakeout,
+          discounts: discounts,
+          notes: notes,
+          edit: edit,
+        );
+    try {
+      await _runEdit(
+        orderId: orderId,
+        itemId: row.id,
+        base: OrderEditBase.ofItem(row),
+        send: send,
+      );
+      return true;
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: partOfGroup
+            ? 'cantidad de ${row.productName} (el resto del cambio no se '
+                  'aplicó; revísalo y vuelve a hacerlo)'
+            : 'cantidad de ${row.productName}',
+        applyMine: () => _runEdit(
+          orderId: orderId,
+          itemId: row.id,
+          base: OrderEditBase.forced,
+          send: send,
+        ),
+      );
+      if (partOfGroup) _conflictApplyMine = null;
+      return false;
+    }
+  }
+
+  /// Descuento y notas de varias líneas, cada una con la versión que se veía.
+  /// Si alguna chocó con otro equipo, avisa con la intención de todas y
+  /// devuelve false (la pantalla se recarga; nada más que hacer aquí).
+  Future<bool> _editDiscountAndNotes(
+    List<({OrderItem item, double discounts, String? notes})> edits, {
+    required String what,
+  }) async {
+    final orderId = state.order?.id;
+    if (orderId == null || edits.isEmpty) return true;
+    final repository = ref.read(salesRepositoryProvider);
+    Future<void> sendAll({required bool force}) => Future.wait(
+      edits.map(
+        (edit) => _runEdit(
+          orderId: orderId,
+          itemId: edit.item.id,
+          base: force ? OrderEditBase.forced : OrderEditBase.ofItem(edit.item),
+          send: (orderEdit) => repository.updateItemDiscountAndNotes(
+            itemId: edit.item.id,
+            discounts: edit.discounts,
+            notes: edit.notes,
+            edit: orderEdit,
+          ),
+        ),
+      ),
+    );
+    try {
+      await sendAll(force: false);
+      return true;
+    } on OrderEditConflict catch (conflict) {
+      _onEditConflict(
+        conflict,
+        what: what,
+        applyMine: () => sendAll(force: true),
+      );
+      return false;
+    }
+  }
+
+  /// Mensaje para un error de edición que no es conflicto.
+  String _editErrorMessage(Object error, String fallback) =>
+      error is OrderEditServerOutdated
+      ? OrderEditServerOutdated.message
+      : '$fallback: $error';
+
+  // T02: cuentas en las que este equipo ya se registró como participante.
+  final Set<String> _sessionParticipations = {};
+
+  /// T02 (20261010_0030): este equipo cargó [orderId] en línea, así que las
+  /// liberaciones automáticas de esa mesa esperan su confirmación (la responde
+  /// SessionReleaseResponder). Una vez por cuenta; si falla, en la próxima
+  /// carga.
+  void _registerSessionParticipation(String orderId, String? businessId) {
+    if (businessId == null ||
+        businessId.isEmpty ||
+        orderId.startsWith('local-order-') ||
+        !_connectivity.isConnected) {
+      return;
+    }
+    final key = '$businessId|$orderId';
+    if (!_sessionParticipations.add(key)) return;
+    final repository = ref.read(salesRepositoryProvider);
+    unawaited(() async {
+      try {
+        await repository.registerSessionParticipant(
+          orderId,
+          await DeviceUtils.getDeviceId(),
+        );
+      } catch (e) {
+        _sessionParticipations.remove(key);
+        debugPrint('[SalesVM] registro de participante: $e');
+      }
+    }());
+  }
+
   /// Después de una carga de [orderId] que tomó [generation]: si algo la
   /// reemplazó antes de escribir (el reintento de la confirmación al retomar
   /// una Venta Rápida, una recarga de Realtime, la marca de comanda enviada),
@@ -7652,6 +8244,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     _freshLoadGeneration = myGeneration;
+    _registerSessionParticipation(orderId, loadBusinessId);
     state = _normalizeHydratedState(
       state.copyWith(
         loading: false,
@@ -8242,30 +8835,54 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           normalizedCurrentNotes == normalizedNewNotes;
       if (sameDiscount && samePromo) continue;
 
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemDiscountAndNotes(
-            itemId: update.itemId,
-            discounts: update.discount,
-            notes: update.notes,
-            writePromotion: true,
-            promotionId: update.promotionId,
-          );
+      // T04: si otro equipo la cambió, se salta; la próxima carga la
+      // vuelve a evaluar sobre lo vigente.
+      try {
+        await _runEdit(
+          orderId: current.orderId,
+          itemId: update.itemId,
+          base: OrderEditBase.ofItem(current),
+          send: (edit) => ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: update.itemId,
+                discounts: update.discount,
+                notes: update.notes,
+                writePromotion: true,
+                promotionId: update.promotionId,
+                edit: edit,
+              ),
+        );
+      } on OrderEditConflict catch (conflict) {
+        debugPrint('[SalesVM] promoción automática no aplicada: $conflict');
+        continue;
+      }
       changed = true;
     }
 
     for (final item in staleManagedItems) {
-      await ref
-          .read(salesRepositoryProvider)
-          .updateItemDiscountAndNotes(
-            itemId: item.id,
-            discounts: 0,
-            notes: _stripManagedNotes(item.notes).isEmpty
-                ? null
-                : _stripManagedNotes(item.notes),
-            writePromotion: true,
-            promotionId: null,
-          );
+      try {
+        await _runEdit(
+          orderId: item.orderId,
+          itemId: item.id,
+          base: OrderEditBase.ofItem(item),
+          send: (edit) => ref
+              .read(salesRepositoryProvider)
+              .updateItemDiscountAndNotes(
+                itemId: item.id,
+                discounts: 0,
+                notes: _stripManagedNotes(item.notes).isEmpty
+                    ? null
+                    : _stripManagedNotes(item.notes),
+                writePromotion: true,
+                promotionId: null,
+                edit: edit,
+              ),
+        );
+      } on OrderEditConflict catch (conflict) {
+        debugPrint('[SalesVM] promoción automática no retirada: $conflict');
+        continue;
+      }
       changed = true;
     }
 
