@@ -158,6 +158,15 @@ enum _VirtualSaleSession {
   revivable,
 }
 
+typedef _PreloadedOrderBundle = ({
+  Order? order,
+  List<OrderItem> items,
+  List<OrderCheck> checks,
+  String? customerId,
+  String? customerName,
+  String? note,
+});
+
 class _OrderMutationContext {
   _OrderMutationContext({
     required this.orderId,
@@ -243,15 +252,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // stale (qty vieja) NO revierte la línea — se mantiene la optimista.
   final Map<String, double> _pendingItemQty = {};
   final Map<String, int> _itemQuantityMutationVersions = {};
-  // Líneas (draft/open) que una comanda LOCAL imprime ahora mismo por la LAN,
-  // por negocio. Mientras dure la impresión no se les cambia la cantidad ni
+  // Líneas (draft/open) de una comanda en envío, por negocio: desde que
+  // confirmOrder captura la ronda, también durante el intento por la nube
+  // que puede caer a la LAN. Mientras dure no se les cambia la cantidad ni
   // se borran: lo impreso y la cuenta divergirían, la línea quedaría «por
   // confirmar» y el siguiente «Enviar» la reimprimiría entera (o cocina
   // prepararía algo que ya no se cobra).
-  final List<({String businessId, Set<String> itemIds})> _localKitchenPrints =
-      [];
+  // [renamedIds]: línea temporal (`tmp_`) cuyo alta en línea terminó durante
+  // la impresión → su id real, que también queda bloqueado.
+  final List<
+    ({String businessId, Set<String> itemIds, Map<String, String> renamedIds})
+  >
+  _localKitchenPrints = [];
   static const _localKitchenPrintBusyMessage =
-      'Espera a que termine de imprimirse la comanda para cambiar este '
+      'Espera a que termine de enviarse la comanda para cambiar este '
       'producto.';
   static const _kitchenRoundAlreadySentMessage =
       'Este producto ya salió a cocina. Ábrelo de nuevo para cambiar la '
@@ -276,6 +290,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // recién agregado de la lista —aunque en la BD sí quedó—. El más nuevo lee la
   // data más fresca y gana; cualquier carga vieja en vuelo sale sin escribir.
   int _loadGeneration = 0;
+  // La carga de detalle que tomó la generación vigente. Quien necesita datos
+  // del servidor y vio su carga reemplazada por otra de la misma cuenta espera
+  // esta en vez de leer lo pintado (ver reloadOrderNow).
+  ({int generation, String orderId, Future<void> done})? _latestOrderLoad;
+  // Generación de la última carga que escribió en pantalla lo que respondió
+  // el servidor.
+  int _freshLoadGeneration = 0;
+  // Tope de lo que reloadOrderNow espera, además de su propia carga, a las
+  // que la reemplazan.
+  static const _reloadFollowBudget = Duration(seconds: 10);
   // Overrides fiscales por sub-cuenta elegidos por el cajero en el header
   // (tipo de comprobante y cliente/RNC del check). Se REAPLICAN tras cada
   // recarga porque el bundle de la BD viva puede no devolver `requested_ncf_type`
@@ -1546,13 +1570,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  Future<void> markPaidOrderLocally(String orderId) async {
-    final businessId = _activeBusinessId;
-    if (businessId == null || businessId.isEmpty) return;
+  /// [businessId]: el del cobro, capturado al abrirlo; sin él, el activo.
+  /// Con otra sucursal ya en pantalla solo se escribe la marca.
+  Future<void> markPaidOrderLocally(String orderId, {String? businessId}) async {
+    final targetBusinessId = businessId ?? _activeBusinessId;
+    if (targetBusinessId == null || targetBusinessId.isEmpty) return;
     await _offlinePos.markOrderClosedLocally(
-      businessId: businessId,
+      businessId: targetBusinessId,
       orderId: orderId,
     );
+    if (_activeBusinessId != targetBusinessId) return;
     _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
     if (state.order?.id == orderId) {
       ++_openTableToken;
@@ -3155,6 +3182,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
+  // Negocio|orden de la última marca de venta cobrada escrita: el aviso del
+  // modal de cobro y el respaldo de handleConfirmed no la repiten.
+  String? _paidMarkWrittenFor;
+
   /// Venta rápida/manual cobrada EN LÍNEA: marca local de cerrada en cuanto
   /// se confirma el cobro, ANTES de imprimir. [markOrderClosing] la escribía
   /// recién al cerrar el diálogo (después de la impresión, que puede colgarse):
@@ -3167,7 +3198,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// de restaurante con algún pago confirmado por el servidor ('completed').
   /// El cobro sin red ya recibe la marca con markPaidOrderLocally, y retail
   /// cambia de carrito con refreshOrder(clearIfPaid).
+  ///
+  /// Todo el contexto ([businessId], [isRetail], orden, origen, sub-cuenta) es
+  /// el capturado al abrir el cobro, nunca el activo: si el cajero cambia de
+  /// sucursal mientras responde el servidor, la marca va al negocio de la
+  /// venta cobrada (antes iba al nuevo y la cobrada quedaba retomable).
   Future<void> markVirtualSalePaidLocally({
+    required String businessId,
+    required bool isRetail,
     required String orderId,
     required String origin,
     required String? checkId,
@@ -3175,17 +3213,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }) async {
     if (checkId != null ||
         (origin != 'quick' && origin != 'manual') ||
-        _isRetail ||
+        isRetail ||
+        businessId.isEmpty ||
         !payments.any((payment) => payment.status == 'completed')) {
       return;
     }
-    final businessId = _activeBusinessId;
-    if (businessId == null || businessId.isEmpty) return;
+    // El VM de cobro ya la escribió antes de esperar al e-CF: la de
+    // handleConfirmed no repite la escritura.
+    if (_paidMarkWrittenFor == '$businessId|$orderId') return;
     try {
       await _offlinePos.markOrderClosedLocally(
         businessId: businessId,
         orderId: orderId,
       );
+      _paidMarkWrittenFor = '$businessId|$orderId';
     } catch (e) {
       debugPrint('[SalesVM] marca de cierre local tras el cobro: $e');
     }
@@ -4061,6 +4102,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             if (_isMutationOrderActive(mutation)) {
               _tmpToRealItemId[optId] = realId;
             }
+            await _rememberKitchenItemIdentity(
+              businessId: mutation.businessId,
+              tmpId: optId,
+              realId: realId,
+            );
             // Adoptar el id real en el estado SIN refetch (la caja no llega a
             // Supabase): reemplaza el tmp por su versión con id real, para que
             // borrar/editar/cobrar después usen el id que el server conoce.
@@ -4105,6 +4151,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (_isMutationOrderActive(mutation) &&
           optimisticItem != null && itemId.isNotEmpty) {
         _tmpToRealItemId[optimisticItem.id] = itemId;
+      }
+      if (optimisticItem != null && itemId.isNotEmpty) {
+        await _rememberKitchenItemIdentity(
+          businessId: mutation.businessId,
+          tmpId: optimisticItem.id,
+          realId: itemId,
+        );
       }
 
       if (selectedModifiers.isNotEmpty && added.itemExists) {
@@ -4426,7 +4479,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // respuesta se pierde y el alta se repite (20260929_0001).
     final clientOpId = const Uuid().v4();
     try {
-      await ref
+      final dealItemId = await ref
           .read(salesRepositoryProvider)
           .addOfferDealItem(
             orderId: orderId,
@@ -4439,6 +4492,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             clientOpId: clientOpId,
             createdByEmployeeId: _trustedActiveWaiter()?.employeeId,
           );
+      if (optimisticItem != null && dealItemId != null) {
+        await _rememberKitchenItemIdentity(
+          businessId: selectionBusinessId,
+          tmpId: optimisticItem.id,
+          realId: dealItemId,
+        );
+      }
       await _loadOrderDetail(
         orderId,
         selectionToken: selectionToken,
@@ -4563,6 +4623,47 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Un alta en línea terminó mientras una comanda local imprime su línea
+  /// temporal: la línea pasa a su id real (ver _tmpToRealItemId). El bloqueo
+  /// y la marca de enviada la siguen por ese id; antes quedaba editable y
+  /// «por confirmar», y el siguiente «Enviar» la reimprimía.
+  void _noteRenamedInLocalKitchenPrint(String tmpId, String realId) {
+    for (final printing in _localKitchenPrints) {
+      if (!printing.itemIds.contains(tmpId)) continue;
+      printing.itemIds.add(realId);
+      printing.renamedIds[tmpId] = realId;
+    }
+  }
+
+  /// Alta en línea terminada (producto u oferta), con el negocio de la
+  /// operación. El replay de una comanda local confirma solo sus líneas y
+  /// busca esta por su id temporal: el mapeo se guarda si la comanda se está
+  /// imprimiendo o si ya salió y su confirmación sigue en la cola (aunque la
+  /// impresión haya terminado antes que el alta). Se espera: sin él, la
+  /// comanda queda retenida.
+  Future<void> _rememberKitchenItemIdentity({
+    required String? businessId,
+    required String tmpId,
+    required String realId,
+  }) async {
+    if (businessId == null || businessId.isEmpty) return;
+    final inLocalPrint = _localKitchenPrints.any(
+      (printing) =>
+          printing.businessId == businessId && printing.itemIds.contains(tmpId),
+    );
+    _noteRenamedInLocalKitchenPrint(tmpId, realId);
+    try {
+      await _offlinePos.rememberKitchenItemMapping(
+        businessId: businessId,
+        localItemId: tmpId,
+        remoteItemId: realId,
+        force: inLocalPrint,
+      );
+    } catch (e) {
+      debugPrint('[SalesVM] mapeo de la línea de la comanda: $e');
+    }
+  }
+
   /// True si [itemId] es una línea de la comanda que se imprime ahora mismo
   /// por la LAN en este negocio (por su id local o, si la orden ya subió
   /// durante la impresión, por su id remoto). Solo se llama con una impresión
@@ -4572,7 +4673,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     for (final printing in List.of(_localKitchenPrints)) {
       if (printing.businessId != businessId) continue;
       if (printing.itemIds.contains(itemId)) return true;
-      for (final localId in printing.itemIds) {
+      // Copia: un alta que termina durante los await agrega su id real.
+      for (final localId in List.of(printing.itemIds)) {
         final mapped = await _offlinePos.mappedRemoteItemId(
           businessId: printing.businessId,
           localItemId: localId,
@@ -6113,6 +6215,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             askedForPrinter = true;
             return choosePrinter(areaName, printers, current);
           };
+    // Las líneas de esta ronda quedan sin edición desde que se capturan hasta
+    // marcarlas enviadas (ver _localKitchenPrints), también mientras se
+    // intenta por la nube: si la red cae en ese intento, la comanda sale por
+    // la LAN con [sentState], y una cantidad cambiada durante la espera
+    // quedaba «por confirmar» y el siguiente «Enviar» la reimprimía entera.
+    // El intento por la nube tiene tope: cada petición corta a los 30 s
+    // (ResilientHttpClient) y, ya detectada la caída, las demás fallan al
+    // instante.
+    final printing = (
+      businessId: sentBusinessId ?? '',
+      itemIds: {
+        for (final item in sentState.items)
+          if (item.status == 'draft' || item.status == 'open') item.id,
+      },
+      renamedIds: <String, String>{},
+    );
+    _localKitchenPrints.add(printing);
+    // El camino local se devuelve sin await (sus errores no pasan por el
+    // catch de abajo): se queda con el bloqueo y lo suelta al imprimir.
+    var lockHandedToLan = false;
     // No ponemos loading: true aquí para evitar el parpadeo de la pantalla completa.
     // El usuario verá el item aparecer inmediatamente cuando _loadOrderDetail termine.
     // state = state.copyWith(loading: true);
@@ -6176,9 +6298,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
           if (mapped != null) sentQuantities[mapped] = item.quantity;
         }
+        // Una línea temporal cuya alta en línea terminó durante la impresión
+        // ya está en pantalla con su id real: se busca al aplicar la marca,
+        // no antes (el cambio puede llegar en cualquier await de arriba).
+        double? sentQuantity(String itemId) {
+          final direct = sentQuantities[itemId];
+          if (direct != null) return direct;
+          for (final renamed in printing.renamedIds.entries) {
+            if (renamed.value == itemId) return sentQuantities[renamed.key];
+          }
+          return null;
+        }
+
         CurrentOrderState markSent(CurrentOrderState target) => target.copyWith(
           items: target.items.map((item) {
-            if (sentQuantities[item.id] == item.quantity &&
+            if (sentQuantity(item.id) == item.quantity &&
                 (item.status == 'draft' || item.status == 'open')) {
               return item.copyWith(status: 'pending');
             }
@@ -6232,18 +6366,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
 
       Future<KitchenSendResult> sendLocally() async {
-        // Las líneas de esta ronda quedan sin edición hasta marcarlas
-        // enviadas (ver _localKitchenPrints): subirle la cantidad a una
-        // durante la impresión la dejaba «por confirmar» con la cantidad
-        // nueva y el siguiente «Enviar» la reimprimía entera.
-        final printing = (
-          businessId: businessId,
-          itemIds: {
-            for (final item in sentState.items)
-              if (item.status == 'draft' || item.status == 'open') item.id,
-          },
-        );
-        _localKitchenPrints.add(printing);
+        lockHandedToLan = true;
         try {
           return await sendLocallyUnguarded();
         } finally {
@@ -6298,6 +6421,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state = state.copyWith(loading: false, error: e.toString());
       }
       rethrow;
+    } finally {
+      if (!lockHandedToLan) _localKitchenPrints.remove(printing);
     }
   }
 
@@ -6455,17 +6580,70 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// internet: offline en una sola caja ya es fresco; la frescura multi-caja
   /// sin internet la da el Hub/LAN (F3). Tolerante: un fallo de recarga no
   /// debe trabar la impresión (el caller decide), así que captura y sigue.
+  /// Después de una carga de [orderId] que tomó [generation]: si algo la
+  /// reemplazó antes de escribir (el reintento de la confirmación al retomar
+  /// una Venta Rápida, una recarga de Realtime, la marca de comanda enviada),
+  /// quien lee el estado enseguida (Pre-Cuenta, Cobrar, subir una venta local
+  /// para cobrarla) vería lo pintado. Sigue la carga vigente de esa cuenta o,
+  /// si no hay otra, repite la suya con [reload], hasta que haya datos del
+  /// servidor de esa generación en adelante. Con tope de vueltas y de tiempo;
+  /// nunca lanza.
+  Future<void> _settleOrderLoad({
+    required String orderId,
+    required int generation,
+    required int token,
+    required Future<void> Function() reload,
+  }) async {
+    var mine = generation;
+    final deadline = DateTime.now().add(_reloadFollowBudget);
+    try {
+      for (var i = 0; i < 3; i++) {
+        final remaining = deadline.difference(DateTime.now());
+        if (_freshLoadGeneration >= mine ||
+            _loadGeneration == mine ||
+            token != _openTableToken ||
+            remaining <= Duration.zero) {
+          return;
+        }
+        final newer = _latestOrderLoad;
+        if (newer != null &&
+            newer.generation > mine &&
+            newer.orderId == orderId) {
+          mine = newer.generation;
+          await newer.done.timeout(remaining);
+        } else {
+          final again = reload();
+          mine = _loadGeneration;
+          await again.timeout(remaining);
+        }
+      }
+    } catch (e) {
+      debugPrint('_settleOrderLoad($orderId): $e');
+    }
+  }
+
   Future<void> reloadOrderNow() async {
     final orderId = state.order?.id;
     if (orderId == null || orderId.startsWith('local-order-')) return;
     if (!_connectivity.isConnected) return;
     _refreshOrderDebounceTimer?.cancel();
+    final token = _openTableToken;
     try {
-      await _loadOrderDetail(
+      Future<void> load() => _loadOrderDetail(
         orderId,
-        selectionToken: _openTableToken,
+        selectionToken: token,
         reloadOf: orderId,
         caller: 'reloadOrderNow',
+      );
+      final first = load();
+      // _loadOrderDetail toma su generación antes de su primer await.
+      final generation = _loadGeneration;
+      await first;
+      await _settleOrderLoad(
+        orderId: orderId,
+        generation: generation,
+        token: token,
+        reload: load,
       );
     } catch (e) {
       debugPrint('reloadOrderNow falló (se imprime con el estado actual): $e');
@@ -6533,12 +6711,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // subió, no necesariamente esta) o el cajero pudo cambiar de venta.
       final current = state.order?.id;
       if (current != localOrderId && current != remoteId) return null;
-      await _loadOrderDetail(
+      final token = _openTableToken;
+      final loadOrigin = state.origin;
+      Future<void> load() => _loadOrderDetail(
         remoteId,
-        selectionToken: _openTableToken,
+        selectionToken: token,
         reloadOf: current,
-        origin: state.origin,
+        origin: loadOrigin,
         caller: 'promoteLocalOrderForPayment',
+      );
+      final first = load();
+      final generation = _loadGeneration;
+      await first;
+      // Reemplazada por otra carga (p. ej. Realtime tras subirla): sin esto
+      // la venta seguía local en pantalla y se cobraba por la cola, con
+      // precuenta en vez de factura.
+      await _settleOrderLoad(
+        orderId: remoteId,
+        generation: generation,
+        token: token,
+        reload: load,
       );
       if (state.order?.id != remoteId) return null;
 
@@ -6907,15 +7099,37 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // Si el caller ya tiene el bundle parseado (ej: openTable usando
     // fn_open_table_and_load), pásalo para evitar el round-trip extra
     // a fn_get_order_bundle.
-    ({
-      Order? order,
-      List<OrderItem> items,
-      List<OrderCheck> checks,
-      String? customerId,
-      String? customerName,
-      String? note,
-    })?
-    preloadedBundle,
+    _PreloadedOrderBundle? preloadedBundle,
+  }) {
+    final generationBefore = _loadGeneration;
+    final load = _runOrderDetailLoad(
+      orderId,
+      selectionToken: selectionToken,
+      reloadOf: reloadOf,
+      origin: origin,
+      tableId: tableId,
+      caller: caller,
+      preloadedBundle: preloadedBundle,
+    );
+    // _runOrderDetailLoad toma su generación antes de su primer await.
+    if (_loadGeneration != generationBefore) {
+      _latestOrderLoad = (
+        generation: _loadGeneration,
+        orderId: orderId,
+        done: load,
+      );
+    }
+    return load;
+  }
+
+  Future<void> _runOrderDetailLoad(
+    String orderId, {
+    required int selectionToken,
+    String? reloadOf,
+    String? origin,
+    String? tableId,
+    required String caller,
+    _PreloadedOrderBundle? preloadedBundle,
   }) async {
     // Reclama esta carga como la vigente. Cualquier `_loadOrderDetail` que
     // arranque después tendrá una generación mayor; al escribir el state esta
@@ -7437,6 +7651,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
+    _freshLoadGeneration = myGeneration;
     state = _normalizeHydratedState(
       state.copyWith(
         loading: false,

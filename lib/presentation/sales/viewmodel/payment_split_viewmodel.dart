@@ -859,6 +859,28 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     state = state.copyWith(salesNoteSelected: value);
   }
 
+  /// Lo fija el diálogo: corre en cuanto el servidor confirma el último
+  /// abono, antes de la espera del e-CF (hasta ~8 s). La pantalla de ventas lo
+  /// usa para la marca local de venta cobrada, con la orden, el origen y la
+  /// sub-cuenta del cobro (no los de la pantalla, que pueden cambiar antes de
+  /// que responda el servidor). Best-effort: un fallo no frena el cobro.
+  Future<void> Function(List<Payment> payments)? onServerConfirmed;
+
+  // El aviso va una sola vez por cobro: en el ciclo, o después si el último
+  // abono ya venía confirmado.
+  bool _serverConfirmedNotified = false;
+
+  Future<void> _notifyServerConfirmed(List<Payment> payments) async {
+    final hook = onServerConfirmed;
+    if (hook == null || _serverConfirmedNotified) return;
+    _serverConfirmedNotified = true;
+    try {
+      await hook(payments);
+    } catch (e) {
+      debugPrint('[split] onServerConfirmed: $e');
+    }
+  }
+
   String? get _effectiveFiscalType {
     if (_fiscalType != null && _fiscalType.trim().isNotEmpty) {
       return _fiscalType;
@@ -1731,8 +1753,19 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         );
         _recordedPayments[i] = enrichedPayment;
         // Abono confirmado por el servidor: al diario ya, antes de cualquier
-        // otra espera (cuenta bancaria, e-CF, impresión).
-        await _saveIntent();
+        // otra espera (cuenta bancaria, e-CF, impresión). El último cerró la
+        // venta en el servidor: se avisa enseguida, aunque el diario falle
+        // (la marca local de venta cobrada no espera al e-CF).
+        try {
+          await _saveIntent();
+        } finally {
+          if (isLast) {
+            await _notifyServerConfirmed([
+              ...createdPayments,
+              enrichedPayment,
+            ]);
+          }
+        }
         final bankAccount = tx.bankAccount;
         if (bankAccount != null) {
           try {
@@ -1767,6 +1800,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       }
       // Todos los abonos confirmados: ya no hay nada que retomar.
       await _finishIntent();
+      // Reintento cuyo último abono ya venía confirmado (p. ej. tras reiniciar
+      // la app): no pasó por el aviso del ciclo.
+      await _notifyServerConfirmed(createdPayments);
       // La cuenta principal puede normalizarse a `null` en el servidor. Los
       // documentos se buscan por el contenedor que realmente quedó cobrado.
       final documentCheckId = createdPayments.last.checkId;

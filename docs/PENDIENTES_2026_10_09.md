@@ -83,16 +83,37 @@ confirmarlo. El plan de validación detallado está en
 ### 1.4 Riesgos residuales que dejaron F2–F4 (revisar)
 Verificación de la fase 4: 16 hallazgos arreglados, 2 con regresión menor y 2 parciales. Los
 hace la sesión mangospos-53 después de F7:
-- [ ] `reloadOrderNow()` (Pre-Cuenta, Cobrar, cargo de delivery, quitar impuestos) puede leer
+- [x] `reloadOrderNow()` (Pre-Cuenta, Cobrar, cargo de delivery, quitar impuestos) puede leer
   el respaldo pintado con «cargando» si el reintento al retomar reemplazó su carga.
+  **Arreglado (10 de octubre, revisión de Codex + 2 /code-review):** la carga anota cuándo
+  escribió datos del servidor. Si ni la suya ni una posterior lo hizo, `reloadOrderNow` sigue
+  la carga vigente de la misma cuenta o, si la reemplazó algo que no era una carga (la marca de
+  comanda enviada), repite la suya. Hasta 3 vueltas y 10 s. Si la suya ya escribió, no espera.
+  Pruebas nuevas en `open_resume_integrity_test` (fallan sin el arreglo).
 - [ ] `orderQueueStatus` cuenta como «van a revivir la orden» altas bloqueadas detrás de una
   acción muerta o de `hub_delivery_started`; solo deben contar las que el replay reproduciría.
-- [ ] El bloqueo de edición durante la impresión local debe empezar desde que `confirmOrder`
+- [x] El bloqueo de edición durante la impresión local debe empezar desde que `confirmOrder`
   captura la ronda (cubre la caída de en línea a local).
+  **Arreglado (10 de octubre, revisión de Codex + 2 /code-review):** el bloqueo se toma al
+  capturar la ronda y dura también el intento por la nube (tiene tope: `ResilientHttpClient`
+  corta cada petición a los 30 s y, detectada la caída, las demás fallan al instante); si cae
+  a la LAN, se imprime lo capturado. Mensaje: «Espera a que termine de enviarse la comanda…».
+  Una línea temporal cuya alta en línea termina durante el envío sigue bloqueada con su id real
+  y queda enviada (antes se reimprimía). Pruebas nuevas en `kitchen_local_print_edit_guard_test`.
+  Se probó y descartó volver a tomar la ronda al caer a la LAN: perdía líneas recién pasadas a
+  su id real.
 - [ ] Actor de los retiros sin red en cajas Hub (parcial, menor); revisar contra R8.
-- [ ] La marca local de «pagada» se escribe después de la espera del e-CF (hasta
+- [x] La marca local de «pagada» se escribe después de la espera del e-CF (hasta
   ~8 s). Si la app muere ahí, con Realtime caído y reinicio sin internet, se podría
   retomar una venta cobrada. Arreglo más fuerte: marcarla en el VM de pago.
+  **Arreglado (10 de octubre, revisión de Codex + 2 /code-review):** la pantalla define la marca
+  una vez (`markPaidLocally` en `_openPaymentModal`, con orden, origen y sub-cuenta del cobro y el
+  notifier ya leído) y se la pasa a los dos modales como `onServerConfirmed`. El cobro dividido
+  la pide al confirmarse el último abono, después del diario (en un `finally`: también si el
+  diario falla) y antes del e-CF; el de crédito, al confirmarse el pago. `handleConfirmed` la
+  repite de respaldo sin escribir dos veces. Pruebas en `open_resume_integrity_test`,
+  `payment_split_retry_test` (conexión del diálogo) y `payment_modal_server_confirmed_test`
+  (VM; el paso del modal no tiene prueba de widget).
 - [ ] Una acción cuyo RPC nunca llega a desplegarse reintenta cada 30 s para
   siempre: el error PGRST202 se reconoce de forma genérica, y además por el texto
   «Falta aplicar la migración», que puede cambiar.
@@ -103,6 +124,31 @@ hace la sesión mangospos-53 después de F7:
   local queda en pantalla para recuperarla a mano.
 - [ ] Ya existía antes: reabrir con `openTable` una mesa barrida crea una orden
   nueva, y los productos en cola de la orden vieja no pasan a la nueva.
+- [x] Ya existía antes: el replay de `confirm_local_order` llamaba `sendToKitchen(orderId)`, que
+  confirma en el servidor TODAS las líneas en borrador de la orden, también las agregadas
+  después de imprimir la comanda local (quedaban «enviadas» sin haber salido).
+  **Arreglado (10 de octubre); `20261010_0002` ya está en producción** (verificado con la
+  definición viva: idéntica al repo; la viva de `fn_confirm_order_to_kitchen` tampoco genera
+  `print_jobs`, y los disparadores de `orders`/`order_items` no imprimen).
+  **Rehecho tras la segunda revisión de Codex (10 de octubre, tarde):** el replay confirma SOLO
+  los ids de la ronda impresa, también cuando reimprime áreas que no salieron
+  (`sendOrderToKitchen(onlyItemIds:)`). Ya no hay respaldo de «orden entera»: si falta el mapeo
+  de una línea temporal, la acción se conserva (espera sin gastar intentos si su alta sigue en
+  la cola; si no, 8 intentos y dead-letter); sin la RPC, se conserva con el aviso «Falta
+  actualizar el servidor»; una acción de una versión anterior sin ids va a dead-letter para
+  recuperarla a mano. Ninguna de esas retenciones bloquea las demás acciones de su orden
+  (`kitchen_hold`): el alta que trae el mapeo y los cobros siguen. El mapeo `tmp_`→id real se
+  guarda (esperado, con el negocio de la operación) al terminar cada alta en línea y cada oferta
+  cuya línea está en una comanda local, aunque la impresión ya haya terminado. Pruebas:
+  `confirm_local_order_items_replay_test` (7) y la regresión de punta a punta en
+  `kitchen_local_print_edit_guard_test`. Límite: el Hub sigue marcando la orden entera como
+  enviada en su vista local.
+- [x] **Marca de venta cobrada con el contexto del cobro (segunda revisión de Codex):** el negocio
+  y el modo se fijan al tocar «Pagar»; `markVirtualSalePaidLocally` ya no lee el negocio ni el
+  modo activos, y `markPaidOrderLocally` recibe el negocio del cobro (con otra sucursal ya en
+  pantalla solo escribe la marca). Regresiones en `open_resume_integrity_test`.
+- [x] `promoteLocalOrderForPayment` usa la misma espera que `reloadOrderNow` (`_settleOrderLoad`):
+  si otra carga reemplaza la suya, la venta ya no se cobra por la cola con precuenta.
 - [ ] Opcional: no imprimir la precuenta si la orden recargada cambió.
 - [ ] El guard de Realtime y el unsubscribe de la apertura de venta virtual no
   tienen prueba unitaria.
@@ -199,6 +245,10 @@ estados de `print_jobs` (962 trabajos en 7 días, solo 160 impresos).
 5. [ ] Agente: va dentro del instalador del sistema (`installer/windows/build_inno.ps1` lo compila desde `agent/`).
    **No usar `-SkipAgentBuild`**: tomaría `agent/dist/mangopos-agent.exe` del 29 de agosto, sin la renovación ni los
    arreglos de impresión. La `20261009_0001` nueva ya está aplicada.
+5b. [x] `20261010_0002_confirm_order_items_to_kitchen`: aplicada (10 de octubre). Comparada con la
+   definición viva: `fn_confirm_order_to_kitchen` es igual al repo (sin `print_jobs`);
+   `consume_inventory_from_order` cuenta todas las líneas no anuladas, así que confirmar menos
+   líneas no cambia el inventario.
 6. [ ] e-CF y nota de venta: confirmar el estado y aplicar `20261008_0001`
    (requiere `ECF_CREDENTIALS_KEY`), `20261008_0002`, `20261008_0003`,
    `20261009_0002`, `20261009_0003` y `20261009_0006`. **La 0006 va antes de

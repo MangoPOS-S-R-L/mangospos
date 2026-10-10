@@ -673,7 +673,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   // ✅ PROCESAR PAGO
   // ============================================================
 
-  Future<void> processPayment() async {
+  Future<void> processPayment({
+    Future<void> Function(Payment payment)? onServerConfirmed,
+  }) async {
     // PRD 1: bloqueo fail-loud. Si la configuración fiscal no se pudo cargar
     // para el negocio actual, no permitimos procesar el pago.
     final taxConfigError = _ref.read(currentOrderProvider).taxConfigError;
@@ -826,6 +828,15 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
           checkId: checkId,
         ),
       );
+      // Cobro confirmado por el servidor: antes de las esperas de abajo
+      // (cuenta bancaria, e-CF). Best-effort: no frena el cobro.
+      if (onServerConfirmed != null) {
+        try {
+          await onServerConfirmed(payment);
+        } catch (e) {
+          debugPrint('onServerConfirmed falló: $e');
+        }
+      }
 
       // PRD 6 §6.4: snapshot de tasa y equivalente USD para auditoría.
       // Se hace post-RPC con UPDATE idempotente (solo si el snapshot

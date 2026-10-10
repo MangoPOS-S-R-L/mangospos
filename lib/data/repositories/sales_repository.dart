@@ -1334,7 +1334,8 @@ class SalesRepository {
   /// SERVIDOR respondió con error (su transacción se revirtió entera); ante un
   /// error de red el resultado es desconocido y se propaga — antes el respaldo
   /// atrapaba cualquier error y podía duplicar la oferta.
-  Future<void> addOfferDealItem({
+  /// Devuelve el id de la línea creada (null si el servidor no lo informó).
+  Future<String?> addOfferDealItem({
     required String orderId,
     required String menuItemId,
     double quantity = 1,
@@ -1346,7 +1347,7 @@ class SalesRepository {
     String? createdByEmployeeId,
   }) async {
     final opId = clientOpId ?? const Uuid().v4();
-    Future<void> viaMenuItem() => _addOfferDealViaMenuItem(
+    Future<String?> viaMenuItem() => _addOfferDealViaMenuItem(
       clientOpId: opId,
       orderId: orderId,
       menuItemId: menuItemId,
@@ -1369,7 +1370,7 @@ class SalesRepository {
     }
     if (!skipIdempotent) {
       try {
-        await _client.rpc(
+        final response = await _client.rpc(
           SalesQueries.rpcAddOfferDealIdempotent,
           params: {
             'p_client_op_id': opId,
@@ -1384,15 +1385,15 @@ class SalesRepository {
           },
         );
         _idempotentDealMissingAt = null;
-        return;
+        final itemId = response is Map ? response['item_id']?.toString() : null;
+        return itemId == null || itemId.isEmpty ? null : itemId;
       } on PostgrestException catch (e) {
         if (e.code != 'PGRST202') {
           final friendly = closedOrderErrorMessage(e);
           if (friendly != null) throw Exception(friendly);
           // La oferta viva falló en el servidor y no dejó nada: alta normal
           // con el MISMO id (la bitácora quedó libre).
-          await viaMenuItem();
-          return;
+          return viaMenuItem();
         }
         _idempotentDealMissingAt = DateTime.now();
         throw StateError(
@@ -1400,11 +1401,12 @@ class SalesRepository {
         );
       }
     }
+    return null;
   }
 
   static DateTime? _idempotentDealMissingAt;
 
-  Future<void> _addOfferDealViaMenuItem({
+  Future<String?> _addOfferDealViaMenuItem({
     required String clientOpId,
     required String orderId,
     required String menuItemId,
@@ -1423,7 +1425,7 @@ class SalesRepository {
       checkPosition: checkPosition,
       createdByEmployeeId: createdByEmployeeId,
     );
-    if (added.itemId.isEmpty || !added.itemExists) return;
+    if (added.itemId.isEmpty || !added.itemExists) return null;
     final id = added.itemId;
     final marker = promotionId != null ? '[DEAL:$promotionId]' : '[DEAL:]';
     final payload = <String, dynamic>{
@@ -1438,6 +1440,7 @@ class SalesRepository {
       payload.remove('promotion_id');
       await _client.from('order_items').update(payload).eq('id', id);
     }
+    return id;
   }
 
   /// Igual que [addItemFromMenu] pero A TRAVÉS del Hub (que tiene internet):
@@ -2855,6 +2858,42 @@ class SalesRepository {
       return (merged: round.merged, roundStamp: round.stamp);
     } catch (e) {
       throw Exception('Error al enviar a cocina: $e');
+    }
+  }
+
+  /// Replay de una comanda ya impresa por la LAN: confirma a cocina SOLO
+  /// [itemIds] (20261010_0002). [sendToKitchen] confirma todos los borradores
+  /// de la orden, también los agregados después de imprimir, que quedaban
+  /// «enviados» sin haber salido. Ronda nueva (el replay nunca fusiona) y
+  /// reabre la cocina como [sendToKitchen]. No envuelve el error: el replay
+  /// distingue PGRST202 (sin la migración) para volver a [sendToKitchen].
+  Future<void> confirmItemsToKitchen(
+    String orderId,
+    List<String> itemIds,
+  ) async {
+    await _client.rpc(
+      SalesQueries.rpcConfirmOrderItemsToKitchen,
+      params: {'p_order_id': orderId, 'p_item_ids': itemIds},
+    );
+    try {
+      await _client
+          .from('order_items')
+          .update({'kitchen_sent_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('order_id', orderId)
+          .inFilter('id', itemIds)
+          .isFilter('kitchen_sent_at', null)
+          .inFilter('status', ['pending', 'preparing']);
+    } catch (_) {
+      // La marca de ronda es best-effort; las líneas ya entraron a cocina.
+    }
+    try {
+      await _client
+          .from('orders')
+          .update({'kitchen_done_at': null})
+          .eq('id', orderId)
+          .not('kitchen_done_at', 'is', null);
+    } catch (_) {
+      // El des-sellado es best-effort (ver sendToKitchen).
     }
   }
 

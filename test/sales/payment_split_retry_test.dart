@@ -196,6 +196,74 @@ void main() {
     },
   );
 
+  testWidgets(
+    'onServerConfirmed runs as soon as the server confirms, before onConfirmed',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final sales = _Sales(Supabase.instance.client);
+      const key = ('order', 0.0, null, null, 'B02', null);
+      final events = <String>[];
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            paymentSplitProvider(key).overrideWith((ref) {
+              final vm = PaymentSplitViewModel(
+                sales,
+                'order',
+                0,
+                ref: ref,
+                initialize: false,
+                salesNotePolicy: const SalesNotePolicy(enabled: true),
+                fiscalType: 'B02',
+                sessionResolver: ({bool skipLocal = false}) async => 'session',
+                connectionStatus: () => true,
+              );
+              vm.setSalesNote(true);
+              return vm;
+            }),
+          ],
+          child: MaterialApp(
+            theme: ThemeData(fontFamily: 'RobotoTicket'),
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showDialog<Object>(
+                  context: context,
+                  barrierDismissible: false,
+                  builder: (_) => PaymentSplitDialog(
+                    orderId: 'order',
+                    totalAmount: 0,
+                    tableName: 'Mesa',
+                    fiscalType: 'B02',
+                    onServerConfirmed: (payments) async {
+                      events.add(
+                        'server:${payments.map((p) => p.id).join(',')}',
+                      );
+                    },
+                    onConfirmed: (payments, {offlineNcf}) async {
+                      events.add('confirmed');
+                    },
+                  ),
+                ),
+                child: const Text('Abrir'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Abrir'));
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(sales.calls, [0]);
+      expect(events, ['server:payment-0', 'confirmed']);
+    },
+  );
+
   testWidgets('partial server failure retries only the missing split', (
     tester,
   ) async {

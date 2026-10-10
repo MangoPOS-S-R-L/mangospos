@@ -173,6 +173,11 @@ class SalesQueries {
   /// Enviar orden a cocina
   static const String rpcConfirmOrderToKitchen = 'fn_confirm_order_to_kitchen';
 
+  /// Confirmar a cocina solo las líneas de una comanda impresa por la LAN
+  /// (replay de 'confirm_local_order', 20261010_0002).
+  static const String rpcConfirmOrderItemsToKitchen =
+      'fn_confirm_order_items_to_kitchen';
+
   /// Cerrar orden y mesa
   static const String rpcCloseOrderAndTable = 'fn_close_order_and_table';
 

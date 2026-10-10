@@ -259,6 +259,9 @@ class PrintingService {
     // Mantener presionado «Enviar Pedido»: volver a preguntar aunque ya haya
     // una impresora fijada.
     bool forceChoosePrinter = false,
+    // Replay de una comanda local: imprime y confirma SOLO estas líneas
+    // (20261010_0002), nunca lo agregado a la orden después de imprimirla.
+    Set<String>? onlyItemIds,
   }) async {
     var printingStarted = false;
     try {
@@ -302,6 +305,7 @@ class PrintingService {
       final draftItems = items
           .where((item) => item.status == 'draft' || item.status == 'open')
           .where((item) => !excludeItemIds.contains(item.id))
+          .where((item) => onlyItemIds == null || onlyItemIds.contains(item.id))
           .toList(growable: false);
 
       if (draftItems.isEmpty) {
@@ -378,10 +382,19 @@ class PrintingService {
       // 6. Marcar orden como enviada a cocina. `merged` indica que estos
       // ítems se sumaron a la comanda anterior (misma tarjeta del KDS), no
       // que abrieron una ronda nueva → el ticket sale marcado "AGREGADO".
-      final sendResult = await _salesRepo.sendToKitchen(
-        orderId,
-        allowMerge: allowKitchenMerge,
-      );
+      final ({bool merged, DateTime roundStamp}) sendResult;
+      if (onlyItemIds != null) {
+        await _salesRepo.confirmItemsToKitchen(
+          orderId,
+          draftItems.map((item) => item.id).toList(growable: false),
+        );
+        sendResult = (merged: false, roundStamp: DateTime.now().toUtc());
+      } else {
+        sendResult = await _salesRepo.sendToKitchen(
+          orderId,
+          allowMerge: allowKitchenMerge,
+        );
+      }
 
       final createdJobs = <String, String>{}; // areaCode -> local dispatch id
       final directAreas = <String>[];

@@ -66,6 +66,11 @@ class PaymentModal extends ConsumerStatefulWidget {
   /// disponible (offline, sin permiso), el modal abre sin selección.
   final String? initialMethodCode;
 
+  /// Corre en cuanto el servidor confirma el pago, antes de la espera del
+  /// e-CF (hasta ~8 s) y de [onComprobante]. Lo usa la pantalla de ventas
+  /// para la marca local de venta cobrada.
+  final Future<void> Function(Payment payment)? onServerConfirmed;
+
   /// Modo SOLO crédito ("Cobrar a crédito" desde la mesa): oculta los demás
   /// métodos de pago, las tabs de división, el banner de impresora y la
   /// sección de efectivo — queda comprobante + cliente + resumen.
@@ -83,6 +88,7 @@ class PaymentModal extends ConsumerStatefulWidget {
     this.onOfflineQueued,
     this.onComprobante,
     this.initialMethodCode,
+    this.onServerConfirmed,
     this.creditOnly = false,
     this.initialCustomerId,
     this.initialCustomerName,
@@ -426,7 +432,10 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           height: 56,
                           child: ElevatedButton(
                             onPressed: state.canProcessPayment
-                                ? () => viewModel.processPayment()
+                                ? () => viewModel.processPayment(
+                                    onServerConfirmed:
+                                        widget.onServerConfirmed,
+                                  )
                                 : null,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: AppColors.primary,

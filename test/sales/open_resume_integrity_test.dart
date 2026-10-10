@@ -14,23 +14,29 @@ import 'dart:async';
 
 import 'package:drift/native.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show BuildContext;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/fiscal/sales_note_policy.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/hub/hub_config.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
+import 'package:mangopos/core/offline/payment_intent_journal.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/data/models/fiscal_models.dart';
+import 'package:mangopos/data/models/payment_attempt_lease.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
+import 'package:mangopos/data/repositories/sales_repository_improved.dart';
 import 'package:mangopos/presentation/sales/state/by_zone_state.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/presentation/sales/viewmodel/payment_split_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/retail_carts_provider.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -48,6 +54,12 @@ class _Session extends SessionController {
   @override
   SessionState build() =>
       SessionState(activeBusinessId: businessId, permissions: _permissions);
+
+  /// El cajero cambia de sucursal.
+  void switchTo(String other) => state = SessionState(
+    activeBusinessId: other,
+    permissions: _permissions,
+  );
 }
 
 class _Sales extends SalesViewModel {
@@ -167,7 +179,7 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> addOfferDealItem({
+  Future<String?> addOfferDealItem({
     required String orderId,
     required String menuItemId,
     double quantity = 1,
@@ -180,6 +192,7 @@ class _Repository extends SalesRepository {
   }) async {
     added.add('offer:$orderId');
     await deferredOffer?.future;
+    return null;
   }
 
   @override
@@ -282,6 +295,73 @@ http.Response _emptyResponse(http.BaseRequest request) => http.Response(
   request: request as http.Request,
 );
 
+/// Cobro dividido en línea: el servidor confirma cada abono.
+class _PaySales extends SalesRepositoryImproved {
+  _PaySales(super.client);
+
+  /// Retiene la respuesta del servidor al cobro.
+  Completer<void>? gate;
+  final paymentStarted = Completer<void>();
+
+  @override
+  Future<PaymentAttemptLease?> acquirePaymentAttempt({
+    required String orderId,
+    String? checkId,
+    required String attemptId,
+    String? deviceId,
+    String? holderLabel,
+  }) async => const PaymentAttemptLease(acquired: true);
+
+  @override
+  Future<Payment> processPayment({
+    required String orderId,
+    String? checkId,
+    required String paymentMethodId,
+    required double amount,
+    String? reference,
+    String? customerId,
+    String? customerRnc,
+    String? fiscalType,
+    String? cashierSessionId,
+    double changeAmount = 0,
+    bool closeOrder = true,
+    int splitSequence = 0,
+    bool closeCheck = true,
+    DateTime? paidAt,
+    String? attemptId,
+  }) async {
+    if (!paymentStarted.isCompleted) paymentStarted.complete();
+    await gate?.future;
+    return Payment(
+    id: 'payment-$splitSequence',
+    businessId: 'biz',
+    orderId: orderId,
+    checkId: checkId,
+    paymentMethodId: paymentMethodId,
+    amount: amount,
+    changeAmount: changeAmount,
+    status: 'completed',
+    createdAt: paidAt ?? DateTime(2026, 10, 10),
+  );
+  }
+}
+
+class _NoContext extends Fake implements BuildContext {}
+
+/// Diario del cobro que guarda el plan inicial y falla al anotar los abonos
+/// (disco lleno).
+class _JournalFailsAfterPlan extends PaymentIntentJournal {
+  var _saves = 0;
+
+  @override
+  Future<bool> save(PaymentIntent intent) async => ++_saves == 1;
+}
+
+/// Retiene la lectura de fiscal_documents, la que precede a la espera del
+/// e-CF en el cobro dividido.
+Completer<void>? _fiscalLookupGate;
+var _fiscalLookups = 0;
+
 Future<void> _waitUntil(bool Function() condition) async {
   for (var i = 0; i < 400 && !condition(); i++) {
     await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -320,7 +400,13 @@ void main() {
     await Supabase.initialize(
       url: 'http://localhost:54321',
       publishableKey: 'test',
-      httpClient: MockClient((request) async => _emptyResponse(request)),
+      httpClient: MockClient((request) async {
+        if (request.url.path.endsWith('/fiscal_documents')) {
+          _fiscalLookups++;
+          await _fiscalLookupGate?.future;
+        }
+        return _emptyResponse(request);
+      }),
     );
   });
 
@@ -691,9 +777,300 @@ void main() {
       expect(visible.loading, isFalse);
       expect(repository.sharedOpens, 1);
     });
+
+    test('Pre-Cuenta durante la confirmación del retomado: cuando el '
+        'reintento reemplaza su recarga, espera y lee el servidor, no el '
+        'respaldo pintado', () async {
+      const biz = 'precheck-during-resume-retry';
+      final repository = _Repository(repoClient);
+      // Respaldo de este equipo: 1 producto. El servidor tiene 2.
+      await offline.saveSnapshot(
+        businessId: biz,
+        slotId: 'quick',
+        origin: 'quick',
+        state: _sale('order-Q'),
+      );
+      final _Bundle fresh = (
+        order: _order('order-Q'),
+        items: [
+          _item('order-Q'),
+          _item('order-Q').copyWith(id: 'item-order-Q-2'),
+        ],
+        checks: const <OrderCheck>[],
+        customerId: null,
+        customerName: null,
+        note: null,
+      );
+      final confirm = Completer<_Bundle>();
+      final precheck = Completer<_Bundle>();
+      final retry = Completer<_Bundle>();
+      repository.bundleQueues['order-Q'] = [confirm, precheck, retry];
+      final c = container(biz, repository);
+      final vm = c.read(currentOrderProvider.notifier);
+      int loadsOfQ() => repository.loaded.where((id) => id == 'order-Q').length;
+
+      final resuming = vm.ensureQuickOrder();
+      await _waitUntil(() => loadsOfQ() == 1);
+      CurrentOrderState? seenByPrecheck;
+      final reloading = vm.reloadOrderNow().then(
+        (_) => seenByPrecheck = c.read(currentOrderProvider),
+      );
+      await _waitUntil(() => loadsOfQ() == 2);
+      // La confirmación quedó reemplazada: reintenta y reemplaza la recarga.
+      confirm.complete(fresh);
+      await _waitUntil(() => loadsOfQ() == 3);
+      precheck.complete(fresh);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      retry.complete(fresh);
+      await reloading;
+      await resuming;
+
+      expect(seenByPrecheck?.order?.id, 'order-Q');
+      expect(seenByPrecheck?.loading, isFalse);
+      expect(seenByPrecheck?.items.map((i) => i.id), [
+        'item-order-Q',
+        'item-order-Q-2',
+      ]);
+      expect(repository.sharedOpens, 0);
+    });
+  });
+
+  test('recarga de la mesa reemplazada por otra de la misma cuenta (sin '
+      '«cargando»): espera la vigente y lee el servidor', () async {
+    const biz = 'reload-replaced-by-realtime';
+    final repository = _Repository(repoClient);
+    final c = await withTableA(biz, repository);
+    final vm = c.read(currentOrderProvider.notifier);
+    expect(c.read(currentOrderProvider).loading, isFalse);
+    expect(c.read(currentOrderProvider).items, hasLength(1));
+
+    final _Bundle fresh = (
+      order: _order('order-A'),
+      items: [
+        _item('order-A'),
+        _item('order-A').copyWith(id: 'item-order-A-2'),
+      ],
+      checks: const <OrderCheck>[],
+      customerId: null,
+      customerName: null,
+      note: null,
+    );
+    final first = Completer<_Bundle>();
+    final second = Completer<_Bundle>();
+    repository.bundleQueues['order-A'] = [first, second];
+    int loadsOfA() => repository.loaded.where((id) => id == 'order-A').length;
+    final loadsBefore = loadsOfA();
+
+    CurrentOrderState? seenByPrecheck;
+    final reloading = vm.reloadOrderNow().then(
+      (_) => seenByPrecheck = c.read(currentOrderProvider),
+    );
+    await _waitUntil(() => loadsOfA() == loadsBefore + 1);
+    // Otra recarga de la misma mesa (p. ej. la de Realtime) la reemplaza.
+    final other = vm.reloadOrderNow();
+    await _waitUntil(() => loadsOfA() == loadsBefore + 2);
+    first.complete(fresh);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    second.complete(fresh);
+    await reloading;
+    await other;
+
+    expect(seenByPrecheck?.items.map((i) => i.id), [
+      'item-order-A',
+      'item-order-A-2',
+    ]);
   });
 
   group('cierre de una venta cobrada', () {
+    test('cobro dividido en línea: la marca local de cobrada se escribe antes '
+        'de la espera del e-CF', () async {
+      const biz = 'split-paid-mark-before-ecf';
+      await PosLookupOfflineCache().saveBusinessTaxes(biz, []);
+      final c = container(biz, _Repository(repoClient));
+      await c.read(currentOrderProvider.notifier).ensureQuickOrder();
+      final orderId = c.read(currentOrderProvider).order!.id;
+      expect((await slot(biz, 'quick'))?.order?.id, orderId);
+
+      final payProvider =
+          StateNotifierProvider<PaymentSplitViewModel, PaymentSplitState>(
+            (ref) => PaymentSplitViewModel(
+              _PaySales(repoClient),
+              orderId,
+              100,
+              ref: ref,
+              initialize: false,
+              salesNotePolicy: const SalesNotePolicy(enabled: false),
+              fiscalType: 'B02',
+              sessionResolver: ({bool skipLocal = false}) async => 'caja',
+              connectionStatus: () => true,
+            ),
+          );
+      final pay = c.read(payProvider.notifier);
+      // Lo que conecta la pantalla de ventas (ver _openPaymentModal).
+      final salesVm = c.read(currentOrderProvider.notifier);
+      pay.onServerConfirmed = (payments) => salesVm.markVirtualSalePaidLocally(
+        businessId: biz,
+        isRetail: false,
+        orderId: orderId,
+        origin: 'quick',
+        checkId: null,
+        payments: payments,
+      );
+      pay.setInput('100');
+      pay.addTransaction();
+
+      final gate = _fiscalLookupGate = Completer<void>();
+      addTearDown(() {
+        if (!gate.isCompleted) gate.complete();
+        _fiscalLookupGate = null;
+      });
+      final lookupsBefore = _fiscalLookups;
+      final paying = pay.confirmPayment(_NoContext());
+      await _waitUntil(() => _fiscalLookups > lookupsBefore);
+
+      // Esperando al e-CF: si la app muere aquí, un reinicio sin red no
+      // retoma la venta cobrada.
+      expect(
+        await offline.isOrderClosedLocally(businessId: biz, orderId: orderId),
+        isTrue,
+      );
+      expect(await slot(biz, 'quick'), isNull);
+
+      gate.complete();
+      expect(await paying, hasLength(1));
+    });
+
+    test('cambio de sucursal mientras responde el cobro: la marca va al '
+        'negocio de la venta cobrada, no al activo', () async {
+      const biz = 'paid-mark-branch-a';
+      const otherBiz = 'paid-mark-branch-b';
+      await PosLookupOfflineCache().saveBusinessTaxes(biz, []);
+      final c = container(biz, _Repository(repoClient));
+      await c.read(currentOrderProvider.notifier).ensureQuickOrder();
+      final orderId = c.read(currentOrderProvider).order!.id;
+      expect((await slot(biz, 'quick'))?.order?.id, orderId);
+
+      final sales = _PaySales(repoClient)..gate = Completer<void>();
+      final payProvider =
+          StateNotifierProvider<PaymentSplitViewModel, PaymentSplitState>(
+            (ref) => PaymentSplitViewModel(
+              sales,
+              orderId,
+              100,
+              ref: ref,
+              initialize: false,
+              salesNotePolicy: const SalesNotePolicy(enabled: false),
+              fiscalType: 'B02',
+              sessionResolver: ({bool skipLocal = false}) async => 'caja',
+              connectionStatus: () => true,
+            ),
+          );
+      final pay = c.read(payProvider.notifier);
+      // Lo que conecta la pantalla: el contexto fijado al tocar «Pagar».
+      final salesVm = c.read(currentOrderProvider.notifier);
+      pay.onServerConfirmed = (payments) => salesVm.markVirtualSalePaidLocally(
+        businessId: biz,
+        isRetail: false,
+        orderId: orderId,
+        origin: 'quick',
+        checkId: null,
+        payments: payments,
+      );
+      pay.setInput('100');
+      pay.addTransaction();
+
+      final paying = pay.confirmPayment(_NoContext());
+      await sales.paymentStarted.future;
+      // Mientras el servidor responde, el cajero pasa a otra sucursal.
+      (c.read(sessionProvider.notifier) as _Session).switchTo(otherBiz);
+      sales.gate!.complete();
+      expect(await paying, hasLength(1));
+
+      expect(
+        await offline.isOrderClosedLocally(businessId: biz, orderId: orderId),
+        isTrue,
+      );
+      expect(await slot(biz, 'quick'), isNull);
+      expect(
+        await offline.isOrderClosedLocally(
+          businessId: otherBiz,
+          orderId: orderId,
+        ),
+        isFalse,
+      );
+    });
+
+    test('cobro de mesa: con otra sucursal ya activa, la marca va al negocio '
+        'del cobro y no toca la pantalla nueva', () async {
+      const biz = 'paid-table-branch-a';
+      const otherBiz = 'paid-table-branch-b';
+      final repository = _Repository(repoClient);
+      final c = await withTableA(biz, repository);
+      (c.read(sessionProvider.notifier) as _Session).switchTo(otherBiz);
+
+      await c
+          .read(currentOrderProvider.notifier)
+          .markPaidOrderLocally('order-A', businessId: biz);
+
+      expect(
+        await offline.isOrderClosedLocally(businessId: biz, orderId: 'order-A'),
+        isTrue,
+      );
+      expect(
+        await offline.isOrderClosedLocally(
+          businessId: otherBiz,
+          orderId: 'order-A',
+        ),
+        isFalse,
+      );
+    });
+
+    test('cobro dividido: si el diario falla tras el último abono, la marca '
+        'local de cobrada ya quedó escrita', () async {
+      const biz = 'split-paid-mark-journal-fails';
+      await PosLookupOfflineCache().saveBusinessTaxes(biz, []);
+      final c = container(biz, _Repository(repoClient));
+      await c.read(currentOrderProvider.notifier).ensureQuickOrder();
+      final orderId = c.read(currentOrderProvider).order!.id;
+
+      final payProvider =
+          StateNotifierProvider<PaymentSplitViewModel, PaymentSplitState>(
+            (ref) => PaymentSplitViewModel(
+              _PaySales(repoClient),
+              orderId,
+              100,
+              ref: ref,
+              initialize: false,
+              salesNotePolicy: const SalesNotePolicy(enabled: false),
+              fiscalType: 'B02',
+              sessionResolver: ({bool skipLocal = false}) async => 'caja',
+              connectionStatus: () => true,
+              intentJournal: _JournalFailsAfterPlan(),
+            ),
+          );
+      final pay = c.read(payProvider.notifier);
+      // Lo que conecta la pantalla de ventas (ver _openPaymentModal).
+      final salesVm = c.read(currentOrderProvider.notifier);
+      pay.onServerConfirmed = (payments) => salesVm.markVirtualSalePaidLocally(
+        businessId: biz,
+        isRetail: false,
+        orderId: orderId,
+        origin: 'quick',
+        checkId: null,
+        payments: payments,
+      );
+      pay.setInput('100');
+      pay.addTransaction();
+
+      // El servidor cerró la venta, pero el cobro no pudo anotarse.
+      expect(await pay.confirmPayment(_NoContext()), isNull);
+      expect(
+        await offline.isOrderClosedLocally(businessId: biz, orderId: orderId),
+        isTrue,
+      );
+      expect(await slot(biz, 'quick'), isNull);
+    });
+
     test('el reinicio tras cobrar respeta la venta nueva que abrió el lector y '
         'su producto escaneado', () async {
       const biz = 'post-payment-restart-keeps-scanned-sale';
@@ -711,6 +1088,8 @@ void main() {
         status: 'paid',
       );
       await vm.markVirtualSalePaidLocally(
+        businessId: biz,
+        isRetail: false,
         orderId: 'order-new-1',
         origin: 'quick',
         checkId: null,
@@ -775,6 +1154,8 @@ void main() {
         await c
             .read(currentOrderProvider.notifier)
             .markVirtualSalePaidLocally(
+              businessId: biz,
+              isRetail: false,
               orderId: 'order-Q',
               origin: 'quick',
               checkId: null,
@@ -842,6 +1223,8 @@ void main() {
         await c
             .read(currentOrderProvider.notifier)
             .markVirtualSalePaidLocally(
+              businessId: biz,
+              isRetail: skipped.value.retail,
               orderId: 'order-S',
               origin: skipped.value.origin,
               checkId: skipped.value.checkId,

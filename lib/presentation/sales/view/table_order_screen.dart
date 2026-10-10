@@ -2871,6 +2871,11 @@ class _CartView extends ConsumerWidget {
     // cierre (onFinish) son los mismos del cobro normal.
     bool creditMode = false,
   }) async {
+    // Contexto del cobro, fijado al tocar «Pagar» y antes de cualquier espera:
+    // las marcas locales de venta cobrada van a este negocio aunque el cajero
+    // cambie de sucursal mientras responde el servidor.
+    final paymentBusinessId = ref.read(sessionProvider).activeBusinessId ?? '';
+    final paymentIsRetail = ref.read(currentBusinessModelProvider).isRetail;
     // Gaveta al tocar "Pagar" (ajuste del negocio). Antes de cualquier await
     // y sin esperar: el cajero tiene el cambio a mano mientras elige el
     // método. El cobro a crédito no mueve efectivo.
@@ -3364,6 +3369,23 @@ class _CartView extends ConsumerWidget {
       }
     }
 
+    // Venta rápida/manual cobrada EN LÍNEA: marca local de cerrada. Los dos
+    // modales la piden en cuanto el servidor confirma el cobro, antes de la
+    // espera del e-CF (hasta ~8 s); handleConfirmed la repite de respaldo y
+    // no se escribe dos veces. Con el notifier ya leído: la pantalla puede
+    // reconstruirse durante el cobro.
+    final salesVm = ref.read(currentOrderProvider.notifier);
+    final paidOrderId = order.id;
+    Future<void> markPaidLocally(List<Payment> payments) =>
+        salesVm.markVirtualSalePaidLocally(
+          businessId: paymentBusinessId,
+          isRetail: paymentIsRetail,
+          orderId: paidOrderId,
+          origin: origin.name,
+          checkId: checkId,
+          payments: payments,
+        );
+
     // Impresión post-pago (factura/precuenta + popup "Imprimir copia").
     // La usan AMBOS flujos: el PaymentSplitDialog vía onConfirmed (corre con
     // el modal de pago AÚN MONTADO — el cajero ve el modal detrás, no un
@@ -3391,26 +3413,20 @@ class _CartView extends ConsumerWidget {
       // su cambio de carrito lo maneja refreshOrder(clearIfPaid).
       final paidOfflineQuickOrManual =
           (origin == OrderOrigin.quick || origin == OrderOrigin.manual) &&
-          !ref.read(currentBusinessModelProvider).isRetail &&
+          !paymentIsRetail &&
           payments.isNotEmpty &&
           payments.every((payment) => payment.status == 'pending');
       if (checkId == null &&
           payments.isNotEmpty &&
           (origin == OrderOrigin.table || paidOfflineQuickOrManual)) {
-        await ref
-            .read(currentOrderProvider.notifier)
-            .markPaidOrderLocally(order.id);
+        await salesVm.markPaidOrderLocally(
+          paidOrderId,
+          businessId: paymentBusinessId,
+        );
       }
-      // Venta rápida/manual cobrada EN LÍNEA: marca local de cerrada antes de
-      // imprimir (la de onFinish llega después de la impresión).
-      await ref
-          .read(currentOrderProvider.notifier)
-          .markVirtualSalePaidLocally(
-            orderId: order.id,
-            origin: origin.name,
-            checkId: checkId,
-            payments: payments,
-          );
+      // Respaldo de la marca de venta cobrada (ver markPaidLocally): antes
+      // de imprimir; la de onFinish llega después de la impresión.
+      await markPaidLocally(payments);
 
       final items = List<OrderItem>.from(prePaymentItems);
       final printOrder = prePaymentOrder;
@@ -3735,6 +3751,7 @@ class _CartView extends ConsumerWidget {
           creditOnly: true,
           initialCustomerId: finalCustomerId,
           initialCustomerName: finalCustomerName,
+          onServerConfirmed: (payment) => markPaidLocally([payment]),
           onComprobante:
               (payment, fiscalDoc, modalCustomerName, salesNote) async {
                 await handleConfirmed([payment]);
@@ -3760,6 +3777,7 @@ class _CartView extends ConsumerWidget {
         customerName: finalCustomerName,
         customerRnc: finalCustomerTaxId,
         fiscalType: finalFiscalType,
+        onServerConfirmed: markPaidLocally,
         // Cuando el Future de onConfirmed resuelve, el modal de pago hace
         // pop y el .then() de abajo dispara onFinish.
         onConfirmed: (payments, {offlineNcf}) async {

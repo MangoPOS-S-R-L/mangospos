@@ -96,7 +96,7 @@ class _Repository extends SalesRepository {
   }
 
   @override
-  Future<void> addOfferDealItem({
+  Future<String?> addOfferDealItem({
     required String orderId,
     required String menuItemId,
     double quantity = 1,
@@ -106,10 +106,11 @@ class _Repository extends SalesRepository {
     int checkPosition = 1,
     String? clientOpId,
     String? createdByEmployeeId,
-  }) {
+  }) async {
     final result = offers.putIfAbsent(menuItemId, Completer<void>.new);
     start('offer-$menuItemId');
-    return result.future;
+    await result.future;
+    return null;
   }
 
   @override

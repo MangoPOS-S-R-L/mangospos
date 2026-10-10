@@ -40,6 +40,11 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
   final Future<void> Function(List<Payment> payments, {String? offlineNcf})?
   onConfirmed;
 
+  /// Corre en cuanto el servidor confirma el último abono, antes del diario
+  /// del cobro, de la espera del e-CF y de [onConfirmed]. Ver
+  /// PaymentSplitViewModel.onServerConfirmed.
+  final Future<void> Function(List<Payment> payments)? onServerConfirmed;
+
   const PaymentSplitDialog({
     super.key,
     required this.orderId,
@@ -51,6 +56,7 @@ class PaymentSplitDialog extends ConsumerStatefulWidget {
     this.customerRnc,
     this.fiscalType,
     this.onConfirmed,
+    this.onServerConfirmed,
   });
 
   @override
@@ -318,6 +324,7 @@ class _PaymentSplitDialogState extends ConsumerState<PaymentSplitDialog> {
     ));
     final state = ref.watch(provider);
     final vm = ref.read(provider.notifier);
+    vm.onServerConfirmed = widget.onServerConfirmed;
 
     return PopScope(
       canPop: !state.isBusy,

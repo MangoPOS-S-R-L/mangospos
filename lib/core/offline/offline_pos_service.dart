@@ -101,6 +101,27 @@ class _OfflineSyncSkip implements Exception {
   String toString() => 'OfflineSyncSkip: $reason';
 }
 
+/// Comanda impresa por la LAN que todavía no se puede confirmar en cocina
+/// solo con sus líneas (20261010_0002). La acción se conserva y NO bloquea las
+/// demás acciones de su orden (marca `kitchen_hold`): el alta que trae el
+/// mapeo que falta, o un cobro, pueden ir detrás.
+/// - [countsAttempt] false: espera sin gastar intentos (el alta de la línea
+///   sigue en la cola, o falta la migración en el servidor).
+/// - [terminal]: no se resuelve sola (acción de una versión anterior sin sus
+///   ids): pasa directo a dead-letter para recuperarla a mano.
+class _KitchenRoundHold implements Exception {
+  const _KitchenRoundHold(
+    this.message, {
+    this.countsAttempt = true,
+    this.terminal = false,
+  });
+  final String message;
+  final bool countsAttempt;
+  final bool terminal;
+  @override
+  String toString() => message;
+}
+
 /// Qué hace la pasada a la nube con una acción de la cola. Lo decide
 /// [OfflinePosService._replayGate], la única fuente de esas reglas.
 enum _ReplayGate {
@@ -1406,6 +1427,107 @@ class OfflinePosService {
     return (unsettled: unsettled, revivingAdds: false);
   }
 
+  /// Alta en línea terminada: guarda `tmp_` → id real si esa línea está en
+  /// una comanda local, para que el replay de la comanda confirme exactamente
+  /// esa línea. [force]: la comanda se está imprimiendo ahora (su acción aún
+  /// no está en la cola). Si no, solo cuando una comanda pendiente de la cola
+  /// la lleva: el mapa no se poda y no se llena con cada alta en línea.
+  Future<void> rememberKitchenItemMapping({
+    required String businessId,
+    required String localItemId,
+    required String remoteItemId,
+    bool force = false,
+  }) async {
+    if (!localItemId.startsWith('tmp_')) return;
+    if (!force) {
+      final pending = await unsettledActions(businessId);
+      final referenced = pending.any(
+        (action) =>
+            _isKitchenRoundAction(action) &&
+            _kitchenRoundRawIds(action).contains(localItemId),
+      );
+      if (!referenced) return;
+    }
+    await _saveItemMapping(
+      businessId: businessId,
+      localItemId: localItemId,
+      remoteItemId: remoteItemId,
+    );
+  }
+
+  static bool _isKitchenRoundAction(Map<String, dynamic> action) {
+    final type = action['type'];
+    return type == 'confirm_local_order' || type == 'send_to_kitchen';
+  }
+
+  /// Ids (tal como se imprimieron) de todas las áreas de la comanda.
+  static Set<String> _kitchenRoundRawIds(Map<String, dynamic> action) {
+    final byArea = action['item_ids_by_area'];
+    if (byArea is! Map) return const <String>{};
+    return {
+      for (final ids in byArea.values)
+        if (ids is List)
+          for (final id in ids)
+            if (id.toString().isNotEmpty) id.toString(),
+    };
+  }
+
+  static final _uuidPattern = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+    r'[0-9a-fA-F]{12}$',
+  );
+
+  /// Ids del servidor de las líneas que imprimió una comanda local. Nunca
+  /// devuelve la orden entera: si no se pueden resolver todas, retiene la
+  /// acción ([_KitchenRoundHold]).
+  Future<List<String>> _kitchenRoundItemIds({
+    required String businessId,
+    required Map<String, dynamic> action,
+  }) async {
+    final raw = _kitchenRoundRawIds(action);
+    if (raw.isEmpty) {
+      throw const _KitchenRoundHold(
+        'Comanda de una versión anterior, sin el detalle de sus productos: no '
+        'se confirma sola en cocina. Revisa la cuenta y vuelve a enviarla si '
+        'hace falta.',
+        terminal: true,
+      );
+    }
+    final itemMap = await _readItemMap(businessId);
+    final resolved = <String>{};
+    final unresolved = <String>[];
+    for (final id in raw) {
+      final remote = id.startsWith('tmp_') ? itemMap[id]?.toString() : id;
+      if (remote != null && _uuidPattern.hasMatch(remote)) {
+        resolved.add(remote);
+      } else {
+        unresolved.add(id);
+      }
+    }
+    if (unresolved.isEmpty) return resolved.toList(growable: false);
+    // El alta de la línea sigue en la cola (va detrás, o falló y reintenta):
+    // al subir guarda el mapeo. Se espera sin gastar intentos.
+    final pending = await unsettledActions(businessId);
+    final addPending = pending.any(
+      (other) =>
+          other['type'] == 'add_item' &&
+          !_isDead(other) &&
+          unresolved.contains(other['item_id']?.toString()),
+    );
+    throw _KitchenRoundHold(
+      addPending
+          ? 'La comanda espera que suban sus productos para confirmarse en '
+                'cocina.'
+          : 'No se pudo identificar ${unresolved.length} producto(s) de la '
+                'comanda para confirmarla en cocina.',
+      countsAttempt: !addPending,
+    );
+  }
+
+  static const _kitchenRpcMissingMessage =
+      'Falta actualizar el servidor (migración 20261010_0002) para confirmar '
+      'esta comanda en cocina. Se conserva hasta entonces.';
+
   Future<List<String>> resolveKitchenPrintItemIds({
     required String businessId,
     required List<String> itemIds,
@@ -1990,6 +2112,31 @@ class OfflinePosService {
             fingerprint: fingerprint,
           );
         }
+      } on _KitchenRoundHold catch (hold) {
+        // Comanda sin confirmar todavía: se conserva sin bloquear su orden.
+        final attempts =
+            ((processing['attempts'] as num?)?.toInt() ?? 0) +
+            (hold.countsAttempt ? 1 : 0);
+        lastError = hold.message;
+        final dies =
+            hold.terminal || (hold.countsAttempt && attempts >= maxAttempts);
+        final updated = Map<String, dynamic>.from(processing)
+          ..['attempts'] = attempts
+          ..['last_error'] = hold.message
+          ..['failed_at'] = DateTime.now().toIso8601String()
+          ..['kitchen_hold'] = true;
+        if (dies) {
+          updated['status'] = _statusDead;
+          updated['dead_at'] = DateTime.now().toIso8601String();
+          updated.remove('next_retry_at');
+        } else {
+          updated['status'] = _statusFailed;
+          updated['next_retry_at'] = DateTime.now()
+              .add(Duration(seconds: _retryDelaySeconds(attempts < 1 ? 1 : attempts)))
+              .toIso8601String();
+        }
+        queue[i] = updated;
+        failed++;
       } on _OfflineSyncSkip catch (skip) {
         // Conflicto cross-device detectado: la accion ya no aplica porque
         // otro terminal modifico el mismo recurso (ej. item borrado).
@@ -2236,6 +2383,25 @@ class OfflinePosService {
             businessId: businessId,
             fingerprint: fingerprint,
           );
+        }
+      } on _KitchenRoundHold catch (hold) {
+        if (hold.terminal) {
+          // El Hub no tiene dead-letter: se reporta sin confirmar nada.
+          conflicts.add(
+            OfflineSyncConflict(
+              actionType: op['type']?.toString() ?? 'unknown',
+              actionId: opId,
+              reason: hold.message,
+            ),
+          );
+          completed++;
+          if (opId != null && opId.isNotEmpty) {
+            await _markOpCompleted(businessId: businessId, opId: opId);
+          }
+        } else {
+          // Se reintenta en la próxima subida, sin frenar su orden.
+          failed++;
+          lastError = hold.message;
         }
       } on _OfflineSyncSkip catch (skip) {
         // Conflicto cross-terminal: la op ya no aplica (item borrado, etc.).
@@ -2837,8 +3003,9 @@ class OfflinePosService {
       if (orderId != null) blockedOrders.add(orderId);
       return _ReplayGate.hubOwned;
     }
+    final kitchenHold = action['kitchen_hold'] == true;
     if (!force && _isDead(action)) {
-      if (orderId != null) blockedOrders.add(orderId);
+      if (orderId != null && !kitchenHold) blockedOrders.add(orderId);
       return _ReplayGate.dead;
     }
     final actionId = action['id']?.toString();
@@ -2850,7 +3017,7 @@ class OfflinePosService {
       return _ReplayGate.reconcile;
     }
     if (!force && !_isReadyToRetry(action)) {
-      if (orderId != null) blockedOrders.add(orderId);
+      if (orderId != null && !kitchenHold) blockedOrders.add(orderId);
       return _ReplayGate.waitingRetry;
     }
     if (orderId != null && blockedOrders.contains(orderId)) {
@@ -3503,36 +3670,47 @@ class OfflinePosService {
         // imprimir. Antes re-despachaba todas las áreas = comanda duplicada
         // (o entera, con rondas viejas) al sincronizar.
         if (printedAreas.isNotEmpty && missingAreas.isEmpty) {
+          // Solo las líneas de esta comanda (20261010_0002). La orden entera
+          // pasaba a 'pending' también lo agregado después de imprimirla, que
+          // quedaba «enviado» sin haber salido a cocina. Sin todos sus ids,
+          // o sin la migración, la acción se conserva (_KitchenRoundHold).
+          final roundItemIds = await _kitchenRoundItemIds(
+            businessId: businessId,
+            action: action,
+          );
           try {
-            // Sin fusión: el replay reproduce envíos encolados uno detrás de
-            // otro y todos caerían dentro de la ventana, uniendo en una sola
-            // comanda rondas que en el salón fueron distintas.
-            await salesRepository.sendToKitchen(
+            await salesRepository.confirmItemsToKitchen(
               resolvedOrderId,
-              allowMerge: false,
+              roundItemIds,
             );
           } catch (e) {
-            // Idempotente: si ya no hay drafts (otro replay/otra caja la
-            // confirmó), el estado deseado ya existe.
-            final msg = e.toString().toLowerCase();
-            if (!msg.contains('no hay items') && !_isItemMissingError(e)) {
-              rethrow;
+            if (_isMissingRpcError(e)) {
+              throw const _KitchenRoundHold(
+                _kitchenRpcMissingMessage,
+                countsAttempt: false,
+              );
             }
+            rethrow;
           }
           return resolvedOrderId;
         }
 
+        // Áreas que no salieron: se imprimen y confirman SOLO las líneas de
+        // esta comanda, nunca lo agregado después (ver arriba).
+        final roundItemIds = await _kitchenRoundItemIds(
+          businessId: businessId,
+          action: action,
+        );
         try {
           final printResult = await printingService.sendOrderToKitchen(
             orderId: resolvedOrderId,
             businessId: businessId,
             // Ver nota arriba: el replay nunca fusiona comandas.
             allowKitchenMerge: false,
-            // Acciones nuevas traen las áreas ya impresas localmente: esas
-            // solo se marcan, se reimprimen únicamente las que quedaron sin
-            // impresora. Acciones legacy (sin el campo) re-despachan todo,
-            // como antes.
+            // Las áreas ya impresas localmente solo se marcan; se imprimen
+            // únicamente las que quedaron sin impresora.
             excludeAreaCodes: printedAreas,
+            onlyItemIds: roundItemIds.toSet(),
           );
           final roundId = action['id']?.toString();
           if (roundId != null && roundId.isNotEmpty) {
@@ -3577,6 +3755,12 @@ class OfflinePosService {
               msg.contains('la orden no tiene items')) {
             throw _OfflineSyncSkip(
               'Orden $resolvedOrderId ya estaba enviada a cocina en server.',
+            );
+          }
+          if (_isMissingRpcError(e)) {
+            throw const _KitchenRoundHold(
+              _kitchenRpcMissingMessage,
+              countsAttempt: false,
             );
           }
           rethrow;
