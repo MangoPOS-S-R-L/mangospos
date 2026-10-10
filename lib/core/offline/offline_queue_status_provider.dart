@@ -8,8 +8,9 @@ import 'offline_pos_service.dart';
 
 /// Snapshot del estado de la cola offline. Lo consumen el badge del topbar
 /// y los snackbars post-sync. `pending` cuenta acciones con status !=
-/// completed; `lastResult` se rellena cuando termina un sync para que la
-/// UI pueda mostrar el resultado.
+/// completed; `lastResult` se rellena cuando termina un sync pedido por el
+/// cajero para que la UI pueda mostrar el resultado (las pasadas
+/// automáticas solo mueven los contadores).
 class OfflineQueueStatus {
   const OfflineQueueStatus({this.pending = 0, this.dead = 0, this.lastResult});
 
@@ -106,7 +107,22 @@ class OfflineQueueStatusController extends StateNotifier<OfflineQueueStatus> {
 
   /// Llamado por los call-sites de sync para publicar el resultado y
   /// disparar la notificación visual (consumida por el listener del shell).
-  void publishSyncResult(OfflineQueueSyncResult result) {
+  ///
+  /// [automatic] = pasada que nadie pidió (uplink, reconexión): solo
+  /// actualiza los contadores del badge/banner y conserva el MISMO
+  /// `lastResult`, así el shell no muestra ningún snackbar (ni éxito, ni
+  /// "en espera", ni fallo, ni dead). Solo una pasada pedida por el cajero
+  /// ("Sincronizar ahora", badge, banner, reintentar) publica su resultado.
+  void publishSyncResult(
+    OfflineQueueSyncResult result, {
+    bool automatic = false,
+  }) {
+    if (automatic) {
+      if (result.pending != state.pending || result.dead != state.dead) {
+        state = state.copyWith(pending: result.pending, dead: result.dead);
+      }
+      return;
+    }
     state = OfflineQueueStatus(
       pending: result.pending,
       dead: result.dead,

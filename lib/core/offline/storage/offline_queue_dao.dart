@@ -111,6 +111,18 @@ class OfflineQueueDao {
     return deleted;
   }
 
+  /// Borra solo las acciones [ids] de este business (lo que «Limpiar cola»
+  /// puede descartar). Las demás y completed_ops/fingerprints no se tocan.
+  /// Devuelve cuántas se borraron.
+  Future<int> deleteActionsByIds(String businessId, Iterable<String> ids) async {
+    final list = ids.toList(growable: false);
+    if (list.isEmpty) return 0;
+    return (_db.delete(_db.queueActions)..where(
+          (t) => t.businessId.equals(businessId) & t.id.isIn(list),
+        ))
+        .go();
+  }
+
   /// Borra SOLO las acciones ya `completed` de este business, conservando las
   /// NO sincronizadas (pending/processing/failed/dead). Se usa en logout para
   /// no perder operaciones offline sin subir. Devuelve cuántas se borraron.

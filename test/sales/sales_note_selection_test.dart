@@ -2,10 +2,9 @@
 //
 // Lo que estas pruebas fijan:
 //
-//  1. LOS DOS DOCUMENTOS SON EXCLUYENTES. Elegir nota de venta tiene que
-//     apagar el NCF seleccionado y viceversa. Si los dos quedan vivos, el
-//     cobro manda `requested_ncf_type` con la marca de nota puesta y la
-//     venta termina quemando un NCF que nadie pidió.
+//  1. LOS DOS DOCUMENTOS SON EXCLUYENTES. La selección de nota conserva el
+//     tipo de consumidor final para que el servidor valide su elegibilidad.
+//     El flag de nota determina qué documento se solicita, sin consumir NCF.
 //
 //  2. LA NOTA NUNCA EXIGE RNC. No ampara crédito fiscal, así que el gate de
 //     comprador que bloquea el botón de cobrar en B01/E31 no aplica.
@@ -20,20 +19,17 @@ import 'package:mangopos/presentation/payments/state/payment_state.dart';
 
 void main() {
   group('Selección de documento en el cobro', () {
-    test('elegir nota de venta apaga el NCF seleccionado', () {
+    test('elegir nota conserva el tipo de consumidor final para validarlo', () {
       const conNcf = PaymentState(
         availableNcfTypes: ['B02', 'E31'],
         selectedNcfType: 'B02',
         salesNoteAvailable: true,
       );
 
-      final conNota = conNcf.copyWith(
-        salesNoteSelected: true,
-        clearNcfType: true,
-      );
+      final conNota = conNcf.copyWith(salesNoteSelected: true);
 
       expect(conNota.salesNoteSelected, isTrue);
-      expect(conNota.selectedNcfType, isNull);
+      expect(conNota.selectedNcfType, 'B02');
     });
 
     test('elegir un NCF apaga la nota de venta', () {
@@ -52,22 +48,15 @@ void main() {
       expect(conNcf.selectedNcfType, equals('B02'));
     });
 
-    test(
-      'la nota de venta no exige RNC aunque quede un tipo que sí lo pide',
-      () {
-        // Caso real del bug que esto previene: el cajero elige B01 (crédito
-        // fiscal, exige RNC), se arrepiente y pasa a nota de venta. Si el gate
-        // siguiera mirando el NCF viejo, el botón de cobrar quedaría bloqueado
-        // pidiendo un RNC que la nota no necesita.
-        const state = PaymentState(
-          selectedNcfType: 'B01',
-          salesNoteAvailable: true,
-          salesNoteSelected: true,
-        );
+    test('la nota de venta de consumidor final no exige RNC', () {
+      const state = PaymentState(
+        selectedNcfType: 'E32',
+        salesNoteAvailable: true,
+        salesNoteSelected: true,
+      );
 
-        expect(state.requiresCustomerRnc, isFalse);
-      },
-    );
+      expect(state.requiresCustomerRnc, isFalse);
+    });
 
     test('sin nota seleccionada, el gate de RNC sigue igual que antes', () {
       const state = PaymentState(selectedNcfType: 'B01');
@@ -90,6 +79,8 @@ void main() {
 
       expect(features.salesNoteEnabled, isFalse);
       expect(features.salesNoteDefault, isFalse);
+      expect(features.salesNoteLimit, 3);
+      expect(features.salesNoteCount, 0);
       // El prefijo nunca puede venir vacío: sin él la nota se imprimiría como
       // un número pelado, indistinguible de un número de orden.
       expect(features.salesNotePrefix, equals('NV-'));
@@ -100,11 +91,15 @@ void main() {
         'sales_note_enabled': true,
         'sales_note_default': true,
         'sales_note_prefix': 'NOTA-',
+        'sales_note_limit': 5,
+        'sales_note_count': 4,
       });
 
       expect(features.salesNoteEnabled, isTrue);
       expect(features.salesNoteDefault, isTrue);
       expect(features.salesNotePrefix, equals('NOTA-'));
+      expect(features.salesNoteLimit, 5);
+      expect(features.salesNoteCount, 4);
     });
 
     test('cambiar un ajuste de la nota no pisa el resto de las banderas', () {
@@ -117,6 +112,8 @@ void main() {
         multimeseroEnabled: true,
         inventoryMode: InventoryMode.advanced,
         salesNotePrefix: 'NOTA-',
+        salesNoteLimit: 5,
+        salesNoteCount: 4,
         deliveryFeeMin: 150,
       );
 
@@ -127,6 +124,8 @@ void main() {
       expect(next.multimeseroEnabled, isTrue);
       expect(next.inventoryMode, equals(InventoryMode.advanced));
       expect(next.salesNotePrefix, equals('NOTA-'));
+      expect(next.salesNoteLimit, 5);
+      expect(next.salesNoteCount, 4);
       expect(next.deliveryFeeMin, equals(150));
       // Lo que no se pasa no cambia.
       expect(next.salesNoteDefault, isFalse);

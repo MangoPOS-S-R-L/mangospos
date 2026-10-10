@@ -16,6 +16,8 @@ import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
 import '../../../data/models/sales_note.dart';
+import '../../../core/fiscal/sales_note_policy.dart';
+import '../../../core/fiscal/ncf_types.dart';
 import '../../../data/repositories/credits_repository.dart';
 import '../../../data/utils/business_id_resolver.dart';
 import '../../../services/session/session_controller.dart';
@@ -473,7 +475,8 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
                           // se lee de la serie elegida por el cajero
                           // (Exx = electrónico).
                           isElectronic:
-                              state.selectedNcfType?.startsWith('E') ?? false,
+                              !state.salesNoteSelected &&
+                              isElectronicNcf(state.selectedNcfType),
                           dgiiContingency: state.dgiiContingency,
                         ),
                       ),
@@ -596,7 +599,7 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
   /// cuando la nota de venta está prendida (aunque haya un solo NCF: elegir
   /// entre factura y nota de venta ya es una decisión).
   bool _showFiscalSelector(PaymentState state) =>
-      state.availableNcfTypes.length > 1 || state.salesNoteAvailable;
+      state.availableNcfTypes.length > 1 || state.salesNoteEnabled;
 
   /// Selector de tipo de documento: comprobantes fiscales (B02 / E32 / E31 /
   /// etc.) y, si el negocio la tiene prendida, la NOTA DE VENTA — documento
@@ -646,6 +649,19 @@ class _PaymentModalState extends ConsumerState<PaymentModal> {
               ),
           ],
         ),
+        if (state.salesNoteEnabled &&
+            state.isCashPayment &&
+            SalesNotePolicy.isConsumerFinal(state.selectedNcfType)) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            state.salesNoteCount >= state.salesNoteLimit
+                ? 'Límite de ${state.salesNoteLimit} notas alcanzado. '
+                      'Esta venta corresponde a factura con comprobante.'
+                : 'Notas de venta utilizadas: ${state.salesNoteCount} de '
+                      '${state.salesNoteLimit}. Después corresponde una factura.',
+            style: TextStyle(fontSize: 12, color: AppColors.mutedForeground),
+          ),
+        ],
         if (state.salesNoteSelected) ...[
           const SizedBox(height: AppSpacing.sm),
           Row(

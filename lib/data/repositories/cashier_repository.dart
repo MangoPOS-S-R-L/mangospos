@@ -1578,7 +1578,7 @@ class CashierRepository {
             .select(
               'id, session_id, table_sessions!inner('
               'id, customer_name, table_id, business_id, opened_by, origin, '
-              'waiter:profiles!opened_by(full_name))',
+              'opened_by_employee_id, waiter:profiles!opened_by(full_name))',
             )
             .inFilter('id', orderIds);
 
@@ -1600,6 +1600,38 @@ class CashierRepository {
             .select('id, code, label')
             .inFilter('id', tableIds);
     final tablesById = {for (final t in tablesRaw) t['id'].toString(): t};
+
+    // Mesero de cada venta = el empleado del PIN que abrió la mesa
+    // (`opened_by_employee_id`). `opened_by` es la CUENTA del equipo
+    // (compartida en multimesero): por ella la reimpresión de la factura
+    // salía a nombre de quien tenía la sesión iniciada.
+    final openerEmployeeIds = tableSessionsRaw
+        .map(
+          (s) => (s['table_sessions'] as Map?)?['opened_by_employee_id']
+              ?.toString(),
+        )
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final employeeNameById = <String, String>{};
+    if (openerEmployeeIds.isNotEmpty) {
+      try {
+        final rows = await _client
+            .from('employees')
+            .select('id, first_name, last_name')
+            .inFilter('id', openerEmployeeIds);
+        for (final row in rows) {
+          final name = [
+            row['first_name']?.toString().trim() ?? '',
+            row['last_name']?.toString().trim() ?? '',
+          ].where((part) => part.isNotEmpty).join(' ');
+          if (name.isNotEmpty) employeeNameById[row['id'].toString()] = name;
+        }
+      } catch (e) {
+        debugPrint('[history] meseros no resueltos: $e');
+      }
+    }
 
     // Payments por documento: necesarios para preservar check_id (split bill) y
     // mostrar agregado de métodos en split payment. Los pagos de una nota de
@@ -1670,8 +1702,14 @@ class CashierRepository {
           ? null
           : tablesById[tableSession['table_id']?.toString()];
       final tableCode = table?['code'];
-      final waiter = (tableSession?['waiter'] as Map?)?['full_name']
-          ?.toString();
+      // Con PIN, el empleado; si no se pudo leer, sin nombre ('Servicio'),
+      // nunca la cuenta del equipo. Sin PIN, la cuenta que la abrió.
+      final openerEmployeeId = tableSession?['opened_by_employee_id']
+          ?.toString()
+          .trim();
+      final waiter = (openerEmployeeId != null && openerEmployeeId.isNotEmpty)
+          ? employeeNameById[openerEmployeeId]
+          : (tableSession?['waiter'] as Map?)?['full_name']?.toString();
 
       final relatedPayments = paymentsByFd[fdId] ?? const [];
 

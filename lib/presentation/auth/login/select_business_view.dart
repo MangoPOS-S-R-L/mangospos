@@ -30,6 +30,15 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   String? _error;
   List<Map<String, dynamic>> _businesses = [];
 
+  /// Si la carga se queda colgada (red muerta, refresh de token trabado,
+  /// switchBusiness que no responde), el spinner gira para siempre y el
+  /// usuario no tiene salida. Pasado [_stuckThreshold] mostramos un botón
+  /// "Cerrar sesión" bajo el spinner.
+  static const _stuckThreshold = Duration(seconds: 6);
+  Timer? _stuckTimer;
+  bool _showStuckEscape = false;
+  bool _isSigningOut = false;
+
   static const _loadingMessages = <String>[
     'Validando tu acceso...',
     'Buscando tus negocios...',
@@ -39,7 +48,22 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   @override
   void initState() {
     super.initState();
+    _armStuckTimer();
     _loadBusinesses();
+  }
+
+  @override
+  void dispose() {
+    _stuckTimer?.cancel();
+    super.dispose();
+  }
+
+  void _armStuckTimer() {
+    _stuckTimer?.cancel();
+    _showStuckEscape = false;
+    _stuckTimer = Timer(_stuckThreshold, () {
+      if (mounted) setState(() => _showStuckEscape = true);
+    });
   }
 
   Future<void> _loadBusinesses() async {
@@ -223,13 +247,28 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
   /// Cierra la sesión Supabase y vuelve al login. Útil cuando el usuario
   /// quedó bloqueado en esta pantalla — cuenta huérfana, business pending,
   /// o entró con un correo equivocado — y necesita salir sin matar la app.
+  ///
+  /// Va por [SessionController.signOut] (no por `auth.signOut` directo): el
+  /// controller ignora un `signedOut` que no inició él — lo trata como fallo
+  /// de refresh — y dejaría el estado de sesión vivo. Además preserva la cola
+  /// offline pendiente. Con tope de tiempo: si la red/auth está trabada (justo
+  /// el caso en que el usuario llega aquí), igual lo sacamos al login.
   Future<void> _handleSignOut() async {
+    if (_isSigningOut) return;
+    if (mounted) setState(() => _isSigningOut = true);
+    final notifier = ref.read(sessionProvider.notifier);
     try {
-      await Supabase.instance.client.auth.signOut(
-        scope: SignOutScope.local,
-      );
+      await notifier.signOut().timeout(const Duration(seconds: 8));
     } catch (e) {
       AppLogger.w('Error cerrando sesión desde select_business: $e');
+      // Respaldo: soltar la sesión local (el router decide por
+      // currentSession) y resetear el estado sin esperar a la red.
+      try {
+        await Supabase.instance.client.auth
+            .signOut(scope: SignOutScope.local)
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {}
+      unawaited(notifier.setUnauthenticated());
     }
     if (mounted) context.go(AppRoutes.login);
   }
@@ -401,7 +440,21 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
 
   Widget _buildContent(bool isCompact) {
     if (_isLoading) {
-      return const _BusinessLoadingState().animate().fadeIn();
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _BusinessLoadingState().animate().fadeIn(),
+          if (_showStuckEscape) ...[
+            const Text(
+              '¿Se quedó cargando? Puedes cerrar sesión y volver a entrar.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            _buildSignOutButton(),
+          ].animate(interval: 80.ms).fadeIn(duration: 300.ms),
+        ],
+      );
     }
 
     if (_error != null) {
@@ -444,6 +497,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
                 setState(() {
                   _error = null;
                   _isLoading = true;
+                  _armStuckTimer();
                 });
                 _loadBusinesses();
               },
@@ -464,21 +518,7 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
           // asociados (huérfana, pending, o el usuario entró con otra
           // cuenta por error), permitir cerrar sesión y volver al login
           // sin tener que matar la app.
-          SizedBox(
-            width: double.infinity,
-            child: TextButton.icon(
-              onPressed: _handleSignOut,
-              icon: const Icon(Icons.logout, size: 18),
-              label: const Text('Cerrar sesión'),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF64748B),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
+          _buildSignOutButton(),
         ],
       );
     }
@@ -717,6 +757,33 @@ class _SelectBusinessViewState extends ConsumerState<SelectBusinessView> {
           ).animate().fadeIn(delay: (100 * i).ms).slideX(begin: 0.1),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildSignOutButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: TextButton.icon(
+        onPressed: _isSigningOut ? null : _handleSignOut,
+        icon: _isSigningOut
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF64748B),
+                ),
+              )
+            : const Icon(Icons.logout, size: 18),
+        label: const Text('Cerrar sesión'),
+        style: TextButton.styleFrom(
+          foregroundColor: const Color(0xFF64748B),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
     );
   }
 }

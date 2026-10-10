@@ -534,131 +534,6 @@ function looksLikeXml(bytes: Uint8Array): boolean {
   return bytes[i] === 0x3c; // '<'
 }
 
-export interface ItemExampleInput {
-  item_name?: string | null;
-  billing_indicator?: number | null;
-  good_service_indicator?: number | null;
-  unit_price?: number | null;
-  item_description?: string | null;
-}
-
-/** `itemExample` de `POST /set-tests`, con los nombres de Alanube. */
-export interface ItemExample {
-  billingIndicator: 1 | 2 | 3 | 4;
-  itemName: string;
-  goodServiceIndicator: 1 | 2;
-  unitPriceItem: number;
-  itemDescription?: string;
-}
-
-export function validateItemExample(input: ItemExampleInput): Validation<ItemExample> {
-  const errors: string[] = [];
-
-  const name = clean(input.item_name);
-  if (!name) errors.push("Falta el nombre del producto de ejemplo.");
-  else if (name.length > 80) errors.push("El nombre del producto no puede pasar de 80 caracteres.");
-
-  const billing = input.billing_indicator;
-  if (billing !== 1 && billing !== 2 && billing !== 3 && billing !== 4) {
-    errors.push("Indicador de facturacion invalido (1 = ITBIS 18%, 2 = 16%, 3 = 0%, 4 = exento).");
-  }
-
-  const goodService = input.good_service_indicator;
-  if (goodService !== 1 && goodService !== 2) {
-    errors.push("Indica si es un bien (1) o un servicio (2).");
-  }
-
-  // Alanube lo pide ENTERO: 125.50 no pasa su validacion.
-  const price = input.unit_price;
-  if (!Number.isInteger(price) || (price as number) < 1 || (price as number) > 99_999_999) {
-    errors.push("El precio de ejemplo tiene que ser un entero entre 1 y 99,999,999.");
-  }
-
-  const description = clean(input.item_description);
-  if (description && description.length > 1000) {
-    errors.push("La descripcion no puede pasar de 1000 caracteres.");
-  }
-
-  if (errors.length > 0) return { ok: false, errors };
-  const value: ItemExample = {
-    billingIndicator: billing as 1 | 2 | 3 | 4,
-    itemName: name as string,
-    goodServiceIndicator: goodService as 1 | 2,
-    unitPriceItem: price as number,
-  };
-  if (description) value.itemDescription = description;
-  return { ok: true, value };
-}
-
-export interface SetTestDocument {
-  type: string;
-  status: string;
-  encf: string | null;
-}
-
-export interface SetTestSummary {
-  id: string | null;
-  status: string;
-  retry_number: number | null;
-  processed: number | null;
-  documents: SetTestDocument[];
-  documents_zip_url: string | null;
-  resumes_zip_url: string | null;
-}
-
-export const SET_TEST_FINAL_STATUSES = ["ACCEPTED", "REJECTED"];
-
-/**
- * Respuesta de `GET /check-set-tests/{id}/idCompany/{idCompany}`. La guia de
- * Alanube y su OpenAPI no coinciden: `documentsInfo` viene como objeto
- * `{ zipUrl, documents[] }` en una y como arreglo en la otra. Se aceptan las dos.
- */
-export function parseSetTest(body: unknown): SetTestSummary {
-  const b = (body ?? {}) as Record<string, unknown>;
-
-  const readGroup = (raw: unknown): { docs: SetTestDocument[]; zip: string | null } => {
-    const obj = raw && typeof raw === "object" && !Array.isArray(raw)
-      ? raw as { zipUrl?: unknown; documents?: unknown }
-      : null;
-    const list = Array.isArray(raw) ? raw : Array.isArray(obj?.documents) ? obj!.documents as unknown[] : [];
-    const docs = list
-      .filter((d): d is Record<string, unknown> => typeof d === "object" && d !== null)
-      .map((d) => ({
-        type: typeof d.documentType === "string" ? d.documentType : "desconocido",
-        status: typeof d.status === "string" ? d.status.toUpperCase() : "DESCONOCIDO",
-        encf: typeof d.encf === "string" ? d.encf : null,
-      }));
-    const zip = typeof obj?.zipUrl === "string" && obj.zipUrl.length > 0 ? obj.zipUrl : null;
-    return { docs, zip };
-  };
-
-  const documents = readGroup(b.documentsInfo);
-  const resumes = readGroup(b.resumesInfo);
-  const id = typeof b.testId === "string" ? b.testId : typeof b.id === "string" ? b.id : null;
-
-  return {
-    id,
-    status: typeof b.status === "string" ? b.status.toUpperCase() : "DESCONOCIDO",
-    retry_number: typeof b.retryNumber === "number" ? b.retryNumber : null,
-    processed: typeof b.totalDocumentProcessed === "number" ? b.totalDocumentProcessed : null,
-    documents: [...documents.docs, ...resumes.docs],
-    documents_zip_url: documents.zip,
-    resumes_zip_url: resumes.zip,
-  };
-}
-
-/**
- * `retryNumber` para generar un set nuevo despues de uno rechazado. Alanube
- * no deja repetir el numero (AP4005) y lo limita a 0–99.
- */
-export function nextSetTestRetry(previous: number | null): Validation<number | null> {
-  if (previous === null) return { ok: true, value: null };
-  if (previous >= 99) {
-    return { ok: false, errors: ["Se agotaron los reintentos del set de pruebas (maximo 99). Hay que hablar con Alanube."] };
-  }
-  return { ok: true, value: previous + 1 };
-}
-
 export interface ProviderInfo {
   software_type: string | null;
   software_name: string | null;
@@ -686,29 +561,6 @@ export function parseProviderInfo(body: unknown): ProviderInfo {
   };
 }
 
-/**
- * Producto de ejemplo sugerido para el set de pruebas: el activo con mas
- * precio entre los que llevan ITBIS (los comprobantes salen representativos).
- * El operador lo puede cambiar.
- */
-export function suggestItemExample(
-  items: Array<{ name: string; price: number | string; taxed: boolean }>,
-): ItemExampleInput | null {
-  const candidates = items
-    .map((i) => ({ ...i, price: Number(i.price) }))
-    .filter((i) => Number.isFinite(i.price) && i.price >= 1 && i.name.trim().length > 0);
-  if (candidates.length === 0) return null;
-  const taxed = candidates.filter((i) => i.taxed);
-  const pool = taxed.length > 0 ? taxed : candidates;
-  const pick = pool.reduce((a, b) => (b.price > a.price ? b : a));
-  return {
-    item_name: pick.name.trim().slice(0, 80),
-    billing_indicator: pick.taxed ? 1 : 4,
-    good_service_indicator: 1,
-    unit_price: Math.max(1, Math.round(pick.price)),
-  };
-}
-
 // ── Solicitud del cliente desde la POS ─────────────────────────────────────
 
 export interface RequestContactInput {
@@ -733,6 +585,154 @@ export function validateRequestContact(
 
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: { contact_name: name as string, contact_phone: phone as string } };
+}
+
+/** Comprobantes electronicos de la DGII, en el orden en que los muestra la POS. */
+export const ECF_TYPE_CATALOG = ["E31", "E32", "E33", "E34", "E41", "E43", "E44", "E45", "E46", "E47"];
+
+/** Serie B (papel) → su equivalente electronico. */
+const PAPER_TO_ECF: Record<string, string> = {
+  B01: "E31",
+  B02: "E32",
+  B03: "E33",
+  B04: "E34",
+  B11: "E41",
+  B13: "E43",
+  B14: "E44",
+  B15: "E45",
+  B16: "E46",
+  B17: "E47",
+};
+
+/**
+ * Tipos que se le sugieren al cliente si no ha elegido: los equivalentes de
+ * las secuencias que ya usa. Siempre con E34: MangoPOS anula con nota de
+ * credito.
+ */
+export function suggestEcfTypes(rows: Array<{ ncf_type: string | null; is_active?: boolean | null }>): string[] {
+  const picked = new Set<string>();
+  for (const r of rows) {
+    if (r.is_active === false) continue;
+    const t = (r.ncf_type ?? "").trim().toUpperCase();
+    const e = PAPER_TO_ECF[t] ?? (ECF_TYPE_CATALOG.includes(t) ? t : null);
+    if (e) picked.add(e);
+  }
+  if (picked.size === 0) {
+    picked.add("E31");
+    picked.add("E32");
+  }
+  picked.add("E34");
+  return ECF_TYPE_CATALOG.filter((t) => picked.has(t));
+}
+
+export interface BranchInput {
+  name?: string | null;
+  address?: string | null;
+}
+
+export interface Branch {
+  name: string | null;
+  address: string;
+}
+
+export const MAX_BRANCHES = 30;
+export const MAX_BRANCH_ADDRESS_LENGTH = 150;
+
+/** Requisitos de la solicitud que no viajan a Alanube: quedan para el operador. */
+export interface RequestDetailsInput {
+  phone?: string | null;
+  legal_rep_name?: string | null;
+  branches?: BranchInput[] | null;
+  ecf_types?: string[] | null;
+  ofv_user?: string | null;
+  ofv_password?: string | null;
+}
+
+export interface RequestDetails {
+  phone: string;
+  legal_rep_name: string;
+  branches: Branch[];
+  ecf_types: string[];
+  ofv_user: string;
+  /** null = no la mando; se conserva la que ya estaba guardada. */
+  ofv_password: string | null;
+}
+
+export function validateRequestDetails(
+  input: RequestDetailsInput,
+  opts: { hasSavedOfvPassword: boolean },
+): Validation<RequestDetails> {
+  const errors: string[] = [];
+
+  const phone = clean(input.phone);
+  const digits = (phone ?? "").replace(/\D/g, "");
+  if (!phone) errors.push("Falta el telefono de la empresa.");
+  else if (digits.length < 10 || digits.length > 15) {
+    errors.push("El telefono de la empresa no es valido (incluye el codigo de area).");
+  }
+
+  const rep = clean(input.legal_rep_name);
+  if (!rep) errors.push("Falta el nombre del representante legal.");
+  else if (rep.length > 120) errors.push("El nombre del representante legal es demasiado largo.");
+
+  const branches: Branch[] = [];
+  for (const b of Array.isArray(input.branches) ? input.branches : []) {
+    const name = clean(b?.name);
+    const address = clean(b?.address);
+    if (!name && !address) continue;
+    if (!address) {
+      errors.push(`Falta la direccion de la sucursal ${name}.`);
+    } else if (address.length > MAX_BRANCH_ADDRESS_LENGTH) {
+      errors.push(`La direccion de una sucursal supera los ${MAX_BRANCH_ADDRESS_LENGTH} caracteres.`);
+    } else {
+      branches.push({ name: name?.slice(0, 80) ?? null, address });
+    }
+  }
+  if (branches.length > MAX_BRANCHES) errors.push(`Maximo ${MAX_BRANCHES} sucursales.`);
+
+  const asked = new Set(
+    (Array.isArray(input.ecf_types) ? input.ecf_types : [])
+      .map((t) => String(t ?? "").trim().toUpperCase()),
+  );
+  const unknown = [...asked].filter((t) => !ECF_TYPE_CATALOG.includes(t));
+  if (unknown.length > 0) errors.push(`Tipo de comprobante desconocido: ${unknown.join(", ")}.`);
+  const ecfTypes = ECF_TYPE_CATALOG.filter((t) => asked.has(t));
+  if (ecfTypes.length === 0) errors.push("Elige al menos un tipo de comprobante.");
+
+  const ofvUser = clean(input.ofv_user);
+  if (!ofvUser) errors.push("Falta el usuario de la Oficina Virtual de la DGII.");
+  else if (ofvUser.length > 60) errors.push("El usuario de la Oficina Virtual es demasiado largo.");
+
+  // La clave no se recorta: un espacio puede ser parte de ella.
+  const rawPassword = input.ofv_password ?? "";
+  const ofvPassword = rawPassword.trim().length > 0 ? rawPassword : null;
+  if (!ofvPassword && !opts.hasSavedOfvPassword) {
+    errors.push("Falta la clave de la Oficina Virtual de la DGII.");
+  } else if (ofvPassword && ofvPassword.length > 128) {
+    errors.push("La clave de la Oficina Virtual es demasiado larga.");
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      phone: phone as string,
+      legal_rep_name: rep as string,
+      branches,
+      ecf_types: ecfTypes,
+      ofv_user: ofvUser as string,
+      ofv_password: ofvPassword,
+    },
+  };
+}
+
+/** La POS pide la direccion fiscal COMPLETA y el correo; el panel no los exige. */
+export function missingForClientRequest(data: TaxpayerData): string[] {
+  const errors: string[] = [];
+  if (!data.province) errors.push("Falta la provincia.");
+  if (!data.municipality) errors.push("Falta el municipio.");
+  if (!data.email) errors.push("Falta el correo.");
+  return errors;
 }
 
 export interface SequenceUsabilityRow {

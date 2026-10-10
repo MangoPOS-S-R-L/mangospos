@@ -1193,7 +1193,13 @@ class _RightPanel extends StatelessWidget {
               salesNoteSelected: state.salesNoteSelected,
               enabled: !isBusy,
               onChanged: vm.setSalesNote,
+              cycleMessage: vm.salesNoteCycleMessage,
             ),
+          ],
+          if (!state.salesNoteAvailable &&
+              vm.salesNoteCycleMessage != null) ...[
+            const SizedBox(height: 6),
+            _SalesNoteCycleInfo(message: vm.salesNoteCycleMessage!),
           ],
           const SizedBox(height: 16),
           Expanded(
@@ -1331,6 +1337,19 @@ class _MobileLayout extends StatelessWidget {
       children: [
         _TotalsCard(state: state, compact: true),
         SizedBox(height: gap),
+        if (state.salesNoteAvailable) ...[
+          _DocumentTypeToggle(
+            salesNoteSelected: state.salesNoteSelected,
+            enabled: !isBusy,
+            onChanged: vm.setSalesNote,
+            cycleMessage: vm.salesNoteCycleMessage,
+          ),
+          SizedBox(height: gap),
+        ],
+        if (!state.salesNoteAvailable && vm.salesNoteCycleMessage != null) ...[
+          _SalesNoteCycleInfo(message: vm.salesNoteCycleMessage!),
+          SizedBox(height: gap),
+        ],
         _LeftPanel(state: state, vm: vm, pressedKey: pressedKey, compact: true),
         // Lista de pagos: solo mostramos si hay transacciones — en
         // celular el "Aún no has agregado pagos" ocupa espacio inútil.
@@ -1346,7 +1365,7 @@ class _MobileLayout extends StatelessWidget {
         // boton, que es el ultimo sitio donde el cajero tenia el dedo.
         PaymentStepsPanel(
           stage: state.stage,
-          isElectronic: vm.isElectronicFiscal,
+          isElectronic: !state.salesNoteSelected && vm.isElectronicFiscal,
           dgiiContingency: state.dgiiContingency,
           accent: _kPrimary,
           positive: _kPositive,
@@ -1354,9 +1373,11 @@ class _MobileLayout extends StatelessWidget {
         SizedBox(height: gap),
         ConfirmPaymentProgressButton(
           stage: state.stage,
-          isElectronic: vm.isElectronicFiscal,
+          isElectronic: !state.salesNoteSelected && vm.isElectronicFiscal,
           dgiiContingency: state.dgiiContingency,
-          ncf: state.emittedNcf,
+          ncf: state.salesNoteSelected
+              ? state.emittedSalesNote
+              : state.emittedNcf,
           height: isPhone ? 48 : 54,
           fontSize: isPhone ? 14 : 15,
           onPressed: canConfirm
@@ -2265,20 +2286,31 @@ class _ErrorBar extends StatelessWidget {
   }
 }
 
-/// Elección del documento con el que se cobra: comprobante fiscal (el de
-/// siempre) o NOTA DE VENTA — papel numerado propio del negocio, sin valor
-/// fiscal y sin consumir NCF.
-///
-/// Solo se monta cuando el negocio tiene la nota de venta prendida.
+class _SalesNoteCycleInfo extends StatelessWidget {
+  const _SalesNoteCycleInfo({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    message,
+    style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+  );
+}
+
+/// Elección del documento para efectivo de consumidor final mientras el
+/// negocio todavía tiene notas disponibles en el ciclo configurado.
 class _DocumentTypeToggle extends StatelessWidget {
   final bool salesNoteSelected;
   final bool enabled;
   final ValueChanged<bool> onChanged;
+  final String? cycleMessage;
 
   const _DocumentTypeToggle({
     required this.salesNoteSelected,
     required this.enabled,
     required this.onChanged,
+    this.cycleMessage,
   });
 
   @override
@@ -2317,7 +2349,10 @@ class _DocumentTypeToggle extends StatelessWidget {
             ),
           ],
         ),
-        if (salesNoteSelected) ...[
+        if (cycleMessage != null) ...[
+          const SizedBox(height: 6),
+          _SalesNoteCycleInfo(message: cycleMessage!),
+        ] else if (salesNoteSelected) ...[
           const SizedBox(height: 6),
           const Text(
             'Sin valor fiscal: no consume NCF ni se declara.',

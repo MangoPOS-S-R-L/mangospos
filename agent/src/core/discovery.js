@@ -4,62 +4,44 @@ const dgram = require('dgram');
 const { config, logger } = require('../config');
 const { exec } = require('child_process');
 
-// Expande un CIDR IPv4 a las IPs escaneables (excluye network y broadcast
-// para prefijos < /31). Rechaza prefijos < /22 (mas de 1024 hosts) para
-// no saturar sockets ni el OS — los locales POS no necesitan rangos mas
-// grandes; si alguien declara un /16 probablemente es un error.
-const MIN_PREFIX = 22;
-function expandCidr(cidr) {
-    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/.exec(String(cidr).trim());
-    if (!m) {
-        throw new Error('formato esperado a.b.c.d/prefix');
-    }
-    const octets = [m[1], m[2], m[3], m[4]].map((s) => Number(s));
-    if (octets.some((o) => o < 0 || o > 255)) {
-        throw new Error('octeto fuera de rango 0-255');
-    }
-    const prefix = m[5] !== undefined ? Number(m[5]) : 24;
-    if (prefix < MIN_PREFIX || prefix > 32) {
-        throw new Error(`prefijo /${prefix} fuera de rango [/${MIN_PREFIX}, /32]`);
-    }
-    const baseInt = ((octets[0] << 24) >>> 0) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
-    const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
-    const netInt = (baseInt & mask) >>> 0;
-    const hostCount = 2 ** (32 - prefix);
-    const skipEdges = prefix < 31 ? 1 : 0; // saltar .0 y broadcast en rangos normales
-    const ips = [];
-    for (let i = skipEdges; i < hostCount - skipEdges; i++) {
-        const addr = (netInt + i) >>> 0;
-        ips.push(`${(addr >>> 24) & 0xff}.${(addr >>> 16) & 0xff}.${(addr >>> 8) & 0xff}.${addr & 0xff}`);
-    }
-    return ips;
-}
+const { expandCidr, candidateIps } = require('../network/ipv4');
+const { getMacForIp } = require('../network/arp');
+
+// El cliente legado de /printers (LocalPrintService.discoverPrinters) espera
+// 12 s y, si no llega la respuesta, muestra la lista vacía aunque se hayan
+// encontrado impresoras. La red tiene un presupuesto y el USB corre en
+// paralelo para que todo quepa con margen.
+const NETWORK_SCAN_BUDGET_MS = 7000;
+// Una impresora en la LAN responde en milisegundos. Esperar 2 s por cada
+// dirección vacía hacía que una /24 tardara ~22 s.
+const PROBE_TIMEOUT_MS = 800;
+const PROBE_CONCURRENCY = 64;
 
 class DiscoveryService {
-    constructor() {
+    constructor(dependencies = {}) {
+        this.dependencies = dependencies;
+        this.scanPromise = null;
         this.discoveredDevices = [];
         this.isScanning = false;
     }
 
     async scan() {
-        if (this.isScanning) return this.discoveredDevices;
+        if (this.scanPromise) return this.scanPromise;
         this.isScanning = true;
         this.discoveredDevices = [];
-
-        logger.info('Starting discovery scan...');
-
-        // 1. Scan Network (Port 9100)
-        if (config.discovery.protocols.includes('network')) {
-            await this.scanNetwork();
-        }
-
-        // 2. Scan USB (platform-aware)
-        if (config.discovery.protocols.includes('usb')) {
-            await this.scanUSB();
-        }
-
-        this.isScanning = false;
-        return this.discoveredDevices;
+        this.scanPromise = (async () => {
+            try {
+                const protocols = config.discovery.protocols;
+                await Promise.all([
+                    protocols.includes('network') ? this.scanNetwork() : null,
+                    protocols.includes('usb') ? this.scanUSB() : null,
+                ]);
+                // Mismo orden que cuando corrían en serie: primero red, después USB.
+                const rank = (d) => (d.type === 'network' ? 0 : 1);
+                return this.discoveredDevices.sort((a, b) => rank(a) - rank(b));
+            } finally { this.isScanning = false; }
+        })();
+        try { return await this.scanPromise; } finally { this.scanPromise = null; }
     }
 
     async scanUSB() {
@@ -205,54 +187,38 @@ class DiscoveryService {
     }
 
     async scanNetwork() {
-        // Recolectamos IPs candidatas desde dos fuentes:
-        //   1) /24 de cada NIC IPv4 no-interna del host (comportamiento legado).
-        //   2) subredes CIDR adicionales declaradas en config.yaml
-        //      (discovery.subnets). Util cuando el agent corre en una PC
-        //      que NO tiene IP en la red de impresoras (VLAN separada).
-        // Se deduplica antes de escanear para evitar trabajo doble.
-        const candidates = new Set();
-
-        const interfaces = os.networkInterfaces();
-        Object.keys(interfaces).forEach((ifname) => {
-            interfaces[ifname].forEach((iface) => {
-                if ('IPv4' !== iface.family || iface.internal !== false) {
-                    return;
-                }
-                const parts = iface.address.split('.');
-                parts.pop();
-                const base = parts.join('.');
-                for (let i = 1; i < 255; i++) {
-                    candidates.add(`${base}.${i}`);
-                }
-            });
-        });
-
-        const configuredSubnets = Array.isArray(config.discovery?.subnets)
-            ? config.discovery.subnets
-            : [];
-        for (const cidr of configuredSubnets) {
-            try {
-                const ips = expandCidr(cidr);
-                ips.forEach((ip) => candidates.add(ip));
-                logger.info(`[discovery] Subred configurada ${cidr} -> ${ips.length} IPs.`);
-            } catch (err) {
-                logger.warn(`[discovery] Subred invalida "${cidr}": ${err.message}`);
-            }
+        const getCandidates = this.dependencies.candidateIps || candidateIps;
+        const readMac = this.dependencies.getMacForIp || getMacForIp;
+        const check = this.dependencies.checkPort || this.checkPort.bind(this);
+        const ips = getCandidates({ subnets: config.discovery?.subnets || [] });
+        const ports = new Set([9100]);
+        for (const printer of config.printers || []) {
+            const port = Number(printer.port || String(printer.endpoint || '').split(':')[1]);
+            if (Number.isInteger(port) && port > 0 && port <= 65535) ports.add(port);
         }
-
-        const scanPromises = Array.from(candidates).map((ip) => this.checkPort(ip, 9100));
-        const results = await Promise.allSettled(scanPromises);
-        results.forEach((res) => {
-            if (res.status === 'fulfilled' && res.value) {
-                this.discoveredDevices.push({
-                    type: 'network',
-                    name: `Net Printer (${res.value})`,
-                    address: res.value,
-                    port: 9100,
-                });
+        const targets = ips.flatMap((ip) => [...ports].map((port) => ({ ip, port })));
+        const budgetMs = this.dependencies.scanBudgetMs ?? NETWORK_SCAN_BUDGET_MS;
+        const deadline = Date.now() + budgetMs;
+        let index = 0;
+        const worker = async () => {
+            while (index < targets.length && Date.now() < deadline) {
+                const { ip, port } = targets[index++];
+                try {
+                    if (!(await check(ip, port, PROBE_TIMEOUT_MS))) continue;
+                    const mac = await readMac(ip, { probePort: port, forceProbe: false });
+                    this.discoveredDevices.push({ type: 'network', name: `Net Printer (${ip})`,
+                        address: ip, ip, port, mac, deviceId: mac || null });
+                } catch (_) { /* An offline host does not interrupt discovery. */ }
             }
-        });
+        };
+        await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, targets.length) }, worker));
+        if (index < targets.length) {
+            // Se devuelve lo encontrado: mejor una lista parcial que una vacía.
+            logger.warn(
+                `[discovery] búsqueda de red cortada a los ${budgetMs} ms: ` +
+                `${targets.length - index} de ${targets.length} direcciones sin revisar`,
+            );
+        }
     }
 
     checkPort(ip, port, timeout = 2000) {
@@ -277,3 +243,5 @@ class DiscoveryService {
 }
 
 module.exports = new DiscoveryService();
+module.exports.DiscoveryService = DiscoveryService;
+module.exports.expandCidr = expandCidr;

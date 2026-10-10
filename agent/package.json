@@ -7,6 +7,7 @@
     "scripts": {
         "start": "node src/index.js",
         "dev": "nodemon src/index.js",
+        "test:printer-recovery": "node --test test/printer_recovery.test.js",
         "usb-scan": "powershell -NoProfile -ExecutionPolicy Bypass -File ./usb_scan.ps1",
         "install-service": "node scripts/install_service.js",
         "uninstall-service": "node scripts/uninstall_service.js",

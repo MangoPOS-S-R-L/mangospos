@@ -11,7 +11,8 @@ import '../../core/business/business_resolver.dart';
 /// Todo pasa por la Edge Function `ecf-onboarding` (acciones `request_status`
 /// y `submit_request`), que valida que el usuario sea dueño o administrador
 /// del negocio. El certificado viaja a Alanube en la misma petición y no se
-/// guarda en MangoPOS.
+/// guarda en MangoPOS. La clave de la Oficina Virtual sí se guarda, cifrada en
+/// el servidor, y nunca vuelve a la POS.
 
 /// En qué va la facturación electrónica del negocio (lo deriva el servidor).
 enum EcfRequestStage {
@@ -47,6 +48,7 @@ class EcfRequestStatus {
     this.contactPhone,
     this.alreadyAuthorized,
     this.data = const EcfRequestData(),
+    this.details = const EcfRequestDetails(),
   });
 
   final EcfRequestStage stage;
@@ -57,9 +59,11 @@ class EcfRequestStatus {
 
   /// Lo último que mandó (o lo que la POS ya tenía): precarga el formulario.
   final EcfRequestData data;
+  final EcfRequestDetails details;
 
   factory EcfRequestStatus.fromJson(Map<String, dynamic> json) {
     final data = json['data'];
+    final details = json['details'];
     return EcfRequestStatus(
       stage: EcfRequestStage.parse(json['stage'] as String?),
       requestedAt: DateTime.tryParse(json['requested_at']?.toString() ?? ''),
@@ -69,6 +73,9 @@ class EcfRequestStatus {
       data: data is Map
           ? EcfRequestData.fromJson(Map<String, dynamic>.from(data))
           : const EcfRequestData(),
+      details: details is Map
+          ? EcfRequestDetails.fromJson(Map<String, dynamic>.from(details))
+          : const EcfRequestDetails(),
     );
   }
 }
@@ -114,9 +121,87 @@ class EcfRequestData {
       };
 }
 
+/// Comprobantes electrónicos de la DGII (código → nombre), en el orden del
+/// formulario. El servidor valida contra la misma lista.
+const ecfTypeCatalog = <String, String>{
+  'E31': 'Crédito fiscal',
+  'E32': 'Consumo',
+  'E33': 'Nota de débito',
+  'E34': 'Nota de crédito',
+  'E41': 'Compras',
+  'E43': 'Gastos menores',
+  'E44': 'Regímenes especiales',
+  'E45': 'Gubernamental',
+  'E46': 'Exportaciones',
+  'E47': 'Pagos al exterior',
+};
+
+class EcfBranch {
+  const EcfBranch({this.name, required this.address});
+
+  final String? name;
+  final String address;
+
+  factory EcfBranch.fromJson(Map<String, dynamic> json) => EcfBranch(
+        name: json['name'] as String?,
+        address: (json['address'] as String?) ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'name': name, 'address': address};
+}
+
+/// Requisitos de la solicitud que no van al proveedor: los usa MangoPOS para
+/// la certificación. La clave de la Oficina Virtual nunca viene aquí, solo si
+/// ya hay una guardada.
+class EcfRequestDetails {
+  const EcfRequestDetails({
+    this.phone,
+    this.legalRepName,
+    this.branches = const [],
+    this.ecfTypes = const [],
+    this.ofvUser,
+    this.ofvPasswordSaved = false,
+  });
+
+  final String? phone;
+  final String? legalRepName;
+  final List<EcfBranch> branches;
+  final List<String> ecfTypes;
+  final String? ofvUser;
+  final bool ofvPasswordSaved;
+
+  factory EcfRequestDetails.fromJson(Map<String, dynamic> json) {
+    final branches = json['branches'];
+    final types = json['ecf_types'];
+    return EcfRequestDetails(
+      phone: json['phone'] as String?,
+      legalRepName: json['legal_rep_name'] as String?,
+      branches: branches is List
+          ? [
+              for (final b in branches)
+                if (b is Map) EcfBranch.fromJson(Map<String, dynamic>.from(b)),
+            ]
+          : const [],
+      ecfTypes: types is List ? types.map((t) => t.toString()).toList() : const [],
+      ofvUser: json['ofv_user'] as String?,
+      ofvPasswordSaved: json['ofv_password_saved'] == true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'phone': phone,
+        'legal_rep_name': legalRepName,
+        'branches': [for (final b in branches) b.toJson()],
+        'ecf_types': ecfTypes,
+        'ofv_user': ofvUser,
+      };
+}
+
 class EcfRequestSubmission {
   const EcfRequestSubmission({
     required this.data,
+    required this.details,
+    this.ofvPassword,
     required this.contactName,
     required this.contactPhone,
     required this.alreadyAuthorized,
@@ -126,6 +211,10 @@ class EcfRequestSubmission {
   });
 
   final EcfRequestData data;
+  final EcfRequestDetails details;
+
+  /// Null: se conserva la que el servidor ya tiene guardada.
+  final String? ofvPassword;
   final String contactName;
   final String contactPhone;
   final bool alreadyAuthorized;
@@ -173,6 +262,10 @@ class EcfRequestRepository {
       'action': 'submit_request',
       'business_id': bid,
       'data': s.data.toJson(),
+      'details': {
+        ...s.details.toJson(),
+        if (s.ofvPassword != null) 'ofv_password': s.ofvPassword,
+      },
       'contact_name': s.contactName,
       'contact_phone': s.contactPhone,
       'already_authorized': s.alreadyAuthorized,

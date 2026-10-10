@@ -26,6 +26,7 @@ const tick = async () => {
     queue.markPrinting(job.jobId);
     logger.info(`[worker] Procesando ${job.jobId} (ticket ${job.ticketId})`);
 
+    let sent = false;
     try {
         // El payload del job contiene la estructura legacy de processPrintJob
         // (printer + content). Lo desempaquetamos y le ponemos el id que
@@ -35,10 +36,12 @@ const tick = async () => {
             ...job.payload,
         };
         await processPrintJob(internalJob);
+        sent = true;
         queue.markDone(job.jobId);
         logger.info(`[worker] Done ${job.jobId}`);
     } catch (err) {
-        const msg = err?.message || String(err);
+        const detail = err?.message || String(err);
+        const msg = sent || err?.deliveryUncertain ? `[DELIVERY_UNCERTAIN] ${detail}` : detail;
         queue.markFailed(job.jobId, msg);
         logger.error(`[worker] Failed ${job.jobId}: ${msg}`);
     }

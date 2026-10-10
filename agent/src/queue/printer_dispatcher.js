@@ -30,7 +30,8 @@ const cloudStore = require('./cloud_store');
 const MAX_CONCURRENT_PRINTERS = 8;
 const QUEUE_TTL_MS = 5 * 60 * 1000;
 
-// Map<printerKey, { busy, queue: [{ job, printerCfg }], lastActiveAt, runner }>
+// Map<printerKey, { busy, current, queue: [{ job, printerCfg }], lastActiveAt, runner }>
+// `current` = id del job que se está imprimiendo (null entre jobs).
 const queues = new Map();
 
 let cleanupTimer = null;
@@ -70,6 +71,7 @@ const runPrinterQueue = async (key) => {
     while (pq.queue.length > 0) {
         const { job, printerCfg } = pq.queue.shift();
         const jobId = job.id;
+        pq.current = jobId;
         pq.lastActiveAt = Date.now();
 
         const internalJob = {
@@ -83,10 +85,12 @@ const runPrinterQueue = async (key) => {
             await cloudStore.complete(jobId, true);
             logger.info(`[dispatcher:${key}] done ${jobId}`);
         } catch (err) {
-            const msg = err && err.message ? err.message : String(err);
+            const detail = err && err.message ? err.message : String(err);
+            const msg = err?.deliveryUncertain ? `[DELIVERY_UNCERTAIN] ${detail}` : detail;
             await cloudStore.complete(jobId, false, msg);
             logger.error(`[dispatcher:${key}] failed ${jobId}: ${msg}`);
         }
+        pq.current = null;
     }
 
     pq.busy = false;
@@ -118,6 +122,7 @@ const dispatch = (job, printerCfg) => {
         }
         pq = {
             busy: false,
+            current: null,
             queue: [],
             lastActiveAt: Date.now(),
         };
@@ -199,6 +204,20 @@ const inFlightCount = () => {
     return count;
 };
 
+/**
+ * Ids de todos los jobs que este agent tiene en memoria: el que se está
+ * imprimiendo en cada impresora y los que esperan turno. El worker renueva
+ * sus claims para que el reclaim no los dé por abandonados.
+ */
+const heldJobIds = () => {
+    const ids = [];
+    for (const pq of queues.values()) {
+        if (pq.current) ids.push(pq.current);
+        for (const { job } of pq.queue) ids.push(job.id);
+    }
+    return ids;
+};
+
 const start = () => {
     if (cleanupTimer) return;
     cleanupTimer = setInterval(cleanup, QUEUE_TTL_MS);
@@ -228,6 +247,7 @@ module.exports = {
     dispatch,
     stats,
     inFlightCount,
+    heldJobIds,
     start,
     stop,
     MAX_CONCURRENT_PRINTERS,

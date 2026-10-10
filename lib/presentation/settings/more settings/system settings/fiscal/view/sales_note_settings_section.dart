@@ -1,40 +1,30 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mangopos/app/theme/mango_colors.dart';
 
 import '../../../../../../data/repositories/pos_settings_repository.dart';
 
-/// Ajustes de la NOTA DE VENTA dentro de Configuración Fiscal.
-///
-/// La nota no es un comprobante fiscal — no consume NCF ni se declara — pero
-/// se configura junto a los que sí lo son porque es el otro documento con el
-/// que puede cerrarse una venta.
-///
-/// Vive en su propio archivo, y no como método de la pantalla, para poder
-/// montarlo en un test de layout: la primera versión reventaba con
-/// "non-zero flex but incoming width constraints are unbounded" por un
-/// `Expanded` dentro de un `Row` anidado sin acotar, y ese tipo de fallo solo
-/// aparece al renderizar.
+/// Configura el ciclo de notas de venta para consumidor final en efectivo.
+/// El contador es informativo: el servidor lo actualiza al emitir documentos.
 class SalesNoteSettingsSection extends StatelessWidget {
   const SalesNoteSettingsSection({
     super.key,
     required this.features,
     required this.prefixController,
+    required this.limitController,
     required this.onEnabledChanged,
-    required this.onDefaultChanged,
+    required this.onLimitSubmitted,
     required this.onPrefixSubmitted,
   });
 
   final BusinessFeatures features;
-
-  /// Controlado por la pantalla para poder sembrarlo tras la carga inicial.
   final TextEditingController prefixController;
-
+  final TextEditingController limitController;
   final ValueChanged<bool> onEnabledChanged;
-  final ValueChanged<bool> onDefaultChanged;
 
-  /// Corre al confirmar el campo del prefijo (Enter, botón, o al salir del
-  /// campo). Quien lo implemente debe ignorar el caso "no cambió nada":
-  /// `onTapOutside` se dispara con cualquier toque de la pantalla.
+  /// Los callbacks deben ignorar valores sin cambios: `onTapOutside` puede
+  /// dispararse con cualquier toque fuera del campo.
+  final VoidCallback onLimitSubmitted;
   final VoidCallback onPrefixSubmitted;
 
   @override
@@ -43,53 +33,38 @@ class SalesNoteSettingsSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            // El Expanded va ACÁ, sobre el Row anidado. Sin él ese Row recibe
-            // ancho infinito del Row de afuera, y el Expanded de adentro
-            // revienta en layout. El texto de esta fila es largo y necesita
-            // envolver, así que el flex no es opcional.
-            Expanded(
-              child: Row(
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: MangoColors.primaryOrange.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.description_outlined,
+                color: MangoColors.primaryOrange,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 16),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: MangoColors.primaryOrange.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.description_outlined,
-                      color: MangoColors.primaryOrange,
-                      size: 20,
-                    ),
+                  Text(
+                    'Vender por nota de venta',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
                   ),
-                  const SizedBox(width: 16),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Vender por nota de venta',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                          ),
-                        ),
-                        Text(
-                          'Documento numerado propio (NV-000123) para el '
-                          'cliente que no pide comprobante. NO consume NCF ni '
-                          'se declara; la venta igual entra a caja e '
-                          'inventario.',
-                          style: TextStyle(fontSize: 13, color: Colors.grey),
-                        ),
-                      ],
-                    ),
+                  Text(
+                    'Solo para consumidor final que paga en efectivo. '
+                    'Tarjeta, transferencia y crédito fiscal siempre usan '
+                    'factura con comprobante. La nota de venta NO consume NCF.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
                   ),
-                  const SizedBox(width: 16),
                 ],
               ),
             ),
+            const SizedBox(width: 16),
             Switch(
               value: features.salesNoteEnabled,
               onChanged: onEnabledChanged,
@@ -98,112 +73,147 @@ class SalesNoteSettingsSection extends StatelessWidget {
         ),
         if (features.salesNoteEnabled) ...[
           const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Expanded(
-                child: Padding(
-                  padding: EdgeInsets.only(left: 56, right: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Preseleccionar al cobrar',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Text(
-                        'El cobro arranca en nota de venta en vez del '
-                        'comprobante predefinido. El cajero puede cambiarlo '
-                        'antes de confirmar.',
-                        style: TextStyle(fontSize: 13, color: Colors.grey),
-                      ),
-                    ],
+          _settingRow(
+            title: 'Notas de venta antes de una factura',
+            description:
+                'Después de ${features.salesNoteLimit} notas de venta, '
+                'el siguiente cobro en efectivo a consumidor final se marca '
+                'como factura con comprobante y comienza un nuevo ciclo.',
+            control: _field(
+              controller: limitController,
+              label: 'Cantidad de notas',
+              tooltip: 'Guardar cantidad de notas',
+              onSubmitted: onLimitSubmitted,
+              numeric: true,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.only(left: 56),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Notas utilizadas desde la última factura: '
+                  '${features.salesNoteCount}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-              Switch(
-                value: features.salesNoteDefault,
-                onChanged: onDefaultChanged,
-              ),
-            ],
+                if (features.salesNoteCount >= features.salesNoteLimit)
+                  const Text(
+                    'El próximo cobro en efectivo a consumidor final será '
+                    'una factura con comprobante.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 56, right: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Prefijo de la numeración',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
-                      ),
-                      Text(
-                        'Se imprime como '
-                        '${features.salesNotePrefix}000123. La serie se lleva '
-                        'por los dígitos, así que cambiarlo no la reinicia.',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              // Ancho fijo con tope: a 1024 dp (las tablets del salón) 260 dp
-              // entran, pero en una ventana angosta hay que ceder o el campo
-              // empuja al texto fuera de la fila.
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 260),
-                child: SizedBox(
-                  width: 260,
-                  child: TextField(
-                    controller: prefixController,
-                    textCapitalization: TextCapitalization.characters,
-                    maxLength: 6,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => onPrefixSubmitted(),
-                    onTapOutside: (_) => onPrefixSubmitted(),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      counterText: '',
-                      filled: true,
-                      fillColor: MangoColors.sidebarBg.withValues(alpha: 0.3),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.check_rounded, size: 20),
-                        tooltip: 'Guardar prefijo',
-                        onPressed: onPrefixSubmitted,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: MangoColors.cardBorder),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: MangoColors.cardBorder),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          _settingRow(
+            title: 'Prefijo de la numeración',
+            description:
+                'Se imprime como ${features.salesNotePrefix}000123. '
+                'Cambiar el prefijo no reinicia la numeración ni el ciclo.',
+            control: _field(
+              controller: prefixController,
+              label: 'Prefijo',
+              tooltip: 'Guardar prefijo',
+              onSubmitted: onPrefixSubmitted,
+            ),
           ),
         ],
       ],
+    );
+  }
+
+  Widget _settingRow({
+    required String title,
+    required String description,
+    required Widget control,
+  }) {
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+        ),
+        Text(
+          description,
+          style: const TextStyle(fontSize: 13, color: Colors.grey),
+        ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 56),
+          child: constraints.maxWidth < 620
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [details, const SizedBox(height: 12), control],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: details),
+                    const SizedBox(width: 16),
+                    control,
+                  ],
+                ),
+        );
+      },
+    );
+  }
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    required String tooltip,
+    required VoidCallback onSubmitted,
+    bool numeric = false,
+  }) {
+    return SizedBox(
+      width: numeric ? 220 : 260,
+      child: TextField(
+        controller: controller,
+        textCapitalization: numeric
+            ? TextCapitalization.none
+            : TextCapitalization.characters,
+        keyboardType: numeric ? TextInputType.number : TextInputType.text,
+        inputFormatters: numeric
+            ? [FilteringTextInputFormatter.digitsOnly]
+            : null,
+        maxLength: numeric ? null : 6,
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => onSubmitted(),
+        onTapOutside: (_) => onSubmitted(),
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: true,
+          counterText: '',
+          filled: true,
+          fillColor: MangoColors.sidebarBg.withValues(alpha: 0.3),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 12,
+          ),
+          suffixIcon: IconButton(
+            icon: const Icon(Icons.check_rounded, size: 20),
+            tooltip: tooltip,
+            onPressed: onSubmitted,
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: MangoColors.cardBorder),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: MangoColors.cardBorder),
+          ),
+        ),
+      ),
     );
   }
 }

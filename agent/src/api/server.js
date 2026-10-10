@@ -3,8 +3,7 @@ const cors = require('cors');
 const { config, logger } = require('../config');
 const printerManager = require('../core/printer_manager');
 const discoveryService = require('../core/discovery');
-const { getMacForIp, normalizeMac } = require('../network/arp');
-const { resolveByMac, invalidateCache } = require('../network/printer_resolver');
+const { installPrinterRecoveryRoutes } = require('../network/printer_routes');
 
 const app = express();
 const PORT = config.service.port || 9100;
@@ -137,7 +136,11 @@ Service Status: ONLINE
 });
 
 app.post('/api/printers/raw', authenticate, async (req, res) => {
-    const { printerId, ip, port, dataBase64 } = req.body;
+    const { printerId, dataBase64 } = req.body;
+    const inline = req.body.printer && typeof req.body.printer === 'object' ? req.body.printer : {};
+    const ip = inline.ip || req.body.ip;
+    const port = inline.port ?? req.body.port ?? 9100;
+    const mac = inline.mac || req.body.mac;
     const normalizedPrinterId = printerId || (ip ? `${ip}:${port || 9100}` : null);
 
     if (!normalizedPrinterId || !dataBase64) {
@@ -147,6 +150,7 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
     try {
         const jobId = printerManager.addJob({
             printerId: normalizedPrinterId,
+            printer: ip || mac ? { ...inline, type: 'network', ip, port, mac, id: printerId || inline.id } : undefined,
             data: {
                 type: 'raw',
                 content: dataBase64,
@@ -158,74 +162,7 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
     }
 });
 
-// ============================================================================
-// Printer auto-recovery — MAC-based IP resolution
-//
-// Flujo cliente (Flutter):
-//   1. POST /api/printers/mac-for-ip { ip } → captura MAC tras print exitoso
-//      la primera vez (cuando aún no la teníamos guardada en Supabase).
-//   2. POST /api/printers/resolve-by-mac { mac } → tras un fallo de socket,
-//      buscar la nueva IP de esa impresora en el LAN. Si la encuentra,
-//      Flutter actualiza Supabase y reintenta el print una vez.
-// ============================================================================
-
-app.post('/api/printers/mac-for-ip', authenticate, async (req, res) => {
-    const { ip } = req.body || {};
-    if (!ip || !/^\d{1,3}(\.\d{1,3}){3}$/.test(String(ip))) {
-        return res.status(400).json({ error: 'Missing or invalid ip' });
-    }
-    try {
-        const mac = await getMacForIp(String(ip));
-        if (!mac) return res.status(404).json({ error: 'mac_not_resolved', ip });
-        res.json({ ip, mac });
-    } catch (e) {
-        logger.error(`/mac-for-ip failed for ${ip}: ${e.message}`);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/printers/resolve-by-mac', authenticate, async (req, res) => {
-    const { mac, printerId, skipCache } = req.body || {};
-    const normalized = normalizeMac(mac);
-    if (!normalized) {
-        return res.status(400).json({ error: 'Missing or invalid mac' });
-    }
-    const logCtx = printerId ? ` [printer=${printerId}]` : '';
-    try {
-        const result = await resolveByMac(normalized, {
-            logCtx,
-            // El cliente puede pedir explícitamente saltar la cache
-            // (útil cuando ya supo que la IP cacheada está stale por
-            // un fallo de impresión que acaba de ocurrir).
-            skipMemoryCache: skipCache === true,
-        });
-        if (!result) {
-            return res.status(404).json({ error: 'printer_not_found', mac: normalized });
-        }
-        res.json({ mac: normalized, ip: result.ip, source: result.source });
-    } catch (e) {
-        logger.error(`/resolve-by-mac failed for ${normalized}: ${e.message}`);
-        res.status(500).json({ error: e.message });
-    }
-});
-
-/**
- * Invalida la entrada de cache MAC→IP para forzar re-resolución
- * fresca en el próximo lookup. El cliente Flutter llama aquí cuando
- * un print con la IP devuelta por el resolver falla — así evitamos
- * que el resolver siga sirviendo la misma IP stale durante todo el
- * TTL (5 min).
- */
-app.post('/api/printers/invalidate-mac-cache', authenticate, async (req, res) => {
-    const { mac } = req.body || {};
-    const normalized = normalizeMac(mac);
-    if (!normalized) {
-        return res.status(400).json({ error: 'Missing or invalid mac' });
-    }
-    invalidateCache(normalized);
-    logger.info(`/invalidate-mac-cache: ${normalized}`);
-    res.json({ ok: true, mac: normalized });
-});
+installPrinterRecoveryRoutes(app, authenticate);
 
 app.use(express.static(require('path').join(__dirname, '../../public')));
 

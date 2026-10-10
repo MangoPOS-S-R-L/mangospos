@@ -6,19 +6,18 @@ import {
   defaultNcfTypeFor,
   hasUsableEcfSequence,
   MAX_CERTIFICATE_BYTES,
-  nextSetTestRetry,
+  missingForClientRequest,
   parseAssociatedPage,
   parseProviderInfo,
-  parseSetTest,
   planSequenceWrite,
   requestStage,
-  suggestItemExample,
+  suggestEcfTypes,
   summarizeCompany,
   TaxpayerData,
   validateCertificate,
   validateEnablingXml,
-  validateItemExample,
   validateRequestContact,
+  validateRequestDetails,
   validateTaxpayer,
 } from "./ecf-onboarding.ts";
 
@@ -392,91 +391,6 @@ Deno.test("xml: tipo desconocido y extension equivocada", () => {
   assertEquals(errorsOf(r).length, 2);
 });
 
-Deno.test("producto de ejemplo: valido", () => {
-  const r = validateItemExample({
-    item_name: "EXPRESSO DOBLE",
-    billing_indicator: 1,
-    good_service_indicator: 1,
-    unit_price: 125,
-  });
-  assert(r.ok);
-  assertEquals(r.value.unitPriceItem, 125);
-  assertEquals("itemDescription" in r.value, false);
-});
-
-Deno.test("producto de ejemplo: Alanube pide precio entero", () => {
-  const r = validateItemExample({
-    item_name: "EXPRESSO",
-    billing_indicator: 1,
-    good_service_indicator: 1,
-    unit_price: 125.5,
-  });
-  assertEquals(errorsOf(r).length, 1);
-});
-
-Deno.test("producto de ejemplo: indicador 0 (no facturable) no aplica al set", () => {
-  const r = validateItemExample({
-    item_name: "LEY",
-    billing_indicator: 0,
-    good_service_indicator: 2,
-    unit_price: 10,
-  });
-  assertEquals(errorsOf(r).length, 1);
-});
-
-Deno.test("set de pruebas: forma de la guia (documentsInfo objeto con zipUrl)", () => {
-  const t = parseSetTest({
-    testId: "01GK1P6FK2EQXFV9CB8FHVV9P4",
-    status: "ACCEPTED",
-    retryNumber: 41,
-    totalDocumentProcessed: 20,
-    documentsInfo: {
-      zipUrl: "https://s3/docs.zip",
-      documents: [{ documentType: "fiscalInvoice", status: "ACCEPTED", encf: "E310000001410" }],
-    },
-    resumesInfo: {
-      zipUrl: "https://s3/resumes.zip",
-      documents: [{ documentType: "resume", status: "ACCEPTED", encf: "E320000002410" }],
-    },
-  });
-  assertEquals(t.id, "01GK1P6FK2EQXFV9CB8FHVV9P4");
-  assertEquals(t.retry_number, 41);
-  assertEquals(t.documents.length, 2);
-  assertEquals(t.documents_zip_url, "https://s3/docs.zip");
-  assertEquals(t.resumes_zip_url, "https://s3/resumes.zip");
-});
-
-Deno.test("set de pruebas: forma del OpenAPI (documentsInfo arreglo)", () => {
-  const t = parseSetTest({
-    testId: "01X",
-    status: "in_progress",
-    documentsInfo: [
-      { documentType: "creditNote", status: "REJECTED", encf: "E340000001820" },
-      { documentType: "debitNote", status: "IN_PROGRESS" },
-    ],
-  });
-  assertEquals(t.status, "IN_PROGRESS");
-  assertEquals(t.documents.map((d) => d.status), ["REJECTED", "IN_PROGRESS"]);
-  assertEquals(t.documents[1].encf, null);
-  assertEquals(t.documents_zip_url, null);
-});
-
-Deno.test("set de pruebas: respuesta de creacion trae id y no testId", () => {
-  const t = parseSetTest({ id: "01NUEVO", status: "REGISTERED" });
-  assertEquals(t.id, "01NUEVO");
-  assertEquals(t.documents.length, 0);
-});
-
-Deno.test("set de pruebas: reintentos", () => {
-  const first = nextSetTestRetry(null);
-  assert(first.ok);
-  assertEquals(first.value, null);
-  const second = nextSetTestRetry(41);
-  assert(second.ok);
-  assertEquals(second.value, 42);
-  assertEquals(errorsOf(nextSetTestRetry(99)).length, 1);
-});
-
 Deno.test("proveedor: saca los valores del formulario de postulacion", () => {
   const p = parseProviderInfo({
     data: {
@@ -502,27 +416,6 @@ Deno.test("empresa: resumen incluye las URLs para la postulacion", () => {
     companyUrls: { reception: "https://r", approval: "https://a", authentication: "https://t" },
   });
   assertEquals(c.company_urls?.authentication, "https://t");
-});
-
-Deno.test("sugerencia: el gravado mas caro, precio redondeado", () => {
-  const s = suggestItemExample([
-    { name: "AGUA", price: 45.45, taxed: false },
-    { name: "EXPRESSO DOBLE", price: "125.00", taxed: true },
-    { name: "GOMITAS", price: 23.44, taxed: true },
-  ]);
-  assertEquals(s?.item_name, "EXPRESSO DOBLE");
-  assertEquals(s?.billing_indicator, 1);
-  assertEquals(s?.unit_price, 125);
-});
-
-Deno.test("sugerencia: solo exentos va con indicador 4", () => {
-  const s = suggestItemExample([{ name: "AGUA", price: 45.45, taxed: false }]);
-  assertEquals(s?.billing_indicator, 4);
-  assertEquals(s?.unit_price, 45);
-});
-
-Deno.test("sugerencia: sin productos con precio no inventa", () => {
-  assertEquals(suggestItemExample([{ name: "GRATIS", price: 0, taxed: true }]), null);
 });
 
 // ── Solicitud del cliente ──────────────────────────────────────────────────
@@ -570,5 +463,76 @@ Deno.test("etapa de la solicitud", () => {
   assertEquals(
     requestStage({ ...base, hasCompany: true, usableSequences: true, provisioned: true, ecfEnabled: true }),
     "active",
+  );
+});
+
+// ── Requisitos de la solicitud (POS) ──────────────────────────────────────
+
+const DETAILS = {
+  phone: "(809) 555-1234",
+  legal_rep_name: " Ana  Pérez ",
+  branches: [
+    { name: "Gurabo", address: "Av. Luperón 4, Santiago" },
+    { name: "", address: "" },
+  ],
+  ecf_types: ["e32", "E31", "E32"],
+  ofv_user: "133328828",
+  ofv_password: " clave con espacios ",
+};
+
+Deno.test("validateRequestDetails: limpia, ordena tipos y descarta filas vacías", () => {
+  const r = validateRequestDetails(DETAILS, { hasSavedOfvPassword: false });
+  assert(r.ok);
+  assertEquals(r.value.legal_rep_name, "Ana Pérez");
+  assertEquals(r.value.branches, [{ name: "Gurabo", address: "Av. Luperón 4, Santiago" }]);
+  assertEquals(r.value.ecf_types, ["E31", "E32"]);
+  // La clave no se recorta.
+  assertEquals(r.value.ofv_password, " clave con espacios ");
+});
+
+Deno.test("validateRequestDetails: todo vacío lista cada requisito", () => {
+  const errors = errorsOf(validateRequestDetails({}, { hasSavedOfvPassword: false }));
+  assertEquals(errors.length, 5);
+  assert(errors.some((e) => e.includes("representante legal")));
+  assert(errors.some((e) => e.includes("clave de la Oficina Virtual")));
+});
+
+Deno.test("validateRequestDetails: la clave guardada se conserva si no mandan otra", () => {
+  const r = validateRequestDetails({ ...DETAILS, ofv_password: "  " }, { hasSavedOfvPassword: true });
+  assert(r.ok);
+  assertEquals(r.value.ofv_password, null);
+});
+
+Deno.test("validateRequestDetails: sucursal sin dirección y tipo inventado", () => {
+  const errors = errorsOf(validateRequestDetails(
+    { ...DETAILS, branches: [{ name: "Centro" }], ecf_types: ["E31", "B02"] },
+    { hasSavedOfvPassword: false },
+  ));
+  assertEquals(errors, [
+    "Falta la direccion de la sucursal Centro.",
+    "Tipo de comprobante desconocido: B02.",
+  ]);
+});
+
+Deno.test("suggestEcfTypes: equivalentes de la serie B, siempre con E34", () => {
+  assertEquals(
+    suggestEcfTypes([
+      { ncf_type: "B02", is_active: true },
+      { ncf_type: "B15", is_active: true },
+      { ncf_type: "B01", is_active: false },
+    ]),
+    ["E32", "E34", "E45"],
+  );
+  assertEquals(suggestEcfTypes([]), ["E31", "E32", "E34"]);
+  assertEquals(suggestEcfTypes([{ ncf_type: "E31" }]), ["E31", "E34"]);
+});
+
+Deno.test("missingForClientRequest: provincia, municipio y correo", () => {
+  const base = validateTaxpayer({ rnc: "133328828", legal_name: "X", fiscal_address: "Calle 1" });
+  assert(base.ok);
+  assertEquals(missingForClientRequest(base.value).length, 3);
+  assertEquals(
+    missingForClientRequest({ ...base.value, province: "Santiago", municipality: "Santiago", email: "a@b.do" }),
+    [],
   );
 });

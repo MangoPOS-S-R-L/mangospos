@@ -8,8 +8,8 @@
 //
 // Recuperación al inicio: cualquier job en estado `printing` cuando el
 // agente arranca se considera huérfano (la instancia previa cayó en
-// medio del print) y se devuelve a `queued` para reintentar (PRD §10
-// hito Fase 2).
+// medio del print). Su entrega es incierta y requiere revisión manual;
+// reenviarlo automáticamente podría duplicar el ticket.
 
 const path = require('path');
 const Database = require('better-sqlite3');
@@ -49,12 +49,14 @@ const init = () => {
     db.exec(SCHEMA);
 
     // Recuperación: jobs en `printing` al arrancar = huérfanos de una
-    // instancia previa que cayó. Volvemos a `queued` para reintento.
+    // instancia previa que cayó. No sabemos si ya envió bytes.
     const recovered = db
-        .prepare("UPDATE jobs SET status = 'queued', started_at = NULL WHERE status = 'printing'")
-        .run();
+        .prepare(`UPDATE jobs SET status = 'failed', finished_at = ?,
+            last_error = '[DELIVERY_UNCERTAIN] Agent stopped while printing; check printer before reprinting'
+            WHERE status = 'printing'`)
+        .run(Date.now());
     if (recovered.changes > 0) {
-        logger.warn(`[queue] Recuperados ${recovered.changes} jobs huerfanos en 'printing' al arrancar.`);
+        logger.warn(`[queue] ${recovered.changes} jobs huerfanos requieren revision de entrega al arrancar.`);
     }
     return db;
 };

@@ -18,7 +18,9 @@ const cors = require('cors');
 
 const { logger, baseDir, AGENT_ID, LOCAL_PORT } = require('../config');
 const { stopExistingAgentOnLocalPort } = require('../platform/windows');
-const { sendRawTcp, checkPrinterStatus } = require('../network/tcp');
+const { checkPrinterStatus } = require('../network/tcp');
+const { printNetworkPayload } = require('../network/network_printer');
+const { installPrinterRecoveryRoutes } = require('../network/printer_routes');
 const queue = require('../queue/store');
 const discoveryService = require('../core/discovery');
 
@@ -43,6 +45,7 @@ const buildApp = () => {
     });
 
     app.use(express.json());
+    installPrinterRecoveryRoutes(app, (_req, _res, next) => next());
 
     // ── Health ──────────────────────────────────────────────────────
     const healthPayload = () => ({
@@ -128,6 +131,7 @@ const buildApp = () => {
             status: job.status,
             attempts: job.attempts,
             last_error: job.lastError,
+            delivery_uncertain: String(job.lastError || '').startsWith('[DELIVERY_UNCERTAIN]'),
             enqueued_at: job.enqueuedAt && new Date(job.enqueuedAt).toISOString(),
             started_at: job.startedAt && new Date(job.startedAt).toISOString(),
             printed_at: job.finishedAt && new Date(job.finishedAt).toISOString(),
@@ -150,12 +154,14 @@ const buildApp = () => {
     // ── Impresión RAW directa por IP (network) ──────────────────────
     app.post('/api/printers/raw', async (req, res) => {
         try {
-            const ip = req.body?.ip;
-            const port = req.body?.port || 9100;
+            const inline = req.body?.printer && typeof req.body.printer === 'object' ? req.body.printer : {};
+            const printer = { ...inline, id: req.body?.printerId || inline.id,
+                type: 'network', ip: inline.ip || req.body?.ip,
+                port: inline.port ?? req.body?.port ?? 9100, mac: inline.mac || req.body?.mac };
             const dataBase64 = req.body?.dataBase64;
             const dataHex = req.body?.dataHex;
 
-            if (!ip) return res.status(400).json({ ok: false, error: 'Missing ip' });
+            if (!printer.ip && !printer.mac) return res.status(400).json({ ok: false, error: 'Missing printer ip/MAC' });
             if (!dataBase64 && !dataHex) {
                 return res.status(400).json({ ok: false, error: 'Missing dataBase64/dataHex' });
             }
@@ -164,11 +170,12 @@ const buildApp = () => {
                 ? Buffer.from(dataBase64, 'base64')
                 : Buffer.from(dataHex, 'hex');
 
-            await sendRawTcp(ip, port, payload);
-            res.json({ ok: true });
+            const target = await printNetworkPayload(printer, payload);
+            res.json({ ok: true, ...target });
         } catch (error) {
             logger.error(`Error RAW print: ${error.message}`);
-            res.status(500).json({ ok: false, error: error.message });
+            res.status(500).json({ ok: false, error: error.message, code: error.code,
+                safeToRetry: error.safeToRetry === true, deliveryUncertain: error.deliveryUncertain === true });
         }
     });
 
@@ -181,7 +188,7 @@ const buildApp = () => {
                 name: device.name || 'Printer',
                 ip: device.address && device.type === 'network' ? device.address : null,
                 port: device.port || 9100,
-                mac: device.deviceId || null,
+                mac: device.mac || (device.type !== 'network' ? device.deviceId : null),
                 deviceId: device.deviceId || device.address || null,
                 vid: device.vid || null,
                 pid: device.pid || null,

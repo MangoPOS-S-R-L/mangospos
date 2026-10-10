@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:decimal/decimal.dart';
 
 import '../../../core/currency/usd_conversion.dart';
+import '../../../core/fiscal/sales_note_policy.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/offline/ncf_offline_allocator.dart' show NcfAssignment;
 import '../../../core/offline/offline_ncf_service.dart';
@@ -51,9 +52,15 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   final Ref _ref;
   final ConnectivityService _connectivity = ConnectivityService();
   final OfflinePosService _offlinePos = OfflinePosService();
+  SalesNotePolicy _salesNotePolicy;
 
-  PaymentViewModel(this._cashierRepo, this._salesRepo, this._ref)
-    : super(const PaymentState()) {
+  PaymentViewModel(
+    this._cashierRepo,
+    this._salesRepo,
+    this._ref, {
+    SalesNotePolicy salesNotePolicy = const SalesNotePolicy(enabled: false),
+  }) : _salesNotePolicy = salesNotePolicy,
+       super(const PaymentState()) {
     unawaited(_connectivity.initialize());
   }
 
@@ -252,15 +259,16 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       // features del negocio, que traen caché local, así que el flag también
       // resuelve offline. Fail-soft: si no se puede leer queda apagado, que es
       // el comportamiento de siempre.
-      var salesNoteAvailable = false;
-      var salesNoteSelected = false;
+      _salesNotePolicy = const SalesNotePolicy(enabled: false);
       try {
         final features = await _ref
             .read(posSettingsRepositoryProvider)
             .getBusinessFeatures(businessId);
-        salesNoteAvailable = features.salesNoteEnabled;
-        salesNoteSelected =
-            features.salesNoteEnabled && features.salesNoteDefault;
+        _salesNotePolicy = SalesNotePolicy(
+          enabled: features.salesNoteEnabled,
+          notesBeforeInvoice: features.salesNoteLimit,
+          currentCount: features.salesNoteCount,
+        );
       } catch (_) {}
 
       // Si estamos cobrando una sub-cuenta y el cajero asignó cliente/NCF
@@ -303,12 +311,12 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         paymentMethods: methods,
         cashSession: cashSession,
         availableNcfTypes: availableNcfTypes,
-        // Con la nota de venta preseleccionada no hay NCF elegido: son
-        // documentos excluyentes.
-        selectedNcfType: salesNoteSelected ? null : prefilledNcfType,
-        clearNcfType: salesNoteSelected,
-        salesNoteAvailable: salesNoteAvailable,
-        salesNoteSelected: salesNoteSelected,
+        selectedNcfType: prefilledNcfType ?? (ecfEnabled ? 'E32' : 'B02'),
+        salesNoteEnabled: _salesNotePolicy.enabled,
+        salesNoteLimit: _salesNotePolicy.notesBeforeInvoice,
+        salesNoteCount: _salesNotePolicy.currentCount,
+        salesNoteAvailable: false,
+        salesNoteSelected: false,
         customerId: prefilledCustomerId,
         customerName: prefilledCustomerName,
         customerRnc: prefilledCustomerRnc,
@@ -474,17 +482,42 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   /// Si el tipo nuevo NO requiere RNC, se preserva el customer si existe
   /// (por si el usuario alterna entre E31 y E32 sin perder lo escrito).
   void selectNcfType(String type) {
+    if (_processingLocal || state.processingPayment || state.paymentProcessed) {
+      return;
+    }
     if (state.selectedNcfType == type && !state.salesNoteSelected) return;
     // Elegir un NCF sale de la nota de venta: son excluyentes.
     state = state.copyWith(selectedNcfType: type, salesNoteSelected: false);
+    _applySalesNotePolicy();
   }
 
   /// Cobra con NOTA DE VENTA: documento numerado propio del negocio, sin
   /// valor fiscal. La venta es real (inventario y caja); solo no consume NCF
   /// ni se declara.
   void selectSalesNote() {
-    if (state.salesNoteSelected) return;
-    state = state.copyWith(salesNoteSelected: true, clearNcfType: true);
+    if (_processingLocal || state.processingPayment || state.paymentProcessed) {
+      return;
+    }
+    if (state.salesNoteSelected || !state.salesNoteAvailable) return;
+    _applySalesNotePolicy(selectDefault: true);
+  }
+
+  void _applySalesNotePolicy({bool selectDefault = false}) {
+    final available = _salesNotePolicy.allowsNote(
+      fiscalType: state.selectedNcfType,
+      paymentMethodCodes: [
+        if (state.selectedMethod != null) state.selectedMethod!.code,
+      ],
+    );
+    state = state.copyWith(
+      error: state.error,
+      salesNoteEnabled: _salesNotePolicy.enabled,
+      salesNoteLimit: _salesNotePolicy.notesBeforeInvoice,
+      salesNoteCount: _salesNotePolicy.currentCount,
+      salesNoteAvailable: available,
+      salesNoteSelected:
+          available && (selectDefault || state.salesNoteSelected),
+    );
   }
 
   /// Invoca `emit-document` en modo SYNC: emite el doc inmediatamente y
@@ -546,8 +579,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
     // Function (la vieja batch, la nueva sync per-doc) — solo nos importa
     // el estado actual del doc en DB despues del intento.
     try {
-      final refreshed = await _salesRepo.getOrderFiscalDocument(
-        state.order!.id,
+      final refreshed = await _salesRepo.getFiscalDocumentById(
+        fiscalDocumentId,
       );
       debugPrint(
         '[emit-sync] REFETCH status=${refreshed?.ecfStatus} '
@@ -568,6 +601,9 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
   /// el cajero tenga seleccionado (consumo, crédito fiscal, e-CF o nota de
   /// venta) y solo él lo cambia, desde el selector.
   void selectPaymentMethod(PaymentMethod method) {
+    if (_processingLocal || state.processingPayment || state.paymentProcessed) {
+      return;
+    }
     state = state.copyWith(
       selectedMethod: method,
       amountReceived: method.isCash ? 0 : state.totalToPay,
@@ -578,6 +614,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       // para forzar el clear en copyWith.
       selectedBankAccount: null,
     );
+    _applySalesNotePolicy(selectDefault: true);
   }
 
   /// Selector usado por el modal cuando el método activo es
@@ -741,7 +778,7 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       // sin este `false` explícito el siguiente cobro saldría como nota
       // aunque el cajero haya elegido factura. Solo corre en negocios con la
       // feature prendida — en el resto no hay un solo viaje extra.
-      if (state.salesNoteAvailable) {
+      if (_salesNotePolicy.enabled) {
         try {
           await _salesRepo.markAsSalesNote(
             orderId: orderId,
@@ -851,21 +888,31 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         }
       }
 
-      // Con nota de venta no hay fiscal_document que buscar: el trigger emitió
-      // la nota. Se lee para imprimir su número en el ticket.
+      // El servidor decide con el contador actual, incluso si otra caja
+      // alcanzó el límite mientras este modal estaba abierto.
       SalesNote? salesNote;
       if (state.salesNoteSelected) {
         salesNote = await _salesRepo.getSalesNote(
           orderId: orderId,
-          checkId: checkId,
+          checkId: payment.checkId,
         );
       }
 
       FiscalDocument? fiscalDoc;
-      if (!state.salesNoteSelected) {
+      if (salesNote == null) {
         try {
-          fiscalDoc = await _salesRepo.getOrderFiscalDocument(orderId);
+          fiscalDoc = payment.fiscalDocumentId != null
+              ? await _salesRepo.getFiscalDocumentById(
+                  payment.fiscalDocumentId!,
+                )
+              : await _salesRepo.getFiscalDocumentForScope(
+                  orderId: orderId,
+                  checkId: payment.checkId,
+                );
         } catch (_) {}
+      }
+      if (fiscalDoc != null) {
+        state = state.copyWith(salesNoteSelected: false);
       }
 
       // Para e-CF: invocamos emit-document SYNC y esperamos al security_code
@@ -900,6 +947,8 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         processedPayment: payment,
         fiscalDocument: fiscalDoc,
         salesNote: salesNote,
+        salesNoteSelected:
+            salesNote != null || (state.salesNoteSelected && fiscalDoc == null),
         offlineQueued: false,
       );
     } catch (e) {
@@ -972,14 +1021,12 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
             // F4: el NCF asignado offline (y su tipo) viajan para que el
             // server registre el fiscal_document con ESE número al sincronizar.
             if (offlineNcf != null) 'offline_ncf': offlineNcf.ncf,
-            'requested_ncf_type': state.salesNoteSelected
-                ? null
-                : state.selectedNcfType,
+            'requested_ncf_type': state.selectedNcfType,
             // La marca de nota de venta viaja para que el replay la ponga
             // ANTES de reproducir el cobro: si llega después, el cierre ya
             // habrá emitido NCF. Viaja el valor elegido (incluido `false`)
             // para que el replay no herede una marca vieja de la orden.
-            if (state.salesNoteAvailable)
+            if (_salesNotePolicy.enabled)
               'is_sales_note': state.salesNoteSelected,
           },
         );

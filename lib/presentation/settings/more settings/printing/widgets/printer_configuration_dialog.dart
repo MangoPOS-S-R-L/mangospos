@@ -50,19 +50,26 @@ class _PrinterConfigurationDialogState
   late PrintSpeed _printSpeed;
   late final RasterInk _initialRasterInk;
   late RasterInk _rasterInk;
+
   /// Columnas del ticket raster guardadas hoy (null = default del papel) y
   /// las elegidas en el diálogo. Ver `core/printing/star/print_width.dart`.
   late final int? _initialColumnsWire;
   late int _columns;
+
   /// Renglones extra antes del corte guardados hoy (null = ninguno) y los
   /// elegidos en el diálogo. Ver `core/printing/star/cut_feed.dart`.
   late final int? _initialCutFeedWire;
   late int _cutFeedLines;
   late bool _isActive;
+
   /// Sprint 3 — id de la impresora de respaldo elegida en el dropdown.
   /// null = "Sin respaldo" → al guardar mandamos `clearFallback: true`.
   String? _fallbackPrinterId;
   bool _saving = false;
+  late String _lastSyncedIp;
+  late String _lastSyncedMac;
+  bool _ipEdited = false;
+  bool _macEdited = false;
 
   @override
   void initState() {
@@ -71,6 +78,8 @@ class _PrinterConfigurationDialogState
     _nameCtrl = TextEditingController(text: printer.name);
     _ipCtrl = TextEditingController(text: printer.ip ?? '');
     _macCtrl = TextEditingController(text: printer.mac ?? '');
+    _lastSyncedIp = _ipCtrl.text;
+    _lastSyncedMac = _macCtrl.text;
     _deviceCtrl = TextEditingController(text: printer.devicePath ?? '');
     _type = printer.type.name;
     _encoding = printer.encoding;
@@ -99,6 +108,27 @@ class _PrinterConfigurationDialogState
     _cutFeedLines = cutFeedWireValue(_initialCutFeedWire ?? 0) ?? 0;
     _isActive = printer.online;
     _fallbackPrinterId = printer.fallbackPrinterId;
+    ref.listenManual(printingPrintersViewModelProvider, (_, next) {
+      if (!mounted) return;
+      final current = next.items
+          .where((p) => p.id == widget.printer.id)
+          .firstOrNull;
+      if (current == null || current.businessId != widget.printer.businessId) {
+        return;
+      }
+      final nextIp = current.ip ?? '';
+      final nextMac = current.mac ?? '';
+      // Una recuperación automática actualiza los campos que el usuario
+      // todavía no editó, para que Guardar no restaure la IP anterior.
+      if (!_ipEdited && _ipCtrl.text.trim() == _lastSyncedIp.trim()) {
+        _ipCtrl.text = nextIp;
+      }
+      if (!_macEdited && _macCtrl.text.trim() == _lastSyncedMac.trim()) {
+        _macCtrl.text = nextMac;
+      }
+      _lastSyncedIp = nextIp;
+      _lastSyncedMac = nextMac;
+    });
   }
 
   @override
@@ -115,8 +145,7 @@ class _PrinterConfigurationDialogState
   /// rango.
   void _setPaperWidth(int width) {
     setState(() {
-      final wasDefault =
-          _columns == defaultColumnsForPaperWidth(_paperWidth);
+      final wasDefault = _columns == defaultColumnsForPaperWidth(_paperWidth);
       _paperWidth = width;
       _columns = wasDefault
           ? defaultColumnsForPaperWidth(width)
@@ -136,9 +165,16 @@ class _PrinterConfigurationDialogState
     setState(() {
       if (selected.ip != null && selected.ip!.isNotEmpty) {
         _ipCtrl.text = selected.ip!;
+        _ipEdited = true;
       }
-      if (selected.mac != null && selected.mac!.isNotEmpty) {
+      if (selected.type == PrinterType.network) {
+        // La selección representa otra impresora: una IP sin MAC no debe
+        // heredar la identidad de la impresora configurada antes.
+        _macCtrl.text = normalizeNetworkPrinterMac(selected.mac) ?? '';
+        _macEdited = true;
+      } else if (selected.mac != null && selected.mac!.isNotEmpty) {
         _macCtrl.text = selected.mac!;
+        _macEdited = true;
       }
       if (selected.idHint != null && selected.idHint!.isNotEmpty) {
         _deviceCtrl.text = selected.idHint!;
@@ -147,6 +183,12 @@ class _PrinterConfigurationDialogState
   }
 
   Future<void> _save() async {
+    if (_type == 'network' &&
+        _macCtrl.text.trim().isNotEmpty &&
+        normalizeNetworkPrinterMac(_macCtrl.text) == null) {
+      AppToast.error(context, 'La dirección MAC de red no es válida.');
+      return;
+    }
     setState(() => _saving = true);
     // Solo si cambió: evita reescribir connection_config en cada guardado.
     final columnsWire = printColumnsWireValue(_columns, _paperWidth);
@@ -393,11 +435,19 @@ class _PrinterConfigurationDialogState
             const SizedBox(width: 18),
             Expanded(
               child: _DialogField(
-                label: 'MAC / puerto USB',
+                label: _type == 'network'
+                    ? 'MAC de la impresora'
+                    : 'MAC / puerto USB',
                 child: TextField(
                   controller: _macCtrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Ej. USB001, VID/PID o MAC si aplica',
+                  onChanged: (_) => _macEdited = true,
+                  decoration: InputDecoration(
+                    hintText: _type == 'network'
+                        ? 'Ej. 00:11:22:33:44:55'
+                        : 'Ej. USB001, VID/PID o MAC si aplica',
+                    helperText: _type == 'network'
+                        ? 'Permite recuperar la conexión cuando cambia la IP.'
+                        : null,
                   ),
                 ),
               ),
@@ -432,7 +482,12 @@ class _PrinterConfigurationDialogState
           label: 'Dirección IP configurada',
           child: Row(
             children: [
-              Expanded(child: TextField(controller: _ipCtrl)),
+              Expanded(
+                child: TextField(
+                  controller: _ipCtrl,
+                  onChanged: (_) => _ipEdited = true,
+                ),
+              ),
               const SizedBox(width: 8),
               // Printing v2 (Slice A — Auto-discovery): botón visible solo
               // cuando el tipo es network. Lanza escaneo de la LAN y muestra
@@ -443,10 +498,11 @@ class _PrinterConfigurationDialogState
                   onPressed: _saving ? null : _openDiscoverDialog,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: MangoColors.primaryOrange,
-                    side: const BorderSide(
-                        color: MangoColors.primaryOrange),
+                    side: const BorderSide(color: MangoColors.primaryOrange),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -541,12 +597,7 @@ class _PrinterConfigurationDialogState
       ),
       (PrintSpeed.fast, Icons.bolt_outlined, 'Rápida', 'Sale antes'),
       (PrintSpeed.normal, Icons.speed_outlined, 'Normal', 'Equilibrio'),
-      (
-        PrintSpeed.slow,
-        Icons.high_quality_outlined,
-        'Lenta',
-        'Máxima nitidez',
-      ),
+      (PrintSpeed.slow, Icons.high_quality_outlined, 'Lenta', 'Máxima nitidez'),
     ];
 
     return Column(
@@ -616,18 +667,8 @@ class _PrinterConfigurationDialogState
   /// pre-cuenta del modelo "Moderna". Ver `core/printing/star/raster_ink.dart`.
   Widget _buildRasterInkSection() {
     const options = <(RasterInk, IconData, String, String)>[
-      (
-        RasterInk.fina,
-        Icons.remove_outlined,
-        'Fina',
-        'Trazo más delgado',
-      ),
-      (
-        RasterInk.normal,
-        Icons.text_fields_outlined,
-        'Normal',
-        'Recomendada',
-      ),
+      (RasterInk.fina, Icons.remove_outlined, 'Fina', 'Trazo más delgado'),
+      (RasterInk.normal, Icons.text_fields_outlined, 'Normal', 'Recomendada'),
       (
         RasterInk.reforzada,
         Icons.format_bold_outlined,
@@ -713,10 +754,9 @@ class _PrinterConfigurationDialogState
     Widget stepButton(IconData icon, bool enabled, int delta) {
       return IconButton.outlined(
         onPressed: enabled && canEdit
-            ? () => setState(() => _columns = clampColumns(
-                  _columns + delta,
-                  _paperWidth,
-                ))
+            ? () => setState(
+                () => _columns = clampColumns(_columns + delta, _paperWidth),
+              )
             : null,
         icon: Icon(icon),
         style: IconButton.styleFrom(
@@ -824,8 +864,12 @@ class _PrinterConfigurationDialogState
     Widget stepButton(IconData icon, bool enabled, int delta) {
       return IconButton.outlined(
         onPressed: enabled && canEdit
-            ? () => setState(() => _cutFeedLines =
-                  (_cutFeedLines + delta).clamp(0, kMaxCutFeedLines))
+            ? () => setState(
+                () => _cutFeedLines = (_cutFeedLines + delta).clamp(
+                  0,
+                  kMaxCutFeedLines,
+                ),
+              )
             : null,
         icon: Icon(icon),
         style: IconButton.styleFrom(
@@ -910,8 +954,9 @@ class _PrinterConfigurationDialogState
   /// no permitir auto-fallback (la BD también lo bloquea via CHECK).
   Widget _buildFallbackSection() {
     final all = ref.watch(printingPrintersViewModelProvider).items;
-    final candidates =
-        all.where((p) => p.id != widget.printer.id).toList(growable: false);
+    final candidates = all
+        .where((p) => p.id != widget.printer.id)
+        .toList(growable: false);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -941,8 +986,7 @@ class _PrinterConfigurationDialogState
           isExpanded: true,
           decoration: const InputDecoration(
             border: OutlineInputBorder(),
-            contentPadding:
-                EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
           ),
           items: [
             const DropdownMenuItem<String?>(
@@ -989,12 +1033,14 @@ class _DialogSectionTitle extends StatelessWidget {
           children: [
             Icon(icon, color: MangoColors.darkGray),
             const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                color: MangoColors.darkGray,
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: MangoColors.darkGray,
+                ),
               ),
             ),
           ],
@@ -1085,22 +1131,24 @@ class _PaperWidthCard extends StatelessWidget {
           children: [
             const Icon(Icons.print_rounded, size: 44, color: Color(0xFF84A8F7)),
             const SizedBox(width: 18),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$width mm',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: MangoColors.darkGray,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$width mm',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: MangoColors.darkGray,
+                    ),
                   ),
-                ),
-                const Text(
-                  'Tamaño de papel',
-                  style: TextStyle(fontSize: 14, color: MangoColors.darkGray),
-                ),
-              ],
+                  const Text(
+                    'Tamaño de papel',
+                    style: TextStyle(fontSize: 14, color: MangoColors.darkGray),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1183,8 +1231,7 @@ class _DiscoverPrinterDialog extends StatefulWidget {
   final PrintingPrintersViewModel vmCtrl;
 
   @override
-  State<_DiscoverPrinterDialog> createState() =>
-      _DiscoverPrinterDialogState();
+  State<_DiscoverPrinterDialog> createState() => _DiscoverPrinterDialogState();
 }
 
 class _DiscoverPrinterDialogState extends State<_DiscoverPrinterDialog> {
@@ -1217,25 +1264,25 @@ class _DiscoverPrinterDialogState extends State<_DiscoverPrinterDialog> {
     _sub = widget.vmCtrl
         .scanIntensiveStream(duration: const Duration(seconds: 120))
         .listen(
-      (d) {
-        if (!mounted) return;
-        final ip = d.ip;
-        final mac = d.mac;
-        final isDup = _found.any((p) {
-          if (ip != null && p.ip == ip) return true;
-          if (mac != null && p.mac == mac) return true;
-          return false;
-        });
-        if (isDup) return;
-        setState(() => _found.add(d));
-      },
-      onDone: () {
-        if (mounted) setState(() => _scanning = false);
-      },
-      onError: (_) {
-        if (mounted) setState(() => _scanning = false);
-      },
-    );
+          (d) {
+            if (!mounted) return;
+            final ip = d.ip;
+            final mac = d.mac;
+            final isDup = _found.any((p) {
+              if (ip != null && p.ip == ip) return true;
+              if (mac != null && p.mac == mac) return true;
+              return false;
+            });
+            if (isDup) return;
+            setState(() => _found.add(d));
+          },
+          onDone: () {
+            if (mounted) setState(() => _scanning = false);
+          },
+          onError: (_) {
+            if (mounted) setState(() => _scanning = false);
+          },
+        );
   }
 
   void _stopScan() {
@@ -1270,8 +1317,7 @@ class _DiscoverPrinterDialogState extends State<_DiscoverPrinterDialog> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.wifi_find,
-                      color: MangoColors.primaryOrange),
+                  const Icon(Icons.wifi_find, color: MangoColors.primaryOrange),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -1349,10 +1395,8 @@ class _DiscoverPrinterDialogState extends State<_DiscoverPrinterDialog> {
                     ? _emptyState()
                     : ListView.separated(
                         itemCount: _found.length,
-                        separatorBuilder: (_, _) => const Divider(
-                          height: 1,
-                          color: Color(0xFFF1F1F1),
-                        ),
+                        separatorBuilder: (_, _) =>
+                            const Divider(height: 1, color: Color(0xFFF1F1F1)),
                         itemBuilder: (_, i) {
                           final p = _found[i];
                           return _PrinterFoundTile(
@@ -1435,8 +1479,7 @@ class _PrinterFoundTile extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
         child: Row(
           children: [
-            const Icon(Icons.print_outlined,
-                color: MangoColors.darkGray),
+            const Icon(Icons.print_outlined, color: MangoColors.darkGray),
             const SizedBox(width: 10),
             Expanded(
               child: Column(

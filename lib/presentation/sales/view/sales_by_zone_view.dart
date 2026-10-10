@@ -1560,11 +1560,26 @@ Future<void> _handleMergeTable(
         multimeseroEnabled = modes.enabled;
         tableOwnerOnly = modes.tableOwnerOnly;
       } catch (_) {
-        // Si la lectura falla, asumimos OFF para no romper el flujo
-        // operativo. El admin verá que el toggle no toma efecto y reabre
-        // el setting.
-        multimeseroEnabled = false;
-        tableOwnerOnly = false;
+        // Sin respuesta a tiempo: lo último guardado en este equipo. Suponer
+        // OFF saltaba el PIN y la mesa quedaba a nombre de la cuenta logueada
+        // (y su comanda y su factura con ella). Solo sin nada guardado se
+        // asume OFF, para no romper el flujo operativo.
+        try {
+          final cached = await ref
+              .read(multimeseroRepositoryProvider)
+              .readCachedModes(businessIdForGate);
+          multimeseroEnabled = cached.enabled;
+          tableOwnerOnly = cached.tableOwnerOnly;
+        } catch (_) {
+          multimeseroEnabled = false;
+          tableOwnerOnly = false;
+        }
+      }
+      // Sin multimesero no hay PIN que identifique a nadie: un mesero que
+      // quedó de una entrada anterior (o de cuando el modo estaba prendido)
+      // no puede firmar esta mesa ni sus productos.
+      if (!multimeseroEnabled) {
+        ref.read(activeWaiterProvider.notifier).clear();
       }
     }
 

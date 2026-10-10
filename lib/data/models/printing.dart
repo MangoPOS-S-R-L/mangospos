@@ -2,6 +2,30 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+/// Identidad Ethernet de una impresora de red. No admite IPs, UUIDs de
+/// Bluetooth ni nombres de puertos USB como si fueran una dirección MAC.
+String? normalizeNetworkPrinterMac(String? value) {
+  if (value == null) return null;
+  final input = value.trim();
+  final valid =
+      RegExp(r'^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(input) ||
+      RegExp(r'^(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}$').hasMatch(input) ||
+      RegExp(r'^[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}$').hasMatch(input) ||
+      RegExp(r'^[0-9a-fA-F]{12}$').hasMatch(input);
+  if (!valid) {
+    return null;
+  }
+  final normalized = input.replaceAll(RegExp(r'[:.\-]'), '').toLowerCase();
+  if (normalized == '000000000000' ||
+      (int.parse(normalized.substring(0, 2), radix: 16) & 1) != 0) {
+    return null;
+  }
+  return List.generate(
+    6,
+    (i) => normalized.substring(i * 2, i * 2 + 2),
+  ).join(':');
+}
+
 /// Connection types supported by the printing service.
 enum PrinterType { network, bluetooth, usb }
 
@@ -68,6 +92,7 @@ class PrinterDevice {
   final int paperWidth;
   final String encoding;
   final DateTime createdAt;
+
   /// PRD 5 F2.5 — id del device que tiene físicamente la impresora
   /// (USB/BT). NULL para impresoras de red. Se propaga desde
   /// `PrinterConfig.hostDeviceId` al construir vía `fromConfig`.
@@ -110,9 +135,9 @@ class PrinterDevice {
       id: config.id,
       businessId: config.businessId,
       name: config.name,
-      ip: config.ipAddress,
-      port: config.port,
-      mac: config.mac,
+      ip: config.effectiveIp,
+      port: config.effectivePort,
+      mac: config.effectiveMac,
       devicePath: config.devicePath,
       type: config.printerType,
       online: config.online,
@@ -145,6 +170,9 @@ class PrinterDevice {
       'encoding': encoding,
       'last_seen': lastSeen?.toIso8601String(),
       'created_at': createdAt.toIso8601String(),
+      'host_device_id': hostDeviceId,
+      'fallback_printer_id': fallbackPrinterId,
+      'connection_config': connectionConfig,
     };
   }
 
@@ -408,7 +436,8 @@ class PrinterConfig {
   factory PrinterConfig.fromMap(Map<String, dynamic> map) {
     final normalized = PrinterFieldMapper.normalize(map);
     final rawTransport = map['transport']?.toString();
-    final legacyType = (normalized['type'] as String?) ?? PrinterType.network.name;
+    final legacyType =
+        (normalized['type'] as String?) ?? PrinterType.network.name;
     return PrinterConfig(
       id: normalized['id'] as String,
       businessId: normalized['business_id'] as String,
@@ -447,11 +476,26 @@ class PrinterConfig {
   // Helpers v2: leer config con fallback al campo legacy correspondiente.
   // Útil mientras conviven los dos modelos.
   String? get effectiveIp =>
-      (connectionConfig['ip'] as String?) ?? ipAddress;
+      PrinterFieldMapper._readString(connectionConfig, const [
+        'ip',
+        'ip_address',
+      ]) ??
+      PrinterFieldMapper._readString({'ip': ipAddress}, const ['ip']);
   int? get effectivePort =>
-      (connectionConfig['port'] as int?) ?? port;
-  String? get effectiveMac =>
-      (connectionConfig['mac'] as String?) ?? mac;
+      PrinterFieldMapper._readPort(connectionConfig) ??
+      PrinterFieldMapper._readPort({'port': port});
+  String? get effectiveMac {
+    final configured = PrinterFieldMapper._readString(connectionConfig, const [
+      'mac',
+      'mac_address',
+    ]);
+    if (isNetwork) {
+      return normalizeNetworkPrinterMac(configured) ??
+          normalizeNetworkPrinterMac(mac);
+    }
+    return configured ??
+        PrinterFieldMapper._readString({'mac': mac}, const ['mac']);
+  }
 
   Map<String, dynamic> toMap() {
     final ipValue = ipAddress?.trim();
@@ -603,16 +647,25 @@ final class PrinterFieldMapper {
   const PrinterFieldMapper._();
 
   static Map<String, dynamic> normalize(Map<String, dynamic> map) {
-    final ip = _readString(map, const ['ip', 'ip_address']);
-    final rawType = _readString(map, const ['type']);
+    final connection = PrinterConfig._readJsonMap(map['connection_config']);
+    final ip =
+        _readString(connection, const ['ip', 'ip_address']) ??
+        _readString(map, const ['ip', 'ip_address']);
+    final rawType = _readString(map, const ['type', 'transport']);
     final printerType = PrinterTypeX.fromName(rawType);
+    final configuredMac = _readString(connection, const ['mac', 'mac_address']);
+    final legacyMac = _readString(map, const ['mac', 'mac_address']);
+    final mac = printerType == PrinterType.network
+        ? normalizeNetworkPrinterMac(configuredMac) ??
+              normalizeNetworkPrinterMac(legacyMac)
+        : configuredMac ?? legacyMac;
 
     return {
       'id': _readString(map, const ['id']) ?? '',
       'business_id': _readString(map, const ['business_id']) ?? '',
       'name': _readString(map, const ['name']) ?? 'Printer',
       'ip': ip,
-      'mac': _readString(map, const ['mac']),
+      'mac': mac,
       'type': printerType.name,
       // Prefer `is_active` (admin flag, persistente) sobre `online`
       // (heartbeat en tiempo real). El toggle "Activo" del dialog
@@ -621,7 +674,7 @@ final class PrinterFieldMapper {
       'online': _readBool(map, const ['is_active', 'online']) ?? false,
       'last_seen': _readDateTime(map, const ['last_seen']),
       'created_at': _readDateTime(map, const ['created_at']) ?? DateTime.now(),
-      'port': _readInt(map, const ['port']),
+      'port': _readPort(connection) ?? _readPort(map),
       'device_path': _readString(map, const ['device_path']),
       'paper_width': _readInt(map, const ['paper_width']) ?? 80,
       'encoding': _readString(map, const ['encoding']) ?? 'CP437',
@@ -661,6 +714,11 @@ final class PrinterFieldMapper {
       if (parsed != null) return parsed;
     }
     return null;
+  }
+
+  static int? _readPort(Map<String, dynamic> map) {
+    final value = _readInt(map, const ['port']);
+    return value != null && value > 0 && value <= 65535 ? value : null;
   }
 
   static DateTime? _readDateTime(Map<String, dynamic> map, List<String> keys) {

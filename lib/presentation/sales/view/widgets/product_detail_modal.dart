@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../../data/models/order_item_removal_reason.dart';
 import '../../logic/unit_removal_plan.dart';
@@ -113,6 +114,18 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
   bool get _hasLoyaltyReward => _loyaltyMarker != null;
 
   late double _quantity;
+
+  /// Lo que tenía la línea al abrir: con el "+" bloqueado, escribir no puede
+  /// pasar de aquí.
+  late double _openingQty;
+
+  /// La cantidad también se escribe. El campo se lleva a [_quantity] con las
+  /// mismas reglas que − y +; lo inválido vuelve a la última cantidad buena.
+  late TextEditingController _qtyController;
+  final FocusNode _qtyFocus = FocusNode();
+  Future<bool>? _qtyCommit;
+  static const _maxTypedQty = 999;
+
   late bool _isTakeout;
   late bool _isCourtesy;
   // Estado inicial del descuento/cortesía: exigimos autorización SOLO cuando
@@ -145,6 +158,9 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     _quantity = _normalizeQty(
       _scopedItems.fold<double>(0, (sum, item) => sum + item.quantity),
     );
+    _openingQty = _quantity;
+    _qtyController = TextEditingController(text: _formatQty(_quantity));
+    _qtyFocus.addListener(_onQtyFocusChange);
     _isTakeout = _scopedItems.every((item) => item.isTakeout);
     final fullAmount = _fullAmountForQuantity(widget.item.quantity);
     _isCourtesy =
@@ -161,8 +177,15 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     _notesController.dispose();
     _courtesyReasonController.dispose();
     _discountController.dispose();
+    _qtyController.dispose();
+    _qtyFocus.dispose();
     super.dispose();
   }
+
+  String _formatQty(double q) =>
+      q == q.roundToDouble() ? q.toStringAsFixed(0) : q.toStringAsFixed(2);
+
+  void _syncQtyText() => _qtyController.text = _formatQty(_quantity);
 
   double _normalizeQty(double value) {
     final rounded = value.roundToDouble();
@@ -181,6 +204,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (!_canAddMore) return;
     setState(() {
       _quantity = _normalizeQty(_quantity + 1);
+      _syncQtyText();
     });
   }
 
@@ -201,6 +225,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (!_canReduce) return;
     setState(() {
       _quantity = _normalizeQty(_quantity - 1);
+      _syncQtyText();
     });
   }
 
@@ -215,6 +240,93 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     } finally {
       _authorizingReduce = false;
     }
+  }
+
+  /// Cantidad escrita, o null si no es un entero entre 1 y [_maxTypedQty].
+  double? _parseTypedQty() {
+    final v = int.tryParse(_qtyController.text.trim());
+    if (v == null || v < 1 || v > _maxTypedQty) return null;
+    return v.toDouble();
+  }
+
+  bool _exceedsAddLimit(double q) => !_canAddMore && q > _openingQty + 0.0001;
+
+  bool _belowReduceFloor(double q) =>
+      !_reduceUnlocked && q < (widget.reduceFloor ?? 0) - 0.0001;
+
+  /// Mientras escribe, los totales siguen lo escrito si ya vale. Lo que pide
+  /// PIN o no vale se resuelve al confirmar ([_commitTypedQty]).
+  void _onQtyTyped(String _) {
+    final q = _parseTypedQty();
+    if (q == null || _exceedsAddLimit(q) || _belowReduceFloor(q)) return;
+    if ((q - _quantity).abs() < 0.0001) return;
+    setState(() => _quantity = q);
+  }
+
+  void _onQtyFocusChange() {
+    if (_qtyFocus.hasFocus) {
+      // Al tocar el número queda todo seleccionado: se escribe encima.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_qtyFocus.hasFocus) return;
+        _qtyController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _qtyController.text.length,
+        );
+      });
+    } else {
+      _commitTypedQty();
+    }
+  }
+
+  /// Aplica lo escrito con las reglas de − y +: mínimo 1, sin pasar de lo
+  /// que había si el producto está inactivo, y PIN para bajar de lo ya
+  /// enviado. Si no se puede, el campo vuelve a la última cantidad válida y
+  /// devuelve false. Perder el foco y «Guardar» comparten la misma llamada:
+  /// el PIN no se pide dos veces.
+  Future<bool> _commitTypedQty() =>
+      _qtyCommit ??= _applyTypedQty().whenComplete(() => _qtyCommit = null);
+
+  Future<bool> _applyTypedQty() async {
+    if (_qtyController.text == _formatQty(_quantity)) return true;
+    final q = _parseTypedQty();
+    String? problem;
+    if (q == null) {
+      problem = 'Escribe una cantidad entre 1 y $_maxTypedQty.';
+    } else if (_exceedsAddLimit(q)) {
+      problem = widget.addMoreBlockedReason;
+    } else if (!_belowReduceFloor(q)) {
+      setState(() {
+        _quantity = q;
+        _syncQtyText();
+      });
+      return true;
+    } else if (widget.onAuthorizeReduce != null && !_authorizingReduce) {
+      _authorizingReduce = true;
+      try {
+        final allowed = await widget.onAuthorizeReduce!();
+        if (!mounted) return false;
+        if (allowed) {
+          setState(() {
+            _reduceUnlocked = true;
+            _quantity = q;
+            _syncQtyText();
+          });
+          return true;
+        }
+      } finally {
+        _authorizingReduce = false;
+      }
+    } else {
+      problem = widget.reduceBlockedReason;
+    }
+    if (!mounted) return false;
+    setState(_syncQtyText);
+    if (problem != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showAppSnackBar(SnackBar(content: Text(problem)));
+    }
+    return false;
   }
 
   Future<void> _handleDelete() async {
@@ -248,6 +360,10 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
 
   Future<void> _handleSave() async {
     if (_isSaving) return;
+    // Lo escrito en la cantidad y sin confirmar (o que pide PIN) se resuelve
+    // antes de guardar; si no se pudo, el campo ya volvió y no se guarda.
+    if (!await _commitTypedQty()) return;
+    if (!mounted) return;
 
     final originalQuantity = _scopedItems.fold<double>(
       0,
@@ -580,18 +696,37 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
                             ),
                             Container(
                               color: Colors.white,
-                              width: 45,
+                              width: 52,
                               height: 40,
                               margin: const EdgeInsets.symmetric(vertical: 4),
                               alignment: Alignment.center,
-                              child: Text(
-                                _quantity == _quantity.roundToDouble()
-                                    ? _quantity.toStringAsFixed(0)
-                                    : _quantity.toStringAsFixed(2),
+                              child: TextField(
+                                key: const ValueKey('product-detail-qty'),
+                                controller: _qtyController,
+                                focusNode: _qtyFocus,
+                                textAlign: TextAlign.center,
+                                keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.done,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                  LengthLimitingTextInputFormatter(3),
+                                ],
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
                                 ),
+                                cursorColor: kPrimary,
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  filled: false,
+                                  contentPadding: EdgeInsets.zero,
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  disabledBorder: InputBorder.none,
+                                ),
+                                onChanged: _onQtyTyped,
+                                onSubmitted: (_) => _commitTypedQty(),
                               ),
                             ),
                             IconButton(

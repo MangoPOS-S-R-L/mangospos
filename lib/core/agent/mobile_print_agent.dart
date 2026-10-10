@@ -26,7 +26,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../printing/android_usb_raw_printer.dart';
+import '../printing/lan_mac_recovery.dart';
+import '../printing/network_printer_recovery.dart';
 import '../printing/usb_printer_identity.dart';
+import '../../data/models/printing.dart';
 import '../offline/hub/hub_config.dart';
 import '../auth/offline_auth_service.dart';
 import '../offline/hub/hub_roster_codec.dart';
@@ -59,14 +62,61 @@ class MobilePrintAgent {
     HubLanTokenService? hubTokens,
     OfflineAuthService? offlineAuth,
     bool Function()? cloudAvailable,
+    @visibleForTesting Future<List<PrinterConfig>> Function()? networkPrinters,
+    @visibleForTesting Future<bool> Function(String ip, int port)? networkProbe,
+    @visibleForTesting
+    Future<String?> Function(String ip, int port)? networkMac,
+    @visibleForTesting
+    Future<String?> Function(String mac, String previousIp, int port)?
+    networkScan,
+    @visibleForTesting Future<String> Function()? activeBusinessId,
+    @visibleForTesting DateTime Function()? networkNow,
+    @visibleForTesting
+    Future<void> Function(String ip, int port, Uint8List data)? networkWrite,
   }) : _hubTokens = hubTokens ?? HubLanTokenService.instance,
        _offlineAuth = offlineAuth ?? OfflineAuthService(),
        _cloudAvailable =
-           cloudAvailable ?? (() => ConnectivityService().isConnected);
+           cloudAvailable ?? (() => ConnectivityService().isConnected),
+       _networkPrintersOverride = networkPrinters,
+       _networkProbe = networkProbe ?? _probeNetwork,
+       _networkMac = networkMac ?? _captureNetworkMac,
+       _networkMacInjected = networkMac != null,
+       _networkScan = networkScan ?? _scanNetworkMac,
+       _activeBusinessOverride = activeBusinessId,
+       _networkNow = networkNow ?? DateTime.now,
+       _networkWrite = networkWrite ?? _writeNetwork;
 
   final HubLanTokenService _hubTokens;
   final OfflineAuthService _offlineAuth;
   final bool Function() _cloudAvailable;
+  final Future<List<PrinterConfig>> Function()? _networkPrintersOverride;
+  final Future<bool> Function(String ip, int port) _networkProbe;
+  final Future<String?> Function(String ip, int port) _networkMac;
+  final bool _networkMacInjected;
+  final Future<String?> Function(String mac, String previousIp, int port)
+  _networkScan;
+  final Future<String> Function()? _activeBusinessOverride;
+  final DateTime Function() _networkNow;
+  final Future<void> Function(String ip, int port, Uint8List data)
+  _networkWrite;
+  String? _networkBusinessId;
+  List<PrinterConfig> _authorizedNetworkPrinters = const [];
+  DateTime? _networkLoadedAt;
+  // Separate from the app's recovery state: resolving via this HTTP agent
+  // must not await the app's own in-flight request back to this same agent.
+  final _mobileRecoveryState = NetworkPrinterRecoveryState(
+    persistLocally: false,
+  );
+  late final _mobileRecovery = NetworkPrinterRecovery(
+    probe: _networkProbe,
+    captureMac: _networkMac,
+    captureExpectedMac: _captureExpectedNetworkMac,
+    scan: (mac, previousIp, port, _) => _networkScan(mac, previousIp, port),
+    configuredIp: (printer) async => printer.effectiveIp,
+    save: (_, _, _) async {},
+    state: _mobileRecoveryState,
+    now: _networkNow,
+  );
   HttpServer? _server;
   int _port = _defaultPort;
   final List<Map<String, dynamic>> _jobHistory = [];
@@ -188,6 +238,9 @@ class MobilePrintAgent {
     // Printer discovery
     router.get('/printers', _handleListPrinters);
     router.get('/api/printers/discover', _handleListPrinters);
+    router.post('/api/printers/mac-for-ip', _handleNetworkMac);
+    router.post('/api/printers/resolve-by-mac', _handleNetworkResolve);
+    router.post('/check-connectivity', _handleNetworkConnectivity);
 
     // Print job
     router.post('/print', _handlePrint);
@@ -202,6 +255,13 @@ class MobilePrintAgent {
 
     return router;
   }
+
+  /// Exercises the real routes and auth middleware without binding a socket.
+  @visibleForTesting
+  shelf.Handler get handlerForTesting => const shelf.Pipeline()
+      .addMiddleware(_corsMiddleware())
+      .addMiddleware(_authMiddleware())
+      .addHandler(_buildRouter().call);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Middleware
@@ -326,6 +386,7 @@ class MobilePrintAgent {
 
   /// Read the current business so switching sessions cannot expose old data.
   Future<String> _resolveOwnBusinessId() async {
+    if (_activeBusinessOverride != null) return _activeBusinessOverride();
     try {
       final storage = await StorageService.getInstance();
       final id = await storage.read(StorageKeys.activeBusinessId) ?? '';
@@ -747,6 +808,271 @@ class MobilePrintAgent {
     });
   }
 
+  static String? _networkIp(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    if (!RegExp(r'^(?:\d{1,3}\.){3}\d{1,3}$').hasMatch(text)) return null;
+    final parts = text.split('.');
+    if (parts.length != 4 ||
+        parts.any((part) {
+          final number = int.tryParse(part);
+          return number == null || number < 0 || number > 255;
+        })) {
+      return null;
+    }
+    return parts.map((part) => int.parse(part).toString()).join('.');
+  }
+
+  static int? _networkPort(dynamic value) {
+    if (value == null) return 9100;
+    final parsed = int.tryParse(value.toString());
+    return parsed != null && parsed > 0 && parsed <= 65535 ? parsed : null;
+  }
+
+  static Future<bool> _probeNetwork(String ip, int port) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        ip,
+        port,
+        timeout: const Duration(milliseconds: 1200),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      socket?.destroy();
+    }
+  }
+
+  static Future<String?> _captureNetworkMac(String ip, int port) =>
+      LanMacRecovery.captureMacForIp(ip, tcpPort: port);
+
+  Future<String?> _captureExpectedNetworkMac(
+    String ip,
+    int port,
+    String? expectedMac,
+  ) => _networkMacInjected
+      ? _networkMac(ip, port)
+      : LanMacRecovery.captureMacForIp(
+          ip,
+          tcpPort: port,
+          expectedMac: expectedMac,
+        );
+
+  static Future<String?> _scanNetworkMac(
+    String mac,
+    String previousIp,
+    int port,
+  ) => LanMacRecovery.resolveIpByMac(
+    mac: mac,
+    tcpPort: port,
+    previousIp: previousIp,
+  );
+
+  Future<List<PrinterConfig>> _loadNetworkPrinters() async {
+    final businessId = await _resolveOwnBusinessId();
+    if (businessId != _networkBusinessId) {
+      _networkBusinessId = businessId;
+      _authorizedNetworkPrinters = const [];
+      _networkLoadedAt = null;
+    }
+    if (businessId.isEmpty) return const [];
+    if (_networkLoadedAt != null &&
+        _networkNow().difference(_networkLoadedAt!) <
+            const Duration(seconds: 2)) {
+      return _authorizedNetworkPrinters;
+    }
+    try {
+      final List<PrinterConfig> printers;
+      if (_networkPrintersOverride != null) {
+        printers = await _networkPrintersOverride();
+      } else {
+        if (!_cloudAvailable()) return _authorizedNetworkPrinters;
+        final client = Supabase.instance.client;
+        if (client.auth.currentSession == null) return const [];
+        final rows = await client
+            .from('printers')
+            .select()
+            .eq('business_id', businessId)
+            .eq('is_active', true)
+            .timeout(const Duration(seconds: 2));
+        printers = rows.map(PrinterConfig.fromMap).toList();
+      }
+      // A business switch during the request invalidates that result.
+      if (await _resolveOwnBusinessId() != businessId) return const [];
+      for (final previous in _authorizedNetworkPrinters) {
+        final current = printers.where((p) => p.id == previous.id).firstOrNull;
+        if (current == null ||
+            current.effectiveIp != previous.effectiveIp ||
+            current.effectiveMac != previous.effectiveMac ||
+            current.effectivePort != previous.effectivePort ||
+            !current.isActive) {
+          await _mobileRecoveryState.forgetPrinter(previous.id);
+        }
+      }
+      _authorizedNetworkPrinters = printers
+          .where(
+            (printer) =>
+                printer.businessId == businessId &&
+                printer.isActive &&
+                printer.isNetwork,
+          )
+          .toList(growable: false);
+      _networkLoadedAt = _networkNow();
+    } catch (_) {
+      // Retain only records already authorized for this active business.
+    }
+    return _authorizedNetworkPrinters;
+  }
+
+  Future<PrinterConfig?> _networkPrinterForAddress(String ip, int port) async {
+    final matches = (await _loadNetworkPrinters())
+        .where(
+          (printer) =>
+              (printer.effectivePort ?? 9100) == port &&
+              (printer.effectiveIp == ip ||
+                  NetworkPrinterRecoveryState.shared.knownIp(printer) == ip ||
+                  _mobileRecoveryState.knownIp(printer) == ip),
+        )
+        .toList(growable: false);
+    return matches.length == 1 ? matches.single : null;
+  }
+
+  Future<shelf.Response> _handleNetworkMac(shelf.Request request) async {
+    final body = await _readJson(request);
+    final ip = _networkIp(body?['ip']);
+    final port = _networkPort(body?['port']);
+    if (body == null || ip == null || port == null) {
+      return _jsonError('Invalid ip or port', 400);
+    }
+    final printer = await _networkPrinterForAddress(ip, port);
+    if (printer == null) {
+      return _jsonError('Printer no autorizado para tu negocio', 403);
+    }
+    try {
+      final expectedMac =
+          normalizeNetworkPrinterMac(printer.effectiveMac) ??
+          NetworkPrinterRecoveryState.shared.knownMac(printer) ??
+          _mobileRecoveryState.knownMac(printer);
+      final mac = normalizeNetworkPrinterMac(
+        await _captureExpectedNetworkMac(ip, port, expectedMac),
+      );
+      return _jsonOk({
+        'ip': ip,
+        'port': port,
+        'mac': mac,
+        'verified': mac != null,
+      });
+    } catch (_) {
+      return _jsonOk({'ip': ip, 'port': port, 'mac': null, 'verified': false});
+    }
+  }
+
+  Future<shelf.Response> _handleNetworkResolve(shelf.Request request) async {
+    final body = await _readJson(request);
+    final requestedMac = normalizeNetworkPrinterMac(body?['mac']?.toString());
+    final printerId = body?['printerId']?.toString().trim();
+    final port = _networkPort(body?['port']);
+    if (body == null ||
+        requestedMac == null ||
+        printerId == null ||
+        printerId.isEmpty ||
+        port == null) {
+      return _jsonError('Missing registered printerId, valid MAC or port', 400);
+    }
+    final printer = (await _loadNetworkPrinters())
+        .where((p) => p.id == printerId)
+        .firstOrNull;
+    final expectedMac = printer == null
+        ? null
+        : normalizeNetworkPrinterMac(printer.effectiveMac) ??
+              NetworkPrinterRecoveryState.shared.knownMac(printer) ??
+              _mobileRecoveryState.knownMac(printer);
+    if (printer == null ||
+        expectedMac != requestedMac ||
+        (printer.effectivePort ?? 9100) != port) {
+      return _jsonError('Printer o MAC no autorizado para tu negocio', 403);
+    }
+    final verifiedPrinter = PrinterConfig(
+      id: printer.id,
+      businessId: printer.businessId,
+      name: printer.name,
+      type: printer.type,
+      ipAddress: printer.effectiveIp,
+      port: port,
+      mac: expectedMac,
+      isActive: printer.isActive,
+      createdAt: printer.createdAt,
+      connectionConfig: {...printer.connectionConfig, 'mac': expectedMac},
+    );
+    try {
+      final ip = await _mobileRecovery.resolve(
+        printer: verifiedPrinter,
+        cachedIp: printer.effectiveIp ?? '',
+      );
+      if (await _resolveOwnBusinessId() != printer.businessId) {
+        return _jsonError(
+          'El negocio activo cambió durante la recuperación',
+          403,
+        );
+      }
+      // The response contract always contains a fresh identity verification.
+      if (normalizeNetworkPrinterMac(
+                await _captureExpectedNetworkMac(ip, port, requestedMac),
+              ) !=
+              requestedMac ||
+          !await _networkProbe(ip, port)) {
+        return _jsonOk({
+          'ip': null,
+          'port': port,
+          'mac': requestedMac,
+          'verified': false,
+        });
+      }
+      return _jsonOk({
+        'ip': ip,
+        'port': port,
+        'mac': requestedMac,
+        'verified': true,
+      });
+    } catch (_) {
+      return _jsonOk({
+        'ip': null,
+        'port': port,
+        'mac': requestedMac,
+        'verified': false,
+      });
+    }
+  }
+
+  Future<shelf.Response> _handleNetworkConnectivity(
+    shelf.Request request,
+  ) async {
+    final body = await _readJson(request);
+    final rawPrinters = body?['printers'];
+    if (rawPrinters is! List || rawPrinters.length > 32) {
+      return _jsonError('Invalid printers list', 400);
+    }
+    final results = <String, bool>{};
+    await Future.wait(
+      rawPrinters.map((raw) async {
+        if (raw is! Map) return;
+        final ip = _networkIp(raw['ip']);
+        final port = _networkPort(raw['port']);
+        if (ip == null || port == null) return;
+        var online = false;
+        try {
+          online =
+              await _networkPrinterForAddress(ip, port) != null &&
+              await _networkProbe(ip, port);
+        } catch (_) {}
+        results[ip] = online;
+        results['$ip:$port'] = online;
+      }),
+    );
+    return _jsonOk({'results': results});
+  }
+
   Future<shelf.Response> _handleListPrinters(shelf.Request request) async {
     final printers = <Map<String, dynamic>>[];
 
@@ -918,43 +1244,14 @@ class MobilePrintAgent {
     }
   }
 
-  /// Verifica que la IP exista como printer activo en algún business al
-  /// que el usuario autenticado tenga acceso. Las policies RLS de
-  /// `printers` filtran automáticamente por `current_user_business_ids`,
-  /// así que esta consulta solo devuelve filas de los negocios del user.
-  ///
-  /// Nota sobre el puerto: muchos registros legacy tienen `port=NULL` en
-  /// la DB. Validamos PRIMARIAMENTE por IP — si la IP coincide con un
-  /// printer del negocio del user, autoriza. El puerto es informativo.
-  /// Si DOS businesses tienen la misma IP registrada (caso edge), RLS le
-  /// devuelve al user el suyo y todo bien; si por error el otro también
-  /// fuera visible, igual está autorizado en términos del modelo actual.
-  ///
-  /// Si no hay sesión Supabase activa (agente standalone), permite el
-  /// print — caso edge de agente puro sin acceso a DB.
+  /// Admite la dirección configurada y una corrección local verificada del
+  /// mismo registro. El caché conserva esa autorización durante un outage.
   Future<bool> _isNetworkPrinterAuthorized(String ip, int port) async {
-    if (ip.isEmpty) return false;
+    if (_networkIp(ip) == null || port <= 0 || port > 65535) return false;
     try {
-      final client = Supabase.instance.client;
-      if (client.auth.currentSession == null) {
-        return true;
-      }
-      // Match solo por IP. Port se tolera porque hay registros legacy con
-      // port=NULL. Si en el futuro se fuerza port no-null, agregar un
-      // OR igualdad.
-      final rows = await client
-          .from('printers')
-          .select('id, business_id, port')
-          .eq('ip_address', ip)
-          .eq('is_active', true)
-          .limit(5);
-      return (rows as List).isNotEmpty;
-    } catch (e) {
-      debugPrint(
-        '[MobileAgent] _isNetworkPrinterAuthorized error: $e — '
-        'permitiendo print para no romper en caso de outage temporal de DB',
-      );
-      return true;
+      return await _networkPrinterForAddress(ip, port) != null;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1191,12 +1488,35 @@ class MobilePrintAgent {
     Uint8List data,
   ) async {
     final ip = printer['ip']?.toString() ?? '';
-    final port = (printer['port'] as num?)?.toInt() ?? 9100;
+    final port = _networkPort(printer['port']);
 
-    if (ip.isEmpty) {
+    if (_networkIp(ip) == null || port == null) {
       throw Exception('Missing network printer IP');
     }
+    final config = await _networkPrinterForAddress(ip, port);
+    if (config == null) {
+      throw Exception('Printer no autorizado para tu negocio');
+    }
+    final expectedMac =
+        normalizeNetworkPrinterMac(config.effectiveMac) ??
+        NetworkPrinterRecoveryState.shared.knownMac(config) ??
+        _mobileRecoveryState.knownMac(config);
+    if (expectedMac != null &&
+        normalizeNetworkPrinterMac(
+              await _captureExpectedNetworkMac(ip, port, expectedMac),
+            ) !=
+            expectedMac) {
+      throw const NetworkPrinterIdentityException(
+        'La IP solicitada no corresponde a la MAC de la impresora registrada.',
+      );
+    }
+    if (await _resolveOwnBusinessId() != config.businessId) {
+      throw Exception('El negocio activo cambió antes de imprimir');
+    }
+    await _networkWrite(ip, port, data);
+  }
 
+  static Future<void> _writeNetwork(String ip, int port, Uint8List data) async {
     final socket = await Socket.connect(
       ip,
       port,

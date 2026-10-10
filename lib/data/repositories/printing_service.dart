@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import '../models/printing_models.dart';
 import '../models/order_item_removal_reason.dart';
 import '../models/sales_models.dart';
+import '../utils/virtual_sale_table_name.dart';
 import '../../core/network/connectivity_service.dart';
 import '../../core/offline/offline_catalog_service.dart';
 import '../../core/offline/business_settings_offline_cache.dart';
@@ -589,37 +590,29 @@ class PrintingService {
     try {
       switch (printer.type) {
         case 'network':
-          final ip = printer.ipAddress?.trim();
+          final ip = printer.effectiveIp?.trim();
           if (ip == null || ip.isEmpty) {
             throw Exception('La impresora de red no tiene IP configurada.');
           }
           debugPrint(
-            '🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.port ?? 9100}',
+            '🖨️ Ruta seleccionada -> NETWORK assigned printer ${printer.name} (${printer.id}) @ $ip:${printer.effectivePort ?? 9100}',
+          );
+          final targetIp = await _printingRepo.resolveReachableNetworkIp(
+            printer: printer,
+            cachedIp: ip,
           );
           if (kIsWeb) {
             await _printingRepo.printRawViaAgent(
-              ip: ip,
-              port: printer.port ?? 9100,
+              ip: targetIp,
+              port: printer.effectivePort ?? 9100,
+              mac:
+                  printer.effectiveMac ??
+                  _printingRepo.getKnownNetworkMac(printer),
+              printerId: printer.id,
               data: bytes,
             );
             return KitchenPrintOutcome.directSuccess;
           }
-          // ─── PREFLIGHT (paridad con el test de página) ────────────
-          // Si la IP cacheada no responde a una sonda TCP corta, releer
-          // la fila fresca en BD ANTES de quemar los 4 intentos contra
-          // una IP muerta (era el caso "el test imprime pero la comanda
-          // no": el cache de impresoras por área servía una IP vieja).
-          // Sin recovery por MAC aquí: en impresora de cocina compartida
-          // la sonda puede fallar por puerto ocupado por otra tablet y
-          // el escaneo LAN metería segundos de latencia — los retries
-          // con jitter de abajo ya cubren ese caso.
-          final targetIp = localOnly
-              ? ip
-              : await _printingRepo.resolveReachableNetworkIp(
-                  printer: printer,
-                  cachedIp: ip,
-                  includeMacRecovery: false,
-                );
           try {
             // attempts:4 (vs 2 por defecto) — en un setup multi-tablet a una
             // impresora de cocina COMPARTIDA, el puerto 9100 puede estar
@@ -629,7 +622,7 @@ class PrintingService {
             // de agente/cloud (que en solo-tablets no existe / no se drena).
             await _printingRepo.printRawDirectTcp(
               ip: targetIp,
-              port: printer.port ?? 9100,
+              port: printer.effectivePort ?? 9100,
               data: bytes,
               attempts: 4,
             );
@@ -645,6 +638,7 @@ class PrintingService {
                 printerId: printer.id,
                 ipAddress: targetIp,
                 existingMac: printer.effectiveMac,
+                port: printer.effectivePort ?? 9100,
               );
             }
           } on PrintLikelyDeliveredException catch (e) {
@@ -662,19 +656,26 @@ class PrintingService {
                 printerId: printer.id,
                 ipAddress: targetIp,
                 existingMac: printer.effectiveMac,
+                port: printer.effectivePort ?? 9100,
               );
             }
           } catch (e) {
+            if (e is PrintDeliveryUncertainException) rethrow;
             debugPrint(
               '⚠️ Direct TCP failed for ${printer.name}, using LAN agent fallback: $e',
             );
             try {
               await _printingRepo.printRawViaAgent(
                 ip: targetIp,
-                port: printer.port ?? 9100,
+                port: printer.effectivePort ?? 9100,
                 data: bytes,
+                mac:
+                    printer.effectiveMac ??
+                    _printingRepo.getKnownNetworkMac(printer),
+                printerId: printer.id,
               );
             } catch (agentError) {
+              if (agentError is PrintDeliveryUncertainException) rethrow;
               if (localOnly) rethrow;
               // Último recurso antes del cloud queue: la impresora pudo
               // haber cambiado de IP por DHCP. A esta altura ya fallaron
@@ -703,7 +704,7 @@ class PrintingService {
               try {
                 await _printingRepo.printRawDirectTcp(
                   ip: recoveredIp,
-                  port: printer.port ?? 9100,
+                  port: printer.effectivePort ?? 9100,
                   data: bytes,
                   attempts: 2,
                 );
@@ -740,6 +741,7 @@ class PrintingService {
               data: bytes,
             );
           } catch (e) {
+            if (e is PrintDeliveryUncertainException) rethrow;
             debugPrint(
               '⚠️ Direct USB failed for ${printer.name}, using local agent fallback: $e',
             );
@@ -799,6 +801,7 @@ class PrintingService {
       }
     } catch (e) {
       // FALLBACK FINAL: si tenemos businessId, escalamos al cloud queue.
+      if (e is PrintDeliveryUncertainException) rethrow;
       // El agent retomará con retry/backoff. Si no, propagamos error
       // legacy.
       if (localOnly || businessId == null || businessId.isEmpty) {
@@ -812,8 +815,8 @@ class PrintingService {
           kind: 'kitchen_order',
           areaCode: areaCode,
           printerId: printer.id,
-          ip: printer.ipAddress,
-          port: printer.port,
+          ip: _printingRepo.getKnownNetworkIp(printer) ?? printer.effectiveIp,
+          port: printer.effectivePort,
           idempotencyKey: idempotencyKey,
         );
         debugPrint(
@@ -1007,6 +1010,14 @@ class PrintingService {
     return result;
   }
 
+  /// Datos de cabecera del ticket tal como los arma [_getOrderDisplayData].
+  /// Solo para pruebas.
+  @visibleForTesting
+  Future<Map<String, dynamic>> debugOrderDisplayData(
+    String orderId, {
+    String? fallbackWaiterName,
+  }) => _getOrderDisplayData(orderId, fallbackWaiterName: fallbackWaiterName);
+
   /// Obtener datos de la orden para mostrar en el ticket
   Future<Map<String, dynamic>> _getOrderDisplayData(
     String orderId, {
@@ -1021,6 +1032,7 @@ class PrintingService {
             table_sessions(
               people_count,
               customer_name,
+              opened_by_employee_id,
               dining_tables(code, label),
               waiter:profiles!waiter_user_id(full_name),
               opener:profiles!opened_by(full_name)
@@ -1042,11 +1054,19 @@ class PrintingService {
       // cocina identifique el cliente.
       final customerName = (tableSession?['customer_name'] as String?)?.trim();
 
-      // Resolver nombre de la mesa
+      // Resolver nombre de la mesa. Mesa virtual de venta rápida/manual: su
+      // código es una identidad interna (`quick#2`, `manual-<id>`), así que va
+      // la etiqueta. Mesas reales: el código, como siempre.
       String? resolvedTableName;
       final tableCode = diningTable?['code']?.toString().trim();
       final tableLabel = diningTable?['label']?.toString().trim();
-      if (tableCode != null && tableCode.isNotEmpty) {
+      final virtualTableName = virtualSaleTableName(
+        code: tableCode,
+        label: tableLabel,
+      );
+      if (virtualTableName != null) {
+        resolvedTableName = virtualTableName;
+      } else if (tableCode != null && tableCode.isNotEmpty) {
         resolvedTableName = tableCode;
       } else if (tableLabel != null && tableLabel.isNotEmpty) {
         resolvedTableName = tableLabel;
@@ -1077,7 +1097,31 @@ class PrintingService {
         debugPrint('[audit] fn_order_opener_name falló en printing: $e');
       }
 
-      if (resolvedWaiterName == null) {
+      // Mesa abierta con PIN: el mesero es ese empleado. Los perfiles de
+      // abajo son la CUENTA del equipo (compartida en multimesero), así que
+      // sin la RPC se lee el empleado directo y, si tampoco, queda el
+      // respaldo del caller (datos de la orden, nunca la sesión).
+      final openerEmployeeId = tableSession?['opened_by_employee_id']
+          ?.toString()
+          .trim();
+      if (resolvedWaiterName == null &&
+          openerEmployeeId != null &&
+          openerEmployeeId.isNotEmpty) {
+        try {
+          final employee = await _client
+              .from('employees')
+              .select('first_name, last_name')
+              .eq('id', openerEmployeeId)
+              .maybeSingle();
+          final name = [
+            employee?['first_name']?.toString().trim() ?? '',
+            employee?['last_name']?.toString().trim() ?? '',
+          ].where((part) => part.isNotEmpty).join(' ');
+          if (name.isNotEmpty) resolvedWaiterName = name;
+        } catch (e) {
+          debugPrint('[audit] mesero $openerEmployeeId no resuelto: $e');
+        }
+      } else if (resolvedWaiterName == null) {
         final waiterUser = tableSession?['waiter'] as Map<String, dynamic>?;
         final openerUser = tableSession?['opener'] as Map<String, dynamic>?;
         final waiterFullName = waiterUser?['full_name']?.toString().trim();

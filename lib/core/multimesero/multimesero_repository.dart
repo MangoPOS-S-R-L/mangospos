@@ -66,7 +66,23 @@ class MultimeseroRepository {
     String businessId,
   ) async {
     if (businessId.isEmpty) return (enabled: false, tableOwnerOnly: false);
-    final row = await _readSettings(businessId);
+    return _modesFromRow(await _readSettings(businessId));
+  }
+
+  /// Lo último que [readModes] guardó en este equipo, sin tocar la red. Para
+  /// cuando la lectura en línea no responde a tiempo: suponer «apagado»
+  /// saltaba el PIN y la mesa (con su comanda y su factura) quedaba a nombre
+  /// de la cuenta logueada en el equipo.
+  Future<({bool enabled, bool tableOwnerOnly})> readCachedModes(
+    String businessId,
+  ) async {
+    if (businessId.isEmpty) return (enabled: false, tableOwnerOnly: false);
+    return _modesFromRow(await BusinessSettingsOfflineCache().loadRow(businessId));
+  }
+
+  static ({bool enabled, bool tableOwnerOnly}) _modesFromRow(
+    Map<String, dynamic>? row,
+  ) {
     final enabled = row?['multimesero_enabled'] == true;
     return (
       enabled: enabled,

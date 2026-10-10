@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:io';
 import 'dart:async';
@@ -14,6 +13,8 @@ import 'package:mangopos/core/printing/android_usb_raw_printer.dart';
 import 'package:mangopos/core/printing/bluetooth_print_service.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/lan_mac_recovery.dart';
+import 'package:mangopos/core/printing/network_printer_recovery.dart';
+import 'package:mangopos/core/printing/print_delivery_exception.dart';
 import 'package:mangopos/core/printing/star/cut_feed.dart';
 import 'package:mangopos/core/printing/star/print_width.dart';
 import 'package:mangopos/core/printing/star/raster_ink.dart';
@@ -24,6 +25,10 @@ import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 
 import '../models/printing_models.dart';
+
+export '../../core/printing/network_printer_recovery.dart'
+    show PrinterAddressChange, NetworkPrinterIdentityException;
+export '../../core/printing/print_delivery_exception.dart';
 
 /// Resultado del intento de impresión. Permite a la UI mostrar mensajes
 /// distintos según el camino que tomó el job:
@@ -37,10 +42,7 @@ import '../models/printing_models.dart';
 /// Caso "todo fallido" (cloud queue también rechaza) no es un valor del
 /// enum: `printEscPos` lanza excepción en ese escenario y la UI muestra
 /// el diálogo de reintentar.
-enum PrintOutcome {
-  directSuccess,
-  escalatedToCloud,
-}
+enum PrintOutcome { directSuccess, escalatedToCloud }
 
 /// Los bytes ya se enviaron a la impresora (flush OK) y muy probablemente
 /// imprimió, pero la impresora cerró la conexión después (RST/EPIPE post-flush
@@ -65,7 +67,17 @@ class PrintingRepository {
   static final Map<String, _CachedLookup<List<PrinterConfig>>>
   _orderPrintersCache = {};
 
-  PrintingRepository(this._client);
+  PrintingRepository(this._client, {LocalPrintService? localPrintService})
+    : _localService = localPrintService ?? LocalPrintService();
+
+  static Stream<PrinterAddressChange> get printerAddressChanges =>
+      NetworkPrinterRecoveryState.shared.changes;
+
+  String? getKnownNetworkIp(PrinterConfig printer) =>
+      NetworkPrinterRecoveryState.shared.knownIp(printer);
+
+  String? getKnownNetworkMac(PrinterConfig printer) =>
+      NetworkPrinterRecoveryState.shared.knownMac(printer);
 
   static T? _readCached<T>(Map<String, _CachedLookup<T>> cache, String key) {
     final entry = cache[key];
@@ -217,6 +229,7 @@ class PrintingRepository {
     String? type,
     String? devicePath,
     String? mac,
+    bool clearMac = false,
     bool? isActive,
     int? paperWidth,
     String? encoding,
@@ -235,7 +248,30 @@ class PrintingRepository {
         updates['transport'] = _transportFromLegacyType(type);
       }
       if (devicePath != null) updates['device_path'] = devicePath;
-      if (mac != null) updates['mac'] = mac;
+      if (clearMac) {
+        updates['mac'] = null;
+      } else if (mac != null) {
+        updates['mac'] = mac;
+      }
+      if (ipAddress != null || port != null || mac != null || clearMac) {
+        final row = await _client
+            .from('printers')
+            .select('connection_config')
+            .eq('id', printerId)
+            .maybeSingle();
+        final config = Map<String, dynamic>.from(
+          (row?['connection_config'] as Map?) ?? const {},
+        );
+        if (ipAddress != null) config['ip'] = ipAddress;
+        if (port != null) config['port'] = port;
+        if (clearMac) {
+          config.remove('mac');
+          config.remove('mac_address');
+        } else if (mac != null) {
+          config['mac'] = mac;
+        }
+        updates['connection_config'] = config;
+      }
       // BUG fix: `is_active` es el flag administrativo (habilitada/
       // deshabilitada lógicamente). `online` es el heartbeat en tiempo
       // real — lo sobreescribe el ping cada 30s. Antes este código
@@ -254,6 +290,9 @@ class PrintingRepository {
 
       if (updates.isEmpty) return;
       await _client.from('printers').update(updates).eq('id', printerId);
+      if (ipAddress != null || port != null || mac != null || clearMac) {
+        await NetworkPrinterRecoveryState.shared.forgetPrinter(printerId);
+      }
       _clearLookupCaches();
     } catch (e) {
       throw Exception('Error al actualizar impresora: $e');
@@ -1182,15 +1221,17 @@ class PrintingRepository {
         }
       }
 
-      return printers.map((p) {
-        final id = p['id']?.toString() ?? '';
-        return {
-          ...p,
-          'pending_count': pendingByPrinter[id] ?? 0,
-          'failed_count': failedByPrinter[id] ?? 0,
-          'printing_count': printingByPrinter[id] ?? 0,
-        };
-      }).toList(growable: false);
+      return printers
+          .map((p) {
+            final id = p['id']?.toString() ?? '';
+            return {
+              ...p,
+              'pending_count': pendingByPrinter[id] ?? 0,
+              'failed_count': failedByPrinter[id] ?? 0,
+              'printing_count': printingByPrinter[id] ?? 0,
+            };
+          })
+          .toList(growable: false);
     } catch (e) {
       throw Exception('Error al obtener salud de impresoras: $e');
     }
@@ -1264,22 +1305,28 @@ class PrintingRepository {
     try {
       final source = await _client
           .from('print_jobs')
-          .select('business_id, printer_id, data_hex, ip, port, area_code, kind')
+          .select(
+            'business_id, printer_id, data_hex, ip, port, area_code, kind',
+          )
           .eq('id', sourceJobId)
           .single();
 
-      final inserted = await _client.from('print_jobs').insert({
-        'business_id': source['business_id'],
-        'printer_id': source['printer_id'],
-        'data_hex': source['data_hex'],
-        'ip': source['ip'],
-        'port': source['port'],
-        'area_code': source['area_code'],
-        'kind': source['kind'],
-        'status': 'pending',
-        'retry_count': 0,
-        // idempotency_key vacío → no choca con unique parcial.
-      }).select('id').single();
+      final inserted = await _client
+          .from('print_jobs')
+          .insert({
+            'business_id': source['business_id'],
+            'printer_id': source['printer_id'],
+            'data_hex': source['data_hex'],
+            'ip': source['ip'],
+            'port': source['port'],
+            'area_code': source['area_code'],
+            'kind': source['kind'],
+            'status': 'pending',
+            'retry_count': 0,
+            // idempotency_key vacío → no choca con unique parcial.
+          })
+          .select('id')
+          .single();
 
       _clearLookupCaches();
       return inserted['id']?.toString() ?? '';
@@ -1376,7 +1423,7 @@ class PrintingRepository {
   }
 
   // Local Print Service
-  final _localService = LocalPrintService();
+  final LocalPrintService _localService;
 
   // ── Serialización por impresora dentro de ESTE device ────────────────────
   // Una térmica de red atiende UNA conexión TCP al puerto 9100 a la vez. Si la
@@ -1465,8 +1512,16 @@ class PrintingRepository {
     required String ip,
     int port = 9100,
     required List<int> data,
+    String? mac,
+    String? printerId,
   }) async {
-    final ok = await _localService.printRawData(ip: ip, port: port, data: data);
+    final ok = await _localService.printRawData(
+      ip: ip,
+      port: port,
+      data: data,
+      mac: mac,
+      configuredPrinterId: printerId,
+    );
     if (!ok) {
       throw Exception('El agente local rechazó los datos RAW');
     }
@@ -1571,16 +1626,13 @@ class PrintingRepository {
         await Future.delayed(_jitteredBackoff(300 * attempt));
       }
       try {
-        await _sendRawTcpOnce(
-          ip: ip,
-          port: port,
-          data: data,
-          timeout: timeout,
-        );
+        await _sendRawTcpOnce(ip: ip, port: port, data: data, timeout: timeout);
         return;
       } on PrintLikelyDeliveredException {
         // Los bytes se enviaron (RST post-flush). NO reintentar: re-imprimiría
         // la misma comanda. Propagar para que el caller tampoco escale.
+        rethrow;
+      } on PrintDeliveryUncertainException {
         rethrow;
       } catch (e, st) {
         lastError = e;
@@ -1608,6 +1660,7 @@ class PrintingRepository {
     } catch (_) {}
 
     Object? asyncError;
+    var writeStarted = false;
     StreamSubscription<List<int>>? sub;
     try {
       // Suscripción para capturar errores asíncronos del socket (RST/
@@ -1623,8 +1676,9 @@ class PrintingRepository {
         cancelOnError: false,
       );
 
+      writeStarted = true;
       socket.add(data);
-      await socket.flush();
+      await socket.flush().timeout(timeout);
 
       // Drain: dejamos que la térmica procese los últimos bytes
       // (incluyendo GS V 'B 0' = corte) antes del FIN. Sin esto
@@ -1638,9 +1692,14 @@ class PrintingRepository {
         // (normal en térmicas). Lo marcamos como "probablemente entregado"
         // para que el retry de abajo y el fallback al agente NO re-impriman
         // (eso causaba la comanda duplicada). Reintentar solo es seguro
-        // cuando los bytes NO llegaron a enviarse (fallo de connect/flush).
+        // cuando la conexión falló ANTES de comenzar la escritura.
         throw PrintLikelyDeliveredException(asyncError!);
       }
+    } on PrintLikelyDeliveredException {
+      rethrow;
+    } catch (e) {
+      if (writeStarted) throw PrintDeliveryUncertainException(e);
+      rethrow;
     } finally {
       try {
         await sub?.cancel();
@@ -1675,6 +1734,7 @@ class PrintingRepository {
     String? idempotencyKey,
     String kind = 'other',
     String? areaCode,
+
     /// El ticket pide salir como imagen (ver `PrintTicket.preferRaster`).
     /// Se propaga tal cual al adaptador: la decisión es del formato, no de
     /// la impresora, y tiene que valer por cualquier transporte.
@@ -1698,8 +1758,7 @@ class PrintingRepository {
     // este device, mandamos el job al agent remoto del host vía LAN.
     final hostId = printer.hostDeviceId?.trim();
     if (hostId != null && hostId.isNotEmpty) {
-      final selfId =
-          await DeviceIdentity.getOrCreateId(printer.businessId);
+      final selfId = await DeviceIdentity.getOrCreateId(printer.businessId);
       if (hostId != selfId) {
         try {
           // No propagamos `timeout` (5s default) — el remoto necesita más
@@ -1712,6 +1771,7 @@ class PrintingRepository {
           );
           return PrintOutcome.directSuccess;
         } catch (e) {
+          if (e is PrintDeliveryUncertainException) rethrow;
           // Fallback inteligente: si el host_device_id apunta a un agent
           // que ya NO existe (registro huerfano por reinstall del app,
           // device viejo borrado, etc), no tiene sentido escalar al cloud
@@ -1736,6 +1796,8 @@ class PrintingRepository {
                 timeout: timeout,
               );
               return PrintOutcome.directSuccess;
+            } on PrintDeliveryUncertainException {
+              rethrow;
             } catch (_) {
               // Local tampoco anduvo: caer al retry fresco / cloud queue.
             }
@@ -1775,6 +1837,7 @@ class PrintingRepository {
       await _printEscPosLocal(printer: printer, data: data, timeout: timeout);
       return PrintOutcome.directSuccess;
     } catch (e) {
+      if (e is PrintDeliveryUncertainException) rethrow;
       // Paridad con el test de página: antes de rendirnos, releer la
       // fila fresca de la impresora en BD y reintentar una vez si la
       // config cacheada quedó stale (IP/host/puerto/ruta USB viejos).
@@ -1830,8 +1893,11 @@ class PrintingRepository {
     try {
       // Timeout corto: offline no debe demorar la escalación al cloud
       // queue (que también maneja offline con su propio flujo).
-      fresh = await getPrinterById(stale.id)
-          .timeout(const Duration(seconds: 2), onTimeout: () => null);
+      fresh = await getPrinterById(
+        stale.id,
+      ).timeout(const Duration(seconds: 2), onTimeout: () => null);
+    } on PrintDeliveryUncertainException {
+      rethrow;
     } catch (_) {
       fresh = null;
     }
@@ -1857,6 +1923,8 @@ class PrintingRepository {
         areaCode: areaCode,
         refreshOnFailure: false,
       );
+    } on PrintDeliveryUncertainException {
+      rethrow;
     } catch (_) {
       // El retry fresco tampoco anduvo — que el caller escale con el
       // error ORIGINAL (más informativo que este segundo fallo).
@@ -1904,10 +1972,14 @@ class PrintingRepository {
   }) async {
     switch (printer.printerType) {
       case PrinterType.network:
-        final ip = printer.ipAddress?.trim();
+        final ip = printer.effectiveIp?.trim();
         if (ip == null || ip.isEmpty) {
           throw Exception('La impresora de red no tiene IP configurada.');
         }
+        final targetIp = await resolveReachableNetworkIp(
+          printer: printer,
+          cachedIp: ip,
+        );
         if (kIsWeb) {
           final up = await isAgentUp();
           if (!up) {
@@ -1916,8 +1988,10 @@ class PrintingRepository {
             );
           }
           await printRawViaAgent(
-            ip: ip,
-            port: printer.port ?? 9100,
+            ip: targetIp,
+            port: printer.effectivePort ?? 9100,
+            mac: printer.effectiveMac ?? getKnownNetworkMac(printer),
+            printerId: printer.id,
             data: data,
           );
           return;
@@ -1932,10 +2006,6 @@ class PrintingRepository {
         // aparece una IP mejor (ej. impresora ocupada con otra
         // conexión), seguimos con el flujo normal — retries y fallbacks
         // de siempre quedan intactos.
-        final targetIp = await resolveReachableNetworkIp(
-          printer: printer,
-          cachedIp: ip,
-        );
         try {
           // Retry silencioso con backoff exponencial antes de escalar a
           // recovery por MAC. Cubre fallos transitorios típicos: blip de
@@ -1946,14 +2016,14 @@ class PrintingRepository {
           // path de recovery / agent fallback / cloud queue.
           await _printTcpWithRetries(
             ip: targetIp,
-            port: printer.port ?? 9100,
+            port: printer.effectivePort ?? 9100,
             data: data,
             timeout: timeout,
           );
           // Print directo OK. Si no tenemos MAC para esta impresora, intentar
           // capturarlo en background — sirve para auto-recovery futuro si la
           // IP cambia por DHCP.
-          _captureMacIfMissing(printer);
+          _captureMacIfMissing(printer, ip: targetIp);
         } on PrintLikelyDeliveredException catch (e) {
           // Bytes enviados (RST post-flush): el ticket muy probablemente ya
           // imprimió. NO hacer recovery por MAC ni fallback al agente — eso
@@ -1962,8 +2032,9 @@ class PrintingRepository {
             'ℹ️ ${printer.name}: conexión cerrada tras enviar (post-flush); '
             'ticket probablemente impreso, no se reintenta: $e',
           );
-          _captureMacIfMissing(printer);
+          _captureMacIfMissing(printer, ip: targetIp);
         } catch (originalError) {
+          if (originalError is PrintDeliveryUncertainException) rethrow;
           // Recovery por MAC ANTES del fallback al agente: si la impresora
           // tiene MAC guardado y el agente está vivo, le pedimos que escanee
           // la LAN. Si encuentra la impresora en otra IP, actualizamos
@@ -1976,11 +2047,15 @@ class PrintingRepository {
             try {
               await printRawDirectTcp(
                 ip: recoveredIp,
-                port: printer.port ?? 9100,
+                port: printer.effectivePort ?? 9100,
                 data: data,
                 timeout: timeout,
               );
               return;
+            } on PrintLikelyDeliveredException {
+              return;
+            } on PrintDeliveryUncertainException {
+              rethrow;
             } catch (_) {
               // El IP nuevo tampoco respondió — caemos al fallback de agente.
             }
@@ -1988,7 +2063,9 @@ class PrintingRepository {
           if (await isAgentUp()) {
             await printRawViaAgent(
               ip: recoveredIp ?? targetIp,
-              port: printer.port ?? 9100,
+              port: printer.effectivePort ?? 9100,
+              mac: printer.effectiveMac ?? getKnownNetworkMac(printer),
+              printerId: printer.id,
               data: data,
             );
             return;
@@ -2082,6 +2159,7 @@ class PrintingRepository {
               '[USB] fallback al agente también falló para '
               '${printer.name}: $e',
             );
+            if (e is PrintDeliveryUncertainException) rethrow;
           }
         }
 
@@ -2138,14 +2216,12 @@ class PrintingRepository {
     try {
       await enqueuePrintJobToCloud(
         businessId: businessId,
-        dataHex: data
-            .map((b) => b.toRadixString(16).padLeft(2, '0'))
-            .join(),
+        dataHex: data.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
         kind: kind,
         areaCode: areaCode ?? 'cashier',
         printerId: printer.id,
-        ip: printer.ipAddress,
-        port: printer.port,
+        ip: getKnownNetworkIp(printer) ?? printer.effectiveIp,
+        port: printer.effectivePort,
         idempotencyKey: idempotencyKey,
       );
       debugPrint(
@@ -2198,7 +2274,8 @@ class PrintingRepository {
         lookedUp = true;
       } catch (e) {
         final msg = e.toString().toLowerCase();
-        final isNetwork = e is TimeoutException ||
+        final isNetwork =
+            e is TimeoutException ||
             msg.contains('socketexception') ||
             msg.contains('clientexception') ||
             msg.contains('failed host lookup');
@@ -2219,9 +2296,7 @@ class PrintingRepository {
       hostName = (row['device_name'] as String?) ?? 'otro dispositivo';
 
       if (!online || agentUrl == null || agentUrl.isEmpty) {
-        throw Exception(
-          'No se puede imprimir: $hostName está fuera de línea.',
-        );
+        throw Exception('No se puede imprimir: $hostName está fuera de línea.');
       }
       unawaited(_saveHostAgent(hostDeviceId, agentUrl, hostName));
     } else {
@@ -2247,38 +2322,21 @@ class PrintingRepository {
         'id': printer.id,
         'type': printer.printerType.name,
         'name': printer.name,
-        'ip': printer.ipAddress,
-        'port': printer.port,
+        'ip': getKnownNetworkIp(printer) ?? printer.effectiveIp,
+        'port': printer.effectivePort,
         'devicePath': printer.devicePath,
-        'mac': printer.mac,
+        'mac': printer.effectiveMac ?? getKnownNetworkMac(printer),
       },
-      'content': {
-        'type': 'raw_base64',
-        'dataBase64': base64Data,
-      },
+      'content': {'type': 'raw_base64', 'dataBase64': base64Data},
     };
 
-    final response = await http
-        .post(
-          Uri.parse('$agentUrl/print'),
-          headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode(payload),
-        )
-        .timeout(timeout);
-
-    if (response.statusCode != 200) {
-      String detail = response.body.trim();
-      try {
-        final parsed = jsonDecode(response.body);
-        if (parsed is Map && parsed['error'] is String) {
-          detail = parsed['error'] as String;
-        }
-      } catch (_) {}
-      if (detail.length > 200) detail = '${detail.substring(0, 200)}…';
-      throw Exception(
-        'No se pudo imprimir desde $hostName (código ${response.statusCode})'
-        '${detail.isEmpty ? '' : ': $detail'}.',
-      );
+    final accepted = await _localService.printAtAgent(
+      agentUrl: agentUrl,
+      payload: payload,
+      timeout: timeout,
+    );
+    if (!accepted) {
+      throw Exception('El agente de $hostName rechazó la impresión.');
     }
   }
 
@@ -2325,6 +2383,7 @@ class PrintingRepository {
     required PrinterConfig printer,
     required List<int> data,
     Duration timeout = const Duration(seconds: 10),
+
     /// Ver `printEscPos`: el formato del ticket manda sobre el transporte.
     bool preferRaster = false,
     // El receipt path (`_printEscPosLocal`) ya envuelve esta llamada en
@@ -2395,8 +2454,8 @@ class PrintingRepository {
     required PrinterConfig printer,
     required List<int> data,
   }) async {
-    final ids = _parseUsbIdentity(printer.devicePath) ??
-        _parseUsbIdentity(printer.mac);
+    final ids =
+        _parseUsbIdentity(printer.devicePath) ?? _parseUsbIdentity(printer.mac);
     if (ids == null) {
       throw Exception(
         'La impresora USB "${printer.name}" no tiene un identificador '
@@ -2597,7 +2656,9 @@ class PrintingRepository {
     } finally {
       try {
         await usb.close();
-      } catch (_) {/* best-effort */}
+      } catch (_) {
+        /* best-effort */
+      }
     }
   }
 
@@ -2721,10 +2782,10 @@ if ($items.Count -eq 0) {
   Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersMacOS() async {
     if (kIsWeb) return const [];
     try {
-      final result = await Process.run(
-        'system_profiler',
-        const ['SPUSBDataType', '-json'],
-      ).timeout(const Duration(seconds: 8));
+      final result = await Process.run('system_profiler', const [
+        'SPUSBDataType',
+        '-json',
+      ]).timeout(const Duration(seconds: 8));
 
       if (result.exitCode != 0) {
         return const [];
@@ -2752,10 +2813,7 @@ if ($items.Count -eq 0) {
   //   - vendor_id matchea fabricante térmico conocido, O
   //   - device_class matchea clase USB Printer (07h), O
   //   - product_id contiene "thermal"/"printer" en el _name.
-  void _walkMacUsbTree(
-    List<dynamic> nodes,
-    List<Map<String, dynamic>> out,
-  ) {
+  void _walkMacUsbTree(List<dynamic> nodes, List<Map<String, dynamic>> out) {
     const knownThermalVendors = {
       // VID hex (sin 0x), normalizado a uppercase.
       '04B8': 'Epson',
@@ -2793,7 +2851,8 @@ if ($items.Count -eq 0) {
       if (vidHex == null) continue;
 
       final isThermalVendor = knownThermalVendors.containsKey(vidHex);
-      final nameMatchesPrinter = name.toLowerCase().contains('printer') ||
+      final nameMatchesPrinter =
+          name.toLowerCase().contains('printer') ||
           name.toLowerCase().contains('thermal') ||
           name.toLowerCase().contains('pos');
 
@@ -2807,7 +2866,9 @@ if ($items.Count -eq 0) {
         'manufacturer': manufacturer.isNotEmpty
             ? manufacturer
             : (knownThermalVendors[vidHex] ?? ''),
-        'devicePath': serial?.isNotEmpty == true ? 'usb://$vidHex:$pidHex/$serial' : 'usb://$vidHex:${pidHex ?? '*'}',
+        'devicePath': serial?.isNotEmpty == true
+            ? 'usb://$vidHex:$pidHex/$serial'
+            : 'usb://$vidHex:${pidHex ?? '*'}',
         'serial': serial,
         'locationId': locationId,
         'mac': '$vidHex:${pidHex ?? '0000'}',
@@ -2828,14 +2889,24 @@ if ($items.Count -eq 0) {
   Future<List<Map<String, dynamic>>> _discoverLocalUsbPrintersLinux() async {
     if (kIsWeb) return const [];
     try {
-      final result = await Process.run('lsusb', const [])
-          .timeout(const Duration(seconds: 5));
+      final result = await Process.run(
+        'lsusb',
+        const [],
+      ).timeout(const Duration(seconds: 5));
       if (result.exitCode != 0) return const [];
 
       final stdout = result.stdout.toString();
       const knownThermalVendors = {
-        '04b8', '0519', '1504', '0fe6', '0416', '067b',
-        '154f', '0aa7', '20d1', '0dd4',
+        '04b8',
+        '0519',
+        '1504',
+        '0fe6',
+        '0416',
+        '067b',
+        '154f',
+        '0aa7',
+        '20d1',
+        '0dd4',
       };
 
       final printers = <Map<String, dynamic>>[];
@@ -2850,7 +2921,8 @@ if ($items.Count -eq 0) {
         final name = (match.group(3) ?? 'USB device').trim();
 
         final isThermalVendor = knownThermalVendors.contains(vid);
-        final nameMatchesPrinter = name.toLowerCase().contains('printer') ||
+        final nameMatchesPrinter =
+            name.toLowerCase().contains('printer') ||
             name.toLowerCase().contains('thermal') ||
             name.toLowerCase().contains('pos');
 
@@ -3078,14 +3150,15 @@ finally {
     if (cached != null) return cached;
     var exe = 'powershell';
     try {
-      final root = Platform.environment['SystemRoot'] ??
-          Platform.environment['windir'];
+      final root =
+          Platform.environment['SystemRoot'] ?? Platform.environment['windir'];
       if (root != null && root.isNotEmpty) {
-        final full =
-            '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+        final full = '$root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
         if (File(full).existsSync()) exe = full;
       }
-    } catch (_) {/* usa el nombre suelto */}
+    } catch (_) {
+      /* usa el nombre suelto */
+    }
     _cachedPowerShellExe = exe;
     return exe;
   }
@@ -3106,10 +3179,12 @@ finally {
     final scriptFile = File('${tempDir.path}${Platform.pathSeparator}run.ps1');
     // BOM UTF-8 obligatorio: PowerShell 5.1 lee los .ps1 SIN BOM como ANSI
     // y corrompería nombres de impresora con acentos/ñ dentro del script.
-    await scriptFile.writeAsBytes(
-      <int>[0xEF, 0xBB, 0xBF, ...utf8.encode(script)],
-      flush: true,
-    );
+    await scriptFile.writeAsBytes(<int>[
+      0xEF,
+      0xBB,
+      0xBF,
+      ...utf8.encode(script),
+    ], flush: true);
 
     Process? process;
     Timer? killer;
@@ -3130,10 +3205,12 @@ finally {
       // Drenar stdout/stderr desde el arranque (un output grande con los
       // pipes llenos bloquearía al hijo) con la misma decodificación que
       // usaba Process.run (systemEncoding).
-      final stdoutFuture =
-          process.stdout.transform(systemEncoding.decoder).join();
-      final stderrFuture =
-          process.stderr.transform(systemEncoding.decoder).join();
+      final stdoutFuture = process.stdout
+          .transform(systemEncoding.decoder)
+          .join();
+      final stderrFuture = process.stderr
+          .transform(systemEncoding.decoder)
+          .join();
 
       // Timeout REAL: mata el proceso. Antes se usaba `.timeout()` sobre el
       // future de Process.run — el future expiraba pero el powershell
@@ -3174,10 +3251,7 @@ finally {
       // Limpieza best-effort del script temporal (contiene el payload del
       // ticket): si Windows lo tiene bloqueado, systemTemp lo recoge luego.
       unawaited(
-        tempDir.delete(recursive: true).then<void>(
-              (_) {},
-              onError: (_) {},
-            ),
+        tempDir.delete(recursive: true).then<void>((_) {}, onError: (_) {}),
       );
     }
   }
@@ -3491,10 +3565,12 @@ finally {
     final trimmedIp = ip?.trim();
     if (trimmedIp == null || trimmedIp.isEmpty) return false;
     if (kIsWeb) {
-      // En web no podemos hacer TCP directo — el caller deberá usar el
-      // agent. Devolvemos `true` (optimista) para no bloquear el flow;
-      // el path real de impresión ya tiene su propio error handling.
-      return true;
+      final health = await _localService
+          .checkConnectivity([
+            {'ip': trimmedIp, 'port': port},
+          ])
+          .timeout(const Duration(seconds: 3), onTimeout: () => {});
+      return health[trimmedIp] == true || health['$trimmedIp:$port'] == true;
     }
     try {
       final socket = await Socket.connect(trimmedIp, port, timeout: timeout);
@@ -3544,6 +3620,8 @@ finally {
       } on PrintLikelyDeliveredException {
         // Los bytes se enviaron (RST post-flush). NO reintentar: re-imprimiría
         // el mismo ticket. Propagar para que el caller lo trate como entregado.
+        rethrow;
+      } on PrintDeliveryUncertainException {
         rethrow;
       } catch (e, st) {
         lastError = e;
@@ -3596,106 +3674,129 @@ finally {
         lower.contains('socketexception');
   }
 
-  /// Preflight compartido por factura/precuenta ([_printEscPosLocal]) y
-  /// comanda ([PrintingService._printKitchenTicketToPrinter]): devuelve
-  /// la IP a la que conviene mandar el ticket.
-  ///
-  /// Si la IP cacheada responde a una sonda TCP corta (~900ms), se usa
-  /// esa (costo: milisegundos en una LAN sana). Si no responde, se busca
-  /// una IP fresca — fila en BD y, si [includeMacRecovery], escaneo LAN
-  /// por MAC vía agente. Si no aparece nada mejor, se devuelve la
-  /// cacheada tal cual: el caller conserva sus retries y fallbacks.
-  ///
-  /// [includeMacRecovery] debe ir en `false` en flujos donde la sonda
-  /// puede fallar por CONTENCIÓN y no por IP muerta (ej. impresora de
-  /// cocina compartida entre tablets con el puerto 9100 ocupado) — ahí
-  /// el escaneo LAN solo agregaría segundos de latencia y los retries
-  /// del caller ya cubren el caso.
+  /// Comparte identidad verificada, caché local y búsquedas concurrentes entre
+  /// comprobantes, comandas y heartbeat. La IP por sí sola no identifica una
+  /// impresora y los errores WAN no descartan una dirección LAN verificada.
+  late final NetworkPrinterRecovery _networkRecovery = NetworkPrinterRecovery(
+    probe: (ip, port) => probePrinter(ip: ip, port: port),
+    captureMac: _captureNetworkMac,
+    captureExpectedMac: (ip, port, expectedMac) =>
+        _captureNetworkMac(ip, port, expectedMac: expectedMac),
+    scan: _scanNetworkAddress,
+    configuredIp: (printer) async {
+      final fresh = await getPrinterById(
+        printer.id,
+      ).timeout(const Duration(seconds: 2), onTimeout: () => null);
+      return fresh?.effectiveIp;
+    },
+    save: _persistRecoveredNetworkAddress,
+  );
+
+  Future<String?> _captureNetworkMac(
+    String ip,
+    int port, {
+    String? expectedMac,
+  }) async {
+    if (LanMacRecovery.isSupported) {
+      final native = await LanMacRecovery.captureMacForIp(
+        ip,
+        tcpPort: port,
+        expectedMac: expectedMac,
+      );
+      if (native != null) return native;
+    }
+    return _localService.captureMacForIp(ip, port: port);
+  }
+
+  Future<String?> _scanNetworkAddress(
+    String mac,
+    String previousIp,
+    int port,
+    String printerId,
+  ) async {
+    Future<String?> viaAgent() => _localService.resolveIpByMac(
+      mac: mac,
+      printerId: printerId,
+      ip: previousIp,
+      port: port,
+      skipCache: true,
+    );
+    final agentFirst =
+        kIsWeb ||
+        !LanMacRecovery.isSupported ||
+        _localService.hasKnownAgentAddress;
+    if (agentFirst) {
+      final ip = await viaAgent();
+      if (ip != null) return ip;
+    }
+    if (LanMacRecovery.isSupported) {
+      final ip = await LanMacRecovery.resolveIpByMac(
+        mac: mac,
+        tcpPort: port,
+        previousIp: previousIp,
+      );
+      if (ip != null) return ip;
+    }
+    return agentFirst ? null : viaAgent();
+  }
+
+  Future<void> _persistRecoveredNetworkAddress(
+    PrinterConfig printer,
+    String ip,
+    String? mac,
+  ) async {
+    final fresh = await getPrinterById(printer.id);
+    if (fresh == null) {
+      throw Exception('No se pudo leer la configuración de la impresora.');
+    }
+    final storedMac = normalizeNetworkPrinterMac(fresh.effectiveMac);
+    if (storedMac == null &&
+        fresh.effectiveIp != printer.effectiveIp &&
+        fresh.effectiveIp != ip) {
+      throw const NetworkPrinterIdentityException(
+        'La dirección de la impresora cambió durante la captura de MAC.',
+      );
+    }
+    if (storedMac != null && storedMac != mac) {
+      throw const NetworkPrinterIdentityException(
+        'La identidad de la impresora cambió durante la recuperación.',
+      );
+    }
+    if ((fresh.effectivePort ?? 9100) != (printer.effectivePort ?? 9100)) {
+      throw const NetworkPrinterIdentityException(
+        'El puerto de la impresora cambió durante la recuperación.',
+      );
+    }
+    final config = Map<String, dynamic>.from(fresh.connectionConfig);
+    config['ip'] = ip;
+    config['port'] = printer.effectivePort ?? 9100;
+    if (mac != null) config['mac'] = mac;
+    await _client
+        .from('printers')
+        .update({
+          'ip_address': ip,
+          if (mac != null) 'mac': mac,
+          'connection_config': config,
+        })
+        .eq('id', printer.id);
+    _clearLookupCaches();
+    debugPrint(
+      '[PrinterRecovery] ${printer.name}: IP verificada $ip guardada.',
+    );
+  }
+
+  /// Comprueba identidad antes de enviar bytes. Una IP reutilizada por otra
+  /// impresora nunca se acepta solamente porque responda al puerto TCP.
   Future<String> resolveReachableNetworkIp({
     required PrinterConfig printer,
     required String cachedIp,
     bool includeMacRecovery = true,
-  }) async {
-    if (kIsWeb) return cachedIp;
-    final reachable = await probePrinter(
-      ip: cachedIp,
-      port: printer.port ?? 9100,
-      timeout: const Duration(milliseconds: 900),
-    );
-    if (reachable) return cachedIp;
-    final fresh = await _resolveFreshNetworkIp(
-      printer,
-      cachedIp,
-      includeMacRecovery: includeMacRecovery,
-    );
-    return fresh ?? cachedIp;
-  }
+  }) => _networkRecovery.resolve(
+    printer: printer,
+    cachedIp: cachedIp,
+    allowScan: includeMacRecovery,
+  );
 
-  /// Busca la IP actual de una impresora de red cuya IP cacheada no
-  /// respondió a la sonda TCP del preflight. Orden:
-  ///   1. Fila fresca en BD — otra caja / el alta de impresoras pudo
-  ///      haberla actualizado (el test de página usa siempre este dato,
-  ///      por eso "funciona mejor" que factura/comanda con cache stale).
-  ///   2. Recovery por MAC vía agente (escaneo LAN).
-  /// Devuelve null si no hay una IP distinta que responda — el caller
-  /// sigue con la IP original y sus fallbacks normales.
-  Future<String?> _resolveFreshNetworkIp(
-    PrinterConfig printer,
-    String currentIp, {
-    bool includeMacRecovery = true,
-  }) async {
-    final port = printer.port ?? 9100;
-    // Timeout corto: si estamos offline, no bloquear el flujo de
-    // impresión esperando a Supabase — el ticket puede salir igual por
-    // los paths locales.
-    PrinterConfig? fresh;
-    try {
-      fresh = await getPrinterById(printer.id)
-          .timeout(const Duration(seconds: 2), onTimeout: () => null);
-    } catch (_) {
-      fresh = null;
-    }
-    final freshIp = fresh?.ipAddress?.trim();
-    if (freshIp != null && freshIp.isNotEmpty && freshIp != currentIp) {
-      if (await probePrinter(ip: freshIp, port: port)) {
-        debugPrint(
-          '[PrintFresh] ${printer.name}: BD tiene IP nueva '
-          '$currentIp → $freshIp; usando la fresca.',
-        );
-        // El cache por área quedó stale — limpiarlo para que las
-        // próximas impresiones ya partan de la IP correcta.
-        _clearLookupCaches();
-        return freshIp;
-      }
-    }
-    if (!includeMacRecovery) return null;
-    return _tryRecoverPrinterIpByMac(printer, currentIp);
-  }
-
-  /// Última vez que se intentó un escaneo LAN nativo por impresora, para no
-  /// barrer la subred en cada ticket cuando una impresora está apagada.
-  /// Static: sobrevive a instancias nuevas del repositorio.
-  static final Map<String, DateTime> _lanScanLastAttempt = {};
-  static const Duration _lanScanCooldown = Duration(seconds: 60);
-
-  static bool _lanScanCooldownExpired(String printerId) {
-    final last = _lanScanLastAttempt[printerId];
-    if (last == null) return true;
-    return DateTime.now().difference(last) >= _lanScanCooldown;
-  }
-
-  /// Recovery por MAC expuesto para callers fuera de este archivo — en
-  /// concreto el dispatcher de comandas ([PrintingService]), que tiene su
-  /// propio pipeline de retries y NO pasa por [printEscPos].
-  ///
-  /// Llamar SOLO tras agotar los intentos directos: a esa altura ya
-  /// sabemos que el fallo no es contención pasajera del puerto 9100, que
-  /// es el caso que hace caro el escaneo LAN en cocinas compartidas.
-  ///
-  /// Si encuentra la impresora en otra IP la persiste en Supabase, limpia
-  /// los caches de lookup y devuelve la IP nueva. Null si no hay MAC
-  /// guardado, si nadie respondió con ese MAC, o si el cooldown de
-  /// escaneo por impresora sigue activo.
   Future<String?> recoverNetworkIpByMac({
     required PrinterConfig printer,
     required String currentIp,
@@ -3705,67 +3806,19 @@ finally {
     PrinterConfig printer,
     String currentIp,
   ) async {
-    // Web no puede llamar el endpoint local del agente sin agente publicado;
-    // el caller ya tiene su propio camino (printRawViaAgent) — saltar.
-    if (kIsWeb) return null;
-    final mac = printer.effectiveMac?.trim();
-    if (mac == null || mac.isEmpty) return null;
-
+    if (normalizeNetworkPrinterMac(printer.effectiveMac) == null &&
+        getKnownNetworkIp(printer) == null) {
+      return null;
+    }
     try {
-      // skipCache: true — venimos de un fallo de TCP a `currentIp`. Si
-      // la cache del agente todavía tiene esa misma IP almacenada de
-      // un resolve anterior, sin skip nos devolvería de nuevo lo mismo
-      // y caeríamos en loop. Forzar re-resolución fresca evita el loop
-      // y triggera el scan del /24 para encontrar la IP actual real.
-      var newIp = await _localService.resolveIpByMac(
-        mac: mac,
-        printerId: printer.id,
-        skipCache: true,
+      final ip = await _networkRecovery.resolve(
+        printer: printer,
+        cachedIp: currentIp,
+        forceScan: true,
       );
-      // Sin agente (Android): escaneo nativo desde la app. Cooldown por
-      // impresora para que una impresora apagada no dispare un barrido de
-      // la subred (~3s) en cada ticket.
-      if (newIp == null &&
-          LanMacRecovery.isSupported &&
-          _lanScanCooldownExpired(printer.id)) {
-        _lanScanLastAttempt[printer.id] = DateTime.now();
-        newIp = await LanMacRecovery.resolveIpByMac(
-          mac: mac,
-          tcpPort: printer.port ?? 9100,
-          excludeIp: currentIp,
-        );
-      }
-      if (newIp == null) return null;
-      if (newIp == currentIp) return null; // sigue siendo la misma, no actualizar
-
-      debugPrint(
-        '[PrinterRecovery] MAC $mac: IP actualizada $currentIp → $newIp',
-      );
-      // Persistir es BEST-EFFORT y va en su propio try: ya encontramos la
-      // impresora y el caller la necesita AHORA. Si el write falla (sin
-      // internet — muy común en este POS —, RLS, blip de red) igual
-      // devolvemos la IP buena; lo único que se pierde es el atajo para las
-      // próximas impresiones, que volverán a pagar el escaneo con su
-      // cooldown. Antes este `await` vivía dentro del try general: cualquier
-      // fallo de Supabase caía al catch y devolvía null, DESCARTANDO una IP
-      // recién verificada y dejando la comanda sin imprimir.
-      try {
-        await updatePrinter(printerId: printer.id, ipAddress: newIp);
-        // Invalidar caches in-memory de lookup de impresoras — si no
-        // hacemos esto, la próxima impresión dentro del TTL (5 min) sigue
-        // recibiendo la PrinterConfig vieja con la IP antigua y volvería
-        // a pasar por todo el flow de recovery innecesariamente. Solo si el
-        // write entró: si falló, refetchear solo traería la IP vieja.
-        _clearLookupCaches();
-      } catch (persistError) {
-        debugPrint(
-          '[PrinterRecovery] no se pudo persistir $newIp para ${printer.id}; '
-          'se usa igual en este print: $persistError',
-        );
-      }
-      return newIp;
+      return ip == currentIp ? null : ip;
     } catch (e) {
-      debugPrint('[PrinterRecovery] resolveIpByMac falló para ${printer.id}: $e');
+      debugPrint('[PrinterRecovery] ${printer.name}: $e');
       return null;
     }
   }
@@ -3773,10 +3826,11 @@ finally {
   /// Si la impresora aún no tiene MAC guardado, intentar capturarlo desde el
   /// agente local. Llamar tras un print exitoso. Fire-and-forget: no
   /// bloquea al caller ni propaga errores.
-  void _captureMacIfMissing(PrinterConfig printer) {
+  void _captureMacIfMissing(PrinterConfig printer, {String? ip}) {
     captureMacForPrinterIfMissing(
       printerId: printer.id,
-      ipAddress: printer.ipAddress,
+      ipAddress: ip ?? printer.effectiveIp,
+      port: printer.effectivePort ?? 9100,
       existingMac: printer.effectiveMac,
     );
   }
@@ -3798,18 +3852,23 @@ finally {
   Future<String?> captureMacNow({
     required String printerId,
     String? ipAddress,
+    int port = 9100,
   }) async {
-    if (kIsWeb) return null;
     final ip = ipAddress?.trim();
     if (ip == null || ip.isEmpty) return null;
 
-    var mac = await captureMacForIpViaAgent(ip);
-    mac ??= await LanMacRecovery.captureMacForIp(ip);
+    final mac = await _captureNetworkMac(ip, port);
     if (mac == null) return null;
 
     await updatePrinter(printerId: printerId, mac: mac);
+    final printer = await getPrinterById(printerId);
+    if (printer != null) {
+      await _networkRecovery.rememberVerifiedAddress(printer, ip, mac);
+    }
     _clearLookupCaches();
-    debugPrint('[PrinterRecovery] MAC capturado manualmente para $printerId: $mac');
+    debugPrint(
+      '[PrinterRecovery] MAC capturado manualmente para $printerId: $mac',
+    );
     return mac;
   }
 
@@ -3820,12 +3879,11 @@ finally {
   ///
   /// Devuelve null si no hay agente o no pudo resolver; el caller decide si
   /// intenta el capturador nativo.
-  Future<String?> captureMacForIpViaAgent(String ip) async {
-    if (kIsWeb) return null;
+  Future<String?> captureMacForIpViaAgent(String ip, {int port = 9100}) async {
     final target = ip.trim();
     if (target.isEmpty) return null;
     try {
-      return await _localService.captureMacForIp(target);
+      return await _localService.captureMacForIp(target, port: port);
     } catch (_) {
       return null;
     }
@@ -3842,11 +3900,10 @@ finally {
     required String printerId,
     String? ipAddress,
     String? existingMac,
+    int port = 9100,
     bool force = false,
   }) {
-    if (kIsWeb) return;
-    final existing = existingMac?.trim();
-    if (existing != null && existing.isNotEmpty) return;
+    if (normalizeNetworkPrinterMac(existingMac) != null) return;
     final ip = ipAddress?.trim();
     if (ip == null || ip.isEmpty) return;
     if (!force) {
@@ -3862,13 +3919,24 @@ finally {
       try {
         // Agente local primero (escritorio); en Android no hay agente, así
         // que cae al capturador nativo (ip neigh → SNMP) de la app.
-        var mac = await _localService.captureMacForIp(ip);
-        mac ??= await LanMacRecovery.captureMacForIp(ip);
+        final mac = await _captureNetworkMac(ip, port);
         if (mac == null) return;
-        await updatePrinter(printerId: printerId, mac: mac);
+        final printer = await getPrinterById(
+          printerId,
+        ).timeout(const Duration(seconds: 2), onTimeout: () => null);
+        if (printer == null ||
+            normalizeNetworkPrinterMac(printer.effectiveMac) != null) {
+          return;
+        }
+        if (printer.effectiveIp != ip && getKnownNetworkIp(printer) != ip) {
+          return;
+        }
+        await _networkRecovery.rememberVerifiedAddress(printer, ip, mac);
         debugPrint('[PrinterRecovery] MAC capturado para $printerId: $mac');
       } catch (e) {
-        debugPrint('[PrinterRecovery] captureMacForIp falló para $printerId: $e');
+        debugPrint(
+          '[PrinterRecovery] captureMacForIp falló para $printerId: $e',
+        );
       }
     });
   }

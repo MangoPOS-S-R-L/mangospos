@@ -40,6 +40,12 @@ import {
   parseChargeBreakdown,
 } from "./charge_breakdown.ts";
 import {
+  addMonthIso,
+  findOverlappingPaidCharge,
+  type PaidCharge,
+  resolveBillingPeriod,
+} from "./billing_period.ts";
+import {
   chargeCustomOrderId,
   classifyChargeVerify,
   decideOnExistingCharge,
@@ -63,12 +69,6 @@ function todayUtcIso(): string {
 function addDaysIso(baseIso: string, days: number): string {
   const d = new Date(`${baseIso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function addMonthIso(baseIso: string): string {
-  const d = new Date(`${baseIso}T00:00:00Z`);
-  d.setUTCMonth(d.getUTCMonth() + 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -203,10 +203,62 @@ Deno.serve(async (req) => {
   //    tener vencimiento y se evalúa contra el período que se cobra, no contra
   //    "hoy" — un reintento de un pago atrasado no debe perder el descuento del
   //    mes al que corresponde.
+  //
+  //    Un período que ya terminó entero se decide con el historial de cobros
+  //    (ver billing_period.ts): si venía pagando se cobra UN mes atrasado; si
+  //    nunca pagó, o ya se le cobró hace poco, se re-ancla a hoy. Octubre
+  //    2026: cuatro mensualidades atrasadas cobradas en cuatro días seguidos.
+  //
+  //    Sin poder leer el historial, no se cobra.
+  const { data: paidRows, error: paidErr } = await service
+    .from("azul_charges")
+    .select("id, billing_period_start, billing_period_end, amount_cents, attempted_at")
+    .eq("membership_id", membershipId)
+    .eq("status", "approved");
+  if (paidErr) {
+    return errorResponse(500, "db_error", "Could not load previous charges", paidErr.message);
+  }
+  const refunded = new Map<string, number>();
+  if (paidRows && paidRows.length > 0) {
+    const { data: refundRows, error: refundErr } = await service
+      .from("azul_refunds")
+      .select("charge_id, amount_cents")
+      .in("charge_id", paidRows.map((r) => r.id))
+      .eq("status", "approved");
+    if (refundErr) {
+      return errorResponse(500, "db_error", "Could not load refunds", refundErr.message);
+    }
+    for (const r of refundRows ?? []) {
+      refunded.set(r.charge_id, (refunded.get(r.charge_id) ?? 0) + r.amount_cents);
+    }
+  }
+  const paid: PaidCharge[] = (paidRows ?? []).map((r) => ({
+    ...r,
+    refunded_cents: refunded.get(r.id) ?? 0,
+  }));
+
   const today = todayUtcIso();
-  const periodStart = (body.billing_period_start ?? membership.next_billing_date ??
+  const requestedStart = (body.billing_period_start ?? membership.next_billing_date ??
     membership.current_period_end ?? today) as string;
-  const periodEnd = addMonthIso(periodStart);
+  const { periodStart, periodEnd, reanchoredFrom } = resolveBillingPeriod(
+    requestedStart,
+    today,
+    paid,
+    Date.now(),
+  );
+
+  // Días ya pagados por otro cobro aprobado (fecha movida hacia atrás después
+  // de pagar): no se cobran de nuevo.
+  const overlap = findOverlappingPaidCharge(paid, periodStart, periodEnd);
+  if (overlap) {
+    return errorResponse(
+      409,
+      "period_already_paid",
+      `Del ${periodStart} al ${periodEnd} ya está pagado (cobro del ` +
+        `${overlap.billing_period_start} al ${overlap.billing_period_end}). No se cobró.`,
+      { charge_id: overlap.id, billing_period_start: periodStart },
+    );
+  }
 
   // 3. Monto = plan + facturas electrónicas extra. v1 sin prorrateo.
   //    El plan lo decide subscription_effective_price_cents (la misma función
@@ -270,6 +322,46 @@ Deno.serve(async (req) => {
   }
   const itbisCents = 0;
   const currencyCode = (plan.currency_code as string) ?? "DOP";
+
+  // El re-anclaje se guarda ANTES de cobrar: si la llamada a Azul se cae, el
+  // reintento del día siguiente tiene que caer en la MISMA fila (período,
+  // intento) para pasar por VerifyPayment. Sin esto se re-anclaba a otro día,
+  // creaba otra fila y podía cobrar dos veces. Va después de las salidas por
+  // monto (RD$0, precio sin resolver): si no se cobra, no se toca la fecha.
+  //
+  // El UPDATE condicional es además el candado: si next_billing_date ya no es
+  // la fecha pedida (un pedido repetido llega con la fecha vieja DESPUÉS de
+  // que el primero cobró y la corrió), re-anclar acá cobraría otro período.
+  // Solo se sigue si la fecha quedó en este mismo re-anclaje.
+  if (reanchoredFrom) {
+    const { data: moved, error: reanchorErr } = await service
+      .from("memberships")
+      .update({ next_billing_date: periodStart })
+      .eq("id", membershipId)
+      .eq("next_billing_date", reanchoredFrom)
+      .select("id");
+    if (reanchorErr) {
+      return errorResponse(500, "db_error", "Could not re-anchor billing date", reanchorErr.message);
+    }
+    if (!moved || moved.length === 0) {
+      const { data: current } = await service
+        .from("memberships")
+        .select("next_billing_date")
+        .eq("id", membershipId)
+        .maybeSingle();
+      if (current?.next_billing_date !== periodStart) {
+        return errorResponse(
+          409,
+          "billing_date_changed",
+          "La fecha de cobro cambió mientras se procesaba este pedido. No se cobró.",
+          {
+            requested_billing_period_start: reanchoredFrom,
+            next_billing_date: current?.next_billing_date ?? null,
+          },
+        );
+      }
+    }
+  }
 
   // 4. OrderNumber determinístico (≤15 alfanumérico).
   const orderNumber = generateChargeOrderNumber(

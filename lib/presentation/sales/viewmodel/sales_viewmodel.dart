@@ -44,6 +44,7 @@ import '../../inventory/viewmodel/inventory_viewmodel.dart'
 import '../../../services/fiscal/fiscal_service.dart';
 import '../../../data/models/fiscal_models.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
+import 'package:mangopos/core/utils/display_name_utils.dart';
 
 final salesRepositoryProvider = Provider<SalesRepository>(
   (ref) => SalesRepository(Supabase.instance.client),
@@ -98,6 +99,26 @@ class _HubModeShortCircuit implements Exception {
   const _HubModeShortCircuit();
 }
 
+/// Cambio rechazado sobre una línea de la ronda de cocina: la comanda local
+/// la está imprimiendo, o ya salió a cocina mientras el modal seguía abierto.
+/// El texto va tal cual al cajero (el modal lo muestra y no se cierra).
+class _KitchenRoundEditBlocked implements Exception {
+  const _KitchenRoundEditBlocked(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// El servidor no anuló una venta en una anulación automática
+/// (fn_void_order_if_unpaid): ya estaba cerrada ('already_closed') o tiene
+/// cobros ('has_payments').
+class _OrderNotVoidable implements Exception {
+  const _OrderNotVoidable(this.result);
+  final String result;
+  @override
+  String toString() => 'La venta no se anuló: $result';
+}
+
 /// Cliente de la orden (sesión) elegido con el botón "Cliente".
 class _OrderCustomer {
   const _OrderCustomer({
@@ -122,6 +143,52 @@ class _PendingOrderCustomer {
   final DateTime at;
   bool savedOnServer = false;
   bool pushing = false;
+}
+
+/// Respuesta del servidor sobre la sesión de una venta rápida/manual que se
+/// quiere retomar (ver `_confirmVirtualSaleSession`).
+enum _VirtualSaleSession {
+  confirmed,
+  rejected,
+  unreachable,
+  unknown,
+
+  /// Sesión de esta pantalla cerrada, con altas de la venta aún por subir
+  /// desde este equipo: decide la carga (ver _confirmVirtualSaleSession).
+  revivable,
+}
+
+class _OrderMutationContext {
+  _OrderMutationContext({
+    required this.orderId,
+    required this.businessId,
+    required this.origin,
+    required this.tableId,
+    required this.slotId,
+    required this.selectionToken,
+    required this.pinEmployeeId,
+    required this.pinEmployeeName,
+    required this.actorEmployeeId,
+    required this.userId,
+    required this.snapshot,
+  });
+
+  final String orderId;
+  final String? businessId;
+  final String? origin;
+  final String? tableId;
+  final String? slotId;
+  final int selectionToken;
+  // Mesero con PIN confiable al tocar: autor del ítem en la misma alta.
+  final String? pinEmployeeId;
+  final String? pinEmployeeName;
+  // Quién opera (PIN o empleado del usuario autenticado): solo para retiros,
+  // nunca como autor de un ítem.
+  final String? actorEmployeeId;
+  // Usuario autenticado al tocar: si otro entra mientras la acción sigue en
+  // vuelo, su empleado no se anota en lo que hizo el anterior.
+  final String? userId;
+  CurrentOrderState snapshot;
 }
 
 class SalesViewModel extends Notifier<CurrentOrderState> {
@@ -163,16 +230,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Timer? _loadingWatchdogTimer;
   static const Duration _loadingMaxAge = Duration(seconds: 45);
   StreamSubscription<bool>? _connectivitySubscription;
-
-  /// Timer de respaldo para drenar la cola offline. El sync principal lo
-  /// dispara la transición offline→online del `connectionStream`, pero ese
-  /// trigger puede perderse: si el stream nunca emite (el adapter nunca
-  /// "bajó", solo Supabase tuvo blips) o si una acción quedó `failed` con
-  /// backoff que vence mientras la app está online e inactiva, nadie la
-  /// reintenta. Este timer es la red de seguridad: cada
-  /// [_periodicSyncInterval], si hay conexión y pendientes, fuerza un sync.
-  Timer? _periodicSyncTimer;
-  static const Duration _periodicSyncInterval = Duration(minutes: 3);
   String? _queuedRefreshOrderId;
   bool _queuedClearIfPaid = false;
   bool _refreshOrderInFlight = false;
@@ -185,6 +242,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // optimista en vuelo. Mientras el server no confirme esa qty, una recarga
   // stale (qty vieja) NO revierte la línea — se mantiene la optimista.
   final Map<String, double> _pendingItemQty = {};
+  final Map<String, int> _itemQuantityMutationVersions = {};
+  // Líneas (draft/open) que una comanda LOCAL imprime ahora mismo por la LAN,
+  // por negocio. Mientras dure la impresión no se les cambia la cantidad ni
+  // se borran: lo impreso y la cuenta divergirían, la línea quedaría «por
+  // confirmar» y el siguiente «Enviar» la reimprimiría entera (o cocina
+  // prepararía algo que ya no se cobra).
+  final List<({String businessId, Set<String> itemIds})> _localKitchenPrints =
+      [];
+  static const _localKitchenPrintBusyMessage =
+      'Espera a que termine de imprimirse la comanda para cambiar este '
+      'producto.';
+  static const _kitchenRoundAlreadySentMessage =
+      'Este producto ya salió a cocina. Ábrelo de nuevo para cambiar la '
+      'cantidad.';
   // Guarda anti-parpadeo al AGREGAR: ids temporales (`tmp_`) de items agregados
   // optimistamente cuyo INSERT aún no confirma el server. Mientras estén aquí,
   // una recarga stale (que corre ANTES de que el INSERT haga commit — típico
@@ -223,21 +294,39 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   final Map<String, _PendingOrderCustomer> _pendingCustomers = {};
   // Cliente elegido cuando la venta rápida/manual todavía no tenía orden
   // (abriéndose, o la anterior cerrándose tras el cobro). Se aplica a la venta
-  // nueva en cuanto abre.
-  ({String origin, _OrderCustomer customer, DateTime at})? _nextOrderCustomer;
+  // nueva en cuanto abre, solo si es del mismo negocio.
+  ({String origin, String? businessId, _OrderCustomer customer, DateTime at})?
+  _nextOrderCustomer;
   // Venta rápida/manual ya cobrada que sigue en pantalla mientras se abre la
   // siguiente. Un cliente elegido en esa ventana es para la venta nueva.
   String? _closingOrderId;
+  // Apertura de venta rápida/manual en curso. ensureManualOrder/
+  // ensureQuickOrder se unen a ella en vez de arrancar otra: cada apertura en
+  // el servidor crea una venta nueva, y la que se reemplazaba a medio camino
+  // quedaba abierta y vacía, ocupando un carril.
+  ({String origin, int token, Future<void> future})? _virtualOpenInFlight;
   bool _syncInFlight = false;
+  // Pedido force ("Sincronizar ahora", reintentar dead, cobro de una venta
+  // local) que llegó con una pasada en curso: corre otra pasada forzada al
+  // terminar esa, y quien lo pidió espera ESA pasada (antes regresaba de
+  // inmediato sin sincronizar nada).
+  Completer<void>? _forcedSyncRerun;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
   String? _fiscalSettingsBusinessId;
   DateTime? _lastFiscalSettingsLoad;
   // Cache del employee_id derivado del usuario autenticado de Supabase.
   // Usado como fallback de `created_by_employee_id` cuando el cajero/admin
-  // agrega items sin pasar por el PIN multimesero. Una sola query por
-  // sesión gracias al cache.
+  // agrega items sin pasar por el PIN multimesero. Se guarda POR usuario y
+  // negocio: la llave evita que, tras cambiar de sucursal o de usuario, un
+  // ítem o un retiro salga a nombre del empleado anterior, incluso si una
+  // consulta en vuelo responde después del cambio.
+  String? _cachedAuthEmployeeKey;
   String? _cachedAuthEmployeeId;
+  // Tope de cada consulta de atribución (dueño de la mesa, empleado del
+  // usuario, sello del autor): con la red conectada pero mala no debe frenar
+  // los extras ni la recarga del alta.
+  static const Duration _attributionTimeout = Duration(seconds: 4);
   // PRD 2 §G2/G6: la única fuente de verdad para impuestos es la tabla
   // `taxes` (cargada en `_cachedBusinessTaxes`). El motor backend ya
   // consolida todos los impuestos (incluida la propina) en `oi.tax`, así
@@ -286,34 +375,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   double _roundMoney(double value) => double.parse(value.toStringAsFixed(2));
 
-  /// Devuelve el `employee_id` que se debe asignar a un item recién creado
-  /// como autor (`order_items.created_by_employee_id`).
-  ///
-  /// Política del negocio (decisión 2026-07-15): el item pertenece a QUIEN
-  /// LO AGREGA (el mesero con PIN activo en el device), aunque la mesa la
-  /// haya abierto otro mesero. La identidad de la MESA es aparte: el
-  /// "MESERO:" de comanda/precuenta/factura sale del opener inmutable
-  /// (`table_sessions.opened_by_employee_id` vía `fn_order_opener_name`)
-  /// y NO cambia porque otro PIN entre a agregar productos o a imprimir.
-  ///
-  /// Prioridad:
-  ///   1. `activeWaiterProvider` — el mesero con PIN validado en el device
-  ///      es quien está físicamente agregando el item.
-  ///   2. Opener de la mesa vía `fn_order_opener_employee_id` — fallback
-  ///      cuando no hay PIN activo (multimesero off / roles sin PIN).
-  ///   3. Usuario autenticado en Supabase → su fila en `employees` para
-  ///      el business activo, vía `fn_current_employee_id`. Cubre el
-  ///      caso del cajero/admin sin PIN.
-  ///   4. `null` — el item queda sin atribución y el tooltip muestra
-  ///      "Sin asignar".
-  ///
-  /// Las dos RPCs usan SECURITY DEFINER porque RLS sobre `employees`
-  /// bloquea SELECT directo desde Flutter para cajeros sin permisos
-  /// especiales. Los resultados se cachean cuando aplica:
-  /// - `_cachedAuthEmployeeId`: el employee del auth user (1 query por
-  ///   sesión).
-  /// - El opener se resuelve cada vez porque puede cambiar entre mesas;
-  ///   si esto se vuelve hot path, agregar cache por orderId.
   /// ActiveWaiter "confiable" para atribución de identidad (opener de
   /// mesa, created_by de items). Solo cuenta si:
   ///   - el device opera con rol `mesero` — único flujo donde el salón
@@ -338,57 +399,201 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return waiter;
   }
 
-  Future<String?> _resolveItemEmployeeId() async {
-    // 1) Active waiter (PIN multimesero) siempre tiene la máxima prioridad
-    //    cuando está activo en el dispositivo, ya que es la persona física
-    //    que está agregando el item en este momento.
-    final activeWaiter = _trustedActiveWaiter();
-    if (activeWaiter != null) return activeWaiter.employeeId;
+  /// Quién abre una venta sin red, capturado AL ABRIRLA: el mesero del PIN
+  /// o, sin PIN, la cuenta que la abre (lo mismo que el servidor guarda en
+  /// línea). Lo anota el borrador local para el replay y para el «MESERO:»
+  /// impreso sin red; así no sale quien esté logueado a la hora de imprimir.
+  ({String? employeeId, String? name}) _localDraftOpener() {
+    final waiter = _trustedActiveWaiter();
+    if (waiter != null) {
+      return (
+        employeeId: waiter.employeeId,
+        name: preferredDisplayName(fullName: waiter.displayName),
+      );
+    }
+    final account = ref.read(sessionProvider).userName?.trim() ?? '';
+    return (
+      employeeId: null,
+      name: account.isEmpty ? null : preferredDisplayName(fullName: account),
+    );
+  }
 
-    // 2) Opener de la mesa actual vía `fn_order_opener_employee_id`
-    //    como fallback si no hay un activeWaiter con PIN.
-    final orderId = state.order?.id;
-    if (orderId != null && orderId.isNotEmpty) {
+  /// Respaldo del «MESERO:» de la comanda cuando la pantalla no lo resolvió
+  /// y los ítems no traen autor: quién abrió la venta sin red, anotado al
+  /// abrirla. NUNCA el usuario logueado: quien envía o cobra no es quien
+  /// abrió la mesa, y ese respaldo sacaba comandas a su nombre.
+  Future<String?> _localOpenerName(String businessId, String orderId) async =>
+      (await _offlinePos.localOrderOpener(
+        businessId: businessId,
+        orderId: orderId,
+      ))?.name;
+
+  /// Devuelve el `employee_id` que se debe asignar a un item recién creado
+  /// como autor (`order_items.created_by_employee_id`).
+  ///
+  /// Política del negocio (decisión 2026-07-15): el item pertenece a QUIEN
+  /// LO AGREGA (el mesero con PIN activo en el device), aunque la mesa la
+  /// haya abierto otro mesero. La identidad de la MESA es aparte: el
+  /// "MESERO:" de comanda/precuenta/factura sale del opener inmutable
+  /// (`table_sessions.opened_by_employee_id` vía `fn_order_opener_name`)
+  /// y NO cambia porque otro PIN entre a agregar productos o a imprimir.
+  ///
+  /// Prioridad:
+  ///   1. [pinEmployeeId] — el mesero con PIN confiable capturado al tocar
+  ///      es quien está físicamente agregando el item.
+  ///   2. Opener de la mesa vía `fn_order_opener_employee_id` (sin la RPC,
+  ///      `table_sessions.opened_by_employee_id`) — fallback cuando no hay
+  ///      PIN activo (multimesero off / roles sin PIN). Va ANTES del
+  ///      usuario conectado: el «MESERO:» de la comanda sale del autor de
+  ///      los ítems, y acreditarle al cajero un ítem de la mesa de un mesero
+  ///      lo imprimiría como mesero. No aplica a Venta Rápida/Manual: el
+  ///      equipo retoma su venta aunque cambie el cajero, y una venta offline
+  ///      la abre en el servidor el equipo que sincroniza; su «dueño» no es
+  ///      quien digita.
+  ///   3. Usuario autenticado en Supabase → su fila en `employees` para
+  ///      el negocio capturado, vía `fn_current_employee_id`. Cubre el
+  ///      caso del cajero/admin sin PIN.
+  ///   4. `null` — el item queda sin atribución (los reportes lo acreditan
+  ///      al mesero que abrió la mesa con PIN) y el tooltip muestra
+  ///      "Sin asignar".
+  ///
+  /// Resuelve SIEMPRE sobre la orden, el negocio y el usuario capturados al
+  /// tocar, no sobre la cuenta que esté en pantalla. Si la consulta del
+  /// dueño de la mesa falla o pasa del tope, sigue al paso 3 (decisión del
+  /// dueño, fase 4: sin saber quién abrió, el ítem va al empleado del
+  /// usuario conectado, como antes).
+  ///
+  /// Las dos RPCs usan SECURITY DEFINER porque RLS sobre `employees`
+  /// bloquea SELECT directo desde Flutter para cajeros sin permisos
+  /// especiales. Los resultados se cachean cuando aplica:
+  /// - `_cachedAuthEmployeeId`: el employee del auth user (1 query por
+  ///   usuario y negocio).
+  /// - El opener se resuelve cada vez porque puede cambiar entre mesas;
+  ///   si esto se vuelve hot path, agregar cache por orderId.
+  Future<String?> _resolveItemEmployeeId({
+    required String orderId,
+    required String? origin,
+    required String? businessId,
+    required String? userId,
+    required String? pinEmployeeId,
+  }) async {
+    // 1) PIN multimesero capturado al tocar: es quien agrega el item.
+    if (pinEmployeeId != null && pinEmployeeId.isNotEmpty) {
+      return pinEmployeeId;
+    }
+
+    // 2) Roles que no piden PIN (cajero, administrador, supervisor): entran
+    // con su propio usuario, así que el item es de ese usuario aunque la mesa
+    // la haya abierto otro mesero (decisión del dueño, 2026-10-10). Si sin
+    // red no se conoce su empleado, queda sin autor: nunca a nombre de otro.
+    if (ref.read(sessionProvider).activeRole != PosRole.mesero) {
+      return _resolveAuthEmployeeId(businessId: businessId, userId: userId);
+    }
+
+    // 3) Mesero sin PIN: opener de la mesa de la orden CAPTURADA.
+    final virtualSale = origin == 'quick' || origin == 'manual';
+    if (!virtualSale &&
+        orderId.isNotEmpty &&
+        !orderId.startsWith('local-order-')) {
       try {
-        final result = await Supabase.instance.client.rpc(
-          'fn_order_opener_employee_id',
-          params: {'p_order_id': orderId},
-        );
-        final openerId = result?.toString();
+        final openerId = await ref
+            .read(salesRepositoryProvider)
+            .fetchOrderOpenerEmployeeId(orderId)
+            .timeout(_attributionTimeout);
         if (openerId != null && openerId.isNotEmpty) {
+          // El autor es el dueño, pero la caché del empleado de este usuario
+          // queda lista (sin usarlo como autor): un retiro sin red debe
+          // registrar a quien lo hace. Antes la llenaba esta misma alta.
+          unawaited(
+            _resolveAuthEmployeeId(businessId: businessId, userId: userId),
+          );
           return openerId;
         }
       } catch (e) {
-        debugPrint('[audit] fn_order_opener_employee_id falló: $e');
+        debugPrint('[audit] dueño de la mesa no resuelto: $e');
       }
     }
 
-    return _resolveAuthEmployeeId();
+    return _resolveAuthEmployeeId(businessId: businessId, userId: userId);
   }
 
-  /// El `employee_id` del usuario autenticado en Supabase para el negocio
-  /// activo (cajero/admin sin PIN), cacheado por sesión.
-  Future<String?> _resolveAuthEmployeeId() async {
-    if (_cachedAuthEmployeeId != null) return _cachedAuthEmployeeId;
+  String _authEmployeeKey(String businessId) =>
+      '${ref.read(sessionProvider).userId ?? ''}|$businessId';
 
-    final authUser = Supabase.instance.client.auth.currentUser;
-    if (authUser == null) return null;
+  /// Empleado del usuario autenticado ya conocido para [businessId] (sin
+  /// red). Solo responde si la caché es de este mismo usuario y negocio.
+  String? _cachedAuthEmployeeIdFor(String? businessId) {
+    if (businessId == null || businessId.isEmpty) return null;
+    return _cachedAuthEmployeeKey == _authEmployeeKey(businessId)
+        ? _cachedAuthEmployeeId
+        : null;
+  }
 
-    final activeBusinessId = _activeBusinessId;
-    if (activeBusinessId == null || activeBusinessId.isEmpty) return null;
+  void _clearAuthEmployeeCache() {
+    _cachedAuthEmployeeKey = null;
+    _cachedAuthEmployeeId = null;
+  }
+
+  /// El `employee_id` del usuario autenticado en Supabase para [businessId]
+  /// (cajero/admin sin PIN), cacheado por usuario y negocio. Con [userId],
+  /// devuelve null si en el equipo ya entró otro usuario (antes o durante la
+  /// consulta): su empleado no es quien hizo la acción.
+  Future<String?> _resolveAuthEmployeeId({
+    required String? businessId,
+    String? userId,
+  }) async {
+    if (businessId == null || businessId.isEmpty) return null;
+    if (userId != null && ref.read(sessionProvider).userId != userId) {
+      return null;
+    }
+    final cached = _cachedAuthEmployeeIdFor(businessId);
+    if (cached != null) return cached;
+    final key = _authEmployeeKey(businessId);
 
     try {
-      final result = await Supabase.instance.client.rpc(
-        'fn_current_employee_id',
-        params: {'p_business_id': activeBusinessId},
-      );
-      final resolved = result?.toString();
+      final resolved = await ref
+          .read(salesRepositoryProvider)
+          .fetchCurrentEmployeeId(businessId)
+          .timeout(_attributionTimeout);
       if (resolved == null || resolved.isEmpty) return null;
+      // La consulta corrió con el usuario de ESE momento: si cambió mientras
+      // tanto, el resultado no sirve ni para la caché ni como autor.
+      if (_authEmployeeKey(businessId) != key) return null;
+      _cachedAuthEmployeeKey = key;
       _cachedAuthEmployeeId = resolved;
       return resolved;
     } catch (e) {
       debugPrint('[audit] fn_current_employee_id falló: $e');
       return null;
+    }
+  }
+
+  /// Sella el autor de un ítem recién guardado SIN PIN: el dueño de la mesa
+  /// de la orden CAPTURADA (aunque el cajero ya haya cambiado de cuenta) o,
+  /// si no hay dueño o no se pudo saber, el empleado del usuario autenticado
+  /// de ese negocio.
+  /// Cada consulta lleva tope y nunca lanza: el ítem y sus extras ya quedaron
+  /// guardados y un fallo aquí no debe encolar ni revertir nada.
+  Future<void> _stampItemAuthor(
+    _OrderMutationContext mutation,
+    String itemId,
+  ) async {
+    try {
+      final employeeId = await _resolveItemEmployeeId(
+        orderId: mutation.orderId,
+        origin: mutation.origin,
+        businessId: mutation.businessId,
+        userId: mutation.userId,
+        pinEmployeeId: null,
+      );
+      if (employeeId == null) return;
+      await ref
+          .read(salesRepositoryProvider)
+          .setItemCreatedByEmployee(itemId: itemId, employeeId: employeeId)
+          .timeout(_attributionTimeout);
+    } catch (e) {
+      debugPrint('[audit] no se pudo set created_by_employee_id: $e');
+      // No abortamos el flujo — el item igual quedó creado.
     }
   }
 
@@ -403,8 +608,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     bool? isWaste,
   }) async {
     try {
+      final businessId = _activeBusinessId;
       final employeeId =
-          _trustedActiveWaiter()?.employeeId ?? await _resolveAuthEmployeeId();
+          _trustedActiveWaiter()?.employeeId ??
+          await _resolveAuthEmployeeId(
+            businessId: businessId,
+            userId: ref.read(sessionProvider).userId,
+          );
       await ref
           .read(salesRepositoryProvider)
           .noteItemRemoval(
@@ -419,6 +629,57 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// Igual que [noteItemRemoval], con el negocio, el usuario y el PIN
+  /// capturados al tocar: el borrado espera al servidor y en ese lapso pudo
+  /// cambiar la sucursal o el usuario del equipo.
+  Future<void> _noteItemRemovalFor(
+    _OrderMutationContext mutation,
+    String itemId, {
+    String? reason,
+    String? reasonCode,
+    bool? isWaste,
+  }) async {
+    try {
+      final employeeId =
+          mutation.actorEmployeeId ??
+          await _resolveAuthEmployeeId(
+            businessId: mutation.businessId,
+            userId: mutation.userId,
+          );
+      await ref
+          .read(salesRepositoryProvider)
+          .noteItemRemoval(
+            itemId: itemId,
+            reason: reason,
+            employeeId: employeeId,
+            reasonCode: reasonCode,
+            isWaste: isWaste,
+          );
+    } catch (e) {
+      debugPrint('[removals] noteItemRemoval: $e');
+    }
+  }
+
+  /// Invalida la caché del empleado autenticado al cambiar de negocio o de
+  /// usuario. La llave (usuario|negocio) ya impide usar un empleado ajeno;
+  /// esto es protección extra. `build()` los registra siempre; queda visible
+  /// para que las pruebas que reemplazan `build()` ejerciten estos mismos
+  /// listeners.
+  @visibleForTesting
+  void listenAuthEmployeeIdentity() {
+    ref.listen(sessionProvider.select((s) => s.activeBusinessId), (
+      previous,
+      next,
+    ) {
+      if (previous != next) _clearAuthEmployeeCache();
+    });
+    // Otro usuario en el mismo equipo (cierre de sesión y entrada de otro):
+    // su empleado es otro.
+    ref.listen(sessionProvider.select((s) => s.userId), (previous, next) {
+      if (previous != next) _clearAuthEmployeeCache();
+    });
+  }
+
   Future<void> refreshOfflineMonitor() => _refreshOfflineMonitor();
 
   Future<void> _refreshOfflineMonitor({
@@ -429,11 +690,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final pending = businessId == null || businessId.isEmpty
         ? 0
         : await _offlinePos.pendingActionsCount(businessId);
+    if (_activeBusinessId != businessId) return;
+    // Mientras se sube una venta para cobrarla, el banner dice eso (y no los
+    // mensajes genéricos de la pasada que corre debajo).
+    final promoting = isPromotingLocalOrder;
     state = state.copyWith(
       isOfflineMode: !_connectivity.isConnected,
-      syncInFlight: syncInFlight ?? _syncInFlight,
+      syncInFlight: promoting || (syncInFlight ?? _syncInFlight),
       pendingOfflineActions: pending,
-      syncStatus: syncStatus ?? state.syncStatus,
+      syncStatus: promoting
+          ? _promotingSyncStatus
+          : (syncStatus ?? state.syncStatus),
     );
   }
 
@@ -444,6 +711,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // ya hace que la acción se sienta instantánea, así que la reconciliación
   // puede esperar 400ms sin que el cajero lo note.
   static const _refreshOrderDebounce = Duration(milliseconds: 400);
+
+  // Tope de ítems de la lectura de respaldo de `_loadOrderDetail` (el bundle
+  // no tiene tope). Llegar a él marca el respaldo como incompleto.
+  static const _fallbackItemsLimit = 500;
 
   static const _cashierClosedMessage =
       'Debes abrir la caja antes de iniciar una venta.';
@@ -463,6 +734,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       next,
     ) {
       if (previous == null || previous == next) return;
+      ++_loadGeneration;
+      ++_openTableToken;
       _tableCache.clear();
       _refreshOrderDebounceTimer?.cancel();
       _refreshOrderDebounceTimer = null;
@@ -480,11 +753,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _realtimeChannel?.unsubscribe();
       _realtimeChannel = null;
       _subscribedOrderId = null;
+      // La mesa activa, el cliente elegido para la venta siguiente y la venta
+      // en cierre también son del negocio anterior.
+      _activeTableId = null;
+      _nextOrderCustomer = null;
+      _closingOrderId = null;
       // Retail: los carritos pertenecían al negocio anterior.
       _activeRetailSlotId = null;
       ref.read(retailCartsProvider.notifier).clear();
       state = const CurrentOrderState();
     });
+    listenAuthEmployeeIdentity();
 
     unawaited(_connectivity.initialize());
     unawaited(_refreshOfflineMonitor());
@@ -499,17 +778,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ),
       );
       if (isConnected) {
-        unawaited(syncPendingOfflineActions());
+        // Pasada automática (silenciosa: solo contadores), pero recarga la
+        // venta activa aunque no suba nada: sin red, Realtime pudo perder
+        // cambios hechos en otra caja.
+        unawaited(syncPendingOfflineActions(reloadActiveOrder: true));
       }
     });
 
-    // Red de seguridad: drena la cola periódicamente aunque el stream de
-    // reconexión no haya disparado. No-op si no hay conexión, ya hay un
-    // sync en vuelo, o la cola está vacía — así no genera ruido ni red
-    // innecesaria.
-    _periodicSyncTimer ??= Timer.periodic(_periodicSyncInterval, (_) {
-      unawaited(_runPeriodicSyncTick());
-    });
+    // Ya no hay timer de respaldo propio (antes cada 3 min, sin revisar si
+    // había algo listo y mostrando el aviso de "en espera"): el uplink del
+    // shell (offlineSalesUplinkProvider) revisa cada 5 s y solo corre una
+    // pasada si hay acciones listas, y HubHostUplink drena el op-log del Hub
+    // cada 4 s.
 
     // Watchdog del flag `loading`. Cualquier transición false→true arma
     // un timer que lo fuerza a false tras `_loadingMaxAge` si nunca volvió
@@ -542,8 +822,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _refreshOrderDebounceTimer = null;
       _loadingWatchdogTimer?.cancel();
       _loadingWatchdogTimer = null;
-      _periodicSyncTimer?.cancel();
-      _periodicSyncTimer = null;
       _connectivitySubscription?.cancel();
       _connectivitySubscription = null;
     });
@@ -1004,7 +1282,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final previous = state.excludedTaxIds;
     state = state.copyWith(excludedTaxIds: taxIds);
     try {
-      final employeeId = await _resolveItemEmployeeId();
+      // `excluded_by` responde «quién quitó este impuesto»: es quien HIZO la
+      // acción (el mesero del PIN o el empleado del usuario conectado), como
+      // en los retiros. Nunca el dueño de la mesa.
+      final employeeId =
+          _trustedActiveWaiter()?.employeeId ??
+          await _resolveAuthEmployeeId(
+            businessId: _activeBusinessId,
+            userId: ref.read(sessionProvider).userId,
+          );
       await Supabase.instance.client.rpc(
         'fn_set_order_excluded_taxes',
         params: {
@@ -1232,7 +1518,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // el overlay del salón). Si el caller no lo pasó (mutaciones de ítem),
     // usamos la mesa activa del viewmodel.
     final effectiveTableId =
-        tableId ?? (origin == 'table' ? _activeTableId : null);
+        tableId ??
+        (origin == 'table' || origin == 'delivery' ? _activeTableId : null);
 
     await _offlinePos.saveSnapshot(
       businessId: businessId,
@@ -1355,8 +1642,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// (que mapea order↔table para el salón y el uplink). Reusa el camino offline
   /// (`local-order-…`) → las mutaciones de ítem se enrutan al Hub por el
   /// uploader de OfflinePosService.
-  Future<void> _openTableViaHub(String tableId, int peopleCount) async {
+  Future<void> _openTableViaHub(
+    String tableId,
+    int peopleCount,
+    int openToken,
+  ) async {
     final businessId = _activeBusinessId;
+    bool stillSelected() =>
+        openToken == _openTableToken && _activeBusinessId == businessId;
     if (businessId == null || businessId.isEmpty) {
       state = state.copyWith(loading: false, error: 'Sin negocio activo.');
       return;
@@ -1378,14 +1671,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 peopleCount: peopleCount,
                 openedByEmployeeId: _trustedActiveWaiter()?.employeeId,
               );
+          if (!stillSelected()) return;
           if (await _offlinePos.isOrderClosedLocally(
             businessId: businessId,
             orderId: result.orderId,
           )) {
             throw StateError('El Hub devolvió una orden ya cobrada.');
           }
+          if (!stillSelected()) return;
           await _loadOrderDetail(
             result.orderId,
+            selectionToken: openToken,
             origin: 'table',
             tableId: tableId,
             caller: 'openTableViaHub',
@@ -1393,6 +1689,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
           return;
         } catch (e) {
+          if (!stillSelected()) return;
           // Hub offline / sin respuesta → respaldo local (abajo).
           debugPrint('[openTableViaHub] proxy falló, uso respaldo local: $e');
         }
@@ -1403,6 +1700,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         slotId: tableId,
       );
       final hubOrder = await _fetchHubOrder(businessId, tableId);
+      if (!stillSelected()) return;
       final pendingHere = existing == null
           ? false
           : (await _offlinePos.unsettledActions(
@@ -1416,6 +1714,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             orderId: existing!.order!.id,
           );
+      if (!stillSelected()) return;
       if (existing != null &&
           !existingClosed &&
           (hubOrder == null || pendingHere)) {
@@ -1438,6 +1737,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             orderId: hubOrderId,
           );
+      if (!stillSelected()) return;
       if (hubOrder != null &&
           !hubOrderClosed &&
           ((hubOrder['items'] as List?)?.isNotEmpty ?? false)) {
@@ -1450,6 +1750,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           state: hydrated,
           localOnly: true,
         );
+        if (!stillSelected()) return;
         state = _normalizeHydratedState(hydrated);
         _tableCache[tableId] = state;
         unawaited(_hydrateFiscalSequencesOffline());
@@ -1460,7 +1761,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         businessId: businessId,
         origin: 'table',
         tableId: tableId,
+        opener: _localDraftOpener(),
       );
+      if (!stillSelected()) return;
       final orderId = draft.order?.id;
       if (orderId != null) {
         await _offlinePos.enqueueAction(
@@ -1473,6 +1776,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           },
         );
       }
+      if (!stillSelected()) return;
       state = _normalizeHydratedState(
         draft.copyWith(
           loading: false,
@@ -1483,6 +1787,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _tableCache[tableId] = state;
       unawaited(_hydrateFiscalSequencesOffline());
     } catch (e) {
+      if (!stillSelected()) return;
       state = state.copyWith(
         loading: false,
         error: 'No se pudo abrir la mesa en el Hub: $e',
@@ -1571,6 +1876,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }
 
   Future<void> _openTableImpl(String tableId, {int peopleCount = 1}) async {
+    ++_loadGeneration;
+    final businessIdAtOpen = _activeBusinessId;
     // ⚡ Fix anti-parpadeo: reset SÍNCRONO del state ANTES de cualquier
     // await. Antes los checks de caja + business tax se ejecutaban
     // primero (cada uno con await) y durante esos ~200-400ms la UI
@@ -1620,14 +1927,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (hasCashierAccess) ensureCashSessionOpen().then((ok) => cashOk = ok),
       _ensureBusinessTaxSettingsLoaded(),
     ]);
-    if (!cashOk) return;
+    if (!cashOk ||
+        myOpenToken != _openTableToken ||
+        _activeBusinessId != businessIdAtOpen) {
+      return;
+    }
 
     // Modo Hub (LAN-first): NO abrimos la mesa en Supabase. La abrimos como
     // borrador local y notificamos al Hub (op `open_table`, que mapea
     // order↔table). Las mutaciones de ítem se enrutan al Hub por el uploader
     // (reusa el camino offline). Inerte si kHubModeEnabled=false.
     if (_isHubMode) {
-      await _openTableViaHub(tableId, peopleCount);
+      await _openTableViaHub(tableId, peopleCount, myOpenToken);
       return;
     }
 
@@ -1671,12 +1982,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           )
           .timeout(const Duration(seconds: 12));
       final orderId = result.orderId;
+      if (myOpenToken != _openTableToken ||
+          _activeBusinessId != businessIdAtOpen) {
+        return;
+      }
 
       // Aplicar el bundle ya parseado — _loadOrderDetail acepta un
       // preloaded para saltarse el fetch y solo correr el post-load
       // (fiscal sequences, normalización de state, etc).
       await _loadOrderDetail(
         orderId,
+        selectionToken: myOpenToken,
         origin: 'table',
         tableId: tableId,
         caller: 'openTable',
@@ -1691,6 +2007,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         'table_id': tableId,
       });
     } catch (e) {
+      if (myOpenToken != _openTableToken ||
+          _activeBusinessId != businessIdAtOpen) {
+        return;
+      }
       final businessId = _activeBusinessId;
       if (businessId != null && businessId.isNotEmpty) {
         // 1. Snapshot previo (la mesa ya se abrió antes online u offline).
@@ -1698,12 +2018,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           businessId: businessId,
           slotId: tableId,
         );
+        if (myOpenToken != _openTableToken ||
+            _activeBusinessId != businessIdAtOpen) {
+          return;
+        }
         if (offlineState != null &&
             offlineState.order?.id != null &&
             !await _offlinePos.isOrderClosedLocally(
               businessId: businessId,
               orderId: offlineState.order!.id,
             )) {
+          if (myOpenToken != _openTableToken ||
+              _activeBusinessId != businessIdAtOpen) {
+            return;
+          }
           state = _normalizeHydratedState(
             offlineState.copyWith(
               loading: false,
@@ -1729,7 +2057,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             origin: 'table',
             tableId: tableId,
+            opener: _localDraftOpener(),
           );
+          if (myOpenToken != _openTableToken ||
+              _activeBusinessId != businessIdAtOpen) {
+            return;
+          }
           state = _normalizeHydratedState(
             draft.copyWith(
               loading: false,
@@ -1866,22 +2199,99 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return false;
   }
 
-  Future<void> openManual({bool forceRestart = false}) async =>
-      _openManualOrQuick('manual', forceReset: forceRestart);
-  Future<void> openQuick({bool forceRestart = false}) async =>
-      _openManualOrQuick('quick', forceReset: forceRestart);
+  Future<void> openManual({bool forceRestart = false}) =>
+      _startVirtualOpen('manual', forceReset: forceRestart);
+  Future<void> openQuick({bool forceRestart = false}) =>
+      _startVirtualOpen('quick', forceReset: forceRestart);
 
-  Future<void> ensureManualOrder() async {
-    // Reusar solo si la orden está abierta. Si fue paid/voided/sent y el
-    // usuario vuelve al tab, se abre una nueva sesión Manual limpia.
-    final current = state.order;
-    if (state.origin == 'manual' &&
-        current != null &&
-        current.status == 'open') {
+  /// Arranca la apertura de venta rápida/manual y la registra como la que
+  /// está en curso (ver [_virtualOpenInFlight]).
+  Future<void> _startVirtualOpen(String origin, {required bool forceReset}) {
+    // Retail: la venta rápida vive en carritos, cada uno con su mesa virtual.
+    // Un carrito cobrado o anulado (addItem/addOfferDeal lo detectan y piden
+    // una venta nueva) se retira y se pasa a otro carrito o a uno nuevo. Antes
+    // caía en la venta rápida general y la orden nueva quedaba guardada bajo
+    // el carrito viejo.
+    if (origin == 'quick' && _isRetail) {
+      return _reopenRetailQuickSale(forceReset: forceReset);
+    }
+    final opening = _openManualOrQuick(origin, forceReset: forceReset);
+    // _openManualOrQuick toma su token antes de su primer await.
+    final inFlight = (origin: origin, token: _openTableToken, future: opening);
+    _virtualOpenInFlight = inFlight;
+    return opening.whenComplete(() {
+      if (identical(_virtualOpenInFlight, inFlight)) {
+        _virtualOpenInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _reopenRetailQuickSale({required bool forceReset}) async {
+    if (forceReset && _activeRetailSlotId != null) {
+      await _finalizeActiveRetailCartAfterPayment();
       return;
     }
-    await openManual(forceRestart: true);
+    await _ensureRetailCartsInitialized();
   }
+
+  /// Apertura de [origin] que sigue en curso para la selección vigente, o
+  /// null. Ver [_virtualOpenInFlight].
+  Future<void>? _pendingVirtualOpen(String origin) {
+    final opening = _virtualOpenInFlight;
+    if (opening == null ||
+        opening.origin != origin ||
+        opening.token != _openTableToken) {
+      return null;
+    }
+    return opening.future;
+  }
+
+  Future<void> ensureManualOrder() async {
+    // Retomar también cuentas enviadas y con abonos; una cuenta cobrada o
+    // anulada requiere una venta nueva al volver a esta pantalla.
+    final current = state.order;
+    if (state.origin == 'manual' && _isReusableOpenOrder(current)) {
+      return;
+    }
+    final pending = _pendingVirtualOpen('manual');
+    if (pending != null) return pending;
+    await openManual();
+  }
+
+  /// Venta rápida/manual que se puede seguir usando al volver a su pantalla.
+  ///
+  /// La abierta sin internet (`local-order-…`) nace con status `draft` y lo
+  /// conserva hasta sincronizar: antes solo se aceptaba `open`, así que volver
+  /// a la pantalla la reemplazaba por una vacía y la venta en curso
+  /// "desaparecía". La que se acaba de cobrar ([markOrderClosing]) nunca se
+  /// reusa.
+  bool _isReusableOpenOrder(Order? order) {
+    if (order == null || order.id == _closingOrderId) return false;
+    if (order.closedAt != null ||
+        order.status == 'paid' ||
+        order.status == 'void') {
+      return false;
+    }
+    if (const {
+      'open',
+      'sent',
+      'preparing',
+      'ready',
+      'served',
+      'partially_paid',
+    }.contains(order.status)) {
+      return true;
+    }
+    return order.id.startsWith('local-order-') && order.status == 'draft';
+  }
+
+  /// Cuenta cerrada (cobrada, anulada o cancelada) según el servidor.
+  static bool _isClosedOrder(Order? order) =>
+      order != null &&
+      (order.closedAt != null ||
+          order.isPaid ||
+          order.isCancelled ||
+          order.status == 'void');
 
   bool get _isRetail => ref.read(currentBusinessModelProvider).isRetail;
 
@@ -1892,20 +2302,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await _ensureRetailCartsInitialized();
       return;
     }
-    // Restaurante: reusar solo si la orden está abierta. Si fue paid/voided/sent
-    // y el usuario vuelve al tab, se abre una nueva sesión Quick limpia.
-    //
-    // NOTA: el "resume" de venta rápida persistente (Feature C) se revirtió
-    // porque su consulta async + _loadOrderDetail tardío pisaba la orden en
-    // curso y borraba los productos recién agregados (parpadeo). Volvemos al
-    // comportamiento conocido-bueno: arrancar una venta rápida limpia.
+    // Restaurante: reusar la venta en pantalla si sigue abierta. Si no, la
+    // apertura retoma la venta de este equipo por su id (respaldo local) o,
+    // si ya se cobró o anuló, abre una nueva. Ver _openManualOrQuick.
     final current = state.order;
-    if (state.origin == 'quick' &&
-        current != null &&
-        current.status == 'open') {
+    if (state.origin == 'quick' && _isReusableOpenOrder(current)) {
       return;
     }
-    await openQuick(forceRestart: true);
+    final pending = _pendingVirtualOpen('quick');
+    if (pending != null) return pending;
+    await openQuick();
   }
 
   // ===========================================================================
@@ -1921,8 +2327,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (carts.carts.isNotEmpty) {
       final active = carts.active ?? carts.carts.first;
       // Si el state ya muestra ese carrito y su orden está cargada, no hacemos
-      // nada (evita recargar al volver a entrar a la pantalla).
-      if (_activeRetailSlotId == active.slotId && state.order != null) {
+      // nada (evita recargar al volver a entrar a la pantalla). Solo si lo
+      // que está en pantalla es venta rápida: al volver de Venta Manual el
+      // slot activo sigue siendo el del carrito, y la venta rápida mostraba
+      // (y cobraba) la cuenta manual.
+      if (_activeRetailSlotId == active.slotId &&
+          state.order != null &&
+          state.origin == 'quick') {
         ref.read(retailCartsProvider.notifier).setActive(active.slotId);
         return;
       }
@@ -1937,13 +2348,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// Crea un carrito de venta rápida nuevo SIN cerrar los demás y lo activa.
   Future<void> newRetailCart() async {
     if (!_isRetail) return;
+    ++_loadGeneration;
+    final openToken = ++_openTableToken;
+    final businessId = _activeBusinessId;
+    bool stillSelected() =>
+        openToken == _openTableToken && _activeBusinessId == businessId;
     // Persistir el carrito activo actual antes de cambiar de slot.
     await _persistCurrentState();
+    if (!stillSelected()) return;
 
     await _ensureBusinessTaxSettingsLoaded();
+    if (!stillSelected()) return;
     if (!await ensureCashSessionOpen()) return;
+    if (!stillSelected()) return;
 
-    final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) {
       state = state.copyWith(
         loading: false,
@@ -1962,27 +2380,48 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     final slotId = 'quick-${const Uuid().v4()}';
     _activeRetailSlotId = slotId;
+    _activeTableId = null;
     ref.read(retailCartsProvider.notifier).addCart(slotId: slotId);
     state = const CurrentOrderState(loading: true, origin: 'quick');
 
     try {
-      // RPC dedicado: mesa virtual por carrito → NO anula las otras ventas
-      // rápidas abiertas (a diferencia de openManualOrQuick).
+      await _persistRetailCartsIndex();
+      if (!stillSelected()) return;
+      if (_preferLocalOperations) {
+        throw TimeoutException('Sin conexión: se abre el carrito local');
+      }
+      // RPC dedicado: una mesa virtual por carrito conserva cada venta
+      // simultánea bajo su propia identidad.
       final res = await ref
           .read(salesRepositoryProvider)
           .openRetailCart(slot: slotId, businessId: businessId, peopleCount: 1);
       final orderId = res['order_id'] as String;
+      if (_activeBusinessId != businessId) return;
       ref.read(retailCartsProvider.notifier).setOrderId(slotId, orderId);
-      await _loadOrderDetail(orderId, origin: 'quick', caller: 'newRetailCart');
+      await _persistRetailCartsIndex();
+      if (_activeRetailSlotId != slotId || !stillSelected()) {
+        return;
+      }
+      await _loadOrderDetail(
+        orderId,
+        selectionToken: openToken,
+        origin: 'quick',
+        caller: 'newRetailCart',
+      );
     } catch (e) {
-      if (!_connectivity.isConnected) {
+      if (_activeRetailSlotId != slotId || !stillSelected()) {
+        return;
+      }
+      if (_shouldTreatAsOffline(e)) {
         // Offline: draft local con este slot. Al sincronizar, el replay abre la
         // sesión quick real y remapea el local-order-… (igual que las mesas).
         final draft = await _offlinePos.createLocalDraft(
           businessId: businessId,
           origin: 'quick',
           slotId: slotId,
+          opener: _localDraftOpener(),
         );
+        if (_activeRetailSlotId != slotId || !stillSelected()) return;
         ref
             .read(retailCartsProvider.notifier)
             .setOrderId(slotId, draft.order!.id);
@@ -2006,12 +2445,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// destino en `currentOrderProvider`.
   Future<void> switchRetailCart(String slotId) async {
     if (!_isRetail) return;
-    if (_activeRetailSlotId == slotId && state.order != null) {
+    if (_activeRetailSlotId == slotId &&
+        state.order != null &&
+        state.origin == 'quick') {
       ref.read(retailCartsProvider.notifier).setActive(slotId);
       return;
     }
 
+    ++_loadGeneration;
+    final openToken = ++_openTableToken;
+    final businessId = _activeBusinessId;
+    bool stillSelected() =>
+        openToken == _openTableToken && _activeBusinessId == businessId;
     await _persistCurrentState();
+    if (!stillSelected()) return;
 
     RetailCart? cart;
     for (final c in ref.read(retailCartsProvider).carts) {
@@ -2023,14 +2470,45 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (cart == null) return;
 
     _activeRetailSlotId = slotId;
+    _activeTableId = null;
     ref.read(retailCartsProvider.notifier).setActive(slotId);
     state = const CurrentOrderState(loading: true, origin: 'quick');
+    final saved = businessId == null
+        ? null
+        : await _offlinePos.loadSnapshot(
+            businessId: businessId,
+            slotId: slotId,
+          );
+    if (_activeRetailSlotId != slotId || !stillSelected()) {
+      return;
+    }
+    // Pintar el respaldo antes de la red: una recarga fallida no borra el
+    // carrito, y el servidor parcial no pisa cambios aún en cola.
+    if (saved?.order != null) {
+      state = _normalizeHydratedState(
+        saved!.copyWith(loading: false, origin: 'quick'),
+      );
+      ref
+          .read(retailCartsProvider.notifier)
+          .setOrderId(slotId, saved.order!.id);
+      if (_preferLocalOperations ||
+          await _offlinePos.hasUnsettledOrderActions(
+            businessId: businessId!,
+            orderId: saved.order!.id,
+          )) {
+        await _persistRetailCartsIndex();
+        unawaited(_hydrateFiscalSequencesOffline());
+        return;
+      }
+    }
 
-    final orderId = cart.orderId;
+    if (!stillSelected()) return;
+    final orderId = saved?.order?.id ?? cart.orderId;
     if (orderId != null && !orderId.startsWith('local-order-')) {
       try {
         await _loadOrderDetail(
           orderId,
+          selectionToken: openToken,
           origin: 'quick',
           caller: 'switchRetailCart',
         );
@@ -2041,13 +2519,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
-    final businessId = _activeBusinessId;
     if (businessId != null && businessId.isNotEmpty) {
       final snap = await _offlinePos.loadSnapshot(
         businessId: businessId,
         slotId: slotId,
       );
       if (snap != null) {
+        if (_activeRetailSlotId != slotId || !stillSelected()) {
+          return;
+        }
         state = _normalizeHydratedState(
           snap.copyWith(loading: false, origin: 'quick'),
         );
@@ -2056,6 +2536,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         return;
       }
     }
+    if (!stillSelected()) return;
     state = state.copyWith(
       loading: false,
       error: 'No se pudo cargar esta venta.',
@@ -2067,25 +2548,77 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   Future<void> closeRetailCart(String slotId) async {
     if (!_isRetail) return;
     final notifier = ref.read(retailCartsProvider.notifier);
-
-    // Si el carrito a cerrar es el activo y tiene una orden con items, la
-    // anulamos (cancelCurrentOrder ya manela online/offline). Si es otro
-    // carrito, solo limpiamos su snapshot (su orden quedará abierta en server,
-    // recuperable; no la tocamos para no requerir cargarla solo para anular).
-    if (slotId == _activeRetailSlotId &&
-        state.order != null &&
-        state.items.where((i) => i.status != 'void').isNotEmpty) {
-      await cancelCurrentOrder();
-    } else {
-      final businessId = _activeBusinessId;
-      if (businessId != null && businessId.isNotEmpty) {
-        await _offlinePos.saveSnapshot(
-          businessId: businessId,
-          slotId: slotId,
-          origin: 'quick',
-          state: const CurrentOrderState(),
-          localOnly: true,
-        );
+    final cart = ref
+        .read(retailCartsProvider)
+        .carts
+        .where((c) => c.slotId == slotId)
+        .firstOrNull;
+    if (cart == null) return;
+    if (slotId != _activeRetailSlotId) await switchRetailCart(slotId);
+    if (_activeRetailSlotId != slotId) return;
+    // Cargar y anular también una pestaña inactiva. Borrar solo su snapshot
+    // dejaba la venta huérfana y sus acciones seguían subiendo sin pestaña.
+    if (cart.orderId != null && state.order == null) return;
+    final loaded = state.order;
+    if (loaded != null) {
+      // Pestaña de una venta ya cobrada o anulada (la app se cerró entre el
+      // cobro y _finalizeActiveRetailCartAfterPayment, o falló la recarga
+      // posterior al cobro): solo se retira. fn_close_order_and_table no
+      // protege 'paid' (annulOrder la usa para anular ventas cobradas), así
+      // que anularla aquí pasaba la venta cobrada a 'void'.
+      var closed =
+          loaded.closedAt != null ||
+          loaded.isPaid ||
+          loaded.isCancelled ||
+          loaded.status == 'void';
+      var queueVoid = false;
+      if (!closed && !loaded.id.startsWith('local-order-')) {
+        // La pantalla puede estar vieja aunque diga «abierta»: la recarga
+        // posterior al cobro falló, o tras un reinicio se repintó el respaldo
+        // previo al cobro. Solo se anula en línea si el servidor confirma que
+        // sigue abierta. Sin red o sin lectura, la anulación va a la cola y su
+        // replay vuelve a leer el servidor y omite una venta cobrada.
+        final closedOnServer = _preferLocalOperations
+            ? null
+            : await _retailOrderClosedOnServer(loaded.id);
+        if (_activeRetailSlotId != slotId || state.order?.id != loaded.id) {
+          return;
+        }
+        closed = closedOnServer == true;
+        queueVoid = closedOnServer == null;
+      }
+      if (closed) {
+        await markPaidOrderLocally(loaded.id);
+      } else {
+        // Cerrar la pestaña es una anulación automática: el servidor solo
+        // anula si sigue abierta y sin cobros (otra caja pudo cobrarla
+        // después de la lectura de arriba, o tener un abono parcial).
+        String? notVoidable;
+        try {
+          await cancelCurrentOrder(
+            expectedOrderId: loaded.id,
+            queueVoid: queueVoid,
+            voidOnlyIfUnpaid: true,
+          );
+        } on _OrderNotVoidable catch (e) {
+          notVoidable = e.result;
+        }
+        if (notVoidable == 'already_closed') {
+          await markPaidOrderLocally(loaded.id);
+        } else if (notVoidable != null) {
+          // Tiene cobros: no se descarta; la pestaña y sus productos quedan.
+          if (_activeRetailSlotId == slotId && state.order?.id == loaded.id) {
+            state = state.copyWith(
+              error:
+                  'Esta venta tiene cobros registrados. Complétala o anúlala '
+                  'con motivo.',
+            );
+          }
+          return;
+        } else if (state.order != null) {
+          // Un rechazo al anular conserva la pestaña y todos sus productos.
+          return;
+        }
       }
     }
 
@@ -2100,6 +2633,27 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
     await _persistRetailCartsIndex();
+  }
+
+  /// Lee en el servidor si la venta de una pestaña retail ya está cobrada,
+  /// anulada o cerrada, antes de anularla. `null` si no se pudo leer (red,
+  /// tiempo agotado): el caller NO anula en línea. Una orden que no aparece
+  /// en el negocio cuenta como abierta (se conserva lo de siempre).
+  Future<bool?> _retailOrderClosedOnServer(String orderId) async {
+    try {
+      final order = await ref
+          .read(salesRepositoryProvider)
+          .getOrder(orderId, businessId: _activeBusinessId)
+          .timeout(const Duration(seconds: 5));
+      if (order == null) return false;
+      return order.closedAt != null ||
+          order.isPaid ||
+          order.isCancelled ||
+          order.status == 'void';
+    } catch (e) {
+      debugPrint('closeRetailCart: no se pudo leer la orden $orderId: $e');
+      return null;
+    }
   }
 
   /// Restaura las pestañas de carritos desde disco (tras reinicio). Devuelve
@@ -2156,30 +2710,109 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await _persistRetailCartsIndex();
   }
 
+  static const _closedSaleRestartMessage =
+      'La venta anterior ya estaba cerrada: se abrió una nueva. Vuelve a '
+      'agregar el producto.';
+
+  /// addItem/addOfferDeal encontraron la venta en pantalla ya cobrada o
+  /// anulada: se abre la siguiente. El producto tocado NO se agregó, así que
+  /// el aviso queda en la venta nueva; antes la apertura lo borraba y el
+  /// lector cantaba «Agregado» sin haber agregado nada.
+  Future<void> _restartClosedSale(String? origin) async {
+    if (origin == 'quick' && _isRetail) {
+      await _replaceClosedRetailCart();
+    } else if (origin == 'quick') {
+      await openQuick(forceRestart: true);
+    } else if (origin == 'manual') {
+      await openManual(forceRestart: true);
+    } else {
+      return;
+    }
+    if (state.origin == origin &&
+        state.order != null &&
+        !state.loading &&
+        state.error == null) {
+      state = state.copyWith(error: _closedSaleRestartMessage);
+    }
+  }
+
+  /// Retail: la venta del carrito activo ya está cobrada o anulada (p. ej. el
+  /// barrido de mesas vacías anuló el carrito vacío). Se abre un carrito NUEVO
+  /// en su lugar y recién entonces se retira el cerrado. Antes se retiraba y se
+  /// pasaba al último carrito abierto: la pantalla saltaba a la venta de OTRO
+  /// cliente y el siguiente escaneo caía en ella. Si el carrito nuevo no se
+  /// puede abrir (caja cerrada, tope de carritos), la pestaña cerrada se queda
+  /// con el aviso: nunca se salta a otro carrito.
+  Future<void> _replaceClosedRetailCart() async {
+    final closedSlot = _activeRetailSlotId;
+    final businessId = _activeBusinessId;
+    if (closedSlot == null) {
+      await _ensureRetailCartsInitialized();
+      return;
+    }
+    // Sin la venta cerrada en pantalla: newRetailCart guarda lo que haya en
+    // pantalla bajo el carrito activo antes de cambiar.
+    state = const CurrentOrderState(origin: 'quick');
+    await newRetailCart();
+    final openedSlot = _activeRetailSlotId;
+    if (openedSlot == null || openedSlot == closedSlot) return;
+    if (businessId != null &&
+        businessId.isNotEmpty &&
+        _activeBusinessId == businessId) {
+      await _offlinePos.saveSnapshot(
+        businessId: businessId,
+        slotId: closedSlot,
+        origin: 'quick',
+        state: const CurrentOrderState(),
+        localOnly: true,
+      );
+    }
+    if (_activeBusinessId != businessId) return;
+    ref.read(retailCartsProvider.notifier).removeCart(closedSlot);
+    await _persistRetailCartsIndex();
+  }
+
   /// Abre una orden de delivery existente (ya creada por DeliveryViewModel).
   Future<void> openDeliveryOrder({
     required String tableId,
     String? deliveryType,
   }) async {
+    ++_loadGeneration;
+    final businessId = _activeBusinessId;
+    var openToken = ++_openTableToken;
     await _ensureBusinessTaxSettingsLoaded();
     if (!await ensureCashSessionOpen()) return;
+    if (openToken != _openTableToken || _activeBusinessId != businessId) {
+      return;
+    }
     state = state.copyWith(loading: true, error: null);
     try {
-      await openTable(tableId, peopleCount: 1);
+      final opening = openTable(tableId, peopleCount: 1);
+      openToken = _openTableToken;
+      await opening;
+      if (openToken != _openTableToken ||
+          _activeBusinessId != businessId ||
+          _activeTableId != tableId) {
+        return;
+      }
+      final order = state.order;
+      if (order == null) return;
       // Cargar la dirección de entrega ya guardada (si la sesión la tiene).
-      String? address;
-      final sessionId = state.order?.sessionId;
-      if (sessionId != null) {
-        try {
-          address = await ref
-              .read(salesRepositoryProvider)
-              .getSessionDeliveryAddress(
-                sessionId,
-                businessId: _activeBusinessId,
-              );
-        } catch (_) {
-          // best-effort: la dirección es opcional, no rompe la apertura.
-        }
+      String? address = state.deliveryAddress;
+      try {
+        address = await ref
+            .read(salesRepositoryProvider)
+            .getSessionDeliveryAddress(order.sessionId, businessId: businessId);
+      } catch (_) {
+        // best-effort: la dirección es opcional, no rompe la apertura.
+      }
+      // La dirección puede llegar después de que el cajero abra otra cuenta.
+      // Nunca aplicar ni guardar esa nueva cuenta bajo la mesa del delivery.
+      if (openToken != _openTableToken ||
+          _activeBusinessId != businessId ||
+          _activeTableId != tableId ||
+          state.order?.id != order.id) {
+        return;
       }
       // El origin se fija aquí (después de openTable, que hidrató como
       // 'table'), así que aplicamos el "para llevar por defecto" de
@@ -2200,7 +2833,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               takeout: deliveryTakeout,
               deliveryAddress: address,
             );
+      await _persistCurrentState(tableId: tableId);
     } catch (e) {
+      if (openToken != _openTableToken || _activeBusinessId != businessId) {
+        return;
+      }
       state = state.copyWith(loading: false, error: e.toString());
     }
   }
@@ -2232,6 +2869,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     required String orderId,
     required String tableId,
   }) async {
+    final businessId = _activeBusinessId;
     if (!await ensureCashSessionOpen()) return;
 
     state = state.copyWith(loading: true, error: null);
@@ -2244,9 +2882,52 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             tableId: tableId,
             userId: userId,
           );
+      // La orden ya es de la mesa (mismo id, sesión de la mesa): el respaldo
+      // 'manual' de este equipo deja de apuntarle. Si no, volver a Venta Manual
+      // la retomaba como venta del mostrador: se le agregaban productos y se
+      // cobraba (y cerraba) la cuenta de la mesa. Solo si el respaldo sigue
+      // siendo de esta orden; no toca la cola ni el servidor.
+      if (businessId != null && businessId.isNotEmpty) {
+        await _releaseManualSlot(businessId: businessId, orderId: orderId);
+      }
       await openTable(tableId);
     } catch (e) {
       state = state.copyWith(loading: false, error: e.toString());
+    }
+  }
+
+  /// Vacía el respaldo 'manual' si todavía guarda [orderId]. Best-effort: si
+  /// falla, al retomar el servidor rechaza la orden (su sesión ya no es
+  /// 'manual') y se abre una venta nueva.
+  Future<void> _releaseManualSlot({
+    required String businessId,
+    required String orderId,
+  }) async {
+    try {
+      // updateSnapshot solo escribe si el respaldo sigue siendo de esta orden
+      // (o de su id local); el fallback solo aporta ese id.
+      await _offlinePos.updateSnapshot(
+        businessId: businessId,
+        slotId: 'manual',
+        origin: 'manual',
+        fallbackState: CurrentOrderState(
+          origin: 'manual',
+          order: Order(
+            id: orderId,
+            sessionId: '',
+            status: 'open',
+            subtotal: 0,
+            discounts: 0,
+            serviceFee: 0,
+            tax: 0,
+            total: 0,
+            createdAt: DateTime.now(),
+          ),
+        ),
+        update: (_) => const CurrentOrderState(origin: 'manual'),
+      );
+    } catch (e) {
+      debugPrint('[SalesVM] no se soltó el respaldo manual de $orderId: $e');
     }
   }
 
@@ -2272,6 +2953,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       taxId: customerTaxId,
     );
     final order = state.order;
+    // Selección de esta asignación: tras la espera del servidor solo se
+    // recarga si la pantalla sigue en esta misma cuenta (ver _loadOrderDetail).
+    final selectionToken = _openTableToken;
+    final selectedOrigin = state.origin;
     final orderClosing =
         order != null &&
         (order.id == _closingOrderId ||
@@ -2282,6 +2967,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (nextOrderOrigin == 'quick' || nextOrderOrigin == 'manual') {
         _nextOrderCustomer = (
           origin: nextOrderOrigin!,
+          businessId: _activeBusinessId,
           customer: customer,
           at: DateTime.now(),
         );
@@ -2341,8 +3027,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (identical(_pendingCustomers[order.id], pending)) {
         _pendingCustomers.remove(order.id);
       }
-      if (state.order?.id == order.id &&
-          state.customerId == customer.id) {
+      if (state.order?.id == order.id && state.customerId == customer.id) {
         state = state
             .copyWith(clearCustomer: true)
             .copyWith(
@@ -2361,10 +3046,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       return 'No se pudo asignar el cliente: ${FriendlyError.from(e)}';
     }
     // Sin `await` desde que se marcó `savedOnServer`: la recarga arranca ya y
-    // su generación nueva descarta cualquier recarga vieja en vuelo.
+    // su generación nueva descarta cualquier recarga vieja en vuelo. Si el
+    // cajero ya pasó a otra cuenta (p. ej. Venta Rápida), no se recarga: el
+    // cliente ya quedó en el servidor y la próxima carga de esta cuenta lo
+    // trae. Antes esta recarga escribía la mesa en la pantalla nueva.
     await _loadOrderDetail(
       order.id,
-      origin: state.origin,
+      selectionToken: selectionToken,
+      reloadOf: order.id,
+      origin: selectedOrigin,
       caller: 'assignCustomer',
     );
     return null;
@@ -2399,8 +3089,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final repo = ref.read(salesRepositoryProvider);
       final resolvedSessionId =
           sessionId ??
-          (await repo.getOrder(orderId, businessId: _activeBusinessId))
-              ?.sessionId;
+          (await repo.getOrder(
+            orderId,
+            businessId: _activeBusinessId,
+          ))?.sessionId;
       if (resolvedSessionId == null || resolvedSessionId.isEmpty) return;
       await repo
           .assignCustomerToSession(
@@ -2447,6 +3139,56 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// siguiente: un cliente elegido en esta ventana es para la venta nueva.
   void markOrderClosing(String orderId) {
     _closingOrderId = orderId;
+    // Cobrada en línea: el servidor ya la cerró, pero el respaldo
+    // 'quick'/'manual' la guarda abierta. Al volver a la pantalla sin red se
+    // retoma ese respaldo sin confirmarlo con el servidor, y la venta cobrada
+    // aparecía como venta en curso (se podía cobrar otra vez). Las mesas ya
+    // reciben esta marca al cobrarse completas (markPaidOrderLocally).
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    unawaited(
+      _offlinePos
+          .markOrderClosedLocally(businessId: businessId, orderId: orderId)
+          .catchError(
+            (Object e) => debugPrint('[SalesVM] marca de cierre local: $e'),
+          ),
+    );
+  }
+
+  /// Venta rápida/manual cobrada EN LÍNEA: marca local de cerrada en cuanto
+  /// se confirma el cobro, ANTES de imprimir. [markOrderClosing] la escribía
+  /// recién al cerrar el diálogo (después de la impresión, que puede colgarse):
+  /// si la app moría en ese lapso y reiniciaba sin red, el respaldo retomaba
+  /// la venta cobrada como venta en curso y se podía cobrar otra vez. Solo la
+  /// marca (que también suelta su respaldo): no toca la pantalla ni la venta
+  /// en cierre. Best-effort: un fallo de disco no frena la impresión.
+  ///
+  /// Solo cobro de la cuenta completa ([checkId] null) de venta rápida/manual
+  /// de restaurante con algún pago confirmado por el servidor ('completed').
+  /// El cobro sin red ya recibe la marca con markPaidOrderLocally, y retail
+  /// cambia de carrito con refreshOrder(clearIfPaid).
+  Future<void> markVirtualSalePaidLocally({
+    required String orderId,
+    required String origin,
+    required String? checkId,
+    required List<Payment> payments,
+  }) async {
+    if (checkId != null ||
+        (origin != 'quick' && origin != 'manual') ||
+        _isRetail ||
+        !payments.any((payment) => payment.status == 'completed')) {
+      return;
+    }
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    try {
+      await _offlinePos.markOrderClosedLocally(
+        businessId: businessId,
+        orderId: orderId,
+      );
+    } catch (e) {
+      debugPrint('[SalesVM] marca de cierre local tras el cobro: $e');
+    }
   }
 
   /// Aplica a la venta recién abierta el cliente que se eligió mientras
@@ -2458,6 +3200,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _nextOrderCustomer = null;
     _closingOrderId = null;
     if (next == null || next.origin != origin) return;
+    // Elegido en otra sucursal (el dueño cambió de negocio en medio): no es
+    // cliente de esta venta.
+    if (next.businessId != _activeBusinessId) return;
     if (DateTime.now().difference(next.at) > const Duration(minutes: 2)) {
       return;
     }
@@ -2485,6 +3230,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   }) async {
     final order = state.order;
     if (order == null) return;
+    // Selección de esta asignación: tras la espera del servidor, nada se
+    // escribe si la pantalla ya pasó a otra cuenta (ver _loadOrderDetail).
+    final selectionToken = _openTableToken;
+    final selectedOrigin = state.origin;
+    bool stillSelected() =>
+        selectionToken == _openTableToken && state.order?.id == order.id;
 
     // Recordar la asignación para reaplicarla tras los reload (ver
     // _checkCustomerOverride): el reload del bundle puede no traer customer_rnc.
@@ -2503,6 +3254,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             customerName: customerName,
             customerRnc: customerTaxId,
           );
+      if (!stillSelected()) return;
       // Reflejar de inmediato en el check local para que el chip del header
       // y los tabs muestren el nombre/RNC sin esperar al reload del bundle.
       final updatedChecks = state.checks
@@ -2519,10 +3271,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(checks: updatedChecks);
       await _loadOrderDetail(
         order.id,
-        origin: state.origin,
+        selectionToken: selectionToken,
+        reloadOf: order.id,
+        origin: selectedOrigin,
         caller: 'assignCustomerToCheck',
       );
     } catch (e) {
+      if (!stillSelected()) return;
       state = state.copyWith(
         error: 'Error al asignar cliente a la subcuenta: $e',
       );
@@ -2616,19 +3371,245 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await updateCurrentSessionNote(nextNote);
   }
 
+  /// Pantalla de venta rápida/manual mientras abre su cuenta: ninguna orden en
+  /// memoria (mismo patrón que openTable). Solo se conserva lo que es del
+  /// negocio y de la conexión (badge de pendientes, secuencias fiscales, error
+  /// de impuestos que bloquea el cobro). También descarta las recargas de la
+  /// cuenta anterior que ya estaban agendadas: si no, al dispararse la volvían
+  /// a cargar en esta pantalla, con este origen y bajo este respaldo.
+  void _showVirtualSaleOpening(String origin) {
+    // Al pasar a quick/manual ya no hay mesa activa; sin esto una mutación
+    // posterior con origin 'table' residual persistiría al slot equivocado.
+    _activeTableId = null;
+    _hasManualFiscalTypeSelection = false;
+    _refreshOrderDebounceTimer?.cancel();
+    _refreshOrderDebounceTimer = null;
+    _queuedRefreshOrderId = null;
+    _queuedClearIfPaid = false;
+    // El canal de la cuenta anterior no sirve en esta pantalla: sus eventos
+    // recargaban la venta que se estaba retomando antes de confirmarla. La
+    // venta que abra o retome se suscribe al cargar.
+    _realtimeChannel?.unsubscribe();
+    _realtimeChannel = null;
+    _subscribedOrderId = null;
+    state = CurrentOrderState(
+      loading: true,
+      origin: origin,
+      isOfflineMode: state.isOfflineMode,
+      syncInFlight: state.syncInFlight,
+      pendingOfflineActions: state.pendingOfflineActions,
+      lastSyncAt: state.lastSyncAt,
+      fiscalSequences: state.fiscalSequences,
+      taxConfigError: state.taxConfigError,
+    );
+  }
+
+  /// ¿Sigue [orderId] siendo una venta [origin] abierta en el servidor?
+  /// confirmed: su sesión (`table_sessions.origin`) es de este origen y no
+  /// está cerrada. rejected: el servidor dice que no (otra pantalla o mesa real
+  /// tras «Asignar a mesa», sesión cerrada, inexistente o de otro negocio).
+  /// unreachable: sin red. unknown: el servidor respondió con un error; no se
+  /// toma como «no» porque, si esta lectura fallara siempre, cada visita
+  /// abriría una venta nueva y dejaría viva la anterior.
+  /// revivable: sesión de este origen pero cerrada, y este equipo todavía
+  /// tiene altas de la venta por subir. Así la deja el barrendero de mesas
+  /// vacías (fn_release_empty_tables) cuando la venta se llenó sin red, y al
+  /// subir el alta el trigger de order_items (20260819_0004) reabre la orden
+  /// y su sesión. Abrir otra venta dejaba esos productos en una orden sin
+  /// pantalla (nunca cobrada) o muertos en la cola. Decide la carga: si el
+  /// servidor la cobró, se adopta el cierre y se abre una nueva.
+  Future<_VirtualSaleSession> _confirmVirtualSaleSession(
+    String orderId, {
+    required String origin,
+    required String businessId,
+  }) async {
+    try {
+      final session = await ref
+          .read(salesRepositoryProvider)
+          .getOrderSessionOrigin(orderId, businessId: businessId)
+          .timeout(const Duration(seconds: 10));
+      if (session == null || session.origin != origin) {
+        return _VirtualSaleSession.rejected;
+      }
+      if (session.closedAt == null) return _VirtualSaleSession.confirmed;
+      try {
+        final queued = await _offlinePos.orderQueueStatus(
+          businessId: businessId,
+          orderId: orderId,
+        );
+        if (queued.revivingAdds) return _VirtualSaleSession.revivable;
+      } catch (e) {
+        debugPrint('[SalesVM] no se leyó la cola de $orderId: $e');
+      }
+      return _VirtualSaleSession.rejected;
+    } catch (e) {
+      if (e is TimeoutException || OfflinePosService.isTransportError(e)) {
+        _recordTransportFailure();
+        return _VirtualSaleSession.unreachable;
+      }
+      debugPrint('[SalesVM] no se pudo confirmar la sesión de $orderId: $e');
+      return _VirtualSaleSession.unknown;
+    }
+  }
+
   Future<void> _openManualOrQuick(
     String origin, {
     bool forceReset = false,
   }) async {
-    // Al pasar a quick/manual ya no hay mesa activa; sin esto una mutación
-    // posterior con origin 'table' residual persistiría al slot equivocado.
-    _activeTableId = null;
-    await _ensureBusinessTaxSettingsLoaded();
-    if (!await ensureCashSessionOpen()) return;
+    // Reinicio tras cobrar (o tras detectar la venta cerrada): si en esa
+    // ventana ya se abrió una venta NUEVA de esta pantalla (p. ej. el lector
+    // escaneó el primer producto del siguiente cliente mientras se cerraba la
+    // cobrada), se respeta. Antes se soltaba y se abría otra: el producto
+    // escaneado desaparecía de la venta del cliente y su orden quedaba viva
+    // sin pantalla. La cobrada nunca pasa este filtro: es la venta en cierre
+    // (_closingOrderId) o ya está paid/void. Antes de tomar token: tomarlo
+    // cortaría el alta en curso sobre esa venta nueva.
+    if (forceReset &&
+        state.origin == origin &&
+        !state.loading &&
+        _isReusableOpenOrder(state.order)) {
+      return;
+    }
+    ++_loadGeneration;
+    final openToken = ++_openTableToken;
+    final businessId = _activeBusinessId;
+    bool stillSelected() =>
+        openToken == _openTableToken && _activeBusinessId == businessId;
+    // Soltar la cuenta saliente ANTES de cualquier await. Antes la anterior
+    // (p. ej. la mesa A) seguía en pantalla durante el respaldo, la caja y el
+    // RPC, y se quedaba ahí si alguno fallaba: un producto o el cobro tocados
+    // en Venta Manual caían en la mesa A. Su respaldo se guarda del estado
+    // capturado aquí mismo (_persistCurrentState lo toma antes de su primer
+    // await); no se borra nada del servidor, la cola ni el respaldo. Con
+    // forceReset la saliente ya se cobró o se descartó: no se vuelve a guardar.
+    final savingPrevious = forceReset ? null : _persistCurrentState();
+    _showVirtualSaleOpening(origin);
+    if (savingPrevious != null) {
+      try {
+        await savingPrevious;
+      } catch (e) {
+        debugPrint(
+          '[SalesVM] no se guardó el respaldo de la cuenta anterior: $e',
+        );
+      }
+      if (!stillSelected()) return;
+    }
 
-    state = forceReset
-        ? const CurrentOrderState(loading: true)
-        : state.copyWith(loading: true, error: null);
+    // Retomar la venta de ESTE equipo por su id: el respaldo 'quick'/'manual'
+    // es por instalación y negocio. El servidor ya no retoma (cada apertura es
+    // una venta nueva), así que dos cajas nunca comparten la misma cuenta.
+    if (!forceReset && businessId != null && businessId.isNotEmpty) {
+      final snapshot = await _offlinePos.loadSnapshot(
+        businessId: businessId,
+        slotId: origin,
+      );
+      if (!stillSelected()) return;
+      final saved = snapshot?.order;
+      if (snapshot != null && saved != null && _isReusableOpenOrder(saved)) {
+        final savedId = saved.id;
+        // Una venta del servidor no se toca hasta confirmarla (igual que el
+        // cache de openTable): se pinta con loading y los toques y el lector
+        // esperan. Antes se podía agregar durante esa lectura y la respuesta
+        // vieja del servidor pisaba lo recién agregado. El borrador local sí
+        // se usa de una vez: no hay servidor que confirmar.
+        final confirm =
+            !_preferLocalOperations && !savedId.startsWith('local-order-');
+        state = _normalizeHydratedState(
+          snapshot.copyWith(
+            loading: confirm,
+            origin: origin,
+            isOfflineMode: state.isOfflineMode,
+            syncInFlight: state.syncInFlight,
+            pendingOfflineActions: state.pendingOfflineActions,
+            lastSyncAt: state.lastSyncAt,
+            taxConfigError: state.taxConfigError,
+          ),
+        );
+        if (!confirm) {
+          unawaited(_hydrateFiscalSequencesOffline());
+          _applyNextOrderCustomer(origin);
+          return;
+        }
+        // El SERVIDOR confirma que sigue siendo una venta de esta pantalla:
+        // su sesión es de este origen y sigue abierta. El estado de la orden
+        // no basta: una Venta Manual pasada a una mesa con «Asignar a mesa»
+        // sigue abierta con el mismo id (en la sesión de la mesa), y
+        // Order.origin siempre llega como 'table'. Única excepción: sesión de
+        // este origen cerrada con altas de esta venta aún en la cola
+        // (revivable); ahí decide la carga.
+        final session = await _confirmVirtualSaleSession(
+          savedId,
+          origin: origin,
+          businessId: businessId,
+        );
+        if (!stillSelected()) return;
+        if (session == _VirtualSaleSession.unreachable) {
+          // Sin red: igual que retomar sin conexión (arriba). Una segunda
+          // lectura al mismo servidor caído solo sumaría espera.
+          state = state.copyWith(loading: false, error: state.error);
+          unawaited(_hydrateFiscalSequencesOffline());
+          _applyNextOrderCustomer(origin);
+          return;
+        }
+        if (session == _VirtualSaleSession.rejected) {
+          debugPrint(
+            '[SalesVM] el respaldo $origin apunta a $savedId, que ya no es una '
+            'venta $origin abierta en el servidor: se abre una venta nueva',
+          );
+          _showVirtualSaleOpening(origin);
+        } else {
+          // Una carga más nueva de esta misma venta (p. ej. la recarga al
+          // reconectar) puede reemplazar la confirmación: se repite para
+          // decidir con la respuesta del servidor y no con el respaldo
+          // pintado. Antes se soltaba el bloqueo igual y se aceptaban toques
+          // sobre una venta sin confirmar (o ya cobrada en el servidor).
+          for (var attempt = 0; attempt < 3; attempt++) {
+            final confirming = _loadOrderDetail(
+              savedId,
+              selectionToken: openToken,
+              origin: origin,
+              caller: 'resumeManualOrQuick:$origin',
+            );
+            // _loadOrderDetail toma su generación antes de su primer await.
+            final confirmGeneration = _loadGeneration;
+            try {
+              await confirming;
+            } catch (e) {
+              debugPrint(
+                '[SalesVM] no se confirmó la venta retomada $savedId: $e',
+              );
+            }
+            if (!stillSelected()) return;
+            if (_loadGeneration == confirmGeneration ||
+                state.order?.id != savedId) {
+              break;
+            }
+          }
+          final shown = state.order;
+          if (shown != null && shown.id != savedId) return;
+          if (_isReusableOpenOrder(shown)) {
+            // Sin red o con cambios en cola la carga conserva la pantalla.
+            if (state.loading) {
+              state = state.copyWith(loading: false, error: state.error);
+            }
+            _applyNextOrderCustomer(origin);
+            return;
+          }
+          // Cobrada o anulada en el servidor (otra caja, o el cobro ya
+          // subió), o ya no accesible: se abre una venta nueva en vez de
+          // mostrarla abierta.
+          _showVirtualSaleOpening(origin);
+        }
+      }
+    }
+    await _ensureBusinessTaxSettingsLoaded();
+    if (!stillSelected()) return;
+    // Caja cerrada: queda el aviso sin ninguna cuenta en pantalla.
+    if (!await ensureCashSessionOpen()) return;
+    if (!stillSelected()) return;
+
+    if (!state.loading) state = state.copyWith(loading: true);
+    String? openedOrderId;
     try {
       // `_preferLocalOperations` y no solo `!isConnected`: si otra lectura
       // acaba de fallar por red, la venta local sale de una vez en vez de
@@ -2642,57 +3623,158 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             origin: origin,
             customerName: null,
             peopleCount: 1,
-            businessId: _activeBusinessId,
+            businessId: businessId,
           )
           .timeout(const Duration(seconds: 10));
+      if (!stillSelected()) return;
+      final orderId = res['order_id'] as String;
+      openedOrderId = orderId;
       await _loadOrderDetail(
-        res['order_id'] as String,
+        orderId,
+        selectionToken: openToken,
         origin: origin,
         caller: 'openManualOrQuick:$origin',
       );
+      if (!stillSelected()) return;
       _applyNextOrderCustomer(origin);
     } catch (e) {
-      final businessId = _activeBusinessId;
+      if (!stillSelected()) return;
       // Sin red: venta NUEVA local (no se recupera ninguna vieja, así que no
       // choca con PRD 2.5). Al sincronizar, el replay abre la sesión real y
       // remapea el local-order-… — el mismo camino que ya usan las mesas y
       // los carritos de retail. Antes aquí se mostraba "No se pudo abrir
       // Venta Rápida" y la caja rápida quedaba muerta toda la caída después
-      // del primer cobro offline.
-      if (businessId != null &&
+      // del primer cobro offline. Solo si el servidor no alcanzó a devolver
+      // una venta: con ella, un borrador local partía la venta en dos.
+      if (openedOrderId == null &&
+          businessId != null &&
           businessId.isNotEmpty &&
           _shouldTreatAsOffline(e)) {
         final draft = await _offlinePos.createLocalDraft(
           businessId: businessId,
           origin: origin,
+          opener: _localDraftOpener(),
         );
+        if (!stillSelected()) return;
         state = _normalizeHydratedState(draft.copyWith(loading: false));
         unawaited(_hydrateFiscalSequencesOffline());
         _applyNextOrderCustomer(origin);
         return;
       }
-      // PRD 2.5: ignoramos completamente el cache offline para Quick/Manual.
-      // Cada sesión Quick/Manual es fresca por definición — recuperar state
-      // viejo solo causa contaminación (orders zombie, items que se asignan
-      // a sesiones equivocadas). Si el RPC falla, surfaceamos el error real
-      // para que el operador entienda qué pasa en vez de ver una venta vieja
-      // como si fuera nueva.
-      //
-      // Limpiamos también el slot del cache para prevenir contaminación futura.
-      if (businessId != null && businessId.isNotEmpty) {
-        await _offlinePos.saveSnapshot(
-          businessId: businessId,
-          slotId: origin,
-          origin: origin,
-          state: const CurrentOrderState(),
-          localOnly: true,
-        );
+      // Un fallo al abrir no autoriza borrar una venta guardada previamente,
+      // ni dejar en pantalla una cuenta que no sea la de esta apertura.
+      if (state.order != null && state.order!.id != openedOrderId) {
+        _showVirtualSaleOpening(origin);
       }
       state = state.copyWith(
         loading: false,
         error:
             'No se pudo abrir Venta ${origin == 'quick' ? 'Rápida' : 'Manual'}: $e',
       );
+    }
+  }
+
+  _OrderMutationContext _captureOrderMutation(String orderId) {
+    final origin = state.origin;
+    final waiter = _trustedActiveWaiter();
+    final businessId = _activeBusinessId;
+    final tableId = origin == 'table' || origin == 'delivery'
+        ? _activeTableId
+        : null;
+    return _OrderMutationContext(
+      orderId: orderId,
+      businessId: businessId,
+      origin: origin,
+      tableId: tableId,
+      slotId: origin == null ? null : _resolvePersistSlotId(origin, tableId),
+      selectionToken: _openTableToken,
+      // El autor de un ítem es el PIN; el empleado del cajero solo registra
+      // quién hizo un retiro (nunca va como autor de lo que agrega).
+      pinEmployeeId: waiter?.employeeId,
+      pinEmployeeName: waiter?.displayName,
+      actorEmployeeId:
+          waiter?.employeeId ?? _cachedAuthEmployeeIdFor(businessId),
+      userId: ref.read(sessionProvider).userId,
+      snapshot: state,
+    );
+  }
+
+  bool _isMutationOrderActive(_OrderMutationContext context) =>
+      context.selectionToken == _openTableToken &&
+      context.businessId == _activeBusinessId &&
+      state.order?.id == context.orderId;
+
+  CurrentOrderState _mutationItemsState(
+    CurrentOrderState source,
+    List<OrderItem> items,
+  ) {
+    final summary = summarizeOrderPricing(
+      source.order,
+      items,
+      forcedOrigin: source.origin,
+    );
+    return source.copyWith(
+      items: items,
+      order: source.order?.copyWith(
+        subtotal: summary.subtotal,
+        discounts: summary.discounts,
+        tax: summary.tax,
+        serviceFee: summary.serviceFee,
+        total: summary.total,
+      ),
+    );
+  }
+
+  void _applyOrderMutation(
+    _OrderMutationContext context,
+    CurrentOrderState Function(CurrentOrderState) update, {
+    String? error,
+  }) {
+    final active = _isMutationOrderActive(context);
+    context.snapshot = update(active ? state : context.snapshot).copyWith(
+      error: error,
+    );
+    if (active) {
+      state = context.snapshot;
+    }
+  }
+
+  Future<void> _persistOrderMutation(
+    _OrderMutationContext context,
+    CurrentOrderState Function(CurrentOrderState) update,
+  ) async {
+    final businessId = context.businessId;
+    final origin = context.origin;
+    final slotId = context.slotId;
+    if (businessId == null || origin == null || slotId == null) return;
+    final active = _isMutationOrderActive(context);
+    final snapshot = active ? state : context.snapshot;
+    context.snapshot = snapshot;
+    if (active) {
+      await _offlinePos.saveSnapshot(
+        businessId: businessId,
+        slotId: slotId,
+        origin: origin,
+        tableId: context.tableId,
+        state: snapshot,
+        localOnly: true,
+      );
+    } else {
+      final saved = await _offlinePos.updateSnapshot(
+        businessId: businessId,
+        slotId: slotId,
+        origin: origin,
+        tableId: context.tableId,
+        fallbackState: snapshot,
+        update: update,
+      );
+      if (saved == null) return;
+      context.snapshot = saved;
+    }
+    if ((origin == 'table' || origin == 'delivery') &&
+        context.tableId != null &&
+        context.businessId == _activeBusinessId) {
+      _tableCache[context.tableId!] = context.snapshot;
     }
   }
 
@@ -2720,6 +3802,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
       return;
     }
+    final mutation = _captureOrderMutation(orderId);
 
     // Anti doble-click: descarta el segundo disparo del mismo producto (con los
     // mismos modifiers) dentro de _addItemDebounceMs. Ver nota del campo.
@@ -2751,11 +3834,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(
         error: 'La orden anterior ya fue cerrada. Iniciando una nueva.',
       );
-      if (origin == 'quick') {
-        await openQuick(forceRestart: true);
-      } else if (origin == 'manual') {
-        await openManual(forceRestart: true);
-      }
+      await _restartClosedSale(origin);
       return;
     }
 
@@ -2779,13 +3858,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     state = state.copyWith(error: null);
-    final previousItems = state.items;
-    final previousOrder = state.order;
+    final previousOrder = mutation.snapshot.order;
 
     // Escáner y algunos accesos rápidos solo pasan el ID. Para construir el
     // ítem sin servidor necesitamos el precio y nombre ya preparados en disco.
     if (productName == null || productPrice == null) {
-      final businessId = _activeBusinessId;
+      final businessId = mutation.businessId;
       if (businessId != null) {
         final catalog = await OfflineCatalogService().loadSnapshot(businessId);
         for (final row in catalog?.products ?? <Map<String, dynamic>>[]) {
@@ -2794,7 +3872,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           productName ??= product.name;
           productPrice ??= product.price;
           productTaxMode = product.taxMode;
-          productTaxRate ??= product.calculateTaxRate(state.origin ?? 'table');
+          productTaxRate ??= product.calculateTaxRate(mutation.origin ?? 'table');
           productFullTaxRate ??= product.calculateFullTaxRate();
           break;
         }
@@ -2813,6 +3891,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     // Optimistic: solo si tenemos datos del producto y un order cargado
     OrderItem? optimisticItem;
+    var itemSavedOnServer = false;
+    String? savedItemId;
     if (productName != null &&
         productPrice != null &&
         previousOrder != null &&
@@ -2845,7 +3925,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // y "10% De Ley" pop-in cuando llega la respuesta del backend (~1-2s
       // despues), causando un salto del total. Replicamos el filtrado del
       // RPC fn_resolve_order_item_tax_profile (origin + takeout).
-      final originForTaxes = parseSaleOrigin(state.origin);
+      final originForTaxes = parseSaleOrigin(mutation.origin);
       final synthTimestamp = DateTime.now();
       final taxBase = optimisticAmounts.subtotal;
       final synthTaxLines = <OrderItemTaxLine>[];
@@ -2880,8 +3960,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       // Item optimista: mostramos de inmediato el mesero activo (PIN
       // multimesero) si lo hay. La resolución completa del employee_id para
-      // persistir se hace aparte vía _resolveItemEmployeeId().
-      final activeWaiter = _trustedActiveWaiter();
+      // persistir se hace aparte vía _resolveItemEmployeeId(). Solo PIN: este
+      // item viaja como item_snapshot en la cola y el replay lo usa de autor;
+      // el id del cajero ahí le acreditaba la mesa de un mesero.
       optimisticItem = OrderItem(
         id: tempId,
         orderId: orderId,
@@ -2902,8 +3983,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         taxRate: resolvedTaxRate,
         originalTaxRate: resolvedFullTaxRate,
         createdAt: DateTime.now(),
-        createdByEmployeeId: activeWaiter?.employeeId,
-        createdByEmployeeName: activeWaiter?.displayName,
+        createdByEmployeeId: mutation.pinEmployeeId,
+        createdByEmployeeName: mutation.pinEmployeeName,
         modifiers: selectedModifiers
             .map(
               (modifier) => OrderItemModifier(
@@ -2918,32 +3999,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         taxLines: synthTaxLines,
       );
 
-      final optimisticItems = [...state.items, optimisticItem];
-      final updatedSummary = summarizeOrderPricing(
-        previousOrder.copyWith(serviceFee: 0),
-        optimisticItems,
-      );
-      final updatedOrder = previousOrder.copyWith(
-        subtotal: updatedSummary.subtotal,
-        tax: updatedSummary.tax,
-        serviceFee: 0,
-        total:
-            updatedSummary.subtotal +
-            updatedSummary.tax -
-            updatedSummary.discounts,
-      );
-
       // Guard del alta: protege este tmp de recargas stale en vuelo hasta que
       // el server confirme su contraparte real (ver _loadOrderDetail).
-      _inFlightAddTmpIds.add(optimisticItem.id);
-
-      state = state.copyWith(
-        items: [...state.items, optimisticItem],
-        order: updatedOrder,
+      if (_isMutationOrderActive(mutation)) {
+        _inFlightAddTmpIds.add(optimisticItem.id);
+      }
+      final addedItem = optimisticItem;
+      _applyOrderMutation(
+        mutation,
+        (source) => _mutationItemsState(source, [...source.items, addedItem]),
       );
     }
 
     try {
+      if (optimisticItem != null) {
+        final addedItem = optimisticItem;
+        await _persistOrderMutation(mutation, (source) {
+          if (source.items.any((item) => item.id == addedItem.id)) return source;
+          return _mutationItemsState(source, [...source.items, addedItem]);
+        });
+      }
       // La orden local se guarda antes de intentar un proxy o RPC remoto.
       if (_preferLocalOperations || orderId.startsWith('local-order-')) {
         throw OfflineShortCircuitException('add_item');
@@ -2971,23 +4046,35 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     modifiers: selectedModifiers
                         .map((m) => m.toMap())
                         .toList(growable: false),
-                    employeeId: await _resolveItemEmployeeId(),
+                    // Solo el PIN (se conoce sin red): la caja cliente no
+                    // consulta Supabase directo antes del proxy (WAN malo).
+                    // Sin PIN el ítem queda sin autor y el reporte lo
+                    // acredita al mesero que abrió la mesa con PIN.
+                    employeeId: mutation.pinEmployeeId,
                     clientOpId: clientOpId,
                   );
         if (realId != null && realId.isNotEmpty) {
+          itemSavedOnServer = true;
+          savedItemId = realId;
           if (optimisticItem != null) {
             final optId = optimisticItem.id;
-            _tmpToRealItemId[optId] = realId;
+            if (_isMutationOrderActive(mutation)) {
+              _tmpToRealItemId[optId] = realId;
+            }
             // Adoptar el id real en el estado SIN refetch (la caja no llega a
             // Supabase): reemplaza el tmp por su versión con id real, para que
             // borrar/editar/cobrar después usen el id que el server conoce.
-            state = state.copyWith(
-              items: state.items
+            _applyOrderMutation(mutation, (source) => source.copyWith(
+              items: source.items
                   .map((it) => it.id == optId ? it.copyWith(id: realId) : it)
                   .toList(growable: false),
-            );
+            ));
+            await _persistOrderMutation(mutation, (source) => source.copyWith(
+              items: source.items
+                  .map((it) => it.id == optId ? it.copyWith(id: realId) : it)
+                  .toList(growable: false),
+            ));
           }
-          await _persistCurrentState(localOnly: true);
           return;
         }
         // Hub no respondió → respaldo local (op-log) por el catch.
@@ -2995,7 +4082,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
       // El mesero del PIN se conoce sin red: va en la misma transacción del
       // alta. Sin PIN se resuelve después (puede consultar al servidor).
-      final pinEmployeeId = _trustedActiveWaiter()?.employeeId;
+      final pinEmployeeId = mutation.pinEmployeeId;
       final added = await ref
           .read(salesRepositoryProvider)
           .addItemFromMenuIdempotent(
@@ -3009,35 +4096,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             createdByEmployeeId: pinEmployeeId,
           );
       final itemId = added.itemId;
+      itemSavedOnServer = added.itemExists;
+      savedItemId = itemId;
 
       // Registrar tmp→real: a partir de aquí la recarga post-commit puede
       // soltar el optimista (su contraparte real ya existe en el server) sin
       // dejar duplicado.
-      if (optimisticItem != null && itemId.isNotEmpty) {
+      if (_isMutationOrderActive(mutation) &&
+          optimisticItem != null && itemId.isNotEmpty) {
         _tmpToRealItemId[optimisticItem.id] = itemId;
-      }
-
-      // Audit trail del item: ver `_resolveItemEmployeeId` arriba.
-      //
-      // 1) Modo multimesero: si hay `activeWaiter` (el mesero metió PIN al
-      //    entrar a la mesa), ya viajó con el alta.
-      // 2) Fallback: cuando un admin/cajero agrega items sin pasar por el
-      //    flow de PIN (`activeWaiter == null`), resolvemos su employee_id
-      //    desde el usuario autenticado de Supabase. Sin esto, todos los
-      //    items que mete el cajero quedaban como "Sin asignar".
-      if (itemId.isNotEmpty && pinEmployeeId == null && added.itemExists) {
-        final employeeId = await _resolveItemEmployeeId();
-        if (employeeId != null) {
-          try {
-            await Supabase.instance.client
-                .from('order_items')
-                .update({'created_by_employee_id': employeeId})
-                .eq('id', itemId);
-          } catch (e) {
-            debugPrint('[audit] no se pudo set created_by_employee_id: $e');
-            // No abortamos el flujo — el item igual quedó creado.
-          }
-        }
       }
 
       if (selectedModifiers.isNotEmpty && added.itemExists) {
@@ -3060,12 +4127,47 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
+      // Audit trail del item: ver `_resolveItemEmployeeId` arriba. Va DESPUÉS
+      // de los extras (que llevan precio) para que una consulta lenta no los
+      // deje esperando, y antes de la recarga para que esta ya traiga al autor.
+      //
+      // 1) Modo multimesero: si hay `activeWaiter` (el mesero metió PIN al
+      //    entrar a la mesa), ya viajó con el alta.
+      // 2) Sin PIN se acredita al dueño de la mesa de la orden CAPTURADA
+      //    (aunque el cajero ya haya cambiado de cuenta); si no hay dueño (o
+      //    no se pudo saber), o es Venta Rápida/Manual, al empleado del
+      //    usuario autenticado de ese negocio. Sin esto, todos los items que
+      //    mete el cajero quedaban como "Sin asignar".
+      if (itemId.isNotEmpty && pinEmployeeId == null && added.itemExists) {
+        await _stampItemAuthor(mutation, itemId);
+      }
+
       // Bypassear el debounce para que la respuesta sea instantánea
-      await _loadOrderDetail(orderId, caller: 'addItem');
+      if (_isMutationOrderActive(mutation)) {
+        await _loadOrderDetail(
+          orderId,
+          selectionToken: mutation.selectionToken,
+          reloadOf: orderId,
+          caller: 'addItem',
+        );
+      }
+      if (optimisticItem != null && itemId.isNotEmpty) {
+        final temporaryId = optimisticItem.id;
+        CurrentOrderState adoptItemId(CurrentOrderState source) => source.copyWith(
+          items: source.items
+              .map((item) => item.id == temporaryId
+                  ? item.copyWith(id: itemId)
+                  : item)
+              .toList(growable: false),
+        );
+        _applyOrderMutation(mutation, adoptItemId);
+        await _persistOrderMutation(mutation, adoptItemId);
+      }
 
       // Fix #1: espejo del ítem al op-log del Hub (visibilidad LAN en clientes).
       // Id estable por item_id real → append idempotente.
-      _mirrorHostMutationToHub({
+      if (_activeBusinessId == mutation.businessId) {
+        _mirrorHostMutationToHub({
         'id': 'host-add-$itemId',
         'type': 'add_item',
         'order_id': orderId,
@@ -3077,11 +4179,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         'takeout': takeout,
         'notes': notes,
       });
+      }
     } catch (e) {
-      final businessId = _activeBusinessId;
+      final businessId = mutation.businessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
 
-      if (isOffline &&
+      if ((isOffline || itemSavedOnServer) &&
           optimisticItem != null &&
           businessId != null &&
           businessId.isNotEmpty) {
@@ -3089,7 +4192,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           businessId: businessId,
           action: {
             'type': 'add_item',
-            'origin': state.origin,
+            'origin': mutation.origin,
+            'table_id': mutation.tableId,
+            'slot_id': mutation.slotId,
             'order_id': orderId,
             'item_id': optimisticItem.id,
             // Mismo id que el intento que acaba de fallar: si en realidad
@@ -3112,21 +4217,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 .toList(growable: false),
           },
         );
-        await _persistCurrentState(localOnly: true);
-        state = state.copyWith(
-          error: 'Producto agregado en local. Pendiente de sincronizar.',
-        );
+        final addedItem = optimisticItem;
+        await _persistOrderMutation(mutation, (source) {
+          if (source.items.any((item) => item.id == addedItem.id)) return source;
+          return _mutationItemsState(source, [...source.items, addedItem]);
+        });
+        if (_isMutationOrderActive(mutation)) {
+          state = state.copyWith(
+            error: 'Producto agregado en local. Pendiente de sincronizar.',
+          );
+        }
         return;
       }
 
       // Revertir si hicimos optimismo
       if (optimisticItem != null) {
-        state = state.copyWith(
-          items: previousItems,
-          order: previousOrder,
-          error: 'Error al agregar: $e',
-        );
-      } else {
+        final temporaryId = optimisticItem.id;
+        final mappedId = businessId == null ? null : await _offlinePos
+            .mappedRemoteItemId(businessId: businessId, localItemId: temporaryId);
+        CurrentOrderState rollback(CurrentOrderState source) =>
+            _mutationItemsState(source, source.items
+                .where((item) => item.id != temporaryId && item.id != mappedId &&
+                    item.id != savedItemId)
+                .toList(growable: false));
+        _applyOrderMutation(mutation, rollback, error: 'Error al agregar: $e');
+        await _persistOrderMutation(mutation, rollback);
+      } else if (_isMutationOrderActive(mutation)) {
         state = state.copyWith(error: 'Error al agregar producto: $e');
       }
     } finally {
@@ -3169,17 +4285,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(error: 'Orden no disponible. Reintenta.');
       return;
     }
+    // Selección de esta oferta: tras cada espera, nada se escribe en pantalla
+    // (optimista, recarga ni restauración) si el cajero ya pasó a otra cuenta.
+    // Antes la recarga y la restauración del catch escribían la mesa A en la
+    // Venta Rápida/Manual abierta mientras respondía el servidor.
+    final selectionToken = _openTableToken;
+    final selectionBusinessId = _activeBusinessId;
+    bool stillSelected() =>
+        selectionToken == _openTableToken &&
+        _activeBusinessId == selectionBusinessId &&
+        state.order?.id == orderId;
     final currentStatus = state.order?.status;
     if (currentStatus == 'paid' || currentStatus == 'void') {
       final origin = state.origin;
       state = state.copyWith(
         error: 'La orden anterior ya fue cerrada. Iniciando una nueva.',
       );
-      if (origin == 'quick') {
-        await openQuick(forceRestart: true);
-      } else if (origin == 'manual') {
-        await openManual(forceRestart: true);
-      }
+      await _restartClosedSale(origin);
       return;
     }
 
@@ -3198,7 +4320,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     final qty = (lineQty < 1 ? 1 : lineQty).toDouble();
     state = state.copyWith(error: null);
-    final previousItems = state.items;
     final previousOrder = state.order;
 
     await _ensureBusinessTaxSettingsLoaded();
@@ -3209,7 +4330,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // oferta y se vea "Subtotal/Descuento/Total" correcto al INSTANTE.
     final dealMarker = '[DEAL:${promotionId ?? ''}]';
     OrderItem? optimisticItem;
-    if (previousOrder != null) {
+    if (previousOrder != null && stillSelected()) {
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
       final grossAmount = (qty * originalPrice - discount)
           .clamp(0, double.infinity)
@@ -3318,14 +4439,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             clientOpId: clientOpId,
             createdByEmployeeId: _trustedActiveWaiter()?.employeeId,
           );
-      await _loadOrderDetail(orderId, caller: 'addOfferDeal');
+      await _loadOrderDetail(
+        orderId,
+        selectionToken: selectionToken,
+        reloadOf: orderId,
+        caller: 'addOfferDeal',
+      );
     } catch (e) {
+      // La oferta era de una cuenta que ya no está en pantalla: no hay nada
+      // que restaurar ni recargar aquí (la próxima carga de esa cuenta trae
+      // la verdad del servidor).
+      if (!stillSelected()) return;
       if (optimisticItem != null) {
-        state = state.copyWith(
-          items: previousItems,
-          order: previousOrder,
-          error: 'No se pudo agregar la oferta: $e',
-        );
+        // Solo se quita la línea de esta oferta. Volver a la lista de antes
+        // borraba de la pantalla los productos agregados mientras esperaba.
+        final failedId = optimisticItem.id;
+        state = _mutationItemsState(
+          state,
+          state.items.where((item) => item.id != failedId).toList(),
+        ).copyWith(error: 'No se pudo agregar la oferta: $e');
       } else {
         state = state.copyWith(error: 'No se pudo agregar la oferta: $e');
       }
@@ -3431,6 +4563,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
+  /// True si [itemId] es una línea de la comanda que se imprime ahora mismo
+  /// por la LAN en este negocio (por su id local o, si la orden ya subió
+  /// durante la impresión, por su id remoto). Solo se llama con una impresión
+  /// en vuelo, así que sin ella las ediciones no ganan ningún await.
+  Future<bool> _inLocalKitchenPrint(String itemId) async {
+    final businessId = _activeBusinessId;
+    for (final printing in List.of(_localKitchenPrints)) {
+      if (printing.businessId != businessId) continue;
+      if (printing.itemIds.contains(itemId)) return true;
+      for (final localId in printing.itemIds) {
+        final mapped = await _offlinePos.mappedRemoteItemId(
+          businessId: printing.businessId,
+          localItemId: localId,
+        );
+        if (mapped == itemId) return true;
+      }
+    }
+    return false;
+  }
+
   /// Devuelve `true` si el producto salió de la cuenta: borrado en el
   /// servidor o encolado sin red (el borrado ya es un hecho para esta caja).
   /// `false` si no se borró — la pantalla no debe imprimir el comprobante ni
@@ -3443,6 +4595,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     /// true = MERMA: el servidor NO devuelve el stock (20260920_0002).
     bool? isWaste,
   }) async {
+    if (_localKitchenPrints.isNotEmpty &&
+        await _inLocalKitchenPrint(itemId)) {
+      state = state.copyWith(error: _localKitchenPrintBusyMessage);
+      return false;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return false;
 
@@ -3459,43 +4616,46 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return false;
     }
-
-    // 1. Snapshot for rollback
-    final previousItems = state.items;
-    final previousOrder = state.order;
+    final mutation = _captureOrderMutation(orderId);
+    final previousPosition = state.items.indexOf(targetItem);
+    String? mappedItemId;
+    CurrentOrderState removeTarget(CurrentOrderState source) =>
+        _mutationItemsState(source, source.items
+            .where((item) => item.id != itemId && item.id != mappedItemId)
+            .toList(growable: false));
+    CurrentOrderState restoreTarget(CurrentOrderState source) {
+      if (source.items.any((item) => item.id == itemId || item.id == mappedItemId)) {
+        return source;
+      }
+      final items = List<OrderItem>.of(source.items);
+      items.insert(previousPosition.clamp(0, items.length), targetItem!.copyWith(
+        id: mappedItemId ?? itemId,
+        orderId: source.order?.id ?? orderId,
+      ));
+      return _mutationItemsState(source, items);
+    }
 
     // 2. Optimistic Local Update — marcamos el id como borrado pendiente para
     // que ninguna recarga stale (refreshOrder/Realtime) lo resucite.
     _pendingDeletedItemIds.add(itemId);
-    final updatedItems = state.items.where((i) => i.id != itemId).toList();
+    _applyOrderMutation(mutation, removeTarget);
 
-    final updatedSummary = summarizeOrderPricing(state.order, updatedItems);
-
-    final updatedOrder = state.order?.copyWith(
-      total: updatedSummary.total,
-      subtotal: updatedSummary.subtotal,
-      tax: updatedSummary.tax,
-      serviceFee: updatedSummary.serviceFee,
-    );
-
-    state = state.copyWith(
-      items: updatedItems,
-      order: updatedOrder,
-      error: null,
-    );
-
+    var deletedOnServer = false;
     try {
+      await _persistOrderMutation(mutation, removeTarget);
       if (_isHubMode) {
         // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
         throw const _HubModeShortCircuit();
       }
       await ref.read(salesRepositoryProvider).deleteItem(itemId: itemId);
+      deletedOnServer = true;
 
       // El borrado ya pasó: el motivo y el operador se anotan aparte, sin
       // hacer esperar a la pantalla.
       unawaited(
-        noteItemRemoval(
+        _noteItemRemovalFor(
+          mutation,
           itemId,
           reason: reason,
           reasonCode: reasonCode,
@@ -3521,17 +4681,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
-      refreshOrder();
+      if (_isMutationOrderActive(mutation)) refreshOrder();
+      await _persistOrderMutation(mutation, removeTarget);
 
       // Fix #1: espejo del borrado al op-log del Hub (visibilidad LAN).
-      _mirrorHostMutationToHub({
+      if (_activeBusinessId == mutation.businessId) {
+        _mirrorHostMutationToHub({
         'type': 'delete_item',
         'order_id': orderId,
         'item_id': itemId,
       });
+      }
       return true;
     } catch (e) {
-      final businessId = _activeBusinessId;
+      final businessId = mutation.businessId;
+      if (deletedOnServer) {
+        if (_isMutationOrderActive(mutation)) {
+          state = state.copyWith(
+          error: 'Producto eliminado; no se pudo actualizar la copia local: $e',
+        );
+        }
+        return true;
+      }
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
         try {
@@ -3539,7 +4710,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             action: {
               'type': 'delete_item',
-              'origin': state.origin,
+              'origin': mutation.origin,
+              'table_id': mutation.tableId,
+              'slot_id': mutation.slotId,
               'order_id': orderId,
               'item_id': itemId,
               'product_id': targetItem.productId,
@@ -3551,42 +4724,47 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               'reason_code': reasonCode,
               'is_waste': isWaste,
               'employee_id':
-                  _trustedActiveWaiter()?.employeeId ?? _cachedAuthEmployeeId,
+                  mutation.actorEmployeeId,
             },
           );
         } catch (queueError) {
           _pendingDeletedItemIds.remove(itemId);
-          state = state.copyWith(
-            items: previousItems,
-            order: previousOrder,
-            error: 'No se guardo la eliminacion offline: $queueError',
-          );
+          mappedItemId = await _offlinePos
+              .mappedRemoteItemId(businessId: businessId, localItemId: itemId);
+          _applyOrderMutation(mutation, restoreTarget,
+              error: 'No se guardo la eliminacion offline: $queueError');
+          await _persistOrderMutation(mutation, restoreTarget);
           return false;
         }
         try {
-          await _persistCurrentState(localOnly: true);
+          await _persistOrderMutation(mutation, removeTarget);
         } catch (snapshotError) {
-          state = state.copyWith(
+          if (_isMutationOrderActive(mutation)) {
+            state = state.copyWith(
             error:
                 'Eliminacion en cola, pero fallo la copia local: '
                 '$snapshotError. No cierre este equipo hasta sincronizar.',
           );
+          }
           // La eliminación SÍ quedó en la cola: se va a aplicar.
           return true;
         }
-        state = state.copyWith(
+        if (_isMutationOrderActive(mutation)) {
+          state = state.copyWith(
           error: 'Producto eliminado en local. Pendiente de sincronizar.',
         );
+        }
         return true;
       }
 
       // El borrado falló → soltamos la guarda para no ocultar el item.
       _pendingDeletedItemIds.remove(itemId);
-      state = state.copyWith(
-        items: previousItems,
-        order: previousOrder,
-        error: 'Error al eliminar: $e',
-      );
+      if (businessId != null) {
+        mappedItemId = await _offlinePos
+          .mappedRemoteItemId(businessId: businessId, localItemId: itemId);
+      }
+      _applyOrderMutation(mutation, restoreTarget, error: 'Error al eliminar: $e');
+      await _persistOrderMutation(mutation, restoreTarget);
       return false;
     }
   }
@@ -3616,6 +4794,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return;
     }
+    if (_localKitchenPrints.isNotEmpty &&
+        await _inLocalKitchenPrint(itemId)) {
+      state = state.copyWith(error: _localKitchenPrintBusyMessage);
+      return;
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
 
@@ -3627,10 +4810,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
     }
 
-    // Optimistic update: apply new quantity locally before server call
-    final previousItems = state.items;
-    final previousOrder = state.order;
-    if (targetItem != null) {
+    if (targetItem == null) {
+      state = state.copyWith(error: 'El producto ya no pertenece a esta orden.');
+      return;
+    }
+    final mutation = _captureOrderMutation(orderId);
+    final originalItem = targetItem;
+    final mutationKey = '${mutation.businessId}|$orderId|$itemId';
+    final quantityVersion = (_itemQuantityMutationVersions[mutationKey] ?? 0) + 1;
+    _itemQuantityMutationVersions[mutationKey] = quantityVersion;
+    String? mappedItemId;
+    bool matchesItem(OrderItem item) => item.id == itemId || item.id == mappedItemId;
+    CurrentOrderState rollbackQuantity(CurrentOrderState source) {
+      if (_itemQuantityMutationVersions[mutationKey] != quantityVersion) {
+        return source;
+      }
+      return _mutationItemsState(source, source.items.map((item) {
+          if (!matchesItem(item) || (item.quantity - quantity).abs() > 0.0001) {
+            return item;
+          }
+          return item.copyWith(
+            quantity: originalItem.quantity,
+            subtotal: originalItem.subtotal,
+            tax: originalItem.tax,
+            total: originalItem.total,
+            taxLines: originalItem.taxLines,
+          );
+        }).toList(growable: false));
+    }
+    CurrentOrderState quantitySnapshot = mutation.snapshot;
+    {
       // PRD 2: el item.tax ya viene consolidado del motor backend (incluye
       // propina si aplicaba). El frontend optimista derive la tasa total
       // del propio item y no agrega service fee separado.
@@ -3672,7 +4881,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state.order,
         optimisticItems,
       );
-      state = state.copyWith(
+      quantitySnapshot = state.copyWith(
         items: optimisticItems,
         order: state.order?.copyWith(
           subtotal: updatedSummary.subtotal,
@@ -3682,13 +4891,29 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         ),
         error: null,
       );
+      _applyOrderMutation(mutation, (_) => quantitySnapshot);
     }
 
     // Guarda: el cambio de cantidad queda pendiente hasta que el server lo
     // confirme; así una recarga stale (qty vieja) no revierte la línea.
     _pendingItemQty[itemId] = quantity;
+    final updatedItem = quantitySnapshot.items.firstWhere(
+      (item) => item.id == itemId,
+    );
+    CurrentOrderState applyQuantity(CurrentOrderState source) =>
+        _mutationItemsState(source, source.items.map((item) => !matchesItem(item)
+            ? item
+            : item.copyWith(
+                quantity: updatedItem.quantity,
+                subtotal: updatedItem.subtotal,
+                tax: updatedItem.tax,
+                total: updatedItem.total,
+                taxLines: updatedItem.taxLines,
+              )).toList(growable: false));
 
+    var quantitySavedOnServer = false;
     try {
+      await _persistOrderMutation(mutation, applyQuantity);
       if (_isHubMode) {
         // Caja cliente: no intentamos Supabase directo (WAN malo) — optimista
         // + op-log; el Hub lo drena al servidor en ~4s (uplink rápido).
@@ -3697,95 +4922,84 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       await ref
           .read(salesRepositoryProvider)
           .updateItemQuantity(itemId: itemId, quantity: quantity);
-      refreshOrder();
+      quantitySavedOnServer = true;
+      if (_isMutationOrderActive(mutation)) refreshOrder();
 
       // Fix #1: espejo del cambio de cantidad al op-log del Hub.
-      _mirrorHostMutationToHub({
+      if (_activeBusinessId == mutation.businessId) {
+        _mirrorHostMutationToHub({
         'type': 'update_item_quantity',
         'order_id': orderId,
         'item_id': itemId,
         'quantity': quantity,
       });
+      }
     } catch (e) {
-      final businessId = _activeBusinessId;
+      final businessId = mutation.businessId;
       final isOffline = _shouldTreatAsOffline(e, orderId: orderId);
       if (isOffline && businessId != null && businessId.isNotEmpty) {
-        final updatedItems = state.items
-            .map((item) {
-              if (item.id != itemId) return item;
-              // PRD 2: el motor backend consolida toda la fiscalidad en
-              // `item.tax`. Optimismo offline deriva la tasa total del item
-              // sin agregar service fee separado.
-              final taxRate = item.subtotal > 0
-                  ? (item.tax / item.subtotal)
-                  : 0.0;
-              final optimisticAmounts = _estimateOptimisticItemAmounts(
-                grossAmount:
-                    (item.unitPrice +
-                        item.modifiers.fold<double>(
-                          0,
-                          (sum, modifier) =>
-                              sum + modifier.price * modifier.qty,
-                        )) *
-                    quantity,
-                taxMode: item.taxMode,
-                taxRate: taxRate,
-                serviceRate: 0.0,
-                includeServiceInInclusivePrice: false,
-              );
-              return item.copyWith(
-                quantity: quantity,
-                subtotal: optimisticAmounts.subtotal,
-                tax: optimisticAmounts.tax,
-                total: (optimisticAmounts.total - item.discounts)
-                    .clamp(0, double.infinity)
-                    .toDouble(),
-                taxLines: _taxLinesAtSubtotal(item, optimisticAmounts.subtotal),
-              );
-            })
-            .toList(growable: false);
-
-        final updatedSummary = summarizeOrderPricing(state.order, updatedItems);
-
-        state = state.copyWith(
-          items: updatedItems,
-          order: state.order?.copyWith(
-            subtotal: updatedSummary.subtotal,
-            tax: updatedSummary.tax,
-            serviceFee: updatedSummary.serviceFee,
-            total: updatedSummary.total,
-          ),
-        );
-        await _offlinePos.enqueueAction(
+        // Una edición posterior de la misma línea ya manda la cantidad
+        // vigente (confirmada o en su propia cola). Encolar esta, más vieja,
+        // la dejaría al sincronizar: 2 encolado después de confirmar 3.
+        if (_itemQuantityMutationVersions[mutationKey] != quantityVersion) {
+          return;
+        }
+        try {
+          await _offlinePos.enqueueAction(
           businessId: businessId,
           action: {
             'type': 'update_item_quantity',
-            'origin': state.origin,
+            'origin': mutation.origin,
+            'table_id': mutation.tableId,
+            'slot_id': mutation.slotId,
             'order_id': orderId,
             'item_id': itemId,
             'quantity': quantity,
-            'item_snapshot': _snapshotForItem(itemId),
-            'product_id': targetItem?.productId,
-            'product_name': targetItem?.productName,
-            'notes': targetItem?.notes,
-            'is_takeout': targetItem?.isTakeout,
+            'item_snapshot': OrderItemSnapshot.encode(updatedItem),
+            'product_id': targetItem.productId,
+            'product_name': targetItem.productName,
+            'notes': targetItem.notes,
+            'is_takeout': targetItem.isTakeout,
           },
         );
-        await _persistCurrentState(localOnly: true);
-        state = state.copyWith(
+        } catch (queueError) {
+          mappedItemId = await _offlinePos.mappedRemoteItemId(
+            businessId: businessId,
+            localItemId: itemId,
+          );
+          if (_itemQuantityMutationVersions[mutationKey] == quantityVersion &&
+              _pendingItemQty[itemId] == quantity) {
+            _pendingItemQty.remove(itemId);
+          }
+          _applyOrderMutation(mutation, rollbackQuantity,
+              error: 'No se guardó la cantidad offline: $queueError');
+          await _persistOrderMutation(mutation, rollbackQuantity);
+          return;
+        }
+        await _persistOrderMutation(mutation, (source) => source);
+        if (_isMutationOrderActive(mutation)) {
+          state = state.copyWith(
           error: 'Cantidad actualizada en local. Pendiente de sincronizar.',
         );
+        }
         return;
       }
 
+      if (quantitySavedOnServer) return;
       // El cambio falló → soltamos la guarda para no fijar una qty inexistente.
-      _pendingItemQty.remove(itemId);
-      // Rollback optimistic update on online error
-      state = state.copyWith(
-        items: previousItems,
-        order: previousOrder,
-        error: 'Error al actualizar cantidad: $e',
+      if (_itemQuantityMutationVersions[mutationKey] == quantityVersion &&
+          _pendingItemQty[itemId] == quantity) {
+        _pendingItemQty.remove(itemId);
+      }
+      if (businessId != null) {
+        mappedItemId = await _offlinePos.mappedRemoteItemId(
+        businessId: businessId,
+        localItemId: itemId,
       );
+      }
+      _applyOrderMutation(mutation, rollbackQuantity,
+          error: 'Error al actualizar cantidad: $e');
+      await _persistOrderMutation(mutation, rollbackQuantity);
     }
   }
 
@@ -4024,8 +5238,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return;
     }
+    if (_localKitchenPrints.isNotEmpty &&
+        await _inLocalKitchenPrint(itemId)) {
+      state = state.copyWith(error: _localKitchenPrintBusyMessage);
+      throw const _KitchenRoundEditBlocked(_localKitchenPrintBusyMessage);
+    }
     final orderId = state.order?.id;
     if (orderId == null) return;
+
+    // Modal abierto antes de que la ronda saliera a cocina: trae la línea
+    // «por enviar», pero ya se envió. Cambiarle la cantidad en sitio cobraría
+    // unidades que cocina nunca recibió (o quitaría sin PIN algo ya impreso).
+    final staleDraft =
+        updatedItem.status == 'draft' || updatedItem.status == 'open';
+    if (staleDraft) {
+      for (final current in state.items) {
+        if (current.id != itemId) continue;
+        final status = current.status;
+        final sentNow =
+            status != 'draft' &&
+            status != 'open' &&
+            status != 'void' &&
+            status != 'paid';
+        if (sentNow &&
+            (updatedItem.quantity - current.quantity).abs() > 0.0001) {
+          state = state.copyWith(error: _kitchenRoundAlreadySentMessage);
+          throw const _KitchenRoundEditBlocked(
+            _kitchenRoundAlreadySentMessage,
+          );
+        }
+        break;
+      }
+    }
 
     // Sin red (u orden local) el guardado del modal no tiene endpoint: se
     // reparte en las mutaciones que SÍ saben encolar (cantidad, notas, para
@@ -4537,12 +5781,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     state = const CurrentOrderState();
   }
 
+  /// True si la venta en pantalla ya se cobró sin internet y su cobro espera
+  /// en la cola. [cancelCurrentOrder] no la anula; los botones lo consultan
+  /// para avisar en vez de decir "Venta descartada".
+  Future<bool> currentOrderHasQueuedPayment() async {
+    final orderId = state.order?.id;
+    final businessId = _activeBusinessId;
+    if (orderId == null || businessId == null || businessId.isEmpty) {
+      return false;
+    }
+    return _offlinePos.hasQueuedPayment(
+      businessId: businessId,
+      orderId: orderId,
+    );
+  }
+
+  /// [queueVoid]: no anular en línea aunque haya red; la anulación va a la
+  /// cola y su replay lee el servidor y omite una venta ya cobrada o cerrada.
+  /// Para cuando la pantalla puede estar vieja y no se pudo confirmar en el
+  /// servidor que la orden sigue abierta (ver closeRetailCart).
+  /// [voidOnlyIfUnpaid]: anulación automática (cerrar una pestaña retail).
+  /// En línea, el servidor anula solo si la venta sigue abierta y sin cobros;
+  /// si no, lanza [_OrderNotVoidable] y no cambia nada. La anulación que pide
+  /// el cajero no lo usa.
   Future<void> cancelCurrentOrder({
     String? reason,
     bool releaseOnlyIfEmpty = false,
     String? expectedOrderId,
+    bool queueVoid = false,
+    bool voidOnlyIfUnpaid = false,
   }) async {
-    final orderId = state.order?.id;
+    final cancellingState = state;
+    final orderId = cancellingState.order?.id;
     if (expectedOrderId != null && expectedOrderId != orderId) return;
     if (releaseOnlyIfEmpty && state.items.isNotEmpty) return;
     if (orderId == null) {
@@ -4552,6 +5822,50 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     final trimmedReason = reason?.trim();
     final businessId = _activeBusinessId;
+    var selectionToken = _openTableToken;
+    bool stillSelected() =>
+        _activeBusinessId == businessId &&
+        _openTableToken == selectionToken &&
+        state.order?.id == orderId;
+    void clearCancelledSelection() {
+      if (!stillSelected()) return;
+      _hasManualFiscalTypeSelection = false;
+      state = const CurrentOrderState();
+    }
+    // La nota también pertenece a la cuenta que se está anulando. Una
+    // navegación durante el cierre nunca debe escribir la nota en otra mesa.
+    final cancelledSessionId = cancellingState.order!.sessionId;
+    final noteAtCancellation = cancellingState.sessionNote?.trim();
+    final actorAtCancellation = ref.read(sessionProvider).userName?.trim() ?? '';
+    final cancellationStamp = DateTime.now().toLocal().toIso8601String();
+
+    // Venta cobrada sin internet: su cobro espera en la cola. Anularla o
+    // descartarla lo borraba junto con la venta (orden local) o lo dejaba sin
+    // orden abierta a la que aplicarse al sincronizar (orden del servidor).
+    // Pasaba al tocar "Descartar venta" o "Salir" al cambiar de pantalla con
+    // la venta ya cobrada todavía visible. Ya está pagada: solo sale de la
+    // pantalla y la cola la sube con su comprobante.
+    if (businessId != null &&
+        businessId.isNotEmpty &&
+        await _offlinePos.hasQueuedPayment(
+          businessId: businessId,
+          orderId: orderId,
+        )) {
+      if (releaseOnlyIfEmpty) return;
+      await _offlinePos.markOrderClosedLocally(
+        businessId: businessId,
+        orderId: orderId,
+      );
+      if (_activeBusinessId == businessId) {
+        _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
+      }
+      if (stillSelected()) {
+        ++_loadGeneration;
+        selectionToken = ++_openTableToken;
+      }
+      clearCancelledSelection();
+      return;
+    }
 
     // Helper local: detecta errores de red transitorios para diferenciarlos
     // de errores de negocio (orden ya cerrada, RLS, validación RPC, etc.).
@@ -4592,11 +5906,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           // y snapshots. Antes solo se reseteaba la UI y la cola recreaba la
           // mesa al reconectar (mesa fantasma) mientras el overlay del salón
           // la seguía mostrando ocupada.
-          await _offlinePos.discardLocalOrder(
+          // `false` = tenía un cobro en cola (o la cola no se pudo leer): la
+          // venta se conserva y tampoco se encola su anulación.
+          final discarded = await _offlinePos.discardLocalOrder(
             businessId: businessId,
             localOrderId: orderId,
           );
-          _tableCache.removeWhere((_, s) => s.order?.id == orderId);
+          if (discarded) {
+            _tableCache.removeWhere((_, s) => s.order?.id == orderId);
+          }
           return;
         }
         // Ya sincronizó en background: la orden real existe en el server,
@@ -4641,14 +5959,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // mesa vacía (releaseOnlyIfEmpty) no pasa por aquí: no reabre nada.
     Future<void> forgetVoidedOrder() async {
       if (releaseOnlyIfEmpty) return;
-      _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
-      if (_queuedRefreshOrderId == orderId) {
-        _queuedRefreshOrderId = null;
-        _queuedClearIfPaid = false;
-        _refreshOrderDebounceTimer?.cancel();
+      if (_activeBusinessId == businessId) {
+        _tableCache.removeWhere((_, cached) => cached.order?.id == orderId);
+        if (_queuedRefreshOrderId == orderId) {
+          _queuedRefreshOrderId = null;
+          _queuedClearIfPaid = false;
+          _refreshOrderDebounceTimer?.cancel();
+        }
       }
-      ++_loadGeneration;
-      ++_openTableToken;
+      if (stillSelected()) {
+        ++_loadGeneration;
+        selectionToken = ++_openTableToken;
+      }
       if (businessId == null || businessId.isEmpty) return;
       try {
         await _offlinePos.markOrderClosedLocally(
@@ -4665,19 +5987,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (orderId.startsWith('local-order-')) {
       await enqueueVoidOffline();
       await forgetVoidedOrder();
-      _hasManualFiscalTypeSelection = false;
-      state = const CurrentOrderState();
+      clearCancelledSelection();
       return;
     }
 
-    // Caso 1: ya estamos offline declarado. No intentamos online, encolamos
-    // directamente. (La audit note igual NO se persiste en server — ver
-    // limitación en el case 'void_order' del _replayAction.)
-    if (!_connectivity.isConnected) {
+    // Caso 1: ya estamos offline declarado (o el caller pidió no anular en
+    // línea). No intentamos online, encolamos directamente. (La audit note
+    // igual NO se persiste en server — ver limitación en el case
+    // 'void_order' del _replayAction.)
+    if (queueVoid || !_connectivity.isConnected) {
       await enqueueVoidOffline();
       await forgetVoidedOrder();
-      _hasManualFiscalTypeSelection = false;
-      state = const CurrentOrderState();
+      clearCancelledSelection();
       return;
     }
 
@@ -4687,7 +6008,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     try {
       if (trimmedReason != null && trimmedReason.isNotEmpty) {
         try {
-          await appendVoidAuditNote(reason: trimmedReason);
+          final actor = actorAtCancellation.isEmpty
+              ? 'Usuario'
+              : actorAtCancellation;
+          final auditLine =
+              '[ANULACION][$cancellationStamp] $actor: $trimmedReason';
+          final nextNote =
+              noteAtCancellation == null || noteAtCancellation.isEmpty
+              ? auditLine
+              : '$noteAtCancellation\n$auditLine';
+          await ref
+              .read(salesRepositoryProvider)
+              .updateSessionNote(
+                sessionId: cancelledSessionId,
+                note: nextNote,
+                businessId: businessId,
+              );
+          if (stillSelected()) state = state.copyWith(sessionNote: nextNote);
         } catch (e) {
           if (!isNetworkError(e)) rethrow;
           // Network falló en audit note: seguimos al closeOrder (que
@@ -4699,9 +6036,30 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           );
         }
       }
-      await ref
-          .read(salesRepositoryProvider)
-          .closeOrder(orderId: orderId, status: 'void');
+      if (voidOnlyIfUnpaid) {
+        // Anulación automática: el servidor comprueba y anula en una sola
+        // transacción, con la orden bloqueada como en el cobro. Sin la
+        // migración 20261009_0007 (PGRST202), el cierre de siempre.
+        String? guarded;
+        try {
+          guarded = await ref
+              .read(salesRepositoryProvider)
+              .voidOrderIfUnpaid(orderId);
+        } on PostgrestException catch (e) {
+          if (e.code != 'PGRST202') rethrow;
+        }
+        if (guarded == null) {
+          await ref
+              .read(salesRepositoryProvider)
+              .closeOrder(orderId: orderId, status: 'void');
+        } else if (guarded == 'already_closed' || guarded == 'has_payments') {
+          throw _OrderNotVoidable(guarded);
+        }
+      } else {
+        await ref
+            .read(salesRepositoryProvider)
+            .closeOrder(orderId: orderId, status: 'void');
+      }
 
       // Fix #1: espejo de la anulación al op-log del Hub → libera la mesa en
       // las cajas cliente.
@@ -4716,8 +6074,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     await forgetVoidedOrder();
-    _hasManualFiscalTypeSelection = false;
-    state = const CurrentOrderState();
+    clearCancelledSelection();
   }
 
   /// Confirma la orden enviándola a cocina. Retorna el [KitchenSendResult]
@@ -4738,8 +6095,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return null;
     }
-    final orderId = state.order?.id;
+    final sentState = state;
+    final orderId = sentState.order?.id;
     if (orderId == null) return null;
+    final sentBusinessId = _activeBusinessId;
+    final sentOrigin = sentState.origin;
+    final sentTableId = _activeTableId;
+    final sentSlotId = _resolvePersistSlotId(sentOrigin ?? 'table', sentTableId);
+    bool stillSelected() =>
+        _activeBusinessId == sentBusinessId && state.order?.id == orderId;
     // Si el envío online ya preguntó y luego cayó al camino local, no se
     // vuelve a preguntar: la elección quedó guardada.
     var askedForPrinter = false;
@@ -4754,17 +6118,25 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // state = state.copyWith(loading: true);
     try {
       final session = ref.read(sessionProvider);
-      final businessId = session.activeBusinessId;
+      final businessId = sentBusinessId;
       if (businessId == null || businessId.isEmpty) {
         throw Exception(
           'No se pudo resolver el negocio activo para imprimir la comanda.',
         );
       }
+      if (sentOrigin == null) throw StateError('Orden sin origen.');
+      await _offlinePos.saveSnapshot(
+        businessId: businessId,
+        slotId: sentSlotId,
+        origin: sentOrigin,
+        tableId: sentTableId,
+        state: sentState,
+      );
 
       // Camino local: imprime directo por la LAN y encola el envío para el
       // replay. Es el de siempre sin red; ahora también el de la ventana en
       // que la red ya murió pero el detector aún no lo admite.
-      Future<KitchenSendResult> sendLocally() async {
+      Future<KitchenSendResult> sendLocallyUnguarded() async {
         // sendLocalOrderToKitchen ya encola su propio 'confirm_local_order'
         // (con printed_areas para que el replay marque sin reimprimir). Antes
         // aquí se encolaba ADEMÁS un 'send_to_kitchen' → dos replays por
@@ -4774,10 +6146,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             .read(printingServiceProvider)
             .sendLocalOrderToKitchen(
               businessId: businessId,
-              localState: state,
+              localState: sentState,
               tableName:
-                  tableName ?? (state.origin == 'table' ? 'MESA' : 'LOCAL'),
-              waiterName: waiterName ?? session.userName,
+                  tableName ?? (sentOrigin == 'table' ? 'MESA' : 'LOCAL'),
+              waiterName:
+                  waiterName ?? await _localOpenerName(businessId, orderId),
               businessName: session.activeBusinessName,
               choosePrinter: chooser,
               forceChoosePrinter: forceChoosePrinter && !askedForPrinter,
@@ -4793,17 +6166,24 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // Los items ya en pending/preparing/ready/served no se tocan
         // (idempotente). Al sync, el replay del action 'send_to_kitchen'
         // dispara el RPC real que persiste estos statuses en server.
-        final updatedItems = state.items
-            .map((item) {
-              if (item.status == 'draft' || item.status == 'open') {
-                return item.copyWith(status: 'pending');
-              }
-              return item;
-            })
-            .toList(growable: false);
-
-        state = state.copyWith(
-          items: updatedItems,
+        final sentQuantities = <String, double>{};
+        for (final item in sentState.items) {
+          if (item.status != 'draft' && item.status != 'open') continue;
+          sentQuantities[item.id] = item.quantity;
+          final mapped = await _offlinePos.mappedRemoteItemId(
+            businessId: businessId,
+            localItemId: item.id,
+          );
+          if (mapped != null) sentQuantities[mapped] = item.quantity;
+        }
+        CurrentOrderState markSent(CurrentOrderState target) => target.copyWith(
+          items: target.items.map((item) {
+            if (sentQuantities[item.id] == item.quantity &&
+                (item.status == 'draft' || item.status == 'open')) {
+              return item.copyWith(status: 'pending');
+            }
+            return item;
+          }).toList(growable: false),
           loading: false,
           error: localResult.pendingAreas.isEmpty
               ? 'Comanda enviada localmente. Pendiente de sincronizar.'
@@ -4811,7 +6191,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     '${localResult.pendingAreas.join(", ")}. '
                     'Comprueba la impresora y la conexión local.',
         );
-        await _persistCurrentState(localOnly: true);
+        // La sync pudo subir la orden durante la impresión y recargarla con
+        // su UUID remoto: sigue siendo la MISMA cuenta. Comparar solo el id
+        // crudo dejaba la ronda impresa en "POR CONFIRMAR" y un segundo
+        // «Enviar» la reimprimía entera por la nube.
+        final mappedOrderId = orderId.startsWith('local-order-')
+            ? await _offlinePos.mappedRemoteOrderId(
+                businessId: businessId,
+                localOrderId: orderId,
+              )
+            : null;
+        final visibleOrderId = state.order?.id;
+        final sameAccount =
+            _activeBusinessId == sentBusinessId &&
+            visibleOrderId != null &&
+            (visibleOrderId == orderId ||
+                (mappedOrderId != null && visibleOrderId == mappedOrderId));
+        if (sameAccount) {
+          // Una recarga en vuelo trae el estado previo a esta ronda (ítems en
+          // draft): se descarta para que no pise la marca de enviados.
+          ++_loadGeneration;
+          state = markSent(state);
+          await _persistCurrentState(localOnly: true);
+        } else {
+          await _offlinePos.updateSnapshot(
+            businessId: businessId,
+            slotId: sentSlotId,
+            origin: sentOrigin,
+            tableId: sentTableId,
+            fallbackState: sentState,
+            update: markSent,
+          );
+        }
         return KitchenSendResult(
           dispatchIds: localResult.dispatchIds,
           directAreas: localResult.dispatchIds.keys.toList(growable: false),
@@ -4820,12 +6231,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
 
+      Future<KitchenSendResult> sendLocally() async {
+        // Las líneas de esta ronda quedan sin edición hasta marcarlas
+        // enviadas (ver _localKitchenPrints): subirle la cantidad a una
+        // durante la impresión la dejaba «por confirmar» con la cantidad
+        // nueva y el siguiente «Enviar» la reimprimía entera.
+        final printing = (
+          businessId: businessId,
+          itemIds: {
+            for (final item in sentState.items)
+              if (item.status == 'draft' || item.status == 'open') item.id,
+          },
+        );
+        _localKitchenPrints.add(printing);
+        try {
+          return await sendLocallyUnguarded();
+        } finally {
+          _localKitchenPrints.remove(printing);
+        }
+      }
+
       // Si hay ítems temporales, el servidor aún NO tiene la ronda completa.
       // Enviar por nube aquí omitía los productos agregados durante el corte
       // (o decía "no hay items"), incluso tras recuperar la conexión.
       if (_preferLocalOperations ||
           orderId.startsWith('local-order-') ||
-          state.items.any((item) => item.id.startsWith('tmp_'))) {
+          sentState.items.any((item) => item.id.startsWith('tmp_'))) {
         return sendLocally();
       }
 
@@ -4833,7 +6264,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // local/offline con replay aún pendiente): el server puede tenerlos
       // todavía en draft — sin excluirlos, la comanda saldría ENTERA
       // (rondas viejas + nuevas). Caso real Android 2026-07-25.
-      final locallySentIds = state.items
+      final locallySentIds = sentState.items
           .where((i) => i.status != 'draft' && i.status != 'open')
           .map((i) => i.id)
           .toSet();
@@ -4846,7 +6277,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               orderId: orderId,
               businessId: businessId,
               fallbackTableName: tableName,
-              fallbackWaiterName: waiterName ?? session.userName,
+              fallbackWaiterName:
+                  waiterName ?? await _localOpenerName(businessId, orderId),
               excludeItemIds: locallySentIds,
               choosePrinter: chooser,
               forceChoosePrinter: forceChoosePrinter,
@@ -4859,10 +6291,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         _recordTransportFailure();
         return sendLocally();
       }
-      refreshOrder();
+      if (stillSelected()) refreshOrder();
       return result;
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      if (stillSelected()) {
+        state = state.copyWith(loading: false, error: e.toString());
+      }
       rethrow;
     }
   }
@@ -4876,6 +6310,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final order = state.order;
     if (order == null) return;
     final orderId = order.id;
+    final businessId = _activeBusinessId;
+    final origin = state.origin;
+    final tableId = _activeTableId;
+    final slotId = _resolvePersistSlotId(origin ?? 'delivery', tableId);
     final clamped = amount < 0 ? 0.0 : amount;
 
     // Optimista: reflejar el fee y el nuevo total localmente (clave offline,
@@ -4887,8 +6325,17 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       forcedOrigin: state.origin,
     ).total;
     state = state.copyWith(order: withFee.copyWith(total: newTotal));
-
-    final businessId = _activeBusinessId;
+    final feeSnapshot = state;
+    if (businessId != null && businessId.isNotEmpty && origin != null) {
+      await _offlinePos.saveSnapshot(
+        businessId: businessId,
+        slotId: slotId,
+        origin: origin,
+        tableId: tableId,
+        state: feeSnapshot,
+        localOnly: !_connectivity.isConnected || orderId.startsWith('local-order-'),
+      );
+    }
 
     if (!_connectivity.isConnected || orderId.startsWith('local-order-')) {
       if (businessId != null && businessId.isNotEmpty) {
@@ -4898,10 +6345,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'type': 'set_delivery_fee',
             'order_id': orderId,
             'amount': clamped,
+            'origin': origin,
+            'table_id': tableId,
+            'slot_id': slotId,
           },
         );
       }
-      await _persistCurrentState(localOnly: true);
       return;
     }
 
@@ -4910,7 +6359,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await ref
         .read(salesRepositoryProvider)
         .setDeliveryFee(orderId: orderId, amount: clamped);
-    await reloadOrderNow();
+    if (_activeBusinessId == businessId && state.order?.id == orderId) {
+      await reloadOrderNow();
+    }
   }
 
   /// VENTA RÁPIDA: imprime la comanda de cocina a partir de un SNAPSHOT de
@@ -4949,7 +6400,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
             localState: snapState,
             tableName: tableName,
-            waiterName: session.userName,
+            // Los ítems ya traen a quien los digitó; esto es solo para los
+            // que no. Nunca la cuenta logueada (ver _localOpenerName).
+            waiterName: await _localOpenerName(businessId, order.id),
             businessName: session.activeBusinessName,
           );
     } catch (e) {
@@ -5008,37 +6461,137 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (!_connectivity.isConnected) return;
     _refreshOrderDebounceTimer?.cancel();
     try {
-      await _loadOrderDetail(orderId, caller: 'reloadOrderNow');
+      await _loadOrderDetail(
+        orderId,
+        selectionToken: _openTableToken,
+        reloadOf: orderId,
+        caller: 'reloadOrderNow',
+      );
     } catch (e) {
       debugPrint('reloadOrderNow falló (se imprime con el estado actual): $e');
     }
   }
 
-  /// Tick del timer de respaldo. Barato: sale temprano si no hay conexión,
-  /// ya hay un sync corriendo, no hay business activo o la cola no tiene
-  /// pendientes. Solo entonces dispara el sync real.
-  Future<void> _runPeriodicSyncTick() async {
-    if (_syncInFlight) return;
-    if (!_connectivity.isConnected) return;
+  String? _promotingLocalOrderId;
+
+  /// True mientras [promoteLocalOrderForPayment] sube una venta: el segundo
+  /// toque de "Pagar" se ignora en vez de abrir un cobro offline en paralelo.
+  bool get isPromotingLocalOrder => _promotingLocalOrderId != null;
+
+  /// Tope de la espera de [promoteLocalOrderForPayment]. La pasada forzada
+  /// espera la que esté en curso y luego corre la suya: tras un corte largo
+  /// eso podía tardar minutos con el cliente esperando en el mostrador.
+  @visibleForTesting
+  static Duration promoteSyncBudget = const Duration(seconds: 30);
+
+  /// Lo que muestra el banner de ventas mientras se sube la venta para
+  /// cobrarla: el toque de "Pagar" no queda en silencio.
+  static const _promotingSyncStatus = 'Subiendo la venta para cobrarla...';
+  static const _syncingStatus = 'Sincronizando operaciones offline...';
+
+  /// Venta abierta como borrador local (`local-order-…`) durante un bajón de
+  /// red —venta rápida la abre así también en los 20 s posteriores a una
+  /// lectura lenta—. Su cobro siempre iba por la cola offline y lo que salía
+  /// era la PRECUENTA, aunque al pagar ya hubiera internet. Si hay conexión,
+  /// la sube ANTES del cobro (la misma sincronización del botón "Sync ahora")
+  /// y deja cargada la orden real, para cobrarla en línea con su comprobante.
+  ///
+  /// Devuelve el id real, o null si la venta sigue local (sin red, Hub, o algo
+  /// de ESTA venta no subió): en ese caso el cobro sigue el camino offline de
+  /// siempre. Cobrar la orden real sin todos sus ítems la cerraría con menos.
+  Future<String?> promoteLocalOrderForPayment(String localOrderId) async {
+    if (!localOrderId.startsWith('local-order-')) return null;
+    if (state.order?.id != localOrderId) return null;
+    if (!_connectivity.isConnected || isPromotingLocalOrder) return null;
     final businessId = _activeBusinessId;
-    if (businessId == null || businessId.isEmpty) return;
-    // Si ESTE equipo es el Hub host, sus ops (y las que recibe de las cajas)
-    // viven en el op-log del Hub, NO en la cola por-device — así que hay que
-    // drenar en cada tick aunque la cola propia esté vacía (uplink continuo).
-    final isHubHost = ref.read(hubModeProvider) == TerminalMode.hubHost;
-    if (!isHubHost) {
-      try {
-        final pending = await _offlinePos.pendingActionsCount(businessId);
-        if (pending <= 0) return;
-      } catch (_) {
-        return;
+    if (businessId == null || businessId.isEmpty) return null;
+
+    _promotingLocalOrderId = localOrderId;
+    try {
+      // Indicador visible (banner de ventas y chip de la orden) mientras sube.
+      await _refreshOfflineMonitor();
+      // Una sola espera, con tope. force ya espera la pasada en curso (que
+      // puede estar subiendo esta misma venta) y luego corre la suya. Si el
+      // tope vence, se cobra por el camino offline de siempre: la pasada
+      // sigue en segundo plano y el cobro encolado sube detrás de los ítems
+      // de esta venta, contra su mapping. No se pierde ni se duplica nada.
+      await syncPendingOfflineActions(
+        force: true,
+      ).timeout(promoteSyncBudget, onTimeout: () {});
+
+      final remoteId = await _offlinePos.mappedRemoteOrderId(
+        businessId: businessId,
+        localOrderId: localOrderId,
+      );
+      if (remoteId == null) return null;
+      final leftovers = (await _offlinePos.unsettledActions(
+        businessId,
+      )).any((action) => action['order_id'] == localOrderId);
+      if (leftovers) return null;
+
+      // El sync pudo cargar otra orden (`lastMappedOrderId` es la última que
+      // subió, no necesariamente esta) o el cajero pudo cambiar de venta.
+      final current = state.order?.id;
+      if (current != localOrderId && current != remoteId) return null;
+      await _loadOrderDetail(
+        remoteId,
+        selectionToken: _openTableToken,
+        reloadOf: current,
+        origin: state.origin,
+        caller: 'promoteLocalOrderForPayment',
+      );
+      if (state.order?.id != remoteId) return null;
+
+      final slotId = _activeRetailSlotId;
+      if (_isRetail && slotId != null) {
+        ref.read(retailCartsProvider.notifier).setOrderId(slotId, remoteId);
+        await _persistRetailCartsIndex();
+      }
+      return remoteId;
+    } catch (e) {
+      debugPrint('promoteLocalOrderForPayment: la venta sigue local: $e');
+      return null;
+    } finally {
+      _promotingLocalOrderId = null;
+      // Quita el indicador; si la pasada sigue en segundo plano, el banner
+      // vuelve a decir que sincroniza.
+      if (ref.mounted) {
+        try {
+          await _refreshOfflineMonitor(
+            syncStatus: _syncInFlight ? _syncingStatus : '',
+          );
+        } catch (e) {
+          debugPrint('promoteLocalOrderForPayment: banner sin refrescar: $e');
+        }
       }
     }
-    await syncPendingOfflineActions();
   }
 
-  Future<void> syncPendingOfflineActions({bool force = false}) async {
-    if (_syncInFlight) return;
+  /// Sube la cola offline del negocio activo.
+  ///
+  /// [force] = pedido explícito del cajero ("Sincronizar ahora", badge,
+  /// banner, reintentar dead, cobro de una venta local): reintenta las dead,
+  /// ignora el backoff, muestra su resultado (snackbar del shell) y, si llega
+  /// con otra pasada en curso, espera a una pasada forzada propia.
+  ///
+  /// Sin [force] es una pasada automática (uplink del shell, reconexión):
+  /// silenciosa, solo actualiza los contadores del badge/banner. Si llega con
+  /// otra pasada en curso no hace nada (esa ya hace el trabajo).
+  ///
+  /// La venta activa se recarga solo si la pasada completó o concilió algo,
+  /// o si [reloadActiveOrder] lo pide (reconexión).
+  Future<void> syncPendingOfflineActions({
+    bool force = false,
+    bool reloadActiveOrder = false,
+  }) async {
+    if (_syncInFlight) {
+      if (!force) return;
+      // promoteLocalOrderForPayment, _retryDead y el botón leen la cola justo
+      // después de esperar este Future: debe terminar cuando la pasada que
+      // pidieron haya corrido, no antes.
+      return (_forcedSyncRerun ??= Completer<void>()).future;
+    }
+    final automatic = !force;
     final businessId = _activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
 
@@ -5049,6 +6602,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // proximo poll. Con esto el boton hace lo que el cajero espera.
     if (force && !_connectivity.isConnected) {
       await _connectivity.forceReachabilityCheck();
+      // Otra pasada pudo arrancar durante la espera: esperar la nuestra
+      // detrás de ella en vez de correr dos a la vez.
+      if (_syncInFlight) {
+        return (_forcedSyncRerun ??= Completer<void>()).future;
+      }
     }
 
     if (!_connectivity.isConnected) {
@@ -5063,7 +6621,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     _syncInFlight = true;
     await _refreshOfflineMonitor(
-      syncStatus: 'Sincronizando operaciones offline...',
+      syncStatus: _syncingStatus,
       syncInFlight: true,
     );
     try {
@@ -5076,28 +6634,38 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         force: force,
       );
 
+      // El negocio puede cambiar mientras los RPC terminan. La cola del
+      // negocio anterior sigue guardada, pero no modifica la venta visible.
+      if (_activeBusinessId != businessId) return;
+
       // Publicamos el resultado al provider central para que el badge
       // del topbar refresque su count y el shell muestre la notificación
       // post-sync con detalle (pagos completados, NCFs emitidos, etc.).
-      ref.read(offlineQueueStatusProvider.notifier).publishSyncResult(result);
+      // Una pasada automática solo mueve los contadores: ningún snackbar.
+      ref
+          .read(offlineQueueStatusProvider.notifier)
+          .publishSyncResult(result, automatic: automatic);
 
       // F3b-3c: si este dispositivo es el Hub Local, drena también su op-log
       // a Supabase (las ops que recibió de otras cajas mientras no había red).
       // En los dispositivos que NO son Hub el op-log está vacío → no-op. Gated
       // por kHubModeEnabled; best-effort (no rompe el sync de la cola propia).
+      var hubLogCompleted = 0;
       if (kHubModeEnabled) {
         try {
-          await _offlinePos.syncHubOpLog(
+          final hubLog = await _offlinePos.syncHubOpLog(
             businessId: businessId,
             salesRepository: ref.read(salesRepositoryProvider),
             printingService: ref.read(printingServiceProvider),
             inventoryRepository: ref.read(inventoryRepositoryProvider),
             cashierRepository: ref.read(cashierRepositoryProvider),
           );
+          hubLogCompleted = hubLog.completed;
         } catch (e) {
           debugPrint('[SalesVM] syncHubOpLog (drenado del Hub) falló: $e');
         }
       }
+      if (_activeBusinessId != businessId) return;
 
       // Clientes elegidos sin red: pasan al id real de su orden y se guardan
       // en el servidor. Antes de las recargas de abajo, para que estas ya
@@ -5110,22 +6678,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
-      if (result.completed > 0 &&
-          state.order != null &&
-          state.order!.id.startsWith('local-order-') &&
-          result.lastMappedOrderId != null) {
-        await _loadOrderDetail(
-          result.lastMappedOrderId!,
-          origin: state.origin,
-          caller: 'syncOffline:mapped',
-        );
-      } else if (state.order != null &&
-          !state.order!.id.startsWith('local-order-')) {
-        await _loadOrderDetail(
-          state.order!.id,
-          origin: state.origin,
-          caller: 'syncOffline:existing',
-        );
+      // Sin nada completado ni conciliado, esta pasada no cambió la venta
+      // activa en el servidor: recargarla solo reiniciaba la generación de
+      // carga y cancelaba el refresh de Realtime en cada pasada.
+      if (reloadActiveOrder ||
+          result.completed > 0 ||
+          result.reconciled > 0 ||
+          hubLogCompleted > 0) {
+        await _refreshActiveOrderAfterSync(businessId);
+        if (_activeBusinessId != businessId) return;
       }
 
       // Refrescar el salón cuando el sync aplicó cambios: las mesas recién
@@ -5150,8 +6711,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           ? 'Sync offline en progreso. Pendientes: ${result.pending}.'
           : 'Sync offline completada (${result.completed}).';
 
+      // El aviso de error solo para una pasada pedida por el cajero; la
+      // automática deja el detalle en el banner (syncStatus) y en la cola.
       state = state.copyWith(
-        error: result.hasFailures ? syncMessage : state.error,
+        error: !automatic && result.hasFailures ? syncMessage : state.error,
       );
       await _refreshOfflineMonitor(
         syncStatus: syncMessage,
@@ -5165,15 +6728,77 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // detalle real se perdía. Lo emitimos a consola para poder rastrear qué
       // operación de la cola falla (NCF, RLS, constraint, red, etc.).
       debugPrint('[SalesVM] syncOffline FALLÓ: $e\n$st');
-      state = state.copyWith(error: 'Error sincronizando offline: $e');
+      if (_activeBusinessId != businessId) return;
+      if (!automatic) {
+        state = state.copyWith(error: 'Error sincronizando offline: $e');
+      }
       await _refreshOfflineMonitor(
         syncStatus: 'Error sincronizando offline.',
         syncInFlight: false,
       );
     } finally {
       _syncInFlight = false;
-      await _refreshOfflineMonitor(syncInFlight: false);
+      // Antes de cualquier await: el pedido force que esperaba arranca su
+      // pasada ya, sin que otra se cuele, y su Future termina con ella.
+      final rerun = _forcedSyncRerun;
+      _forcedSyncRerun = null;
+      if (rerun != null) {
+        if (ref.mounted) {
+          unawaited(
+            syncPendingOfflineActions(force: true).then<void>(
+              (_) => rerun.complete(),
+              onError: rerun.completeError,
+            ),
+          );
+        } else {
+          rerun.complete();
+        }
+      }
+      // Sin syncInFlight explícito: si arrancó la pasada pedida, el banner
+      // debe seguir mostrando que hay una en curso.
+      await _refreshOfflineMonitor();
     }
+  }
+
+  Future<void> _refreshActiveOrderAfterSync(String businessId) async {
+    final activeOrderId = state.order?.id;
+    final origin = state.origin;
+    if (activeOrderId == null || _activeBusinessId != businessId) return;
+    final mappedId = await _offlinePos.mappedRemoteOrderId(
+      businessId: businessId,
+      localOrderId: activeOrderId,
+    );
+    final resolvedId = mappedId ?? activeOrderId;
+    final pending = await _offlinePos.hasUnsettledOrderActions(
+      businessId: businessId,
+      orderId: activeOrderId,
+    );
+    if (_activeBusinessId != businessId || state.order?.id != activeOrderId) {
+      return;
+    }
+    if (pending || resolvedId.startsWith('local-order-')) {
+      // Conservar TODO el contenido local si solo subió parte de la venta.
+      // Al completarse, la próxima pasada sí carga el bundle del servidor.
+      return;
+    }
+    if (origin == 'quick' && _activeRetailSlotId != null) {
+      ref
+          .read(retailCartsProvider.notifier)
+          .setOrderId(_activeRetailSlotId!, resolvedId);
+      await _persistRetailCartsIndex();
+      if (_activeBusinessId != businessId || state.order?.id != activeOrderId) {
+        return;
+      }
+    }
+    // Recarga de la cuenta que estaba en pantalla al empezar (o su id real
+    // tras subir): si el cajero ya pasó a otra, no arranca.
+    await _loadOrderDetail(
+      resolvedId,
+      selectionToken: _openTableToken,
+      reloadOf: activeOrderId,
+      origin: origin,
+      caller: 'syncOffline:active',
+    );
   }
 
   void _scheduleOrderRefresh(String orderId, {bool clearIfPaid = false}) {
@@ -5206,10 +6831,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         // openQuick abrió la siguiente): recargar la vieja es trabajo muerto
         // y, si la carga falla, su recovery vaciaba la orden NUEVA. Sin red
         // pasaba siempre, porque la venta local nueva abre al instante.
+        // Sin cuenta en pantalla tampoco hay nada que refrescar: cargar aquí
+        // metía la cuenta anterior en la pantalla que se está abriendo (venta
+        // rápida/manual o la mesa siguiente), con su origen y su respaldo.
         final current = state.order?.id;
-        if (current != null && current != orderId) return;
+        if (current != orderId) return;
 
-        await _loadOrderDetail(orderId, caller: 'scheduledRefresh');
+        await _loadOrderDetail(
+          orderId,
+          selectionToken: _openTableToken,
+          reloadOf: orderId,
+          caller: 'scheduledRefresh',
+        );
         if (clearIfPaid && (state.order?.isPaid ?? false)) {
           _hasManualFiscalTypeSelection = false;
           // Retail multi-carrito: en vez de dejar el state vacío, cerramos la
@@ -5249,8 +6882,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
+  /// Carga [orderId] y la escribe en pantalla y en su respaldo.
+  ///
+  /// Regla central: solo escribe para la selección vigente.
+  /// [selectionToken] es el `_openTableToken` de la selección que pidió la
+  /// carga (la apertura que la lanza, o la cuenta en pantalla cuando el caller
+  /// la capturó antes de su await). [reloadOf] marca una RECARGA: el id que
+  /// debe seguir en pantalla (el local cuyo remoto es [orderId], o el mismo).
+  /// Si la selección ya cambió, la carga ni arranca (no toma generación, así
+  /// que tampoco reemplaza la carga de la pantalla nueva) ni escribe estado
+  /// ni el respaldo 'quick'/'manual'.
   Future<void> _loadOrderDetail(
     String orderId, {
+    required int selectionToken,
+    String? reloadOf,
     String? origin,
     String? tableId,
     // Identifica el camino que disparó el load. Solo se usa en el log
@@ -5277,9 +6922,62 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // carga comprueba que `myGeneration == _loadGeneration` y, si no, se
     // descarta para no pisar el resultado de una carga más fresca (evita que un
     // reload stale en vuelo borre el item recién agregado — ver `_loadGeneration`).
+    //
+    // Antes, una recarga tardía de la cuenta anterior (cliente asignado u
+    // oferta que respondió después de pasar a Venta Rápida/Manual) tomaba
+    // generación, reemplazaba la apertura y escribía la mesa A con el origen
+    // de la pantalla nueva: quedaba guardada como la venta de este equipo.
+    bool selectionCurrent() =>
+        selectionToken == _openTableToken &&
+        (reloadOf == null ||
+            state.order?.id == reloadOf ||
+            state.order?.id == orderId);
+    if (!selectionCurrent()) return;
     final myGeneration = ++_loadGeneration;
+    final loadBusinessId = _activeBusinessId;
+    bool superseded() =>
+        myGeneration != _loadGeneration ||
+        _activeBusinessId != loadBusinessId ||
+        !selectionCurrent();
     final previousOrderId = state.order?.id;
     final previousOrigin = state.origin;
+    final sameLogicalOrder =
+        previousOrderId == orderId ||
+        (previousOrderId != null &&
+            loadBusinessId != null &&
+            await _offlinePos.mappedRemoteOrderId(
+                  businessId: loadBusinessId,
+                  localOrderId: previousOrderId,
+                ) ==
+                orderId);
+    // Cambios de ESTA cuenta aún en la cola (pendientes, fallidos o muertos):
+    // lo de pantalla es la verdad local. Antes se cortaba aquí sin leer, y una
+    // operación muerta dejaba la cuenta abierta para siempre aunque otro equipo
+    // ya la hubiera cobrado o anulado. Ahora se lee el servidor y solo se
+    // adopta un cierre definitivo (ver abajo); si no, se conserva lo local.
+    final queueBusinessId = previousOrderId == orderId ? loadBusinessId : null;
+    // Contador de la cola ANTES de leerla: si no cambia mientras se lee el
+    // servidor, esta lectura sigue valiendo y no se repite (ver abajo).
+    final queueRevisionAtStart = queueBusinessId == null
+        ? 0
+        : _offlinePos.queueRevision(queueBusinessId);
+    final queuedAtStart = queueBusinessId == null
+        ? null
+        : await _offlinePos.orderQueueStatus(
+            businessId: queueBusinessId,
+            orderId: orderId,
+          );
+    final keepLocalContent = queuedAtStart?.unsettled ?? false;
+    // Sin servidor que consultar (borrador local o sin red): como antes.
+    if (keepLocalContent &&
+        (orderId.startsWith('local-order-') ||
+            (preloadedBundle == null && _preferLocalOperations))) {
+      if (!superseded()) {
+        state = state.copyWith(loading: false);
+      }
+      return;
+    }
+    if (superseded()) return;
     final tableCacheHit = tableId != null && _tableCache.containsKey(tableId);
     // Cargas de mesa con tableId explícito fijan la mesa activa (clave del
     // snapshot offline). Las recargas sin tableId (realtime/refresh) heredan
@@ -5295,11 +6993,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await _ensureBusinessTaxSettingsLoaded();
     await _ensureDefaultTakeoutLoaded();
     await _ensureBusinessFiscalSettingsLoaded();
+    if (superseded()) return;
     final repo = ref.read(salesRepositoryProvider);
     Order? order;
     List<OrderItem> items = const [];
     List<OrderCheck> checks = const [];
+    // `loadError` solo recoge fallos de la lectura de respaldo: protege la
+    // pantalla. El del bundle va aparte; si el respaldo trae la cuenta
+    // completa, sus datos se aplican y el error del bundle no cuenta.
     String? loadError;
+    String? bundleError;
     String? customerId;
     String? customerName;
     String? sessionNote;
@@ -5324,7 +7027,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } else {
       try {
         final bundle = await repo
-            .getOrderBundle(orderId, businessId: _activeBusinessId)
+            .getOrderBundle(orderId, businessId: loadBusinessId)
             .timeout(const Duration(seconds: 12));
         order = bundle.order;
         items = bundle.items;
@@ -5336,24 +7039,28 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         loadedByBundle = order != null;
       } catch (e) {
         noteFailure(e);
-        loadError = FriendlyError.from(e);
+        bundleError = FriendlyError.from(e);
       }
     }
 
     // Si el bundle cayó por red, las 3 lecturas de respaldo van al mismo
     // servidor caído: solo sumarían espera.
     if (!loadedByBundle && !failedByNetwork) {
-      final orderFuture = repo.getOrder(orderId, businessId: _activeBusinessId);
+      final orderFuture = repo.getOrder(orderId, businessId: loadBusinessId);
+      // Respaldo COMPLETO, con el mismo alcance que el bundle (ítems abiertos,
+      // con extras y líneas de impuesto). Sin ellos la precuenta salía sin los
+      // extras y con el desglose de impuestos adivinado. Si esas lecturas
+      // fallan, getOrderItems lanza y la pantalla se conserva.
       final itemsFuture = repo.getOrderItems(
         orderId,
-        includeModifiers: false,
-        limit: 500,
+        includeModifiers: true,
+        limit: _fallbackItemsLimit,
         onlyOpen: true,
-        businessId: _activeBusinessId,
+        businessId: loadBusinessId,
       );
       final checksFuture = repo.getOrderChecks(
         orderId,
-        businessId: _activeBusinessId,
+        businessId: loadBusinessId,
       );
       // Marcar las futures como manejadas para que un rechazo temprano no se
       // reporte como "Error FATAL no controlado" antes de llegar a su await.
@@ -5367,10 +7074,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       try {
         order = await orderFuture;
         if (order != null) {
+          // `ignore` como las de arriba: un rechazo temprano no sale como
+          // error no controlado; el await de abajo igual lo recibe.
           customerFuture = repo.getSessionCustomer(
             order.sessionId,
-            businessId: _activeBusinessId,
-          );
+            businessId: loadBusinessId,
+          )..ignore();
         }
         checks = await checksFuture;
       } catch (e) {
@@ -5380,6 +7089,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
       try {
         items = await itemsFuture;
+        // Con el tope lleno puede haber más ítems: no es la cuenta completa.
+        if (items.length >= _fallbackItemsLimit) {
+          loadError ??=
+              'La lectura de respaldo trajo $_fallbackItemsLimit productos o '
+              'más (puede estar incompleta).';
+        }
       } catch (e) {
         noteFailure(e);
         loadError ??= e.toString();
@@ -5391,7 +7106,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           customerId = customer.customerId;
           customerName = customer.customerName;
           sessionNote = customer.note;
-        } catch (_) {}
+        } catch (e) {
+          // Sin el cliente la recarga lo borraba de pantalla (y de la
+          // precuenta): también cuenta como respaldo incompleto.
+          noteFailure(e);
+          loadError ??= e.toString();
+        }
       }
     }
 
@@ -5401,14 +7121,32 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // mesa se veía vacía, la precuenta y la factura salían sin productos y
     // cada toque mostraba "Error… envíame una captura". También cubre la
     // carga parcial (orden sí, ítems no), que pintaba la orden sin ítems.
-    if (failedByNetwork && state.order?.id == orderId) {
+    if (superseded()) return;
+    if (failedByNetwork &&
+        sameLogicalOrder &&
+        state.order?.id == previousOrderId) {
       if (myGeneration != _loadGeneration) return;
       debugPrint(
         '[SalesViewModel] _loadOrderDetail($caller): sin red, se conserva la '
-        'orden en pantalla ($loadError)',
+        'orden en pantalla (${loadError ?? bundleError})',
       );
       unawaited(_connectivity.forceReachabilityCheck());
       if (state.loading) state = state.copyWith(loading: false);
+      return;
+    }
+
+    // Respaldo incompleto (falló alguna de sus lecturas): nunca se aplica a
+    // medias sobre la misma cuenta. Se conserva la pantalla con un aviso que
+    // no bloquea; la próxima carga buena lo limpia.
+    if (loadError != null &&
+        sameLogicalOrder &&
+        state.order?.id == previousOrderId) {
+      if (myGeneration != _loadGeneration) return;
+      state = state.copyWith(
+        loading: false,
+        error:
+            'No se pudo actualizar la orden. Se conserva la venta guardada: $loadError',
+      );
       return;
     }
 
@@ -5433,6 +7171,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       debugPrint("activeBusinessId: $activeBusinessId");
       debugPrint("loadedByBundle: $loadedByBundle");
       debugPrint("loadError: $loadError");
+      debugPrint("bundleError: $bundleError");
       debugPrint("requestedOrigin: $origin");
       debugPrint("previousOrigin: $previousOrigin");
       debugPrint("previousOrderId: $previousOrderId");
@@ -5445,9 +7184,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // entre sucursales. Sin esto, el viewmodel reintenta cargar el mismo
       // orderId out-of-scope cada vez que el usuario interactúa.
       // Un fallo de red no dice nada sobre a qué orden apunta la mesa.
+      // Con el bundle caído y un respaldo que respondió sin error pero sin
+      // la cuenta, el "no existe" es del servidor: también se limpia (antes
+      // quedaba un error fijo sobre una cuenta que ya no existe).
       if (!failedByNetwork) _tableCache.remove(tableId);
       final baseMessage =
           loadError ??
+          bundleError ??
           'Esta orden no está disponible en este negocio.\n'
               'Vuelve a la pantalla de mesas e intenta de nuevo.';
       state = state.copyWith(
@@ -5495,6 +7238,71 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         debugPrint('Error loading fiscal sequences: $e');
         fiscalSequencesLoadError = FriendlyError.from(e);
       }
+    }
+
+    // Una respuesta fiscal tardía tampoco puede podar las guardas de una
+    // cuenta más reciente antes del chequeo que precede la escritura.
+    if (superseded()) return;
+
+    // Cambios de esta cuenta en la cola, de antes o que cayeron a ella
+    // MIENTRAS se leía el servidor (un alta que se fue a la cola ya soltó su
+    // guarda anti-parpadeo): con la cuenta abierta en el servidor, lo de
+    // pantalla es la verdad local y la lectura no lo pisa. Solo se adopta un
+    // cierre DEFINITIVO del servidor: esas operaciones ya no pueden aplicarse
+    // y siguen en la cola (no se borra nada), pero la cuenta no queda abierta
+    // y cobrable aquí.
+    //
+    // Definitivo = cobrada ('paid'/'partially_paid'). Una anulada (o cerrada
+    // sin cobro a la vista) NO lo es mientras quede un alta suya por subir:
+    // al subir, el trigger de order_items (20260819_0004) la resucita. Así
+    // anula el barrendero de mesas vacías (fn_release_empty_tables: 'void' +
+    // closed_at, sin marca que lo distinga de una anulación a mano) una cuenta
+    // que se llenó sin red. Antes ese cierre se adoptaba: los productos sin
+    // subir desaparecían de la pantalla, del respaldo y de la precuenta.
+    final serverClosed = _isClosedOrder(order);
+    final settledOnServer =
+        order != null &&
+        serverClosed &&
+        (order.isPaid || order.status == 'partially_paid');
+    if (queueBusinessId != null &&
+        queuedAtStart != null &&
+        !settledOnServer &&
+        // Solo se protege una copia local ABIERTA. Cerrada en pantalla solo
+        // queda al adoptar un cierre del servidor (el cobro sin red limpia la
+        // pantalla): si el servidor la reabrió (alta resucitada, cobro
+        // anulado), se aplica el servidor. Antes la regla protegía esa copia
+        // cerrada y vacía como si fuera lo local mientras quedara una
+        // operación muerta.
+        !_isClosedOrder(state.order)) {
+      bool keepsLocal(({bool unsettled, bool revivingAdds}) queued) =>
+          serverClosed ? queued.revivingAdds : queued.unsettled;
+      var keepLocal = keepsLocal(queuedAtStart);
+      // Solo se vuelve a leer la cola si cambió durante la lectura del
+      // servidor. Antes se leía (y descifraba completa) dos veces por recarga.
+      if (!keepLocal &&
+          _offlinePos.queueRevision(queueBusinessId) != queueRevisionAtStart) {
+        keepLocal = keepsLocal(
+          await _offlinePos.orderQueueStatus(
+            businessId: queueBusinessId,
+            orderId: orderId,
+          ),
+        );
+        if (superseded()) return;
+      }
+      if (keepLocal) {
+        if (state.order?.id != orderId) return;
+        if (state.loading) state = state.copyWith(loading: false);
+        // Realtime sigue activo: es lo que avisa si otro equipo la cierra.
+        _subscribeToOrderUpdates(orderId);
+        return;
+      }
+    }
+    if (keepLocalContent && serverClosed) {
+      // Los cambios sin subir siguen visibles en la cola (badge/visor).
+      debugPrint(
+        '[SalesViewModel] _loadOrderDetail($caller): la cuenta $orderId se '
+        'cerró en el servidor con cambios locales en la cola',
+      );
     }
 
     final resolvedFiscalType = _resolveFiscalTypeForState(
@@ -5603,7 +7411,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // nueva, descartamos este resultado (potencialmente stale) para no pisar el
     // state fresco. No hay `await` entre esta comprobación y la escritura, así
     // que la condición no puede cambiar bajo nuestros pies.
-    if (myGeneration != _loadGeneration) return;
+    if (superseded()) return;
 
     // Cliente elegido que el servidor todavía no confirma: gana sobre el
     // bundle hasta que el bundle lo traiga (o el servidor ya lo tenga y otra
@@ -5673,12 +7481,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
 
     final promotionsChanged = await _applyAutomaticPromotionsIfNeeded();
+    if (superseded() || state.order?.id != orderId) return;
     if (promotionsChanged) {
       refreshOrder();
       return;
     }
 
     await _persistCurrentState(tableId: tableId);
+    if (superseded() || state.order?.id != orderId) return;
     _subscribeToOrderUpdates(orderId);
   }
 
@@ -5698,6 +7508,15 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     _realtimeChannel = client.channel('order_view_$orderId');
     _subscribedOrderId = orderId;
 
+    // El canal es de ESTA orden: un evento que llega cuando la pantalla ya
+    // muestra otra cuenta (la baja del canal es asíncrona) no recarga la cuenta
+    // en pantalla. Antes un cambio en la mesa A recargaba la venta rápida que
+    // se estaba retomando y le quitaba la confirmación con el servidor.
+    void refreshOwnOrder({bool clearIfPaid = false}) {
+      if (state.order?.id != orderId) return;
+      refreshOrder(clearIfPaid: clearIfPaid);
+    }
+
     _realtimeChannel!
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
@@ -5710,7 +7529,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           ),
           callback: (payload) {
             // Refresh order on any item change
-            refreshOrder();
+            refreshOwnOrder();
           },
         )
         .onPostgresChanges(
@@ -5724,7 +7543,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           ),
           callback: (payload) {
             // Refresh on check changes (splits, payments, closing)
-            refreshOrder();
+            refreshOwnOrder();
           },
         )
         .onPostgresChanges(
@@ -5739,7 +7558,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           callback: (payload) {
             // Refresh on order status change (e.g. paid/closed)
             // Check if order is closed/paid to clear state or navigate back could be logic here
-            refreshOrder(clearIfPaid: true);
+            refreshOwnOrder(clearIfPaid: true);
           },
         )
         .onPostgresChanges(
@@ -5752,7 +7571,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             value: orderId,
           ),
           callback: (payload) {
-            refreshOrder();
+            refreshOwnOrder();
           },
         )
         .subscribe();

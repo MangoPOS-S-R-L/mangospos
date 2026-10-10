@@ -26,6 +26,7 @@ Future<void> _pumpModal(
   double? reduceFloor,
   VoidCallback? onReprint,
   Future<bool> Function()? onAuthorizeReduce,
+  Future<void> Function(OrderItem item)? onSave,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -37,7 +38,7 @@ Future<void> _pumpModal(
           reduceBlockedReason: 'Solo un supervisor puede quitarlo.',
           onAuthorizeReduce: onAuthorizeReduce,
           onReprint: onReprint,
-          onSave: (_) async {},
+          onSave: onSave ?? (_) async {},
           onDelete: (_) async {},
         ),
       ),
@@ -238,5 +239,126 @@ void main() {
 
     await _pumpModal(tester, onReprint: () {});
     expect(find.text('Reimprimir comanda'), findsOneWidget);
+  });
+
+  group('cantidad escrita', () {
+    Finder qtyField() => find.byKey(const ValueKey('product-detail-qty'));
+
+    Future<void> type(WidgetTester tester, String text) async {
+      await tester.enterText(qtyField(), text);
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> tapSave(WidgetTester tester) async {
+      await tester.ensureVisible(find.text('Guardar cambios'));
+      await tester.tap(find.text('Guardar cambios'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('se escribe y se guarda esa cantidad', (tester) async {
+      OrderItem? saved;
+      await _pumpModal(tester, onSave: (item) async => saved = item);
+
+      await type(tester, '12');
+      expect(find.text('12'), findsOneWidget);
+
+      // Los botones siguen desde lo escrito.
+      await tester.tap(find.byIcon(Icons.add));
+      await tester.pump();
+      expect(find.text('13'), findsOneWidget);
+
+      await tapSave(tester);
+      expect(saved?.quantity, 13);
+    });
+
+    testWidgets('«Guardar» aplica lo escrito aunque no le diera Enter', (
+      tester,
+    ) async {
+      OrderItem? saved;
+      await _pumpModal(tester, onSave: (item) async => saved = item);
+
+      await tester.enterText(qtyField(), '4');
+      await tapSave(tester);
+      expect(saved?.quantity, 4);
+    });
+
+    testWidgets('vacío o 0 vuelve a la última cantidad', (tester) async {
+      await _pumpModal(tester);
+
+      await type(tester, '');
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('Escribe una cantidad entre 1 y 999.'), findsOneWidget);
+
+      await type(tester, '0');
+      expect(find.text('2'), findsOneWidget);
+    });
+
+    testWidgets('producto inactivo: no se escribe más de lo que había', (
+      tester,
+    ) async {
+      await _pumpModal(tester, addMoreBlockedReason: 'Producto inactivo.');
+
+      await type(tester, '5');
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('Producto inactivo.'), findsOneWidget);
+
+      // Bajar sí se puede.
+      await type(tester, '1');
+      expect(find.text('1'), findsOneWidget);
+    });
+
+    testWidgets('sin PIN no se escribe por debajo de lo enviado', (
+      tester,
+    ) async {
+      await _pumpModal(tester, reduceFloor: 2);
+
+      await type(tester, '1');
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('Solo un supervisor puede quitarlo.'), findsOneWidget);
+    });
+
+    testWidgets('bajo lo enviado pide PIN una vez; rechazado, vuelve', (
+      tester,
+    ) async {
+      var pinRequests = 0;
+      var allow = false;
+      await _pumpModal(
+        tester,
+        reduceFloor: 2,
+        onAuthorizeReduce: () async {
+          pinRequests++;
+          return allow;
+        },
+      );
+
+      await type(tester, '1');
+      expect(pinRequests, 1);
+      expect(find.text('2'), findsOneWidget);
+
+      allow = true;
+      await type(tester, '1');
+      expect(pinRequests, 2);
+      expect(find.text('1'), findsOneWidget);
+    });
+
+    testWidgets('perder el foco y «Guardar» no piden el PIN dos veces', (
+      tester,
+    ) async {
+      var pinRequests = 0;
+      await _pumpModal(
+        tester,
+        reduceFloor: 2,
+        onAuthorizeReduce: () async {
+          pinRequests++;
+          return false;
+        },
+      );
+
+      await tester.enterText(qtyField(), '1');
+      await tapSave(tester);
+      expect(pinRequests, 1);
+      expect(find.text('2'), findsOneWidget);
+    });
   });
 }

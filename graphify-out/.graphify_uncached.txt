@@ -1,0 +1,6 @@
+/Users/cristiangomez/dev/mangospos/lib/.claude/agents/ui-ux-designer.md
+/Users/cristiangomez/dev/mangospos/lib/Guides/guia_modulo_comprobantes.txt
+/Users/cristiangomez/dev/mangospos/lib/PRD Facturacion Electronica/PRD-MangoPOS-Alanube-Integration.md
+/Users/cristiangomez/dev/mangospos/lib/PRD Facturacion Electronica/PRD-MangoPOS-Alanube-Plan-Ejecucion.md
+/Users/cristiangomez/dev/mangospos/lib/PRD Zonas y Mesas/PRD-Zonas-Mesas-Estado-Actual-y-Vision.md
+/Users/cristiangomez/dev/mangospos/lib/databasecode/databasecode.txt

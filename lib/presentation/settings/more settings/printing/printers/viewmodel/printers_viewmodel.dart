@@ -107,13 +107,40 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
   @override
   PrintingPrintersState build() {
+    final addressChanges = PrintingRepository.printerAddressChanges.listen(
+      _onPrinterAddressChanged,
+    );
     ref.onDispose(() async {
       _log('build() -> onDispose called');
+      await addressChanges.cancel();
       await _cleanupRealtime();
       _stopPolling();
       state = state.copyWith(isLoading: false, isDiscovering: false);
     });
     return const PrintingPrintersState();
+  }
+
+  void _onPrinterAddressChanged(PrinterAddressChange change) {
+    if (_businessId != change.businessId) return;
+    if (!state.items.any((p) => p.id == change.printerId)) return;
+    state = state.copyWith(
+      items: state.items
+          .map((printer) {
+            if (printer.id != change.printerId) return printer;
+            return printer.copyWith(
+              ip: change.ipAddress,
+              mac: change.mac,
+              connectionConfig: {
+                ...printer.connectionConfig,
+                'ip': change.ipAddress,
+                if (change.mac != null) 'mac': change.mac,
+              },
+            );
+          })
+          .toList(growable: false),
+      isLoading: state.isLoading,
+      errorMessage: state.errorMessage,
+    );
   }
 
   // ----------------- Carga -----------------
@@ -136,7 +163,22 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       _lastLoadedBusinessId = _businessId;
 
       final configs = await _repo.getPrinters(_businessId!);
-      var items = configs.map(_toPrinterDevice).toList();
+      var items = configs.map((config) {
+        final device = _toPrinterDevice(config);
+        final knownIp = _repo.getKnownNetworkIp(config);
+        final knownMac = _repo.getKnownNetworkMac(config);
+        return knownIp == null && knownMac == null
+            ? device
+            : device.copyWith(
+                ip: knownIp,
+                mac: knownMac,
+                connectionConfig: {
+                  ...device.connectionConfig,
+                  'ip': ?knownIp,
+                  'mac': ?knownMac,
+                },
+              );
+      }).toList();
 
       // NEW: Health Check via Agent if on Web
       if (kIsWeb) {
@@ -179,7 +221,13 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     String? ip,
   }) async {
     try {
-      final mac = await _repo.captureMacNow(printerId: printerId, ipAddress: ip);
+      final mac = await _repo.captureMacNow(
+        printerId: printerId,
+        ipAddress: ip,
+        port:
+            state.items.where((p) => p.id == printerId).firstOrNull?.port ??
+            9100,
+      );
       if (mac != null) {
         final b = await _ensureOrResolveBusiness();
         await load(businessId: b, force: true);
@@ -210,6 +258,18 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureOrResolveBusiness();
       final PrinterType t = _toPrinterType(type);
+      final normalizedMac = t == PrinterType.network
+          ? normalizeNetworkPrinterMac(mac)
+          : ((mac ?? '').trim().isEmpty ? null : mac!.trim());
+      if (t == PrinterType.network &&
+          (mac ?? '').trim().isNotEmpty &&
+          normalizedMac == null) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'La dirección MAC de red no es válida.',
+        );
+        return false;
+      }
 
       // PRD 5 F2.5: si la impresora es USB o Bluetooth, autoasignar este
       // device como host. Permite que otros dispositivos del negocio
@@ -239,7 +299,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         businessId: b,
         name: trimmed,
         ipAddress: (ip ?? '').trim().isEmpty ? null : (ip ?? '').trim(),
-        mac: (mac ?? '').trim().isEmpty ? null : (mac ?? '').trim(),
+        mac: normalizedMac,
         devicePath: (devicePath ?? '').trim().isEmpty
             ? null
             : (devicePath ?? '').trim(),
@@ -260,7 +320,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       if (t == PrinterType.network) {
         _repo.captureMacForPrinterIfMissing(
           printerId: created.id,
-          ipAddress: created.ipAddress,
+          ipAddress: created.effectiveIp,
+          port: created.effectivePort ?? 9100,
           existingMac: created.effectiveMac,
           force: true,
         );
@@ -291,16 +352,18 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       }
       try {
         final deviceName = await DeviceIdentity.getDisplayName();
-        await Supabase.instance.client.rpc(
-          'fn_register_device_agent',
-          params: {
-            'p_id': deviceId,
-            'p_business_id': businessId,
-            'p_device_name': deviceName,
-            'p_agent_url': null,
-            'p_platform': DeviceIdentity.currentPlatform(),
-          },
-        ).timeout(const Duration(seconds: 6));
+        await Supabase.instance.client
+            .rpc(
+              'fn_register_device_agent',
+              params: {
+                'p_id': deviceId,
+                'p_business_id': businessId,
+                'p_device_name': deviceName,
+                'p_agent_url': null,
+                'p_platform': DeviceIdentity.currentPlatform(),
+              },
+            )
+            .timeout(const Duration(seconds: 6));
         return true;
       } catch (e, st) {
         _log(
@@ -339,6 +402,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     String? encoding,
     String? fallbackPrinterId,
     bool clearFallback = false,
+
     /// Null = no tocar la velocidad guardada.
     PrintSpeed? printSpeed,
 
@@ -366,11 +430,33 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     try {
       state = state.copyWith(isLoading: true, errorMessage: null);
       final b = await _ensureOrResolveBusiness();
+      final currentPrinter = state.items
+          .where((p) => p.id == printerId)
+          .firstOrNull;
+      final printerType = type == null
+          ? currentPrinter?.type ?? PrinterType.network
+          : _toPrinterType(type);
+      final normalizedMac = printerType == PrinterType.network
+          ? normalizeNetworkPrinterMac(mac)
+          : (mac?.trim().isEmpty == true ? null : mac?.trim());
+      if (printerType == PrinterType.network &&
+          (mac ?? '').trim().isNotEmpty &&
+          normalizedMac == null) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'La dirección MAC de red no es válida.',
+        );
+        return false;
+      }
       await _repo.updatePrinter(
         printerId: printerId,
         name: trimmedName,
         ipAddress: ipAddress?.trim().isEmpty == true ? null : ipAddress?.trim(),
-        mac: mac?.trim().isEmpty == true ? null : mac?.trim(),
+        mac: normalizedMac,
+        clearMac:
+            printerType == PrinterType.network &&
+            mac != null &&
+            mac.trim().isEmpty,
         type: type?.trim().isEmpty == true ? null : type?.trim(),
         devicePath: devicePath?.trim().isEmpty == true
             ? null
@@ -453,8 +539,12 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final printer = state.items.firstWhere((p) => p.id == printerId);
 
       if (printer.type == PrinterType.network && printer.ip != null) {
+        final ip = await _repo.resolveReachableNetworkIp(
+          printer: _toPrinterConfig(printer),
+          cachedIp: printer.ip!,
+        );
         final socket = await Socket.connect(
-          printer.ip!,
+          ip,
           printer.port ?? 9100,
           timeout: const Duration(seconds: 3),
         );
@@ -464,7 +554,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           27, 97, 1, // center
           ...utf8.encode('PRUEBA DE IMPRESION\n'),
           ...utf8.encode('Impresora: ${printer.name}\n'),
-          ...utf8.encode('IP: ${printer.ip}\n'),
+          ...utf8.encode('IP: $ip\n'),
           10, 10, 10,
           27, 109, // cut
         ];
@@ -484,7 +574,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
         // esperar el cooldown que protege al camino de comandas.
         _repo.captureMacForPrinterIfMissing(
           printerId: printer.id,
-          ipAddress: printer.ip,
+          ipAddress: ip,
+          port: printer.port ?? 9100,
           existingMac: printer.mac,
           force: true,
         );
@@ -527,6 +618,13 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
   Future<bool> testPrint(String printerId) async {
     try {
       final p = state.items.firstWhere((x) => x.id == printerId);
+      if (p.type == PrinterType.network) {
+        await _repo.printEscPos(
+          printer: _toPrinterConfig(p),
+          data: _buildSampleEscPos(p, detail: 'Prueba de conexión de red'),
+        );
+        return true;
+      }
 
       if (kIsWeb) {
         try {
@@ -550,11 +648,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             return true;
           }
 
-          if (p.ip?.isNotEmpty ?? false) {
-            await _repo.testPrintViaAgent(ip: p.ip!, port: p.port ?? 9100);
-            return true;
-          }
-
           state = state.copyWith(
             errorMessage:
                 'Esta impresora no tiene IP configurada para el Agente Local.',
@@ -565,17 +658,6 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
             errorMessage: 'No se pudo imprimir con el Agente Local: $e',
           );
           return false;
-        }
-      }
-
-      // Nativo (Desktop/Mobile)
-      if (p.type == PrinterType.network && (p.ip?.isNotEmpty ?? false)) {
-        try {
-          await _repo.testPrintViaAgent(ip: p.ip!, port: p.port ?? 9100);
-          return true;
-        } catch (_) {
-          // Si el agente no está disponible, intenta por socket directo
-          return await printSampleDirect(printerId);
         }
       }
 
@@ -728,8 +810,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       final subnets = <String>{
         ...localIps.map(_subnetBaseFromIp),
         ...extraBases,
-      }.toList()
-        ..sort();
+      }.toList()..sort();
       final ownLastOctets = localIps
           .map((ip) => int.tryParse(ip.split('.').last))
           .whereType<int>()
@@ -858,28 +939,33 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
       for (final service in serviceTypes) {
         try {
-          await for (final ptr in client
-              .lookup<PtrResourceRecord>(
-                ResourceRecordQuery.serverPointer(service),
-              )
-              .timeout(timeout, onTimeout: (sink) => sink.close())) {
-            await for (final srv in client
-                .lookup<SrvResourceRecord>(
-                  ResourceRecordQuery.service(ptr.domainName),
-                )
-                .timeout(timeout, onTimeout: (sink) => sink.close())) {
-              await for (final ip in client
-                  .lookup<IPAddressResourceRecord>(
-                    ResourceRecordQuery.addressIPv4(srv.target),
+          await for (final ptr
+              in client
+                  .lookup<PtrResourceRecord>(
+                    ResourceRecordQuery.serverPointer(service),
                   )
                   .timeout(timeout, onTimeout: (sink) => sink.close())) {
+            await for (final srv
+                in client
+                    .lookup<SrvResourceRecord>(
+                      ResourceRecordQuery.service(ptr.domainName),
+                    )
+                    .timeout(timeout, onTimeout: (sink) => sink.close())) {
+              await for (final ip
+                  in client
+                      .lookup<IPAddressResourceRecord>(
+                        ResourceRecordQuery.addressIPv4(srv.target),
+                      )
+                      .timeout(timeout, onTimeout: (sink) => sink.close())) {
                 final addr = ip.address.address;
                 if (seenIps.contains(addr)) continue;
                 seenIps.add(addr);
 
                 // Nombre legible: `Epson TM-T20II._pdl...` → `Epson TM-T20II`.
-                final friendlyName =
-                    ptr.domainName.split('.').first.replaceAll('\\032', ' ');
+                final friendlyName = ptr.domainName
+                    .split('.')
+                    .first
+                    .replaceAll('\\032', ' ');
 
                 out.add(
                   DiscoveredPrinter(
@@ -949,14 +1035,16 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
     bool timeLeft() => !cancelled && DateTime.now().isBefore(deadline);
 
     // Worker 1: USB instantáneo.
-    final usbFuture = scanUSB().then((list) {
-      for (final p in list) {
-        if (cancelled) break;
-        emit(p);
-      }
-    }).catchError((e) {
-      _log('scanIntensive USB error: $e');
-    });
+    final usbFuture = scanUSB()
+        .then((list) {
+          for (final p in list) {
+            if (cancelled) break;
+            emit(p);
+          }
+        })
+        .catchError((e) {
+          _log('scanIntensive USB error: $e');
+        });
 
     // Worker 2: mDNS continuo. Re-lanzamos cada lookup hasta que se acabe
     // el tiempo, para atrapar devices que tarden en anunciarse.
@@ -971,64 +1059,74 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       // ningún anuncio multicast entrante.
       await AndroidNetLock.acquireMulticastLock();
       try {
-      while (timeLeft()) {
-        final remaining = deadline.difference(DateTime.now());
-        if (remaining <= Duration.zero) break;
-        final tickTimeout = remaining > const Duration(seconds: 6)
-            ? const Duration(seconds: 6)
-            : remaining;
-        final client = MDnsClient();
-        try {
-          await client.start();
-          for (final svc in services) {
-            if (!timeLeft()) break;
-            try {
-              await for (final ptr in client
-                  .lookup<PtrResourceRecord>(
-                    ResourceRecordQuery.serverPointer(svc),
-                  )
-                  .timeout(tickTimeout, onTimeout: (s) => s.close())) {
-                if (!timeLeft()) break;
-                await for (final srv in client
-                    .lookup<SrvResourceRecord>(
-                      ResourceRecordQuery.service(ptr.domainName),
-                    )
-                    .timeout(tickTimeout, onTimeout: (s) => s.close())) {
+        while (timeLeft()) {
+          final remaining = deadline.difference(DateTime.now());
+          if (remaining <= Duration.zero) break;
+          final tickTimeout = remaining > const Duration(seconds: 6)
+              ? const Duration(seconds: 6)
+              : remaining;
+          final client = MDnsClient();
+          try {
+            await client.start();
+            for (final svc in services) {
+              if (!timeLeft()) break;
+              try {
+                await for (final ptr
+                    in client
+                        .lookup<PtrResourceRecord>(
+                          ResourceRecordQuery.serverPointer(svc),
+                        )
+                        .timeout(tickTimeout, onTimeout: (s) => s.close())) {
                   if (!timeLeft()) break;
-                  await for (final ip in client
-                      .lookup<IPAddressResourceRecord>(
-                        ResourceRecordQuery.addressIPv4(srv.target),
-                      )
-                      .timeout(tickTimeout, onTimeout: (s) => s.close())) {
+                  await for (final srv
+                      in client
+                          .lookup<SrvResourceRecord>(
+                            ResourceRecordQuery.service(ptr.domainName),
+                          )
+                          .timeout(tickTimeout, onTimeout: (s) => s.close())) {
                     if (!timeLeft()) break;
-                    final addr = ip.address.address;
-                    final friendly = ptr.domainName
-                        .split('.')
-                        .first
-                        .replaceAll('\\032', ' ');
-                    emit(DiscoveredPrinter(
-                      name: friendly.isNotEmpty ? friendly : 'Network Printer',
-                      type: PrinterType.network,
-                      ip: addr,
-                      idHint: addr,
-                    ));
+                    await for (final ip
+                        in client
+                            .lookup<IPAddressResourceRecord>(
+                              ResourceRecordQuery.addressIPv4(srv.target),
+                            )
+                            .timeout(
+                              tickTimeout,
+                              onTimeout: (s) => s.close(),
+                            )) {
+                      if (!timeLeft()) break;
+                      final addr = ip.address.address;
+                      final friendly = ptr.domainName
+                          .split('.')
+                          .first
+                          .replaceAll('\\032', ' ');
+                      emit(
+                        DiscoveredPrinter(
+                          name: friendly.isNotEmpty
+                              ? friendly
+                              : 'Network Printer',
+                          type: PrinterType.network,
+                          ip: addr,
+                          idHint: addr,
+                        ),
+                      );
+                    }
                   }
                 }
+              } catch (e) {
+                _log('scanIntensive mDNS $svc error: $e');
               }
-            } catch (e) {
-              _log('scanIntensive mDNS $svc error: $e');
             }
+          } catch (e) {
+            _log('scanIntensive mDNS client error: $e');
+          } finally {
+            client.stop();
           }
-        } catch (e) {
-          _log('scanIntensive mDNS client error: $e');
-        } finally {
-          client.stop();
+          // Pequeña pausa antes de re-loop para no spamear la red.
+          if (timeLeft()) {
+            await Future.delayed(const Duration(seconds: 2));
+          }
         }
-        // Pequeña pausa antes de re-loop para no spamear la red.
-        if (timeLeft()) {
-          await Future.delayed(const Duration(seconds: 2));
-        }
-      }
       } finally {
         await AndroidNetLock.releaseMulticastLock();
       }
@@ -1076,29 +1174,33 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
 
         for (var i = 0; i < hosts.length && timeLeft(); i += slotSize) {
           final slice = hosts.skip(i).take(slotSize).toList();
-          await Future.wait(slice.map((host) async {
-            if (!timeLeft()) return;
-            for (final port in tcpPorts) {
+          await Future.wait(
+            slice.map((host) async {
               if (!timeLeft()) return;
-              try {
-                final socket = await Socket.connect(
-                  host,
-                  port,
-                  timeout: perHostTimeout,
-                );
-                socket.destroy();
-                emit(DiscoveredPrinter(
-                  name: 'Network Printer ($host)',
-                  type: PrinterType.network,
-                  ip: host,
-                  idHint: host,
-                ));
-                return; // Un puerto basta, no probamos los otros.
-              } catch (_) {
-                // Puerto cerrado o timeout. Probar siguiente puerto.
+              for (final port in tcpPorts) {
+                if (!timeLeft()) return;
+                try {
+                  final socket = await Socket.connect(
+                    host,
+                    port,
+                    timeout: perHostTimeout,
+                  );
+                  socket.destroy();
+                  emit(
+                    DiscoveredPrinter(
+                      name: 'Network Printer ($host)',
+                      type: PrinterType.network,
+                      ip: host,
+                      idHint: host,
+                    ),
+                  );
+                  return; // Un puerto basta, no probamos los otros.
+                } catch (_) {
+                  // Puerto cerrado o timeout. Probar siguiente puerto.
+                }
               }
-            }
-          }));
+            }),
+          );
         }
       } catch (e) {
         _log('scanIntensive TCP error: $e');
@@ -1150,10 +1252,7 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
               (map['ip'] as String?) ??
               (map['address'] as String?) ??
               (map['host'] as String?);
-          mac =
-              (map['mac'] as String?) ??
-              (map['deviceId'] as String?) ??
-              (map['address'] as String?);
+          mac = (map['mac'] ?? map['mac_address'])?.toString();
           name =
               (map['name'] as String?) ??
               (ip != null
@@ -1162,15 +1261,22 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
           final t = map['type'] as String?;
           type = t != null
               ? PrinterTypeX.fromName(t)
-              : (mac != null && (ip == null || ip.isEmpty)
+              : ((mac != null || map['deviceId'] != null) &&
+                        (ip == null || ip.isEmpty)
                     ? PrinterType.bluetooth
                     : PrinterType.network);
+          if (type != PrinterType.network) {
+            mac ??= map['deviceId']?.toString() ?? map['address']?.toString();
+          }
           idHint =
               map['deviceId']?.toString() ??
               map['address']?.toString() ??
               map['id']?.toString();
         } else {
           continue; // tipo inesperado
+        }
+        if (type == PrinterType.network) {
+          mac = normalizeNetworkPrinterMac(mac);
         }
 
         out.add(
@@ -1414,7 +1520,8 @@ class PrintingPrintersViewModel extends Notifier<PrintingPrintersState> {
       //    - Linux: lsusb
       // PRD 5 F2.1 agregó Mac/Linux. discoverLocalUsbPrinters() ya hace el
       // dispatch interno por Platform.
-      final supportsLocalUsb = !kIsWeb &&
+      final supportsLocalUsb =
+          !kIsWeb &&
           (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
 
       if (supportsLocalUsb) {

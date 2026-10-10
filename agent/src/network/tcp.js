@@ -1,134 +1,82 @@
-// PRD 7 Fase 1.0 — Helpers TCP para impresoras de red y health checks.
-//
-// Hardening contra "se desconectó a mitad de impresión":
-//   - Retry interno: el dispatcher reencola jobs, pero la latencia
-//     hasta el próximo claim es 2-5s. Un retry inmediato aquí cubre
-//     blips de red (~80% de los casos) en <500ms sin que el cajero
-//     vea el ticket en espera.
-//   - setNoDelay: ESC/POS son ráfagas pequeñas; Nagle puede demorar el
-//     corte (GS V) ~200ms y el driver POS asume desconexión.
-//   - setKeepAlive: detectar peer muerto durante jobs largos antes que
-//     el OS lo deje colgado en FIN_WAIT.
-//   - Drain antes de end(): damos tiempo a la térmica a procesar el
-//     último corte antes del FIN, evitando truncado.
-//   - 'error' event escuchado siempre (no solo en connect): RST/EPIPE
-//     post-write asíncronos llegan acá, no al callback de write.
-
+// Retry only before bytes have been submitted. Once writing starts, failure
+// means uncertain delivery and must be reviewed rather than replayed.
 const net = require('net');
+const { validIpv4, validPort, tcpProbe } = require('./arp');
 
-const TRANSIENT_CODES = new Set([
-    'ECONNRESET',
-    'EPIPE',
-    'ETIMEDOUT',
-    'EHOSTUNREACH',
-    'ENETUNREACH',
-    'ENETDOWN',
-]);
+function deliveryError(error, writeStarted) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    err.deliveryUncertain = Boolean(writeStarted);
+    err.retryable = !writeStarted;
+    err.safeToRetry = !writeStarted;
+    if (writeStarted) err.code = 'DELIVERY_UNCERTAIN';
+    return err;
+}
 
-const isTransientError = (err) => {
-    if (!err) return false;
-    if (err.code && TRANSIENT_CODES.has(err.code)) return true;
-    const msg = (err.message || '').toLowerCase();
-    return msg.includes('timeout') || msg.includes('reset');
-};
-
-const sendRawTcpOnce = (ip, port, payload, timeout) => new Promise((resolve, reject) => {
-    const socket = new net.Socket();
-    let settled = false;
-    let drainTimer = null;
-    let connectTimer = null;
-    let firstError = null;
-
-    const finish = (err) => {
-        if (settled) return;
-        settled = true;
-        if (connectTimer) clearTimeout(connectTimer);
-        if (drainTimer) clearTimeout(drainTimer);
-        try { socket.destroy(); } catch (_) {}
-        if (err) reject(err);
-        else resolve();
-    };
-
-    connectTimer = setTimeout(
-        () => finish(new Error('connect timeout')),
-        timeout,
-    );
-
-    socket.once('connect', () => {
-        clearTimeout(connectTimer);
-        connectTimer = null;
-        try {
-            socket.setNoDelay(true);
-            socket.setKeepAlive(true, 30000);
-        } catch (_) {}
-
-        socket.write(payload, (err) => {
-            if (err) return finish(err);
-            // Drain: dejamos que la térmica consuma el TX buffer
-            // (incluyendo el corte) antes del FIN. Sin este pause
-            // algunas impresoras truncan el último comando y el ticket
-            // sale a la mitad — el cajero lo lee como "se desconectó".
-            drainTimer = setTimeout(() => {
-                socket.end(() => finish(firstError));
-            }, 80);
+function createTcpSender({ socketFactory = () => new net.Socket(), drainMs = 80, retryDelayMs = 300 } = {}) {
+    function sendRawTcpOnce(ip, port, payload, timeout) {
+        return new Promise((resolve, reject) => {
+            let socket;
+            let settled = false;
+            let writeStarted = false;
+            let drainTimer;
+            const finish = (error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(deadline);
+                clearTimeout(drainTimer);
+                try { socket?.destroy(); } catch (_) {}
+                if (error) reject(deliveryError(error, writeStarted)); else resolve();
+            };
+            const deadline = setTimeout(() => {
+                const error = new Error(writeStarted ? 'Print delivery timeout' : 'Printer connect timeout');
+                error.code = 'ETIMEDOUT';
+                finish(error);
+            }, timeout);
+            try {
+                socket = socketFactory();
+                socket.once('connect', () => {
+                    try {
+                        socket.setNoDelay(true);
+                        socket.setKeepAlive(true, 30000);
+                        writeStarted = true;
+                        socket.write(payload, (error) => {
+                            if (settled) return;
+                            if (error) return finish(error);
+                            drainTimer = setTimeout(() => {
+                                try { socket.end(() => finish()); } catch (err) { finish(err); }
+                            }, drainMs);
+                        });
+                    } catch (err) { finish(err); }
+                });
+                socket.on('error', finish);
+                socket.once('close', () => {
+                    if (!settled) {
+                        const error = new Error('Printer connection closed before delivery completed');
+                        error.code = 'ECONNRESET';
+                        finish(error);
+                    }
+                });
+                socket.connect(port, ip);
+            } catch (err) { finish(err); }
         });
-    });
-
-    socket.on('error', (err) => {
-        if (!firstError) firstError = err;
-        // Si el error llega antes del connect, fail rápido. Si llega
-        // durante el drain, finish() lo propaga via firstError.
-        finish(err);
-    });
-
-    socket.on('close', () => {
-        // close sin error previo = éxito. close tras error ya está
-        // cubierto por finish() inicial vía 'error'.
-        finish(firstError);
-    });
-
-    socket.connect(port, ip);
-});
-
-// Envía bytes raw a una impresora TCP (típicamente puerto 9100). Resuelve
-// cuando los bytes están escritos y la conexión cerrada. Rechaza con
-// Error si todos los intentos fallan.
-const sendRawTcp = async (ip, port, payload, timeout = 8000, attempts = 2) => {
-    const total = Math.max(1, attempts);
-    let lastError = null;
-    for (let i = 0; i < total; i++) {
-        if (i > 0) {
-            await new Promise((r) => setTimeout(r, 300));
+    }
+    async function sendRawTcp(ip, port, payload, timeout = 8000, attempts = 2) {
+        if (!validIpv4(ip) || !validPort(port)) {
+            const err = deliveryError(new Error('Invalid printer IPv4/port'), false);
+            err.retryable = false;
+            err.safeToRetry = false;
+            throw err;
         }
-        try {
-            await sendRawTcpOnce(ip, port, payload, timeout);
-            return;
-        } catch (err) {
-            lastError = err;
-            // Si el error no es transitorio y ya hicimos un intento
-            // (típicamente ECONNREFUSED = IP/puerto mal, o EACCES),
-            // no insistir.
-            if (i > 0 && !isTransientError(err)) break;
+        const total = Math.min(3, Math.max(1, Number(attempts) || 1));
+        for (let i = 0; i < total; i++) {
+            try { return await sendRawTcpOnce(ip.trim(), Number(port), payload, timeout); }
+            catch (err) {
+                if (!err.safeToRetry || i + 1 === total) throw err;
+                await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            }
         }
     }
-    throw lastError || new Error('sendRawTcp failed');
-};
-
-// Chequea si una impresora responde en TCP. Resuelve true/false (no
-// rechaza) — útil para health checks paralelos.
-const checkPrinterStatus = (ip, port, timeout = 1500) => new Promise((resolve) => {
-    const socket = new net.Socket();
-    let status = false;
-
-    socket.setTimeout(timeout);
-    socket.on('connect', () => {
-        status = true;
-        socket.destroy();
-    });
-    socket.on('timeout', () => socket.destroy());
-    socket.on('error', () => socket.destroy());
-    socket.on('close', () => resolve(status));
-    socket.connect(port, ip);
-});
-
-module.exports = { sendRawTcp, checkPrinterStatus };
+    return { sendRawTcp, sendRawTcpOnce };
+}
+module.exports = { ...createTcpSender(), createTcpSender, deliveryError,
+    checkPrinterStatus: (ip, port, timeout = 1500) => tcpProbe(ip, port, timeout) };

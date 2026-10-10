@@ -176,6 +176,10 @@ class SalesQueries {
   /// Cerrar orden y mesa
   static const String rpcCloseOrderAndTable = 'fn_close_order_and_table';
 
+  /// Anulación automática solo si la orden sigue abierta y sin cobros
+  /// (20261009_0007).
+  static const String rpcVoidOrderIfUnpaid = 'fn_void_order_if_unpaid';
+
   /// Crear split bill
   static const String rpcCreateSplitBill = 'fn_create_split_bill';
   static const String rpcSplitItemsEqually = 'fn_split_items_equally';

@@ -35,6 +35,7 @@ import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/utils/virtual_sale_table_name.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/presentation/settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
@@ -433,7 +434,15 @@ Future<void> reprintInvoiceFromPayment(
       order: printOrder,
       items: printItems,
       payments: printPayments,
-      tableName: payment['table_code']?.toString() ?? 'Mesa',
+      // Venta rápida/manual: su mesa virtual se imprime por su etiqueta
+      // ("Venta rapida 2"), no por el código interno ("quick#2").
+      tableName:
+          virtualSaleTableName(
+            code: payment['table_code']?.toString(),
+            label: payment['table_label']?.toString(),
+          ) ??
+          payment['table_code']?.toString() ??
+          'Mesa',
       waiterName: waiterName,
       businessName: profileRaw?['name'] ?? profileRaw?['business_name'],
       legalName: profileRaw?['legal_name'],

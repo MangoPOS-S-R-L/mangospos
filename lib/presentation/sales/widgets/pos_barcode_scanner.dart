@@ -7,7 +7,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/offline/offline_catalog_service.dart';
-import 'package:mangopos/core/business/business_model.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/sales_viewmodel.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
@@ -310,20 +309,37 @@ class _PosBarcodeScannerState extends ConsumerState<PosBarcodeScanner> {
       }
 
       final notifier = ref.read(currentOrderProvider.notifier);
-      if (ref.read(currentOrderProvider).order == null) {
-        if (widget.autoOpenQuick) {
-          // Retail: enrutar por el sistema de carritos (ensureQuickOrder crea
-          // el primer carrito si no hay), no abrir una sesión quick única.
-          if (ref.read(currentBusinessModelProvider).isRetail) {
-            await notifier.ensureQuickOrder();
-          } else {
-            await notifier.openQuick();
-          }
-          if (!mounted) return;
-        } else {
-          _toast('Inicia la venta antes de escanear', error: true);
-          return;
-        }
+      var current = ref.read(currentOrderProvider);
+      // Igual que tocar un producto: nunca durante una carga (abriendo,
+      // retomando o confirmando la cuenta). Antes el lector agregaba igual y
+      // el producto podía caer en la cuenta que se estaba soltando o en una
+      // venta retomada que el servidor todavía no confirmaba.
+      if (current.loading) {
+        _toast('Cargando orden. Intenta de nuevo.', error: true);
+        return;
+      }
+      if (widget.autoOpenQuick &&
+          (current.order == null || current.origin != 'quick')) {
+        // Retail: ensureQuickOrder enruta por el sistema de carritos (crea el
+        // primero si no hay); restaurante: retoma o abre la venta rápida.
+        await notifier.ensureQuickOrder();
+        if (!mounted) return;
+        current = ref.read(currentOrderProvider);
+      }
+      if (current.order == null || current.loading) {
+        _toast(
+          current.loading
+              ? 'Cargando orden. Intenta de nuevo.'
+              : (current.error ?? 'Inicia la venta antes de escanear'),
+          error: true,
+        );
+        return;
+      }
+      // Solo sobre la venta rápida que se acaba de abrir, nunca sobre una
+      // cuenta de otro origen que haya quedado en pantalla.
+      if (widget.autoOpenQuick && current.origin != 'quick') {
+        _toast('No se pudo abrir la venta rápida.', error: true);
+        return;
       }
 
       // `addItem` NO lanza cuando lo rechaza el gate de permisos ni cuando el

@@ -1,5 +1,6 @@
 import 'package:equatable/equatable.dart';
 import '../../../core/fiscal/payment_stage.dart';
+import '../../../core/fiscal/sales_note_policy.dart';
 import '../../../data/models/bank_account.dart';
 import '../../../data/models/payment_models.dart';
 import '../../../data/models/sales_models.dart';
@@ -56,13 +57,15 @@ class PaymentState extends Equatable {
   final bool ecfEnabled;
 
   // ── Nota de venta (documento NO fiscal) ──
-  /// El negocio tiene la nota de venta habilitada, así que el cobro ofrece
-  /// "Nota de venta" como documento además de los NCF disponibles.
+  final bool salesNoteEnabled;
+  final int salesNoteLimit;
+  final int salesNoteCount;
+
+  /// Disponible únicamente para consumidor final en efectivo bajo el límite.
   final bool salesNoteAvailable;
 
-  /// El cajero eligió cobrar con nota de venta. Excluyente con
-  /// [selectedNcfType]: cuando esto es true, la venta no consume NCF y
-  /// `selectedNcfType` queda en null.
+  /// El cajero eligió nota de venta. [selectedNcfType] conserva el tipo de
+  /// consumidor final para validar la regla al cerrar, sin consumir un NCF.
   final bool salesNoteSelected;
 
   /// La nota emitida al cerrar el cobro. Es lo que se imprime en el ticket en
@@ -106,6 +109,9 @@ class PaymentState extends Equatable {
     this.availableNcfTypes = const [],
     this.selectedNcfType,
     this.ecfEnabled = false,
+    this.salesNoteEnabled = false,
+    this.salesNoteLimit = 3,
+    this.salesNoteCount = 0,
     this.salesNoteAvailable = false,
     this.salesNoteSelected = false,
     this.salesNote,
@@ -136,11 +142,13 @@ class PaymentState extends Equatable {
     String? customerName,
     List<String>? availableNcfTypes,
     String? selectedNcfType,
-    /// Elegir nota de venta apaga el NCF, y `selectedNcfType ?? this` no
-    /// puede expresar "ponlo en null". Misma convención que
-    /// `OrderCheck.copyWith(clearNcfType:)`.
+
+    /// Permite limpiar el tipo durante un reset del selector.
     bool clearNcfType = false,
     bool? ecfEnabled,
+    bool? salesNoteEnabled,
+    int? salesNoteLimit,
+    int? salesNoteCount,
     bool? salesNoteAvailable,
     bool? salesNoteSelected,
     SalesNote? salesNote,
@@ -177,6 +185,9 @@ class PaymentState extends Equatable {
           ? null
           : (selectedNcfType ?? this.selectedNcfType),
       ecfEnabled: ecfEnabled ?? this.ecfEnabled,
+      salesNoteEnabled: salesNoteEnabled ?? this.salesNoteEnabled,
+      salesNoteLimit: salesNoteLimit ?? this.salesNoteLimit,
+      salesNoteCount: salesNoteCount ?? this.salesNoteCount,
       salesNoteAvailable: salesNoteAvailable ?? this.salesNoteAvailable,
       salesNoteSelected: salesNoteSelected ?? this.salesNoteSelected,
       salesNote: salesNote ?? this.salesNote,
@@ -214,6 +225,13 @@ class PaymentState extends Equatable {
 
     // Si hay un error (ej: falta sesión de caja), no permitir pago
     if (error != null) return false;
+
+    if (salesNoteSelected &&
+        (!salesNoteAvailable ||
+            !isCashPayment ||
+            !SalesNotePolicy.isConsumerFinal(selectedNcfType))) {
+      return false;
+    }
 
     // Comprobantes que exigen RNC del comprador (E31, E33, E34, B01).
     if (requiresCustomerRnc && !hasValidCustomerRnc) {
@@ -287,6 +305,9 @@ class PaymentState extends Equatable {
     availableNcfTypes,
     selectedNcfType,
     ecfEnabled,
+    salesNoteEnabled,
+    salesNoteLimit,
+    salesNoteCount,
     salesNoteAvailable,
     salesNoteSelected,
     salesNote,

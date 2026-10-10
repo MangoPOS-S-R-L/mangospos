@@ -72,4 +72,21 @@ void main() {
     expect(await repo.readModes('b'), (enabled: true, tableOwnerOnly: true));
     expect(await repo.isEnabled('b'), isTrue);
   });
+  test('slow network: the salon still knows to ask for the PIN', () async {
+    // Si la lectura en línea no responde a tiempo, el salón usa esto en vez
+    // de suponer OFF (que saltaba el PIN y dejaba la mesa a nombre de la
+    // cuenta logueada).
+    await BusinessSettingsOfflineCache().saveRow(
+      businessId: 'slow',
+      row: {'multimesero_enabled': true},
+    );
+    expect(
+      await repo.readCachedModes('slow'),
+      (enabled: true, tableOwnerOnly: false),
+    );
+    expect(
+      await repo.readCachedModes('never-cached'),
+      (enabled: false, tableOwnerOnly: false),
+    );
+  });
 }

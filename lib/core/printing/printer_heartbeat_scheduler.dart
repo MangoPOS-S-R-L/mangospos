@@ -8,7 +8,7 @@
 // Diseño:
 //   - El agent local Node.js NO se modifica en F1. La app Flutter es quien
 //     reporta heartbeat usando su propio Supabase auth.
-//   - Para impresoras `network`: TCP ping al puerto 9100.
+//   - Para impresoras `network`: resolver IP por MAC y probe sin enviar bytes.
 //   - Para impresoras `usb`/`bluetooth`: ping al agent local en :4000/health
 //     (si el agent responde online, asumimos que las USB/BT que tiene
 //     vinculadas también están alcanzables).
@@ -25,10 +25,12 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/models/printing.dart';
+import '../../services/session/session_controller.dart';
 import '../../services/print_agent_detector.dart';
 import '../network/android_net_lock.dart';
 import 'ble_printer_connection_manager.dart';
 import 'device_identity.dart';
+import 'printer_heartbeat_provider.dart';
 import 'package:mangopos/presentation/settings/more settings/printing/printers/viewmodel/printers_viewmodel.dart';
 
 class PrinterHeartbeatScheduler {
@@ -37,15 +39,21 @@ class PrinterHeartbeatScheduler {
   final Ref _ref;
   Timer? _timer;
   bool _tickInFlight = false;
+  bool _tickAgain = false;
+  bool _running = false;
+  int _generation = 0;
   // PRD 5 F2.5: tracking si ya hicimos el register full este ciclo.
   // Reset en cada error para que el próximo tick reintente completo.
   bool _deviceAgentRegistered = false;
+  String? _registeredDeviceKey;
 
   static const Duration _interval = Duration(seconds: 30);
   static const Duration _pingTimeout = Duration(seconds: 2);
 
   void start() {
     if (_timer != null) return;
+    _running = true;
+    _generation++;
     _timer = Timer.periodic(_interval, (_) => _safeTick());
     // WifiLock de alto rendimiento durante toda la sesión POS: evita que el
     // radio WiFi entre en power-save al atenuarse la pantalla y que el primer
@@ -59,12 +67,24 @@ class PrinterHeartbeatScheduler {
   }
 
   void stop() {
+    _running = false;
+    _generation++;
+    _tickAgain = false;
+    _deviceAgentRegistered = false;
+    _registeredDeviceKey = null;
     _timer?.cancel();
     _timer = null;
     unawaited(AndroidNetLock.releaseWifiLock());
     // Cierra conexiones BLE y detiene el Foreground Service al fin de sesión.
     // NO borra la cola persistida (los pendientes sobreviven al logout).
     unawaited(BlePrinterConnectionManager.instance.shutdown());
+  }
+
+  void refreshForSession() {
+    _generation++;
+    _deviceAgentRegistered = false;
+    _registeredDeviceKey = null;
+    if (_running) unawaited(_safeTick());
   }
 
   /// Mantiene el set de impresoras BT que el [BlePrinterConnectionManager] debe
@@ -75,8 +95,8 @@ class PrinterHeartbeatScheduler {
     final p = defaultTargetPlatform;
     if (p != TargetPlatform.android && p != TargetPlatform.iOS) return;
     final btIds = printers
-        .where((p) => p.type.toLowerCase() == 'bluetooth')
-        .map((p) => (p.mac ?? p.devicePath ?? '').trim())
+        .where((p) => p.isActive && p.isBluetooth)
+        .map((p) => (p.effectiveMac ?? p.devicePath ?? '').trim())
         .where((id) => id.isNotEmpty)
         .toSet();
     try {
@@ -87,7 +107,11 @@ class PrinterHeartbeatScheduler {
   }
 
   Future<void> _safeTick() async {
-    if (_tickInFlight) return;
+    if (!_running) return;
+    if (_tickInFlight) {
+      _tickAgain = true;
+      return;
+    }
     _tickInFlight = true;
     try {
       await _tick();
@@ -96,6 +120,10 @@ class PrinterHeartbeatScheduler {
       debugPrint('PrinterHeartbeatScheduler tick error: $e\n$st');
     } finally {
       _tickInFlight = false;
+      if (_tickAgain && _running) {
+        _tickAgain = false;
+        unawaited(_safeTick());
+      }
     }
   }
 
@@ -104,14 +132,28 @@ class PrinterHeartbeatScheduler {
     final user = supabase.auth.currentUser;
     if (user == null) return; // sin auth, no hay heartbeat
 
-    final businessId = await _resolveBusinessId(supabase, user.id);
-    if (businessId == null) return;
+    final session = _ref.read(sessionProvider);
+    final businessId = session.activeBusinessId?.trim();
+    if (!session.isAuthenticated || businessId == null || businessId.isEmpty) {
+      return;
+    }
+    final generation = _generation;
+    bool isCurrent() {
+      if (!_running || _generation != generation) return false;
+      final current = _ref.read(sessionProvider);
+      return current.isAuthenticated &&
+          current.activeBusinessId == businessId &&
+          current.userId == session.userId;
+    }
 
     // PRD 5 F2.5: registrar / actualizar este device como agent host del
     // business. Permite que otros devices del business lo usen como proxy
     // para imprimir a sus impresoras locales (USB/BT).
     final deviceId = await DeviceIdentity.getOrCreateId(businessId);
     final deviceName = await DeviceIdentity.getDisplayName();
+    if (!isCurrent()) return;
+    final deviceKey = '$businessId:$deviceId';
+    if (_registeredDeviceKey != deviceKey) _deviceAgentRegistered = false;
 
     // Ping una sola vez al agent local; reusamos el resultado para todas
     // las impresoras USB/BT que dependen de él.
@@ -132,42 +174,52 @@ class PrinterHeartbeatScheduler {
     // Sino otros devices verían un host "online" pero sin manera real de
     // alcanzarlo, lo que rompería el flujo de routing.
     if (await isAgentReachable() && agentUrl != null) {
+      if (!isCurrent()) return;
       // PRD 5 F2.5 fix: el detector retorna http://127.0.0.1:<port> que solo
       // funciona dentro del mismo device. Para que otros devices del business
       // puedan rutear jobs hacia este host, sustituimos por la IP LAN.
       final shareableUrl = await _toShareableUrl(agentUrl!);
+      if (!isCurrent()) return;
 
       try {
         if (!_deviceAgentRegistered) {
-          await supabase.rpc('fn_register_device_agent', params: {
-            'p_id': deviceId,
-            'p_business_id': businessId,
-            'p_device_name': deviceName,
-            'p_agent_url': shareableUrl,
-            'p_platform': DeviceIdentity.currentPlatform(),
-          });
+          await supabase.rpc(
+            'fn_register_device_agent',
+            params: {
+              'p_id': deviceId,
+              'p_business_id': businessId,
+              'p_device_name': deviceName,
+              'p_agent_url': shareableUrl,
+              'p_platform': DeviceIdentity.currentPlatform(),
+            },
+          );
+          if (!isCurrent()) return;
           _deviceAgentRegistered = true;
+          _registeredDeviceKey = deviceKey;
         } else {
-          await supabase.rpc('fn_device_agent_heartbeat', params: {
-            'p_id': deviceId,
-            'p_agent_url': shareableUrl,
-          });
+          await supabase.rpc(
+            'fn_device_agent_heartbeat',
+            params: {'p_id': deviceId, 'p_agent_url': shareableUrl},
+          );
         }
       } catch (e) {
         debugPrint('Device agent heartbeat failed: $e');
         // Reset flag para que el próximo tick reintente register completo.
-        _deviceAgentRegistered = false;
+        if (isCurrent()) _deviceAgentRegistered = false;
       }
     }
 
     final repo = _ref.read(printingPrintersRepositoryProvider);
     final List<PrinterConfig> printers;
     try {
-      printers = await repo.getActivePrinters(businessId);
+      printers = (await repo.getActivePrinters(businessId))
+          .where((p) => p.isActive && p.businessId == businessId)
+          .toList(growable: false);
     } catch (e) {
       debugPrint('Heartbeat: error fetching printers: $e');
       return;
     }
+    if (!isCurrent()) return;
     if (printers.isEmpty) {
       // Sin impresoras activas: derriba cualquier conexión BLE persistente y
       // detiene el Foreground Service (PRD BT — F1.4: no corre en vacío).
@@ -181,10 +233,11 @@ class PrinterHeartbeatScheduler {
     unawaited(_syncBlePrinters(printers));
 
     for (final printer in printers) {
-      final reachable = await _ping(
-        printer,
-        agentReachable: isAgentReachable,
-      );
+      if (!isCurrent()) return;
+      final reachable = printer.isNetwork
+          ? (await probeNetworkPrinterStatus(repo, printer)).online
+          : await isAgentReachable();
+      if (!isCurrent()) return;
       if (reachable) {
         try {
           await supabase.rpc(
@@ -198,6 +251,7 @@ class PrinterHeartbeatScheduler {
         }
       }
     }
+    if (!isCurrent()) return;
 
     // PRD 5 F1+F2.5: invocar la limpieza de stale en cada tick.
     // Reemplaza la dependencia de pg_cron cuando la extensión no está
@@ -212,55 +266,6 @@ class PrinterHeartbeatScheduler {
       await supabase.rpc('fn_mark_stale_device_agents_offline');
     } catch (e) {
       debugPrint('Stale device agent cleanup failed: $e');
-    }
-  }
-
-  Future<String?> _resolveBusinessId(SupabaseClient sb, String userId) async {
-    try {
-      final row = await sb
-          .from('user_businesses')
-          .select('business_id')
-          .eq('user_id', userId)
-          .order('created_at', ascending: true)
-          .limit(1)
-          .maybeSingle();
-      return row?['business_id'] as String?;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<bool> _ping(
-    PrinterConfig printer, {
-    required Future<bool> Function() agentReachable,
-  }) async {
-    final type = printer.type.toLowerCase();
-    if (type == 'network' && (printer.ipAddress?.isNotEmpty ?? false)) {
-      // DESACTIVADO: el TCP probe a port 9100 sobre impresoras de red
-      // disparaba prints de basura en algunas térmicas (interpretan el
-      // socket abierto+cerrado como un job RAW). Reportamos heartbeat
-      // optimista (true) para que la app no las marque offline. Si la
-      // impresora está realmente offline, un trabajo real fallará y el
-      // error se levanta por ahí.
-      //
-      // Históricamente este ping también detectaba impresoras de OTROS
-      // negocios en la misma LAN, generando impresiones cruzadas.
-      // Eliminarlo cierra ese vector también.
-      return true;
-    }
-    // USB / Bluetooth: dependen del agent local.
-    return agentReachable();
-  }
-
-  // ignore: unused_element
-  Future<bool> _pingTcp(String ip, int port) async {
-    try {
-      final socket =
-          await Socket.connect(ip, port, timeout: _pingTimeout);
-      socket.destroy();
-      return true;
-    } catch (_) {
-      return false;
     }
   }
 
@@ -395,9 +400,20 @@ class PrinterHeartbeatScheduler {
 /// Provider singleton del scheduler. La app debe llamar `.start()` desde
 /// donde inicialice servicios autenticados (típicamente al entrar al shell
 /// de ventas o tras login).
-final printerHeartbeatSchedulerProvider =
-    Provider<PrinterHeartbeatScheduler>((ref) {
+final printerHeartbeatSchedulerProvider = Provider<PrinterHeartbeatScheduler>((
+  ref,
+) {
   final scheduler = PrinterHeartbeatScheduler(ref);
   ref.onDispose(scheduler.stop);
+  ref.listen(
+    sessionProvider.select((s) => (s.status, s.userId, s.activeBusinessId)),
+    (_, next) {
+      if (next.$1 == AuthStatus.authenticated) {
+        scheduler.refreshForSession();
+      } else {
+        scheduler.stop();
+      }
+    },
+  );
   return scheduler;
 });

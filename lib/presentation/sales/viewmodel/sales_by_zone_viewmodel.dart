@@ -15,6 +15,7 @@ import '../../../core/offline/hub/hub_config.dart';
 import '../../../core/offline/hub/hub_event_stream.dart';
 import '../../../core/offline/hub/hub_mode_controller.dart';
 import '../../../core/utils/sorting_utils.dart';
+import '../logic/hub_order_closure_guard.dart';
 import '../logic/hub_zone_refresh_scope.dart';
 import '../state/by_zone_state.dart';
 
@@ -38,10 +39,12 @@ bool shouldOverlayHubTable(
   Map<String, dynamic> hubTable, {
   required bool freshServerStatus,
   Set<String> confirmedClosedOrderIds = const {},
+  Set<String> unsettledOrderIds = const {},
 }) {
   if (row.sessionId != null) return false;
   if (!freshServerStatus) return true;
   final orderId = hubTable['order_id']?.toString() ?? '';
+  if (unsettledOrderIds.contains(orderId)) return true;
   if (confirmedClosedOrderIds.contains(orderId)) return false;
   return orderId.startsWith('local-order-') ||
       ((hubTable['items_count'] as num?)?.toInt() ?? 0) > 0 ||
@@ -63,6 +66,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
   final Map<String, String> _tableToZoneIndex = <String, String>{};
   final Map<String, String> _sessionToZoneIndex = <String, String>{};
   final Map<String, String> _hubOrderToTableIndex = <String, String>{};
+  final Map<String, String> _hubClosureConflictsByTable = <String, String>{};
   final OfflinePosService _offlinePos = OfflinePosService();
 
   // PERF: consulta business-wide (todas las zonas en 1 viaje) en vuelo.
@@ -125,6 +129,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       }
       if (state.businessId != null && state.businessId != bizId) {
         _hubOrderToTableIndex.clear();
+        _hubClosureConflictsByTable.clear();
       }
 
       final repo = ref.read(zonesRepoProvider);
@@ -298,7 +303,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         confirmedClosedOrderIds: closedHubOrders.keys.toSet(),
       );
       updatedStatus[zoneId] = overlaid;
-      updatedErrors[zoneId] = null;
+      updatedErrors[zoneId] = _closureConflictForRows(rows);
       _indexZone(zoneId, overlaid);
     }
 
@@ -369,7 +374,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         statusByZone: {...state.statusByZone, zoneId: hubRows},
         isOffline: result.fromCache,
         lastSyncAt: result.cachedAt ?? DateTime.now(),
-        errorByZone: {...state.errorByZone, zoneId: null},
+        errorByZone: {
+          ...state.errorByZone,
+          zoneId: _closureConflictForRows(rows),
+        },
       );
       _indexZone(zoneId, hubRows);
     } catch (e) {
@@ -490,9 +498,9 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     );
   }
 
-  /// A fresh free table can still have an old, itemful Hub projection after
-  /// an online payment. Only an authoritative paid/void order row may hide it;
-  /// an unknown or still-open order remains visible to protect offline work.
+  /// Una fila paid/void solo retira la proyección después de conciliar sus
+  /// operaciones pendientes. El barrido puede marcar void una orden cuyo
+  /// contenido todavía está en la cola local o en el Hub.
   Future<Map<String, String>> _confirmedClosedHubOrders(
     Iterable<TableStatus> rows,
     Map<String, Map<String, dynamic>> hubTables,
@@ -501,8 +509,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
     if (businessId == null || businessId.isEmpty || hubTables.isEmpty) {
       return const {};
     }
-    final remoteToHubOrder = <String, String>{};
+    final remoteOrderIds = <String, String>{};
+    final tableByHubOrder = <String, String>{};
     for (final row in rows) {
+      _hubClosureConflictsByTable.remove(row.tableId);
       if (row.sessionId != null) continue;
       final hubOrderId = hubTables[row.tableId]?['order_id']?.toString();
       if (hubOrderId == null || hubOrderId.isEmpty) continue;
@@ -513,33 +523,57 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
             )
           : hubOrderId;
       if (remoteOrderId != null && _serverOrderId.hasMatch(remoteOrderId)) {
-        remoteToHubOrder[remoteOrderId] = hubOrderId;
+        remoteOrderIds[hubOrderId] = remoteOrderId;
+        tableByHubOrder[hubOrderId] = row.tableId;
       }
     }
-    if (remoteToHubOrder.isEmpty) return const {};
+    if (remoteOrderIds.isEmpty) return const {};
     try {
-      final closed = <String, String>{};
-      final ids = remoteToHubOrder.keys.toList(growable: false);
-      for (var i = 0; i < ids.length; i += 100) {
-        final end = (i + 100).clamp(0, ids.length);
-        final found = await sb
-            .from('orders')
-            .select('id, status_ext')
-            .eq('business_id', businessId)
-            .inFilter('id', ids.sublist(i, end))
-            .inFilter('status_ext', ['paid', 'void']);
-        for (final row in found) {
-          final id = row['id']?.toString();
-          final status = row['status_ext']?.toString();
-          if (id != null && status != null) {
-            final hubOrderId = remoteToHubOrder[id];
-            if (hubOrderId != null) closed[hubOrderId] = status;
-          }
+      final remoteStatuses = await fetchClosedHubOrderStatuses(
+        sb,
+        businessId: businessId,
+        orderIds: remoteOrderIds.values,
+      );
+      final closed = {
+        for (final entry in remoteOrderIds.entries)
+          if (remoteStatuses[entry.value] != null)
+            entry.key: remoteStatuses[entry.value]!,
+      };
+      final decision = await reconcileHubOrderClosures(
+        remoteClosures: closed,
+        remoteOrderIds: remoteOrderIds,
+        ordersWithHubContent: {
+          for (final entry in tableByHubOrder.entries)
+            if (_hubTableHasContent(hubTables[entry.value]!)) entry.key,
+        },
+        // El cliente no conoce los acuses cloud del host. Sin metadata no
+        // puede fabricar un cierre que descarte su proyección con productos.
+        canVerifyHubUploads: ref.read(hubModeProvider) == TerminalMode.hubHost,
+        readQueueActions: () => _offlinePos.unsettledActions(businessId),
+        readHubActions: () => _offlinePos.unsettledHubActions(businessId),
+        mappedOrderId: (id) => _offlinePos.mappedRemoteOrderId(
+          businessId: businessId,
+          localOrderId: id,
+        ),
+      );
+      for (final id in decision.conflicts) {
+        final tableId = tableByHubOrder[id];
+        if (tableId != null) {
+          _hubClosureConflictsByTable[tableId] =
+              'La cuenta figura cerrada en el servidor, pero su contenido '
+              'offline aún requiere conciliación. Se conserva visible.';
         }
       }
-      if (closed.isNotEmpty) _mirrorConfirmedClosures(businessId, closed);
-      return closed;
+      if (decision.confirmed.isNotEmpty) {
+        _mirrorConfirmedClosures(businessId, decision.confirmed);
+      }
+      return decision.confirmed;
     } catch (error) {
+      for (final tableId in tableByHubOrder.values) {
+        _hubClosureConflictsByTable[tableId] =
+            'No se pudo verificar el cierre de la cuenta. '
+            'Se conserva el contenido del Hub hasta conciliarlo.';
+      }
       developer.log(
         'No se pudo conciliar el cierre del Hub',
         name: 'ByZoneViewModel',
@@ -547,6 +581,18 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
       );
       return const {};
     }
+  }
+
+  bool _hubTableHasContent(Map<String, dynamic> table) =>
+      ((table['items_count'] as num?)?.toInt() ?? 0) > 0 ||
+      ((table['items'] as List?)?.isNotEmpty ?? false);
+
+  String? _closureConflictForRows(Iterable<TableStatus> rows) {
+    final messages = rows
+        .map((row) => _hubClosureConflictsByTable[row.tableId])
+        .whereType<String>()
+        .toSet();
+    return messages.isEmpty ? null : messages.join(' ');
   }
 
   void _mirrorConfirmedClosures(String businessId, Map<String, String> closed) {
@@ -629,6 +675,10 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
             t,
             freshServerStatus: freshServerStatus,
             confirmedClosedOrderIds: confirmedClosedOrderIds,
+            unsettledOrderIds: {
+              if (_hubClosureConflictsByTable.containsKey(r.tableId))
+                t['order_id']?.toString() ?? '',
+            },
           )) {
         return r;
       }
@@ -649,6 +699,7 @@ class ByZoneViewModel extends Notifier<ByZoneState> {
         waiterName: r.waiterName,
         customerName: r.customerName,
         isOwn: false,
+        isPendingSync: _hubClosureConflictsByTable.containsKey(r.tableId),
       );
     }).toList();
   }

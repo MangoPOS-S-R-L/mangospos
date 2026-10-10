@@ -5,6 +5,9 @@ const USB = require('escpos-usb');
 const Serial = require('escpos-serialport');
 const { config, logger } = require('../config');
 const fs = require('fs');
+const { normalizeMac } = require('../network/arp');
+const { printNetworkPayload } = require('../network/network_printer');
+const { renderNetworkContent } = require('../print/network_content');
 
 class PrinterManager {
     constructor() {
@@ -92,6 +95,16 @@ class PrinterManager {
         const requestedPrinter = job.printer && typeof job.printer === 'object'
             ? job.printer
             : null;
+        const inline = this._normalizeProvidedPrinter(job);
+        if (inline?.type === 'network') {
+            const mac = normalizeMac(inline.mac);
+            const configured = printers.find((p) => (requestedId && p.id === requestedId) ||
+                (mac && normalizeMac(p.mac) === mac));
+            // An inline physical identity is authoritative; names/IPs must
+            // never select a different configured physical printer.
+            return configured ? { ...configured, ...Object.fromEntries(
+                Object.entries(inline).filter(([, value]) => value !== null && value !== undefined)) } : inline;
+        }
         const candidateKeys = new Set([
             requestedId,
             ...this._buildPrinterCandidates(requestedPrinter),
@@ -170,10 +183,10 @@ class PrinterManager {
         } catch (err) {
             logger.error(`Job ${job.id} failed: ${err.message}`);
             job.error = err.message;
-            if (job.retries < (config.queue?.max_retries || 3)) {
+            if (!err.deliveryUncertain && err.retryable !== false && job.retries < (config.queue?.max_retries || 3)) {
                 job.retries = (job.retries || 0) + 1;
                 job.status = 'retrying';
-                logger.warn(`Retrying job ${job.id} (${job.retries}/${config.queue.max_retries})`);
+                logger.warn(`Retrying job ${job.id} (${job.retries}/${config.queue?.max_retries || 3})`);
             } else {
                 job.status = 'failed';
             }
@@ -191,6 +204,13 @@ class PrinterManager {
     }
 
     async printToDevice(printerConfig, data) {
+        if (printerConfig.type === 'network') {
+            const payload = await renderNetworkContent(data, {}, 'GB18030');
+            const target = await printNetworkPayload(printerConfig, payload);
+            const configured = this._getConfiguredPrinters().find((p) => p.id === printerConfig.id);
+            if (configured) Object.assign(configured, { ip: target.ip, port: target.port, endpoint: `${target.ip}:${target.port}` });
+            return target;
+        }
         return new Promise((resolve, reject) => {
             let device;
             try {
@@ -273,3 +293,4 @@ class PrinterManager {
 }
 
 module.exports = new PrinterManager();
+module.exports.PrinterManager = PrinterManager;

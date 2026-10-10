@@ -12,7 +12,6 @@ import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
 import '../utils/payment_recovery.dart';
 import '../models/sales_note.dart';
-import '../utils/business_id_resolver.dart';
 import '../utils/payment_amount_utils.dart';
 import '../../core/offline/hub/hub_client.dart';
 import '../../core/performance/performance_diagnostics.dart';
@@ -883,8 +882,9 @@ class SalesRepository {
     String? businessId,
   }) async {
     try {
-      await _ensureVirtualTableForOrigin(origin);
-
+      // El RPC crea zona/mesa bajo el mismo candado que retail y offline,
+      // dentro de la sucursal solicitada. Precrearlas desde el cliente podía
+      // duplicar zonas o usar otro negocio del usuario antes de abrir la venta.
       final response = await _client.rpc(
         SalesQueries.rpcOpenManualOrQuick,
         params: {
@@ -963,6 +963,28 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al abrir venta rápida (retail): $e');
     }
+  }
+
+  /// Recrea una venta offline usando su identidad estable e independiente.
+  Future<Map<String, dynamic>> openOfflineSale({
+    required String origin,
+    required String slot,
+    required String businessId,
+  }) async {
+    final response = await _client.rpc(
+      'fn_open_offline_sale',
+      params: {
+        'p_business_id': businessId,
+        'p_user_id': _client.auth.currentUser?.id,
+        'p_origin': origin,
+        'p_slot': slot,
+        'p_people_count': 1,
+      },
+    );
+    if (response == null) {
+      throw StateError('No se pudo sincronizar la venta local.');
+    }
+    return Map<String, dynamic>.from(response as Map);
   }
 
   /// Asignar una orden manual a una mesa real
@@ -2142,6 +2164,91 @@ class SalesRepository {
     }
   }
 
+  /// Cuándo se vio por última vez que `fn_order_opener_employee_id` no sirve
+  /// (no existe en producción, o el cuerpo del repo sin el alias de
+  /// `current_user_business_ids`, 42703). Mientras sea reciente se lee la
+  /// sesión directo, sin pagar la ida y vuelta perdida en cada alta; pasado
+  /// [_openerRpcRecheck] se vuelve a probar la RPC.
+  static DateTime? _openerRpcMissingAt;
+  static const _openerRpcRecheck = Duration(minutes: 5);
+
+  @visibleForTesting
+  static void debugResetOpenerRpcProbe() => _openerRpcMissingAt = null;
+
+  static bool _isUnusableOpenerRpc(PostgrestException e) =>
+      e.code == 'PGRST202' || e.code == '42883' || e.code == '42703';
+
+  /// Empleado dueño de la mesa de [orderId] (prioriza
+  /// `opened_by_employee_id`; si no, el empleado de quien la abrió), vía
+  /// `fn_order_opener_employee_id` (20260529_0006). Null si no tiene dueño.
+  ///
+  /// Si la RPC no existe (producción) se lee `table_sessions.
+  /// opened_by_employee_id` de la orden, como ya hace la impresión: así el
+  /// mesero del PIN sigue por delante del usuario conectado. Esa lectura solo
+  /// conoce al dueño con PIN: null = la mesa se abrió sin PIN.
+  /// Los demás errores se propagan: el llamador decide qué hacer sin
+  /// respuesta.
+  Future<String?> fetchOrderOpenerEmployeeId(String orderId) async {
+    final missingAt = _openerRpcMissingAt;
+    final skipRpc =
+        missingAt != null &&
+        DateTime.now().difference(missingAt) < _openerRpcRecheck;
+    if (!skipRpc) {
+      try {
+        final result = await _client.rpc(
+          'fn_order_opener_employee_id',
+          params: {'p_order_id': orderId},
+        );
+        _openerRpcMissingAt = null;
+        final id = result?.toString();
+        return (id == null || id.isEmpty) ? null : id;
+      } on PostgrestException catch (e) {
+        if (!_isUnusableOpenerRpc(e)) rethrow;
+        _openerRpcMissingAt = DateTime.now();
+      }
+    }
+    final row = await _client
+        .from('orders')
+        .select('id, table_sessions(opened_by_employee_id)')
+        .eq('id', orderId)
+        .maybeSingle();
+    if (row == null) {
+      // Sin la orden no se sabe si la mesa tiene dueño: no es "sin dueño".
+      throw StateError('Orden $orderId no visible para leer su dueño.');
+    }
+    final raw = row['table_sessions'];
+    final session = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+    final id = session is Map
+        ? session['opened_by_employee_id']?.toString().trim()
+        : null;
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// Empleado del usuario autenticado en [businessId], vía
+  /// `fn_current_employee_id` (20260529_0004). Null sin sesión o sin fila en
+  /// `employees`. Los errores se propagan.
+  Future<String?> fetchCurrentEmployeeId(String businessId) async {
+    if (_client.auth.currentUser == null) return null;
+    final result = await _client.rpc(
+      'fn_current_employee_id',
+      params: {'p_business_id': businessId},
+    );
+    final id = result?.toString();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// Sella el autor (`order_items.created_by_employee_id`) de un ítem ya
+  /// guardado sin PIN. Los errores se propagan.
+  Future<void> setItemCreatedByEmployee({
+    required String itemId,
+    required String employeeId,
+  }) async {
+    await _client
+        .from('order_items')
+        .update({'created_by_employee_id': employeeId})
+        .eq('id', itemId);
+  }
+
   /// Deja constancia de QUIÉN autorizó con su PIN de Supervisor/Administrador
   /// el retiro que esta cuenta acaba de hacer de [itemId]
   /// (`order_item_removals.approved_by_*`, migración 20261005_0003).
@@ -2238,6 +2345,33 @@ class SalesRepository {
     } catch (e) {
       throw Exception('Error al obtener orden: $e');
     }
+  }
+
+  /// Origen y cierre de la SESIÓN de [orderId] (`table_sessions.origin` y
+  /// `closed_at`) dentro de [businessId]. `orders` no tiene columna origin: el
+  /// `Order.origin` del bundle siempre llega como 'table', así que no sirve
+  /// para saber si una orden sigue siendo venta rápida/manual. Null si la
+  /// orden no existe o no es de ese negocio. Los fallos (red incluida) se
+  /// propagan sin envolver para que el caller distinga la red.
+  Future<({String? origin, DateTime? closedAt})?> getOrderSessionOrigin(
+    String orderId, {
+    required String businessId,
+  }) async {
+    final row = await _client
+        .from('orders')
+        .select('id, table_sessions!inner(origin, closed_at, business_id)')
+        .eq('id', orderId)
+        .eq('table_sessions.business_id', businessId)
+        .maybeSingle();
+    if (row == null) return null;
+    final raw = row['table_sessions'];
+    final session = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+    if (session is! Map) return null;
+    final closedAt = session['closed_at']?.toString();
+    return (
+      origin: session['origin']?.toString(),
+      closedAt: closedAt == null ? null : DateTime.tryParse(closedAt),
+    );
   }
 
   /// True si alguna fila del bundle trae qty no entera. Sirve para disparar
@@ -3352,6 +3486,27 @@ class SalesRepository {
 
   // ── Notas de venta (documento NO fiscal) ──────────────────────────────────
 
+  /// Documento activo del contenedor realmente cobrado, sin mezclar los
+  /// comprobantes de otras subcuentas de la misma orden.
+  Future<FiscalDocument?> getFiscalDocumentForScope({
+    required String orderId,
+    String? checkId,
+  }) async {
+    var query = _client
+        .from('fiscal_documents')
+        .select()
+        .eq('order_id', orderId)
+        .eq('status', 'active');
+    query = checkId != null && checkId.isNotEmpty
+        ? query.eq('check_id', checkId)
+        : query.isFilter('check_id', null);
+    final row = await query
+        .order('created_at', ascending: false)
+        .limit(1)
+        .maybeSingle();
+    return row == null ? null : FiscalDocument.fromMap(row);
+  }
+
   /// Marca el contenedor que se va a cobrar para que, al cerrarse, emita una
   /// NOTA DE VENTA en vez de un comprobante con NCF.
   ///
@@ -3594,6 +3749,20 @@ class SalesRepository {
     }
   }
 
+  /// Anulación AUTOMÁTICA (replay de `void_order`, cierre de una pestaña
+  /// retail): el servidor anula solo si la orden sigue abierta y sin cobros,
+  /// con la fila bloqueada, así que un cobro de otra caja nunca queda anulado
+  /// (20261009_0007). Devuelve 'voided', 'already_closed', 'has_payments' o
+  /// 'not_found'. Sin la migración el error es PostgrestException PGRST202 y el
+  /// caller recurre al camino anterior. annulOrder no la usa.
+  Future<String> voidOrderIfUnpaid(String orderId) async {
+    final result = await _client.rpc(
+      SalesQueries.rpcVoidOrderIfUnpaid,
+      params: {'p_order_id': orderId},
+    );
+    return result?.toString() ?? 'not_found';
+  }
+
   /// Agrega una línea de auditoría de anulación a la nota de la sesión de
   /// [orderId]. Resuelve la sesión de la orden, lee la nota actual y le
   /// appendea `[ANULACION][stamp] actor: razón` (mismo formato que el flujo
@@ -3639,115 +3808,6 @@ class SalesRepository {
       note: nextNote,
       businessId: businessId,
     );
-  }
-
-  // ============================================================
-  // 🔧 UTILIDADES
-  // ============================================================
-
-  /// Crear mesas virtuales para venta manual/rápida
-  Future<void> _ensureVirtualTableForOrigin(String origin) async {
-    final normalized = origin == 'quick_sale' ? 'quick' : 'manual';
-    final businessId = await resolveBusinessIdOrNull(_client, 'auto');
-
-    if (businessId == null || businessId.isEmpty) {
-      throw Exception(
-        'No se pudo identificar el negocio para crear una venta $normalized.',
-      );
-    }
-
-    final zoneName = normalized == 'manual'
-        ? 'Ventas manuales'
-        : 'Ventas rápidas';
-    final tableCode = normalized;
-    final tableLabel = normalized == 'manual'
-        ? 'Venta manual Auto'
-        : 'Venta rápida Auto';
-    final zoneSortIndex = normalized == 'manual' ? 900 : 901;
-
-    // Asegurar que existe la zona
-    Future<String> ensureZone() async {
-      final existing = await _client
-          .from('zones')
-          .select('id')
-          .eq('business_id', businessId)
-          .eq('name', zoneName)
-          .limit(1)
-          .maybeSingle();
-
-      if (existing != null && existing['id'] != null) {
-        return existing['id'] as String;
-      }
-
-      try {
-        final inserted = await _client
-            .from('zones')
-            .insert({
-              'business_id': businessId,
-              'name': zoneName,
-              'sort_index': zoneSortIndex,
-            })
-            .select('id')
-            .single();
-        return inserted['id'] as String;
-      } on PostgrestException catch (e) {
-        if (e.code == '23505') {
-          final retry = await _client
-              .from('zones')
-              .select('id')
-              .eq('business_id', businessId)
-              .eq('name', zoneName)
-              .limit(1)
-              .maybeSingle();
-          if (retry != null && retry['id'] != null) {
-            return retry['id'] as String;
-          }
-        }
-        rethrow;
-      }
-    }
-
-    final zoneId = await ensureZone();
-
-    // Verificar si ya existe la mesa virtual
-    final existingTable = await _client
-        .from('dining_tables')
-        .select('id')
-        .eq('zone_id', zoneId)
-        .eq('code', tableCode)
-        .limit(1)
-        .maybeSingle();
-
-    if (existingTable != null && existingTable['id'] != null) {
-      return;
-    }
-
-    // Crear mesa virtual
-    try {
-      await _client
-          .from('dining_tables')
-          .insert({
-            'zone_id': zoneId,
-            'code': tableCode,
-            'label': tableLabel,
-            'shape': 'square',
-            'state': 'available',
-            'capacity': 2,
-            'pos_x': 0,
-            'pos_y': 0,
-            'width': 1,
-            'height': 1,
-            'rotation': 0,
-          })
-          .select('id')
-          .single();
-    } on PostgrestException catch (e) {
-      if (e.code == '23505') {
-        // Ya existe, ignorar
-        return;
-      }
-      rethrow;
-    }
   }
 
   // ============================================================
@@ -3803,18 +3863,50 @@ class SalesRepository {
   // 🚚 DELIVERY
   // ============================================================
 
+  /// [allowLegacyBusinessFallback]: el usuario tiene un único negocio. Solo
+  /// así es seguro caer a la firma de 3 argumentos (que elige el negocio en
+  /// el servidor) cuando falta la migración 20261009_0004.
   Future<Map<String, dynamic>> openDeliveryOrder({
     required String deliveryType,
     int peopleCount = 1,
+    String? businessId,
+    bool allowLegacyBusinessFallback = false,
   }) async {
-    final response = await _client.rpc(
-      SalesQueries.rpcOpenDeliveryOrder,
-      params: {
-        'p_user_id': _client.auth.currentUser?.id,
-        'p_delivery_type': deliveryType,
-        'p_people_count': peopleCount,
-      },
-    );
+    final params = <String, dynamic>{
+      'p_user_id': _client.auth.currentUser?.id,
+      'p_delivery_type': deliveryType,
+      'p_people_count': peopleCount,
+    };
+    final scoped = businessId != null && businessId.isNotEmpty;
+    dynamic response;
+    try {
+      response = await _client.rpc(
+        SalesQueries.rpcOpenDeliveryOrder,
+        params: {...params, if (scoped) 'p_business_id': businessId},
+      );
+    } on PostgrestException catch (e) {
+      // Servidor sin la migración 20261009_0004 (la app se publicó primero):
+      // no existe la firma con p_business_id. La de 3 argumentos elige el
+      // negocio en el servidor (el más antiguo del usuario): solo es segura
+      // con un único negocio. Con varias sucursales podría crear el delivery
+      // en otra, así que no se crea. Quitar cuando 0004 esté en producción.
+      if (!scoped || e.code != 'PGRST202') rethrow;
+      if (!allowLegacyBusinessFallback) {
+        throw StateError(
+          'Falta actualizar el servidor para crear delivery en esta sucursal '
+          '(migración 20261009_0004). Avisa al administrador.',
+        );
+      }
+      debugPrint(
+        '[delivery] AVISO: el servidor no tiene fn_open_delivery_order con '
+        'p_business_id (falta la migración 20261009_0004). Se usa la versión '
+        'de 3 argumentos; el negocio lo elige el servidor. $e',
+      );
+      response = await _client.rpc(
+        SalesQueries.rpcOpenDeliveryOrder,
+        params: params,
+      );
+    }
     if (response == null) {
       throw Exception('No se pudo crear orden de delivery');
     }

@@ -34,6 +34,7 @@ class OfflineQueueSyncResult {
     this.skipped = 0,
     this.pending = 0,
     this.dead = 0,
+    this.reconciled = 0,
     this.lastMappedOrderId,
     this.lastError,
     this.conflicts = const <OfflineSyncConflict>[],
@@ -45,6 +46,11 @@ class OfflineQueueSyncResult {
   final int failed;
   final int skipped;
   final int pending;
+
+  /// Acciones que ya estaban en el servidor (marcador de idempotencia) y en
+  /// esta pasada solo se marcaron completed. No cuentan en [completed], pero
+  /// sí cambian la cola: la venta activa puede recargarse.
+  final int reconciled;
 
   /// Acciones que agotaron sus reintentos (>= [OfflinePosService.maxAttempts])
   /// y pasaron a estado `dead`. Ya NO reintentan solas; requieren acción
@@ -93,6 +99,31 @@ class _OfflineSyncSkip implements Exception {
   final String reason;
   @override
   String toString() => 'OfflineSyncSkip: $reason';
+}
+
+/// Qué hace la pasada a la nube con una acción de la cola. Lo decide
+/// [OfflinePosService._replayGate], la única fuente de esas reglas.
+enum _ReplayGate {
+  /// Ya completada: nunca se reprocesa.
+  completed,
+
+  /// Entregada (o a medio entregar) al Hub: solo el Hub la reenvía.
+  hubOwned,
+
+  /// Dead-letter en una pasada sin force.
+  dead,
+
+  /// Ya figura subida (marcador de idempotencia): solo se marca completed.
+  reconcile,
+
+  /// Falló y su backoff no ha vencido (pasada sin force).
+  waitingRetry,
+
+  /// Su orden quedó detenida por una acción anterior en esta pasada.
+  blockedBehind,
+
+  /// Se reenvía al servidor.
+  replay,
 }
 
 /// Delta de KPIs del día calculado SOLO a partir de operaciones offline aún
@@ -198,6 +229,19 @@ class OfflinePosService {
   /// mostrándose al usuario en vez de encolarse a ciegas.
   static bool isTransportError(Object e) => _isConnectivityError(e);
 
+  /// PGRST202: el servidor todavía no tiene la función del RPC (la app se
+  /// publicó antes que su migración, p. ej. `fn_open_offline_sale` de
+  /// 20261009_0004). No es culpa de la acción: no cuenta para el dead-letter
+  /// y se reintenta con backoff, así se sube sola cuando llegue la migración.
+  /// Tampoco corta la pasada: el resto de la cola no depende de esa función.
+  /// Los repositorios que convierten ese PGRST202 en «Falta aplicar la
+  /// migración …» (alta idempotente de ítems, candado de cobros) cuentan igual.
+  static bool _isMissingRpcError(Object e) {
+    final msg = e.toString();
+    return msg.contains('PGRST202') ||
+        msg.toLowerCase().contains('falta aplicar la migración');
+  }
+
   /// client_op_id del alta de ítem (20260929_0001). Las acciones nuevas lo
   /// traen desde el toque: es el mismo que usó el intento online o el proxy
   /// del Hub. Las encoladas por builds anteriores no lo tienen: se deriva uno
@@ -233,6 +277,25 @@ class OfflinePosService {
   final Map<String, Future<OfflineQueueSyncResult>> _hubUplinkInFlight = {};
   final Map<String, Future<OfflineQueueSyncResult>> _queueSyncInFlight = {};
   final Map<String, Future<void>> _queueMutations = {};
+  final Map<String, Future<void>> _snapshotMutations = {};
+
+  Future<T> _withSnapshotMutation<T>(String key, Future<T> Function() fn) {
+    final previous = _snapshotMutations[key] ?? Future<void>.value();
+    final run = previous.then((_) => fn());
+    final settled = run.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    _snapshotMutations[key] = settled;
+    unawaited(
+      settled.then((_) {
+        if (identical(_snapshotMutations[key], settled)) {
+          _snapshotMutations.remove(key);
+        }
+      }),
+    );
+    return run;
+  }
 
   // Solo serializa escrituras locales breves. Nunca mantener este candado
   // durante un RPC: el cajero debe poder seguir agregando mientras hay sync.
@@ -441,6 +504,7 @@ class OfflinePosService {
           .toList(growable: false);
       if (queueMaps.isNotEmpty) {
         await _queueDao!.writeQueue(businessId, queueMaps);
+        _bumpQueueRevision(businessId);
       }
       for (final id in legacyOps.map((e) => e.toString())) {
         if (id.isEmpty) continue;
@@ -489,6 +553,8 @@ class OfflinePosService {
   String _printQueueKey(String businessId) => 'offline_print_queue_$businessId';
   String _orderMapKey(String businessId) => 'offline_order_map_$businessId';
   String _itemMapKey(String businessId) => 'offline_item_map_$businessId';
+  String _localOrderOpenerKey(String businessId) =>
+      'offline_order_opener_$businessId';
   String _cashSessionMapKey(String businessId) =>
       'offline_cash_session_map_$businessId';
   String _completedOpsKey(String businessId) =>
@@ -534,23 +600,81 @@ class OfflinePosService {
     required CurrentOrderState state,
     bool localOnly = false,
   }) async {
-    final storage = await _storage;
-    final orderId = state.order?.id;
-    if (orderId != null &&
-        await storage.read(_closedOrderKey(businessId, orderId)) != null) {
-      return;
-    }
-    final payload = {
-      'slot_id': slotId,
-      'business_id': businessId,
-      'origin': origin,
-      'table_id': tableId,
-      'local_only': localOnly,
-      'saved_at': DateTime.now().toIso8601String(),
-      'state': _encodeState(state),
-    };
-    await _writeSnapshot(storage, _snapshotKey(businessId, slotId), payload);
+    await _withSnapshotMutation(_snapshotKey(businessId, slotId), () async {
+      final storage = await _storage;
+      final orderId = state.order?.id;
+      if (orderId != null &&
+          await isOrderClosedLocally(
+            businessId: businessId,
+            orderId: orderId,
+          )) {
+        return;
+      }
+      final payload = {
+        'slot_id': slotId,
+        'business_id': businessId,
+        'origin': origin,
+        'table_id': tableId,
+        'local_only': localOnly,
+        'saved_at': DateTime.now().toIso8601String(),
+        'state': _encodeState(state),
+      };
+      await _writeSnapshot(storage, _snapshotKey(businessId, slotId), payload);
+    });
   }
+
+  /// Alias del producto temporal después de sincronizar su alta.
+  Future<String?> mappedRemoteItemId({
+    required String businessId,
+    required String localItemId,
+  }) async => (await _readItemMap(businessId))[localItemId]?.toString();
+
+  /// Aplica una respuesta tardía solo a su orden, conservando las demás
+  /// líneas del respaldo vigente bajo el mismo candado que los guardados.
+  Future<CurrentOrderState?> updateSnapshot({
+    required String businessId,
+    required String slotId,
+    required String origin,
+    String? tableId,
+    required CurrentOrderState fallbackState,
+    required CurrentOrderState Function(CurrentOrderState) update,
+  }) => _withSnapshotMutation(_snapshotKey(businessId, slotId), () async {
+    final expectedOrderId = fallbackState.order?.id;
+    if (expectedOrderId == null ||
+        await isOrderClosedLocally(
+          businessId: businessId,
+          orderId: expectedOrderId,
+        )) {
+      return null;
+    }
+    final storage = await _storage;
+    final key = _snapshotKey(businessId, slotId);
+    final payload = await _readSnapshot(storage, key);
+    final current = payload == null
+        ? fallbackState
+        : _decodeState(Map<String, dynamic>.from(payload['state'] as Map));
+    final currentOrderId = current.order?.id;
+    if (currentOrderId != expectedOrderId) {
+      final mappings = await _readOrderMap(businessId);
+      if (currentOrderId == null ||
+          (mappings[currentOrderId] ?? currentOrderId) !=
+              (mappings[expectedOrderId] ?? expectedOrderId)) {
+        return null;
+      }
+    }
+    final updated = update(current);
+    await _writeSnapshot(storage, key, {
+      ...?payload,
+      'business_id': businessId,
+      'slot_id': slotId,
+      'origin': payload?['origin'] ?? origin,
+      'table_id': payload?['table_id'] ?? tableId,
+      'local_only': payload?['local_only'] ?? true,
+      'saved_at': DateTime.now().toIso8601String(),
+      'state': _encodeState(updated),
+    });
+    return updated;
+  });
 
   Future<CurrentOrderState?> loadSnapshot({
     required String businessId,
@@ -564,16 +688,21 @@ class OfflinePosService {
       final stateMap = Map<String, dynamic>.from(payload['state'] as Map);
       final orderId = (stateMap['order'] as Map?)?['id']?.toString();
       if (orderId != null &&
-          await storage.read(_closedOrderKey(businessId, orderId)) != null) {
-        await storage.delete(key);
+          await isOrderClosedLocally(
+            businessId: businessId,
+            orderId: orderId,
+          )) {
+        // La lectura pudo empezar antes de que una venta nueva ocupara este
+        // slot. El cierre elimina sus snapshots mediante la ruta de mutación;
+        // una lectura antigua nunca debe borrar el nuevo respaldo.
         return null;
       }
       final reconciledState = await _reconcileEncodedState(
         businessId: businessId,
         state: stateMap,
       );
-      payload['state'] = reconciledState;
-      await _writeSnapshot(storage, key, payload);
+      // Una lectura no reescribe: el cajero pudo guardar productos nuevos
+      // mientras se resolvían los mappings. Reescribir aquí perdía esos items.
       return _decodeState(reconciledState);
     } catch (e) {
       debugPrint('OfflinePosService.loadSnapshot error: $e');
@@ -592,16 +721,20 @@ class OfflinePosService {
 
     for (final key in keys) {
       try {
-        final payload = await _readSnapshot(storage, key);
-        if (payload == null) continue;
-        final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
-        final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
-        if (order['id'] != localOrderId) continue;
-        order['id'] = remoteOrderId;
-        state['order'] = order;
-        payload['state'] = state;
-        payload['local_only'] = false;
-        await _writeSnapshot(storage, key, payload);
+        await _withSnapshotMutation(key, () async {
+          final payload = await _readSnapshot(storage, key);
+          if (payload == null) return;
+          final state = Map<String, dynamic>.from(
+            payload['state'] as Map? ?? {},
+          );
+          final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
+          if (order['id'] != localOrderId) return;
+          order['id'] = remoteOrderId;
+          state['order'] = order;
+          payload['state'] = state;
+          payload['local_only'] = false;
+          await _writeSnapshot(storage, key, payload);
+        });
       } catch (e) {
         debugPrint('OfflinePosService.remapSnapshotOrderId error: $e');
       }
@@ -709,10 +842,7 @@ class OfflinePosService {
       'active_slot_id': activeSlotId,
       'saved_at': DateTime.now().toIso8601String(),
     };
-    await storage.write(
-      _retailCartsIndexKey(businessId),
-      await _cipher.seal(jsonEncode(payload)),
-    );
+    await _writeSnapshot(storage, _retailCartsIndexKey(businessId), payload);
   }
 
   /// Lee el índice de carritos retail. Null si no existe o el descifrado falla.
@@ -762,15 +892,24 @@ class OfflinePosService {
     return null;
   }
 
+  /// [opener]: quién abre la venta AHORA (el mesero del PIN, o la cuenta si
+  /// se abre sin PIN). Ver [rememberLocalOrderOpener].
   Future<CurrentOrderState> createLocalDraft({
     required String businessId,
     required String origin,
     String? tableId,
     String? slotId,
     String? label,
+    ({String? employeeId, String? name})? opener,
   }) async {
     final orderId = 'local-order-${_uuid.v4()}';
     final sessionId = 'local-session-${_uuid.v4()}';
+    await rememberLocalOrderOpener(
+      businessId: businessId,
+      localOrderId: orderId,
+      employeeId: opener?.employeeId,
+      name: opener?.name,
+    );
     final order = Order(
       id: orderId,
       sessionId: sessionId,
@@ -813,6 +952,53 @@ class OfflinePosService {
     // la lectura del id no bloqueamos el enqueue.
     final deviceId = await _resolveDeviceId(businessId);
     final enriched = Map<String, dynamic>.from(action);
+    final localOrderId = action['order_id']?.toString();
+    if (localOrderId != null && localOrderId.startsWith('local-order-')) {
+      // El pago/anulación retira el snapshot. Guardar ahora el destino de
+      // replay en la acción para poder subirla aun sin ese snapshot.
+      final storage = await _storage;
+      final keys = await storage.getKeysByPrefix(
+        'offline_snapshot_${businessId}_',
+      );
+      // Atajo: si la acción ya trae su slot, ese snapshot se revisa primero
+      // (descifrar todos los snapshots del negocio en cada alta es caro).
+      final knownSlot = enriched['slot_id']?.toString();
+      if (knownSlot != null && knownSlot.isNotEmpty) {
+        final slotKey = _snapshotKey(businessId, knownSlot);
+        if (keys.remove(slotKey)) keys.insert(0, slotKey);
+      }
+      for (final key in keys) {
+        try {
+          final snapshot = await _readSnapshot(storage, key);
+          if ((snapshot?['state'] as Map?)?['order'] is! Map) continue;
+          final snapshotOrder = (snapshot!['state'] as Map)['order'] as Map;
+          if (snapshotOrder['id'] != localOrderId) continue;
+          for (final field in ['origin', 'table_id', 'slot_id']) {
+            if (enriched[field] == null && snapshot[field] != null) {
+              enriched[field] = snapshot[field];
+            }
+          }
+          break;
+        } catch (e) {
+          // Un snapshot ilegible (de esta u otra venta) no debe impedir
+          // encolar: el enriquecimiento es best-effort y el replay tiene sus
+          // respaldos (_resolveTableIdForAction / findSnapshotSlotForOrder).
+          debugPrint('[OfflinePos] snapshot ilegible al encolar ($key): $e');
+        }
+      }
+      // Quién la abrió viaja EN la acción: si la sube otro equipo (el Hub),
+      // ese no tiene la anotación local y la mesa quedaría a nombre de su
+      // cuenta.
+      if (enriched['opened_by_employee_id'] == null) {
+        final opener = await localOrderOpener(
+          businessId: businessId,
+          orderId: localOrderId,
+        );
+        if (opener?.employeeId != null) {
+          enriched['opened_by_employee_id'] = opener!.employeeId;
+        }
+      }
+    }
     if (deviceId != null && enriched['device_id'] == null) {
       enriched['device_id'] = deviceId;
     }
@@ -859,26 +1045,13 @@ class OfflinePosService {
     final queue = await _readQueue(businessId);
     var completed = 0;
     String? error;
-    final cloudOwnedOrders = queue
-        .where(
-          (action) =>
-              ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
-              (action['status'] == _statusProcessing &&
-                  action['hub_delivery_started'] != true),
-        )
-        .map((action) => action['order_id']?.toString())
-        .whereType<String>()
-        .toSet();
+    final cloudOwnedOrders = _cloudOwnedOrders(queue);
     for (final action in queue) {
       if (_isCompleted(action)) continue;
       if (!identical(uploader, _hubUploader)) break;
       // Do not transfer a partially replayed order to a different authority.
       // Independent new orders can still operate through LAN.
-      if (_isDead(action) ||
-          cloudOwnedOrders.contains(action['order_id']?.toString()) ||
-          ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
-          (action['status'] == _statusProcessing &&
-              action['hub_delivery_started'] != true)) {
+      if (_isCloudOwned(action, cloudOwnedOrders)) {
         error = 'Hay operaciones previas de nube pendientes de conciliar.';
         continue;
       }
@@ -908,10 +1081,14 @@ class OfflinePosService {
         break;
       }
     }
+    // Una sola lectura para los dos contadores: sin `dead`, cada pasada en
+    // modo Hub dejaba el badge rojo de dead-letter en 0.
+    final remaining = await _readQueue(businessId);
     return OfflineQueueSyncResult(
       completed: completed,
       processed: completed,
-      pending: await pendingActionsCount(businessId),
+      pending: remaining.where((action) => !_isSettled(action)).length,
+      dead: remaining.where(_isDead).length,
       lastError: error,
     );
   }
@@ -953,6 +1130,49 @@ class OfflinePosService {
       }
     }
     return (pending: pending, dead: dead);
+  }
+
+  /// ¿Una pasada automática (sin force) subiría o conciliaría algo AHORA?
+  /// Solo lectura: no reclama, no escribe, no toca la red.
+  ///
+  /// Usa las mismas reglas que la pasada ([_replayGate] en la nube,
+  /// [_isCloudOwned] en modo Hub), así el uplink no despierta cada 5 s por
+  /// acciones en backoff, en dead-letter, entregadas al Hub o detenidas
+  /// detrás de un fallo de su misma orden. Una acción que ya figura subida
+  /// (marcador de idempotencia) sí cuenta: la pasada la marca completed.
+  Future<bool> hasActionsReadyToSync(String businessId) async {
+    if (businessId.isEmpty || _queueSyncInFlight.containsKey(businessId)) {
+      return false;
+    }
+    // Atajo nativo: sin pendientes no hace falta leer (ni descifrar) la cola.
+    if (!kIsWeb && (await queueStatusCounts(businessId)).pending == 0) {
+      return false;
+    }
+    final queue = await _readQueue(businessId);
+    if (_hubUploader != null) {
+      final cloudOwnedOrders = _cloudOwnedOrders(queue);
+      return queue.any(
+        (action) =>
+            !_isCompleted(action) && !_isCloudOwned(action, cloudOwnedOrders),
+      );
+    }
+    if (!queue.any((action) => !_isSettled(action))) return false;
+    final completedOps = await _readCompletedOps(businessId);
+    final completedFingerprints = await _readCompletedFingerprints(businessId);
+    final blockedOrders = <String>{};
+    for (final action in queue) {
+      final gate = _replayGate(
+        action,
+        force: false,
+        completedOps: completedOps,
+        completedFingerprints: completedFingerprints,
+        blockedOrders: blockedOrders,
+      );
+      if (gate == _ReplayGate.replay || gate == _ReplayGate.reconcile) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Suma las ventas del día que viven SOLO en la cola local (offline, aún no
@@ -1128,6 +1348,64 @@ class OfflinePosService {
     }
   }
 
+  /// Incluye errores pendientes de revisión. Una venta incompleta en nube
+  /// nunca debe reemplazar al snapshot que conserva todos sus productos.
+  Future<bool> hasUnsettledOrderActions({
+    required String businessId,
+    required String orderId,
+  }) async {
+    final mappings = await _readOrderMap(businessId);
+    final resolved = mappings[orderId]?.toString() ?? orderId;
+    return (await _readQueue(businessId)).any((action) {
+      if (_isCompleted(action)) return false;
+      final actionOrderId = action['order_id']?.toString();
+      return actionOrderId == orderId ||
+          actionOrderId == resolved ||
+          (actionOrderId != null && mappings[actionOrderId] == resolved);
+    });
+  }
+
+  /// Las acciones de [orderId] en la cola, con UNA sola lectura (mismo cruce
+  /// de ids que [hasUnsettledOrderActions]):
+  /// - `unsettled`: alguna sin completar (pendiente, en proceso, fallida o
+  ///   muerta). Lo de pantalla es la verdad local.
+  /// - `revivingAdds`: algún alta de producto que todavía sube sola
+  ///   (pendiente, en proceso o fallida; no muerta). Al subir, el trigger de
+  ///   `order_items` (20260819_0004, fn_reopen_orphan_order) RESUCITA la
+  ///   cuenta si quedó anulada sin cobro ni NCF, como la anula el barrendero
+  ///   de mesas vacías (fn_release_empty_tables). Mientras haya una, esa
+  ///   anulación no es definitiva.
+  /// Sin acciones sin completar en el negocio (conteo por metadatos, sin
+  /// descifrar) ni siquiera lee la cola.
+  Future<({bool unsettled, bool revivingAdds})> orderQueueStatus({
+    required String businessId,
+    required String orderId,
+  }) async {
+    if (!kIsWeb) {
+      final counts = await queueStatusCounts(businessId);
+      if (counts.pending + counts.dead == 0) {
+        return (unsettled: false, revivingAdds: false);
+      }
+    }
+    final mappings = await _readOrderMap(businessId);
+    final resolved = mappings[orderId]?.toString() ?? orderId;
+    var unsettled = false;
+    for (final action in await _readQueue(businessId)) {
+      if (_isCompleted(action)) continue;
+      final actionOrderId = action['order_id']?.toString();
+      final ofThisOrder =
+          actionOrderId == orderId ||
+          actionOrderId == resolved ||
+          (actionOrderId != null && mappings[actionOrderId] == resolved);
+      if (!ofThisOrder) continue;
+      unsettled = true;
+      if (action['type'] == 'add_item' && !_isDead(action)) {
+        return (unsettled: true, revivingAdds: true);
+      }
+    }
+    return (unsettled: unsettled, revivingAdds: false);
+  }
+
   Future<List<String>> resolveKitchenPrintItemIds({
     required String businessId,
     required List<String> itemIds,
@@ -1167,17 +1445,26 @@ class OfflinePosService {
     required String orderId,
   }) async {
     final storage = await _storage;
+    final mappings = await _readOrderMap(businessId);
+    final resolvedId = mappings[orderId]?.toString() ?? orderId;
     final keys = await storage.getKeysByPrefix(
       'offline_snapshot_${businessId}_',
     );
     for (final key in keys) {
       try {
-        final payload = await _readSnapshot(storage, key);
-        final state = Map<String, dynamic>.from(
-          payload?['state'] as Map? ?? {},
-        );
-        final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
-        if (order['id']?.toString() == orderId) await storage.delete(key);
+        await _withSnapshotMutation(key, () async {
+          final payload = await _readSnapshot(storage, key);
+          final state = Map<String, dynamic>.from(
+            payload?['state'] as Map? ?? {},
+          );
+          final order = Map<String, dynamic>.from(state['order'] as Map? ?? {});
+          final snapshotId = order['id']?.toString();
+          if (snapshotId == orderId ||
+              snapshotId == resolvedId ||
+              (snapshotId != null && mappings[snapshotId] == resolvedId)) {
+            await storage.delete(key);
+          }
+        });
       } catch (e) {
         debugPrint('OfflinePosService.removeOrderSnapshots: $e');
       }
@@ -1207,7 +1494,22 @@ class OfflinePosService {
     required String orderId,
   }) async {
     final storage = await _storage;
-    return await storage.read(_closedOrderKey(businessId, orderId)) != null;
+    if (await storage.read(_closedOrderKey(businessId, orderId)) != null) {
+      return true;
+    }
+    final mappings = await _readOrderMap(businessId);
+    final resolved = mappings[orderId]?.toString() ?? orderId;
+    if (resolved != orderId &&
+        await storage.read(_closedOrderKey(businessId, resolved)) != null) {
+      return true;
+    }
+    for (final entry in mappings.entries) {
+      if (entry.value == resolved &&
+          await storage.read(_closedOrderKey(businessId, entry.key)) != null) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Descarta por completo una orden LOCAL que el cajero anuló antes de que
@@ -1219,48 +1521,257 @@ class OfflinePosService {
   /// SOLO aplica a órdenes `local-order-…` SIN mapping a server (si ya
   /// sincronizó, lo correcto es anular la orden real vía void_order). Las
   /// acciones ya `completed` se conservan como histórico de idempotencia.
-  Future<void> discardLocalOrder({
+  ///
+  /// Una orden con un cobro en la cola NO se descarta y devuelve `false`: ya
+  /// se cobró sin internet (salió la precuenta y el cliente pagó). Borrarla
+  /// perdía la venta entera — productos, cobro y comprobante — sin dejar
+  /// rastro en el servidor.
+  Future<bool> discardLocalOrder({
     required String businessId,
     required String localOrderId,
   }) async {
     if (businessId.isEmpty || !localOrderId.startsWith('local-order-')) {
-      return;
+      return false;
     }
-    // Cola: fuera todas las acciones pendientes/failed/dead de esa orden.
+    // Cola: fuera todas las acciones pendientes/failed/dead de esa orden. Se
+    // revisa y se escribe dentro del mismo candado que `enqueueAction`, para
+    // que un cobro encolado justo ahora no se cuele entre la revisión y el
+    // borrado.
+    final bool discarded;
     try {
-      final queue = await _readQueue(businessId);
-      final survivors = queue
-          .where((a) {
-            if (_isCompleted(a)) return true;
-            return a['order_id']?.toString() != localOrderId;
-          })
-          .toList(growable: false);
-      if (survivors.length != queue.length) {
-        await _writeQueue(businessId, survivors);
-      }
+      discarded = await _withQueueMutation(businessId, () async {
+        final queue = await _readQueue(businessId);
+        if (queue.any((a) => _isUnsettledPaymentFor(a, localOrderId))) {
+          return false;
+        }
+        final survivors = queue
+            .where((a) {
+              if (_isCompleted(a)) return true;
+              return a['order_id']?.toString() != localOrderId;
+            })
+            .toList(growable: false);
+        if (survivors.length != queue.length) {
+          await _writeQueue(businessId, survivors);
+        }
+        return true;
+      });
     } catch (e) {
+      // Sin poder leer la cola no se sabe si hay un cobro: no se borra nada.
       debugPrint('OfflinePosService.discardLocalOrder cola: $e');
+      return false;
     }
+    if (!discarded) return false;
     try {
       await removeOrderSnapshots(businessId: businessId, orderId: localOrderId);
     } catch (e) {
       debugPrint('OfflinePosService.discardLocalOrder snapshots: $e');
     }
+    return true;
   }
 
-  /// Descarta todas las acciones de la cola para este business. Pensado
-  /// para el boton "Limpiar cola" del banner offline — recurso de
-  /// emergencia cuando hay acciones bloqueadas por bugs anteriores o
-  /// conflictos irresolubles (ej: order_id que ya no existe en server).
+  /// True si la cola tiene un cobro de [orderId] que todavía no subió: la
+  /// venta ya se cobró sin internet. Anularla o descartarla borraría ese cobro
+  /// (orden local) o lo dejaría sin orden abierta a la que aplicarse al
+  /// sincronizar (orden del servidor).
+  ///
+  /// Si la cola no se puede leer devuelve `true`: ante la duda no se toca una
+  /// venta que pudo haberse cobrado.
+  Future<bool> hasQueuedPayment({
+    required String businessId,
+    required String orderId,
+  }) async {
+    if (businessId.isEmpty || orderId.isEmpty) return false;
+    try {
+      final mappings = await _readOrderMap(businessId);
+      final queue = await _readQueue(businessId);
+      return queue.any(
+        (a) => _isUnsettledPaymentFor(a, orderId, orderMappings: mappings),
+      );
+    } catch (e) {
+      debugPrint('OfflinePosService.hasQueuedPayment: $e');
+      return true;
+    }
+  }
+
+  bool _isUnsettledPaymentFor(
+    Map<String, dynamic> action,
+    String orderId, {
+    Map<String, dynamic> orderMappings = const {},
+  }) {
+    if (_isCompleted(action) || action['type'] != 'process_payment') {
+      return false;
+    }
+    final actionOrderId = action['order_id']?.toString();
+    if (actionOrderId == null || actionOrderId.isEmpty) return false;
+    // La pantalla usa el UUID remoto tras el primer replay, pero el cobro
+    // durable conserva el ID local. Ambos siguen siendo la misma venta,
+    // incluso cuando ese cobro quedó failed/dead y necesita revisión.
+    final resolvedOrderId = orderMappings[orderId]?.toString() ?? orderId;
+    final resolvedActionId =
+        orderMappings[actionOrderId]?.toString() ?? actionOrderId;
+    return actionOrderId == orderId || resolvedActionId == resolvedOrderId;
+  }
+
+  /// Operaciones de dinero o caja: «Limpiar cola» nunca las descarta.
+  static const Set<String> _moneyActionTypes = {
+    'process_payment',
+    'cash_transaction',
+    'open_cash_session',
+    'close_cash_session',
+  };
+
+  /// Respaldo cifrado de lo que «Limpiar cola» descartó: cada limpieza en su
+  /// propia clave (sin tope, nada se pisa ni se poda hasta conciliarlo). El
+  /// sufijo es el instante en microsegundos con ancho fijo, así el orden de
+  /// las claves es el orden de las limpiezas.
+  String _discardedBackupPrefix(String businessId) =>
+      'offline_queue_discarded_${businessId}_';
+
+  /// Reparte lo no sincronizado entre lo que «Limpiar cola» puede descartar
+  /// y lo que conserva: dinero y caja, TODO lo de una cuenta con un cobro
+  /// pendiente (por id local o remoto: sin sus productos el cobro quedaría
+  /// sin cuenta a la que aplicarse) y lo que una pasada está procesando.
+  Future<({List<Map<String, dynamic>> discard, int kept})> _splitClearable(
+    String businessId,
+  ) async {
+    final queue = await _readQueue(businessId);
+    final orderMap = await _readOrderMap(businessId);
+    Set<String> idsOf(Map<String, dynamic> action) {
+      final raw = action['order_id']?.toString();
+      if (raw == null || raw.isEmpty) return const {};
+      final mapped = orderMap[raw]?.toString();
+      return {raw, if (mapped != null && mapped.isNotEmpty) mapped};
+    }
+
+    final unsettled = queue.where((a) => !_isCompleted(a)).toList();
+    final moneyOrderIds = <String>{
+      for (final action in unsettled)
+        if (_moneyActionTypes.contains(action['type'])) ...idsOf(action),
+    };
+    final discard = <Map<String, dynamic>>[];
+    var kept = 0;
+    for (final action in unsettled) {
+      final keep =
+          _moneyActionTypes.contains(action['type']) ||
+          action['status'] == _statusProcessing ||
+          idsOf(action).any(moneyOrderIds.contains);
+      if (keep) {
+        kept++;
+      } else {
+        discard.add(action);
+      }
+    }
+    return (discard: discard, kept: kept);
+  }
+
+  /// Qué haría «Limpiar cola…» ahora, sin tocar nada.
+  Future<({int discardable, int kept})> previewClearPendingActions(
+    String businessId,
+  ) async {
+    if (businessId.isEmpty) return (discardable: 0, kept: 0);
+    final split = await _splitClearable(businessId);
+    return (discardable: split.discard.length, kept: split.kept);
+  }
+
+  /// «Limpiar cola…» del indicador de sincronización: recurso de emergencia
+  /// para acciones bloqueadas por errores irresolubles (ej: order_id que ya
+  /// no existe en server).
+  ///
+  /// NUNCA descarta dinero: cobros, movimientos y aperturas/cierres de caja,
+  /// ni ninguna acción de una cuenta con un cobro pendiente, ni lo que una
+  /// pasada está procesando. Antes de descartar respalda lo descartado
+  /// (payload completo, estado, error, quién y cuándo) cifrado en este equipo;
+  /// si el respaldo no se puede guardar, no descarta nada.
   ///
   /// NO toca completed_ops/fingerprints: esos son markers que evitan
   /// re-aplicar acciones que SI llegaron al server. Borrarlos podria
   /// causar dobles ventas si una accion completed se re-encola luego.
   ///
-  /// Devuelve cuantas acciones se borraron para feedback al cajero.
-  Future<int> clearPendingActions(String businessId) async {
+  /// Devuelve cuántas acciones descartó.
+  Future<int> clearPendingActions(
+    String businessId, {
+    String? discardedBy,
+  }) async {
     if (businessId.isEmpty) return 0;
-    return _deleteAllPending(businessId);
+    final split = await _splitClearable(businessId);
+    final ids = {
+      for (final action in split.discard)
+        if ((action['id']?.toString() ?? '').isNotEmpty)
+          action['id'].toString(),
+    };
+    if (ids.isEmpty) return 0;
+    await _backupDiscardedActions(
+      businessId,
+      split.discard,
+      discardedBy: discardedBy,
+    );
+    if (kIsWeb) {
+      final queue = await _readQueue(businessId);
+      await _writeQueue(
+        businessId,
+        queue.where((a) => !ids.contains(a['id']?.toString())).toList(),
+      );
+      return ids.length;
+    }
+    try {
+      return await _queueDao!.deleteActionsByIds(businessId, ids);
+    } finally {
+      _bumpQueueRevision(businessId);
+    }
+  }
+
+  Future<void> _backupDiscardedActions(
+    String businessId,
+    List<Map<String, dynamic>> actions, {
+    String? discardedBy,
+  }) async {
+    final storage = await _storage;
+    final now = DateTime.now();
+    final stamp = now.microsecondsSinceEpoch.toString().padLeft(20, '0');
+    final discardedAt = now.toIso8601String();
+    final entries = <Object?>[
+      for (final action in actions)
+        {
+          ...action,
+          'business_id': businessId,
+          'discarded_at': discardedAt,
+          'discarded_by': ?discardedBy,
+        },
+    ];
+    try {
+      await _writeSnapshot(
+        storage,
+        '${_discardedBackupPrefix(businessId)}$stamp',
+        {'actions': entries},
+      );
+    } catch (e) {
+      throw StateError(
+        'No se pudo respaldar la cola antes de limpiarla; no se descartó '
+        'nada. $e',
+      );
+    }
+  }
+
+  /// Lo que «Limpiar cola» descartó en este equipo, para revisarlo o
+  /// recuperarlo (lo más reciente al final).
+  Future<List<Map<String, dynamic>>> discardedActionsBackup(
+    String businessId,
+  ) async {
+    if (businessId.isEmpty) return const [];
+    final storage = await _storage;
+    final keys = (await storage.getKeysByPrefix(
+      _discardedBackupPrefix(businessId),
+    )).toList()..sort();
+    final result = <Map<String, dynamic>>[];
+    for (final key in keys) {
+      final payload = await _readSnapshot(storage, key);
+      result.addAll(
+        (payload?['actions'] as List? ?? const []).whereType<Map>().map(
+          (a) => Map<String, dynamic>.from(a),
+        ),
+      );
+    }
+    return result;
   }
 
   /// Borra los datos OFFLINE de un negocio. Pensado para dos momentos:
@@ -1324,6 +1835,7 @@ class OfflinePosService {
 
     // 3. Mappings local→remoto y cola de impresión.
     await storage.delete(_orderMapKey(businessId));
+    await storage.delete(_localOrderOpenerKey(businessId));
     await storage.delete(_itemMapKey(businessId));
     await storage.delete(_cashSessionMapKey(businessId));
     await storage.delete(_printQueueKey(businessId));
@@ -1387,6 +1899,7 @@ class OfflinePosService {
     var completed = 0;
     var failed = 0;
     var skipped = 0;
+    var reconciled = 0;
     String? lastMappedOrderId;
     String? lastError;
     final conflicts = <OfflineSyncConflict>[];
@@ -1399,40 +1912,32 @@ class OfflinePosService {
       final action = queue[i];
       final orderId = action['order_id']?.toString();
       final actionId = action['id']?.toString();
-      final fingerprint = action['fingerprint']?.toString();
-      // Las completadas nunca se reprocesan. Las dead-letter no reintentan
-      // en el sync automático, pero en el manual (force = botón
-      // "Sincronizar ahora") se les da otra oportunidad: el cajero pidió
-      // sincronizar la cola completa, no solo lo pendiente.
-      if (_isCompleted(action)) continue;
-      // The Hub may have committed despite a lost reply. Only resend there,
-      // never replay this operation independently against the cloud.
-      if (action['hub_delivery_started'] == true) {
-        if (orderId != null) blockedOrders.add(orderId);
-        skipped++;
-        continue;
-      }
-      if (!force && _isDead(action)) {
-        if (orderId != null) blockedOrders.add(orderId);
-        continue;
-      }
-      if ((actionId != null && completedOps.contains(actionId)) ||
-          (_fingerprintWasCompleted(fingerprint, completedFingerprints))) {
-        queue[i] = Map<String, dynamic>.from(action)
-          ..['status'] = _statusCompleted
-          ..['completed_at'] =
-              action['completed_at'] ?? DateTime.now().toIso8601String();
-        await _upsertAction(businessId, queue[i]);
-        continue;
-      }
-      if (!force && !_isReadyToRetry(action)) {
-        if (orderId != null) blockedOrders.add(orderId);
-        skipped++;
-        continue;
-      }
-      if (orderId != null && blockedOrders.contains(orderId)) {
-        skipped++;
-        continue;
+      // Mismas reglas que hasActionsReadyToSync (ver _replayGate).
+      switch (_replayGate(
+        action,
+        force: force,
+        completedOps: completedOps,
+        completedFingerprints: completedFingerprints,
+        blockedOrders: blockedOrders,
+      )) {
+        case _ReplayGate.completed:
+        case _ReplayGate.dead:
+          continue;
+        case _ReplayGate.hubOwned:
+        case _ReplayGate.waitingRetry:
+        case _ReplayGate.blockedBehind:
+          skipped++;
+          continue;
+        case _ReplayGate.reconcile:
+          queue[i] = Map<String, dynamic>.from(action)
+            ..['status'] = _statusCompleted
+            ..['completed_at'] =
+                action['completed_at'] ?? DateTime.now().toIso8601String();
+          await _upsertAction(businessId, queue[i]);
+          reconciled++;
+          continue;
+        case _ReplayGate.replay:
+          break;
       }
 
       final processing = await _withQueueMutation(businessId, () async {
@@ -1519,14 +2024,25 @@ class OfflinePosService {
         final attempts = ((processing['attempts'] as num?)?.toInt() ?? 0) + 1;
         lastError = FriendlyError.from(e);
         final isConnectivity = _isConnectivityError(e);
+        final isMissingRpc = _isMissingRpcError(e);
+        if (isMissingRpc) {
+          debugPrint(
+            '[OfflinePos] AVISO: el servidor no tiene la función de '
+            '${processing['type']} (PGRST202); falta aplicar su migración. '
+            'Se reintenta sin mandarla a dead-letter. $e',
+          );
+        }
         // Dead-letter: si una acción NO de conectividad agotó sus
         // reintentos, deja de reintentar sola y pasa a estado terminal
         // `dead`. Los errores de conectividad NUNCA matan la acción —
         // son transitorios y no cuentan contra el tope (no hay culpa de
         // la acción si no hay red). Así un error permanente (constraint,
         // recurso borrado en server) no reintenta para siempre ni deja
-        // el badge de pendientes pegado.
-        final shouldDie = !isConnectivity && attempts >= maxAttempts;
+        // el badge de pendientes pegado. Una función que aún no existe en
+        // el servidor (PGRST202) tampoco la mata: se arregla aplicando la
+        // migración, no tocando la acción.
+        final shouldDie =
+            !isConnectivity && !isMissingRpc && attempts >= maxAttempts;
         final updated = Map<String, dynamic>.from(processing)
           ..['attempts'] = attempts
           ..['last_error'] = lastError
@@ -1558,7 +2074,9 @@ class OfflinePosService {
       if (breakLoop) break;
     }
 
-    await _pruneQueue(businessId);
+    // Sin nada completado no hay qué podar: no reescribir (DELETE + INSERT
+    // cifrado) la cola entera en cada pasada.
+    if (completed > 0 || reconciled > 0) await _pruneQueue(businessId);
     final remaining = await _readQueue(businessId);
     await _drainStalePrintQueue(businessId, remaining);
     final pending = remaining.where((item) => !_isSettled(item)).length;
@@ -1570,6 +2088,7 @@ class OfflinePosService {
       skipped: skipped,
       pending: pending,
       dead: dead,
+      reconciled: reconciled,
       lastMappedOrderId: lastMappedOrderId,
       lastError: lastError,
       conflicts: List<OfflineSyncConflict>.unmodifiable(conflicts),
@@ -1600,10 +2119,10 @@ class OfflinePosService {
     required CashierRepository cashierRepository,
   }) {
     // Una sola subida a la vez por negocio. En el Hub corren dos disparadores
-    // (el drenaje de 4 s y el sync de 3 min de SalesViewModel): si se pisaban,
-    // los dos leían la misma op pendiente antes de que alguno la marcara
-    // completada y la subían dos veces. El segundo recibe el resultado del
-    // primero.
+    // (el drenaje de 4 s y las pasadas de sync de SalesViewModel): si se
+    // pisaban, los dos leían la misma op pendiente antes de que alguno la
+    // marcara completada y la subían dos veces. El segundo recibe el
+    // resultado del primero.
     final running = _hubUplinkInFlight[businessId];
     if (running != null) return running;
     final run =
@@ -1635,8 +2154,8 @@ class OfflinePosService {
 
     // H7 — Candado 1: solo el equipo con ROL de Hub sube el op-log del Hub.
     //
-    // Este método corre en TODO equipo: el sync de 3 min de SalesViewModel lo
-    // llama con kHubModeEnabled. Mientras la réplica al respaldo no funcionaba,
+    // Este método corre en TODO equipo: las pasadas de sync de SalesViewModel
+    // lo llaman con kHubModeEnabled. Mientras la réplica al respaldo no funcionaba,
     // el op-log de cajas y respaldos estaba vacío y esto salía arriba. Con la
     // réplica funcionando, el RESPALDO tiene el op-log lleno de copias: sin
     // este candado las subía cada 3 minutos en paralelo con el Hub, y como la
@@ -1835,14 +2354,34 @@ class OfflinePosService {
     String businessId,
     List<Map<String, dynamic>> queue,
   ) async {
-    if (kIsWeb) {
-      final storage = await _storage;
-      final saved = await storage.writeList(_queueKey(businessId), queue);
-      if (!saved) throw StateError('No se pudo guardar la operación offline.');
-      return;
+    try {
+      if (kIsWeb) {
+        final storage = await _storage;
+        final saved = await storage.writeList(_queueKey(businessId), queue);
+        if (!saved) {
+          throw StateError('No se pudo guardar la operación offline.');
+        }
+        return;
+      }
+      await _queueDao!.writeQueue(businessId, queue);
+    } finally {
+      _bumpQueueRevision(businessId);
     }
-    await _queueDao!.writeQueue(businessId, queue);
   }
+
+  // Contador de escrituras de la cola y del mapping de órdenes, por negocio.
+  // Ver [queueRevision].
+  final Map<String, int> _queueRevisions = <String, int>{};
+
+  /// Cambia cada vez que se agrega o se actualiza una acción de la cola de
+  /// [businessId], o el mapping local→remoto de sus órdenes (borrar no cuenta:
+  /// no puede crear pendientes). Si no cambió, lo que se leyó de la cola sigue
+  /// valiendo: `_loadOrderDetail` lo usa para no volver a leer (y descifrar)
+  /// la cola completa después de cada lectura del servidor.
+  int queueRevision(String businessId) => _queueRevisions[businessId] ?? 0;
+
+  void _bumpQueueRevision(String businessId) =>
+      _queueRevisions[businessId] = queueRevision(businessId) + 1;
 
   /// H7: confirma la lease del Hub en Supabase. Si es de OTRO equipo (un
   /// respaldo fue promovido), cede: pasa este equipo a respaldo y lo registra.
@@ -1875,6 +2414,25 @@ class OfflinePosService {
     return ops
         .where((op) => !_isHubOpUploaded(op, doneOps, doneFingerprints))
         .length;
+  }
+
+  /// Operaciones del Hub que aún no tienen confirmación durable en Supabase.
+  /// La conciliación del salón no puede tratar un autocierre remoto como una
+  /// anulación definitiva mientras estas operaciones conserven contenido.
+  Future<List<Map<String, dynamic>>> unsettledHubActions(
+    String businessId,
+  ) async {
+    final ops = await _hubOpLog.since(businessId);
+    if (ops.length != await _hubOpLog.length(businessId)) {
+      throw StateError('No se pudo leer toda la cola del Hub.');
+    }
+    if (ops.isEmpty) return const [];
+    final doneOps = await _readCompletedOps(businessId);
+    final doneFingerprints = await _readCompletedFingerprints(businessId);
+    return ops
+        .where((op) => !_isHubOpUploaded(op, doneOps, doneFingerprints))
+        .map((op) => Map<String, dynamic>.unmodifiable(op))
+        .toList(growable: false);
   }
 
   static String? _hubOpId(Map<String, dynamic> op) {
@@ -2049,22 +2607,11 @@ class OfflinePosService {
       await _writeQueue(businessId, queue);
       return;
     }
-    await _queueDao!.upsertAction(businessId, action);
-  }
-
-  Future<int> _deleteAllPending(String businessId) async {
-    if (kIsWeb) {
-      final queue = await _readQueue(businessId);
-      final beforeCount = queue
-          .where((a) => a['status']?.toString() != _statusCompleted)
-          .length;
-      final remaining = queue
-          .where((a) => a['status']?.toString() == _statusCompleted)
-          .toList();
-      await _writeQueue(businessId, remaining);
-      return beforeCount;
+    try {
+      await _queueDao!.upsertAction(businessId, action);
+    } finally {
+      _bumpQueueRevision(businessId);
     }
-    return _queueDao!.deleteAllPending(businessId);
   }
 
   Future<void> _pruneCompletedOlderThan(Duration olderThan) async {
@@ -2264,6 +2811,79 @@ class OfflinePosService {
     if (parsed == null) return true;
     return !parsed.isAfter(DateTime.now());
   }
+
+  /// Decide qué hace la pasada a la nube con [action]. Única fuente de las
+  /// reglas de elegibilidad: la usan [_syncPendingActionsOnce] y
+  /// [hasActionsReadyToSync], así el uplink no despierta por algo que la
+  /// pasada va a saltar. Anota en [blockedOrders] las órdenes que dejan de
+  /// avanzar en esta pasada (el orden de las reglas importa: la conciliación
+  /// por marcador va antes del backoff y del bloqueo por orden).
+  _ReplayGate _replayGate(
+    Map<String, dynamic> action, {
+    required bool force,
+    required Set<String> completedOps,
+    required Set<String> completedFingerprints,
+    required Set<String> blockedOrders,
+  }) {
+    final orderId = action['order_id']?.toString();
+    // Las completadas nunca se reprocesan. Las dead-letter no reintentan
+    // en el sync automático, pero en el manual (force = botón
+    // "Sincronizar ahora") se les da otra oportunidad: el cajero pidió
+    // sincronizar la cola completa, no solo lo pendiente.
+    if (_isCompleted(action)) return _ReplayGate.completed;
+    // The Hub may have committed despite a lost reply. Only resend there,
+    // never replay this operation independently against the cloud.
+    if (action['hub_delivery_started'] == true) {
+      if (orderId != null) blockedOrders.add(orderId);
+      return _ReplayGate.hubOwned;
+    }
+    if (!force && _isDead(action)) {
+      if (orderId != null) blockedOrders.add(orderId);
+      return _ReplayGate.dead;
+    }
+    final actionId = action['id']?.toString();
+    if ((actionId != null && completedOps.contains(actionId)) ||
+        _fingerprintWasCompleted(
+          action['fingerprint']?.toString(),
+          completedFingerprints,
+        )) {
+      return _ReplayGate.reconcile;
+    }
+    if (!force && !_isReadyToRetry(action)) {
+      if (orderId != null) blockedOrders.add(orderId);
+      return _ReplayGate.waitingRetry;
+    }
+    if (orderId != null && blockedOrders.contains(orderId)) {
+      return _ReplayGate.blockedBehind;
+    }
+    return _ReplayGate.replay;
+  }
+
+  /// Órdenes que la nube ya empezó a recibir (un intento previo, o una
+  /// reclamación que quedó a medias). En modo Hub no pasan a otra autoridad.
+  Set<String> _cloudOwnedOrders(List<Map<String, dynamic>> queue) => queue
+      .where(
+        (action) =>
+            ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
+            (action['status'] == _statusProcessing &&
+                action['hub_delivery_started'] != true),
+      )
+      .map((action) => action['order_id']?.toString())
+      .whereType<String>()
+      .toSet();
+
+  /// Regla del drenaje al Hub (la comparte [hasActionsReadyToSync]): una
+  /// acción dead, ya intentada contra la nube o de una orden que la nube ya
+  /// empezó a recibir no se manda al Hub.
+  bool _isCloudOwned(
+    Map<String, dynamic> action,
+    Set<String> cloudOwnedOrders,
+  ) =>
+      _isDead(action) ||
+      cloudOwnedOrders.contains(action['order_id']?.toString()) ||
+      ((action['attempts'] as num?)?.toInt() ?? 0) > 0 ||
+      (action['status'] == _statusProcessing &&
+          action['hub_delivery_started'] != true);
 
   int _retryDelaySeconds(int attempt) {
     if (attempt <= 1) return 3;
@@ -2776,22 +3396,60 @@ class OfflinePosService {
           action: action,
           salesRepository: salesRepository,
         );
+        // Un void encolado nunca anula una venta cobrada (ni con cobros
+        // parciales): se encoló sobre una pantalla o un respaldo previos al
+        // cobro. fn_void_order_if_unpaid (20261009_0007) comprueba y anula en
+        // una sola transacción con la orden bloqueada, como el cobro, así que
+        // otra caja que cobre al mismo tiempo nunca queda anulada. annulOrder
+        // (la anulación explícita con motivo) no pasa por la cola. Cubre
+        // también el op-log del Hub, que comparte este replay.
+        String? guardedResult;
         try {
-          await salesRepository.closeOrder(
-            orderId: voidOrderId,
-            status: 'void',
-          );
+          guardedResult = await salesRepository.voidOrderIfUnpaid(voidOrderId);
         } catch (e) {
-          // Si la orden ya está cerrada (otro terminal anuló o cobró,
-          // o este replay corrió duplicado) tratamos el action como
-          // completado — el estado deseado ya se cumple.
-          if (_isItemMissingError(e) ||
-              e.toString().toLowerCase().contains('already')) {
+          // Sin la migración: el camino anterior, leer y después cerrar.
+          if (!_isMissingRpcError(e)) rethrow;
+        }
+        if (guardedResult != null && guardedResult != 'voided') {
+          throw _OfflineSyncSkip(
+            'Orden $voidOrderId no se anula en server: $guardedResult.',
+          );
+        }
+        if (guardedResult == null) {
+          // Si la lectura falla, el error sigue su reintento normal (la red
+          // no la manda a dead-letter); si la orden no aparece en el negocio,
+          // se conserva el comportamiento de siempre.
+          final serverOrder = await salesRepository.getOrder(
+            voidOrderId,
+            businessId: businessId,
+          );
+          if (serverOrder != null &&
+              (serverOrder.isPaid ||
+                  serverOrder.isCancelled ||
+                  serverOrder.status == 'void' ||
+                  serverOrder.closedAt != null)) {
             throw _OfflineSyncSkip(
-              'Orden $voidOrderId ya estaba cerrada en server.',
+              'Orden $voidOrderId ya estaba ${serverOrder.status} en server: '
+              'no se anula.',
             );
           }
-          rethrow;
+          try {
+            await salesRepository.closeOrder(
+              orderId: voidOrderId,
+              status: 'void',
+            );
+          } catch (e) {
+            // Si la orden ya está cerrada (otro terminal anuló o cobró,
+            // o este replay corrió duplicado) tratamos el action como
+            // completado — el estado deseado ya se cumple.
+            if (_isItemMissingError(e) ||
+                e.toString().toLowerCase().contains('already')) {
+              throw _OfflineSyncSkip(
+                'Orden $voidOrderId ya estaba cerrada en server.',
+              );
+            }
+            rethrow;
+          }
         }
         final voidReason = action['reason']?.toString();
         if (voidReason != null && voidReason.trim().isNotEmpty) {
@@ -3040,7 +3698,7 @@ class OfflinePosService {
     }
 
     Map<String, dynamic> created;
-    if (origin == 'table') {
+    if (origin == 'table' || origin == 'delivery') {
       final tableId = await _resolveTableIdForAction(
         businessId: businessId,
         action: action,
@@ -3050,11 +3708,46 @@ class OfflinePosService {
           'No se pudo resolver la mesa para sincronizar la orden local',
         );
       }
-      created = await salesRepository.openTable(
-        tableId: tableId,
-        userId: null,
-        peopleCount: 1,
-      );
+      // El mesero que la abrió sin red. Sin él la mesa nacía a nombre de la
+      // cuenta que sincroniza y así salían su precuenta y su factura.
+      final fromAction = action['opened_by_employee_id']?.toString().trim();
+      final openedByEmployeeId =
+          (fromAction != null && fromAction.isNotEmpty ? fromAction : null) ??
+          (await localOrderOpener(
+            businessId: businessId,
+            orderId: originalOrderId,
+          ))?.employeeId;
+      try {
+        created = await salesRepository.openTable(
+          tableId: tableId,
+          userId: null,
+          peopleCount: 1,
+          openedByEmployeeId: openedByEmployeeId,
+        );
+      } catch (e) {
+        // La atribución nunca detiene una venta. Si el servidor ya no acepta
+        // a ese mesero (lo desactivaron o borraron mientras no había red:
+        // EMPLOYEE_NOT_IN_BUSINESS), sus ítems y su cobro quedaban detrás de
+        // esta acción hasta el dead-letter. fn_open_table valida al empleado
+        // antes de tomar el candado y de escribir nada, así que reabrir sin
+        // él no duplica la mesa. Se pierde solo la atribución en el servidor
+        // (la mesa queda a nombre de la cuenta que sincroniza, como antes de
+        // registrar al mesero); la anotación local de quién la abrió se
+        // conserva para lo que este equipo imprime sin red.
+        if (openedByEmployeeId == null ||
+            !e.toString().contains('EMPLOYEE_NOT_IN_BUSINESS')) {
+          rethrow;
+        }
+        debugPrint(
+          '[OfflinePos] El servidor rechazó al mesero $openedByEmployeeId '
+          'de $originalOrderId: la mesa se abre sin él. $e',
+        );
+        created = await salesRepository.openTable(
+          tableId: tableId,
+          userId: null,
+          peopleCount: 1,
+        );
+      }
     } else {
       // Retail: si esta orden local pertenece a un carrito de venta rápida
       // (slot 'quick-…'), recrearla con fn_open_retail_cart (mesa virtual
@@ -3062,16 +3755,31 @@ class OfflinePosService {
       // compartido fn_open_manual_or_quick cerraría la sesión quick previa.
       String? retailSlot;
       if (origin == 'quick') {
-        retailSlot = await findSnapshotSlotForOrder(
-          businessId: businessId,
-          localOrderId: originalOrderId,
-        );
+        retailSlot =
+            action['slot_id']?.toString() ??
+            await findSnapshotSlotForOrder(
+              businessId: businessId,
+              localOrderId: originalOrderId,
+            );
+        // Tras cobrar offline se retira el snapshot/pestaña, pero la venta
+        // aún tiene que subir. Una clave determinista conserva su identidad
+        // y evita anular otra venta usando la mesa quick compartida.
+        if (retailSlot == null || !retailSlot.startsWith('quick-')) {
+          retailSlot =
+              'quick-${originalOrderId.substring('local-order-'.length)}';
+        }
       }
       if (retailSlot != null && retailSlot.startsWith('quick-')) {
         created = await salesRepository.openRetailCart(
           slot: retailSlot,
           businessId: businessId,
           peopleCount: 1,
+        );
+      } else if (origin == 'manual') {
+        created = await salesRepository.openOfflineSale(
+          origin: origin,
+          slot: 'manual-${originalOrderId.substring('local-order-'.length)}',
+          businessId: businessId,
         );
       } else {
         created = await salesRepository.openManualOrQuick(
@@ -3172,21 +3880,28 @@ class OfflinePosService {
 
     for (final key in keys) {
       try {
-        final payload = await _readSnapshot(storage, key);
-        if (payload == null) continue;
-        final state = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
-        final items = ((state['items'] as List?) ?? const [])
-            .map((entry) {
-              final item = Map<String, dynamic>.from(entry as Map);
-              if (item['id']?.toString() == localItemId) {
-                item['id'] = remoteItemId;
-              }
-              return item;
-            })
-            .toList(growable: false);
-        state['items'] = items;
-        payload['state'] = state;
-        await _writeSnapshot(storage, key, payload);
+        await _withSnapshotMutation(key, () async {
+          final payload = await _readSnapshot(storage, key);
+          if (payload == null) return;
+          final state = Map<String, dynamic>.from(
+            payload['state'] as Map? ?? {},
+          );
+          var changed = false;
+          final items = ((state['items'] as List?) ?? const [])
+              .map((entry) {
+                final item = Map<String, dynamic>.from(entry as Map);
+                if (item['id']?.toString() == localItemId) {
+                  item['id'] = remoteItemId;
+                  changed = true;
+                }
+                return item;
+              })
+              .toList(growable: false);
+          if (!changed) return;
+          state['items'] = items;
+          payload['state'] = state;
+          await _writeSnapshot(storage, key, payload);
+        });
       } catch (e) {
         debugPrint('OfflinePosService.remapSnapshotItemId error: $e');
       }
@@ -3320,10 +4035,100 @@ class OfflinePosService {
     required String localOrderId,
     required String remoteOrderId,
   }) async {
-    final storage = await _storage;
-    final current = await _readOrderMap(businessId);
-    current[localOrderId] = remoteOrderId;
-    await storage.writeJson(_orderMapKey(businessId), current);
+    await _withQueueMutation(businessId, () async {
+      final storage = await _storage;
+      final current = await _readOrderMap(businessId);
+      current[localOrderId] = remoteOrderId;
+      try {
+        if (!await storage.writeJson(_orderMapKey(businessId), current)) {
+          throw StateError(
+            'No se pudo guardar la identidad de la venta sincronizada.',
+          );
+        }
+      } finally {
+        // Una acción de la venta local pasa a ser de su orden remota.
+        _bumpQueueRevision(businessId);
+      }
+    });
+  }
+
+  /// Anota quién abrió una venta sin red, en el momento de abrirla: el
+  /// mesero del PIN o, sin PIN, la cuenta que la abre. Sirve para dos cosas:
+  ///   - El replay lo manda como `opened_by_employee_id` al crear la mesa
+  ///     real. Sin esto el servidor la dejaba a nombre de la cuenta que
+  ///     sincroniza, y la precuenta/factura salían con ese nombre.
+  ///   - Sin red, el «MESERO:» impreso sale de aquí y no de quien esté
+  ///     logueado al imprimir.
+  /// Nunca lanza: perder la anotación no puede tumbar la apertura.
+  Future<void> rememberLocalOrderOpener({
+    required String businessId,
+    required String localOrderId,
+    String? employeeId,
+    String? name,
+  }) async {
+    final cleanEmployee = employeeId?.trim() ?? '';
+    final cleanName = name?.trim() ?? '';
+    if (businessId.isEmpty || (cleanEmployee.isEmpty && cleanName.isEmpty)) {
+      return;
+    }
+    try {
+      final storage = await _storage;
+      final key = _localOrderOpenerKey(businessId);
+      final current = await storage.readJson(key) ?? <String, dynamic>{};
+      // Solo hace falta mientras la venta no sube y se imprime: una semana
+      // sobra y evita que el mapa crezca para siempre.
+      final cutoff = DateTime.now().subtract(const Duration(days: 7));
+      current.removeWhere((_, value) {
+        final at = DateTime.tryParse('${(value as Map?)?['at']}');
+        return at == null || at.isBefore(cutoff);
+      });
+      current[localOrderId] = {
+        if (cleanEmployee.isNotEmpty) 'employee_id': cleanEmployee,
+        if (cleanName.isNotEmpty) 'name': cleanName,
+        'at': DateTime.now().toIso8601String(),
+      };
+      await storage.writeJson(key, current);
+    } catch (e) {
+      debugPrint('[offline] no se pudo anotar quién abrió $localOrderId: $e');
+    }
+  }
+
+  /// Quién abrió la venta [orderId] sin red (ver [rememberLocalOrderOpener]).
+  /// Acepta el id local o el remoto que le tocó al sincronizar. Null si este
+  /// equipo no la abrió sin red.
+  Future<({String? employeeId, String? name})?> localOrderOpener({
+    required String businessId,
+    required String orderId,
+  }) async {
+    if (businessId.isEmpty || orderId.isEmpty) return null;
+    try {
+      final storage = await _storage;
+      final openers =
+          await storage.readJson(_localOrderOpenerKey(businessId)) ??
+          <String, dynamic>{};
+      var raw = openers[orderId];
+      if (raw == null && !orderId.startsWith('local-order-')) {
+        final mappings = await _readOrderMap(businessId);
+        for (final entry in mappings.entries) {
+          if (entry.value?.toString() == orderId) {
+            raw = openers[entry.key];
+            if (raw != null) break;
+          }
+        }
+      }
+      if (raw is! Map) return null;
+      String? clean(Object? value) {
+        final text = value?.toString().trim();
+        return (text == null || text.isEmpty) ? null : text;
+      }
+
+      final employeeId = clean(raw['employee_id']);
+      final name = clean(raw['name']);
+      if (employeeId == null && name == null) return null;
+      return (employeeId: employeeId, name: name);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>> _readItemMap(String businessId) async {
@@ -3343,10 +4148,16 @@ class OfflinePosService {
     required String localSessionId,
     required String remoteSessionId,
   }) async {
-    final storage = await _storage;
-    final current = await _readCashSessionMap(businessId);
-    current[localSessionId] = remoteSessionId;
-    await storage.writeJson(_cashSessionMapKey(businessId), current);
+    await _withQueueMutation(businessId, () async {
+      final storage = await _storage;
+      final current = await _readCashSessionMap(businessId);
+      current[localSessionId] = remoteSessionId;
+      if (!await storage.writeJson(_cashSessionMapKey(businessId), current)) {
+        throw StateError(
+          'No se pudo guardar la identidad de la caja sincronizada.',
+        );
+      }
+    });
   }
 
   Future<void> _saveItemMapping({
@@ -3372,6 +4183,8 @@ class OfflinePosService {
       'error': state.error,
       'takeout': state.takeout,
       'origin': state.origin,
+      'delivery_type': state.deliveryType,
+      'delivery_address': state.deliveryAddress,
       'selected_check_id': state.selectedCheckId,
       'customer_id': state.customerId,
       'customer_name': state.customerName,
@@ -3390,6 +4203,10 @@ class OfflinePosService {
       error: map['error']?.toString(),
       takeout: map['takeout'] == true,
       origin: map['origin']?.toString(),
+      // Los respaldos anteriores no incluían estos campos: siguen siendo
+      // legibles y devuelven null hasta cargar los datos de la sesión.
+      deliveryType: map['delivery_type']?.toString(),
+      deliveryAddress: map['delivery_address']?.toString(),
       selectedCheckId: map['selected_check_id']?.toString(),
       customerId: map['customer_id']?.toString(),
       customerName: map['customer_name']?.toString(),

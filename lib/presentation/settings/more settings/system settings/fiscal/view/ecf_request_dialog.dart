@@ -9,6 +9,11 @@ import 'package:mangopos/data/repositories/ecf_request_repository.dart';
 /// Formulario con que el dueño pide la facturación electrónica. Al enviar, el
 /// servidor guarda la solicitud y registra la empresa con el proveedor usando
 /// el certificado. Devuelve el resultado, o null si se cerró sin enviar.
+///
+/// Pide los requisitos del alta e-CF: datos de la empresa (RNC, razón social,
+/// nombre comercial, dirección fiscal, teléfono, correo, representante legal),
+/// sucursales, tipos de comprobantes, acceso a la Oficina Virtual de la DGII y
+/// el certificado digital con su contraseña.
 Future<EcfRequestResult?> showEcfRequestDialog(
   BuildContext context, {
   required String businessId,
@@ -31,38 +36,70 @@ class _EcfRequestDialog extends ConsumerStatefulWidget {
   ConsumerState<_EcfRequestDialog> createState() => _EcfRequestDialogState();
 }
 
+class _BranchFields {
+  _BranchFields({String? name, String? address})
+      : name = TextEditingController(text: name ?? ''),
+        address = TextEditingController(text: address ?? '');
+
+  final TextEditingController name;
+  final TextEditingController address;
+
+  bool get isEmpty => name.text.trim().isEmpty && address.text.trim().isEmpty;
+
+  void dispose() {
+    name.dispose();
+    address.dispose();
+  }
+}
+
 class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
   late final EcfRequestData _d = widget.status.data;
+  late final EcfRequestDetails _x = widget.status.details;
   late final _rnc = TextEditingController(text: _d.rnc ?? '');
   late final _legal = TextEditingController(text: _d.legalName ?? '');
   late final _trade = TextEditingController(text: _d.tradeName ?? '');
   late final _address = TextEditingController(text: _d.fiscalAddress ?? '');
   late final _province = TextEditingController(text: _d.province ?? '');
   late final _municipality = TextEditingController(text: _d.municipality ?? '');
+  late final _phone = TextEditingController(text: _x.phone ?? '');
   late final _email = TextEditingController(text: _d.email ?? '');
+  late final _legalRep = TextEditingController(text: _x.legalRepName ?? '');
+  // El usuario de la Oficina Virtual casi siempre es el RNC o la cédula.
+  late final _ofvUser = TextEditingController(text: _x.ofvUser ?? _d.rnc ?? '');
+  final _ofvPassword = TextEditingController();
   late final _contactName =
       TextEditingController(text: widget.status.contactName ?? '');
   late final _contactPhone =
       TextEditingController(text: widget.status.contactPhone ?? '');
   final _password = TextEditingController();
 
+  late final List<_BranchFields> _branches = [
+    for (final b in _x.branches) _BranchFields(name: b.name, address: b.address),
+  ];
+  late final Set<String> _types = {..._x.ecfTypes};
+
   late bool _alreadyAuthorized = widget.status.alreadyAuthorized ?? false;
   bool _accept = false;
   bool _obscure = true;
+  bool _obscureOfv = true;
   bool _sending = false;
   String? _certName;
   Uint8List? _certBytes;
   String? _error;
 
   static const _maxCertBytes = 100 * 1024;
+  static final _emailRe = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
 
   @override
   void dispose() {
     for (final c in [
-      _rnc, _legal, _trade, _address, _province, _municipality, _email,
-      _contactName, _contactPhone, _password,
+      _rnc, _legal, _trade, _address, _province, _municipality, _phone, _email,
+      _legalRep, _ofvUser, _ofvPassword, _contactName, _contactPhone, _password,
     ]) {
       c.dispose();
+    }
+    for (final b in _branches) {
+      b.dispose();
     }
     super.dispose();
   }
@@ -97,19 +134,47 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
     }
   }
 
+  static int _digits(TextEditingController c) =>
+      c.text.replaceAll(RegExp(r'\D'), '').length;
+
+  // Mismo orden que el formulario: el primer error es el primero que se ve.
   String? _validate() {
-    final rnc = _rnc.text.replaceAll(RegExp(r'\D'), '');
-    if (rnc.length != 9 && rnc.length != 11) {
+    final rnc = _digits(_rnc);
+    if (rnc != 9 && rnc != 11) {
       return 'El RNC debe tener 9 dígitos (u 11 si es cédula).';
     }
     if (_legal.text.trim().isEmpty) return 'Falta la razón social.';
     if (_address.text.trim().isEmpty) return 'Falta la dirección fiscal.';
+    if (_province.text.trim().isEmpty) return 'Falta la provincia.';
+    if (_municipality.text.trim().isEmpty) return 'Falta el municipio.';
+    if (_digits(_phone) < 10) {
+      return 'El teléfono de la empresa debe incluir el código de área.';
+    }
+    if (!_emailRe.hasMatch(_email.text.trim())) {
+      return 'Escribe un correo válido.';
+    }
+    if (_legalRep.text.trim().isEmpty) {
+      return 'Falta el nombre completo del representante legal.';
+    }
+    for (final b in _branches) {
+      if (!b.isEmpty && b.address.text.trim().isEmpty) {
+        final name = b.name.text.trim();
+        return 'Falta la dirección de la sucursal $name.';
+      }
+    }
+    if (_types.isEmpty) return 'Elige al menos un tipo de comprobante.';
+    if (_ofvUser.text.trim().isEmpty) {
+      return 'Falta el usuario de la Oficina Virtual de la DGII.';
+    }
+    if (_ofvPassword.text.trim().isEmpty && !_x.ofvPasswordSaved) {
+      return 'Falta la clave de la Oficina Virtual de la DGII.';
+    }
+    if (_certBytes == null) return 'Falta tu certificado digital (.p12 o .pfx).';
+    if (_password.text.isEmpty) return 'Falta la contraseña del certificado.';
     if (_contactName.text.trim().isEmpty) return 'Falta la persona de contacto.';
-    if (_contactPhone.text.replaceAll(RegExp(r'\D'), '').length < 10) {
+    if (_digits(_contactPhone) < 10) {
       return 'El teléfono de contacto debe incluir el código de área.';
     }
-    if (_certBytes == null) return 'Falta tu certificado de firma digital (.p12).';
-    if (_password.text.isEmpty) return 'Falta la contraseña del certificado.';
     if (!_accept) return 'Debes autorizar a MangoPOS para continuar.';
     return null;
   }
@@ -142,6 +207,22 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
                 municipality: clean(_municipality),
                 email: clean(_email),
               ),
+              details: EcfRequestDetails(
+                phone: clean(_phone),
+                legalRepName: clean(_legalRep),
+                branches: [
+                  for (final b in _branches)
+                    if (!b.isEmpty)
+                      EcfBranch(name: clean(b.name), address: b.address.text.trim()),
+                ],
+                ecfTypes: [
+                  for (final t in ecfTypeCatalog.keys)
+                    if (_types.contains(t)) t,
+                ],
+                ofvUser: clean(_ofvUser),
+              ),
+              // Vacía con una ya guardada: el servidor conserva la anterior.
+              ofvPassword: _ofvPassword.text.trim().isEmpty ? null : _ofvPassword.text,
               contactName: _contactName.text.trim(),
               contactPhone: _contactPhone.text.trim(),
               alreadyAuthorized: _alreadyAuthorized,
@@ -184,8 +265,8 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
               const _Group('Datos de tu empresa'),
               _field(_rnc, 'RNC o cédula', keyboard: TextInputType.number),
               _field(_legal, 'Razón social'),
-              _field(_trade, 'Nombre comercial (opcional)'),
-              _field(_address, 'Dirección fiscal (la registrada en la DGII)', maxLength: 100),
+              _field(_trade, 'Nombre comercial (si tiene)'),
+              _field(_address, 'Dirección fiscal completa (la registrada en la DGII)', maxLength: 100),
               Row(
                 children: [
                   Expanded(child: _field(_province, 'Provincia')),
@@ -193,9 +274,92 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
                   Expanded(child: _field(_municipality, 'Municipio')),
                 ],
               ),
-              _field(_email, 'Correo', keyboard: TextInputType.emailAddress),
+              Row(
+                children: [
+                  Expanded(child: _field(_phone, 'Teléfono', keyboard: TextInputType.phone)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _field(_email, 'Correo electrónico', keyboard: TextInputType.emailAddress),
+                  ),
+                ],
+              ),
+              _field(_legalRep, 'Nombre completo del representante legal'),
               const SizedBox(height: 8),
-              const _Group('Contacto'),
+              const _Group('Sucursales (si aplica)'),
+              const _Note('Si tienes más de un local, agrega cada uno con su dirección.'),
+              const SizedBox(height: 6),
+              for (var i = 0; i < _branches.length; i++) _branchRow(i),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _sending ? null : () => setState(() => _branches.add(_BranchFields())),
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Agregar sucursal'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const _Group('Comprobantes que utilizas'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final e in ecfTypeCatalog.entries)
+                    FilterChip(
+                      label: Text('${e.key} · ${e.value}'),
+                      selected: _types.contains(e.key),
+                      selectedColor: MangoColors.primaryOrange.withValues(alpha: 0.15),
+                      checkmarkColor: MangoColors.primaryOrange,
+                      onSelected: _sending
+                          ? null
+                          : (v) => setState(() => v ? _types.add(e.key) : _types.remove(e.key)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const _Note('La nota de crédito (E34) la usa MangoPOS para anular facturas.'),
+              const SizedBox(height: 16),
+              const _Group('Oficina Virtual de la DGII'),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _field(_ofvUser, 'Usuario')),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _secretField(
+                      _ofvPassword,
+                      _x.ofvPasswordSaved ? 'Clave (ya guardada)' : 'Clave',
+                      obscure: _obscureOfv,
+                      onToggle: () => setState(() => _obscureOfv = !_obscureOfv),
+                    ),
+                  ),
+                ],
+              ),
+              _Note(
+                '${_x.ofvPasswordSaved ? 'Déjala vacía para conservar la que ya enviaste. ' : ''}'
+                'MangoPOS la guarda cifrada y solo la usa para tu postulación y las '
+                'pruebas de certificación en la Oficina Virtual.',
+              ),
+              const SizedBox(height: 16),
+              const _Group('Certificado digital'),
+              OutlinedButton.icon(
+                onPressed: _sending ? null : _pickCertificate,
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: Text(_certName ?? 'Elegir certificado (.p12 o .pfx)'),
+              ),
+              const SizedBox(height: 8),
+              _secretField(
+                _password,
+                'Contraseña del certificado',
+                obscure: _obscure,
+                onToggle: () => setState(() => _obscure = !_obscure),
+              ),
+              const _Note(
+                'Emitido por una entidad autorizada por INDOTEL, a nombre de tu empresa '
+                'o de su representante legal. MangoPOS no guarda el certificado ni su '
+                'contraseña: van directo al proveedor de facturación electrónica.',
+              ),
+              const SizedBox(height: 16),
+              const _Group('Persona de contacto'),
               Row(
                 children: [
                   Expanded(child: _field(_contactName, 'Nombre')),
@@ -216,33 +380,6 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
                   style: TextStyle(fontSize: 12),
                 ),
               ),
-              const SizedBox(height: 8),
-              const _Group('Certificado de firma digital'),
-              OutlinedButton.icon(
-                onPressed: _sending ? null : _pickCertificate,
-                icon: const Icon(Icons.upload_file, size: 18),
-                label: Text(_certName ?? 'Elegir certificado (.p12)'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _password,
-                obscureText: _obscure,
-                enabled: !_sending,
-                decoration: InputDecoration(
-                  labelText: 'Contraseña del certificado',
-                  suffixIcon: IconButton(
-                    onPressed: () => setState(() => _obscure = !_obscure),
-                    icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off, size: 18),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                'Debe estar a nombre de tu empresa o de su representante legal. '
-                'MangoPOS no guarda el certificado ni la contraseña: van directo al '
-                'proveedor de facturación electrónica.',
-                style: TextStyle(fontSize: 11.5, color: MangoColors.muted),
-              ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
@@ -251,7 +388,8 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
                 activeColor: MangoColors.primaryOrange,
                 title: const Text(
                   'Autorizo a MangoPOS a registrar mi empresa con su proveedor de '
-                  'facturación electrónica usando este certificado.',
+                  'facturación electrónica usando este certificado, y a entrar a mi '
+                  'Oficina Virtual de la DGII para la certificación.',
                   style: TextStyle(fontSize: 12.5),
                 ),
               ),
@@ -294,6 +432,30 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
     );
   }
 
+  void _removeBranch(_BranchFields b) {
+    setState(() => _branches.remove(b));
+    // Sus TextField siguen montados hasta el próximo frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) => b.dispose());
+  }
+
+  Widget _branchRow(int i) {
+    final b = _branches[i];
+    return Row(
+      key: ObjectKey(b),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(flex: 2, child: _field(b.name, 'Nombre')),
+        const SizedBox(width: 12),
+        Expanded(flex: 3, child: _field(b.address, 'Dirección', maxLength: 150)),
+        IconButton(
+          tooltip: 'Quitar sucursal',
+          onPressed: _sending ? null : () => _removeBranch(b),
+          icon: const Icon(Icons.close, size: 18),
+        ),
+      ],
+    );
+  }
+
   Widget _field(
     TextEditingController c,
     String label, {
@@ -314,6 +476,31 @@ class _EcfRequestDialogState extends ConsumerState<_EcfRequestDialog> {
       ),
     );
   }
+
+  Widget _secretField(
+    TextEditingController c,
+    String label, {
+    required bool obscure,
+    required VoidCallback onToggle,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TextField(
+        controller: c,
+        obscureText: obscure,
+        enabled: !_sending,
+        autocorrect: false,
+        enableSuggestions: false,
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: IconButton(
+            onPressed: onToggle,
+            icon: Icon(obscure ? Icons.visibility : Icons.visibility_off, size: 18),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Group extends StatelessWidget {
@@ -327,6 +514,17 @@ class _Group extends StatelessWidget {
           text,
           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
         ),
+      );
+}
+
+class _Note extends StatelessWidget {
+  const _Note(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+        text,
+        style: const TextStyle(fontSize: 11.5, color: MangoColors.muted),
       );
 }
 

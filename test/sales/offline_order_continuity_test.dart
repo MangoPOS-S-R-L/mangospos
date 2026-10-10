@@ -17,6 +17,7 @@ import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/storage/offline_queue_db.dart';
 import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/repositories/sales_repository.dart';
@@ -45,6 +46,30 @@ class _Sales extends SalesViewModel {
   final CurrentOrderState initial;
   @override
   CurrentOrderState build() => initial;
+  void showForTest(CurrentOrderState selected) => state = selected;
+}
+
+class _DelayedKitchen extends PrintingService {
+  _DelayedKitchen(super.client);
+  final started = Completer<void>();
+  final release = Completer<void>();
+  CurrentOrderState? printedState;
+
+  @override
+  Future<LocalKitchenSendResult> sendLocalOrderToKitchen({
+    required String businessId,
+    required CurrentOrderState localState,
+    String tableName = 'LOCAL',
+    String? waiterName,
+    String? businessName,
+    KitchenAreaPrinterChooser? choosePrinter,
+    bool forceChoosePrinter = false,
+  }) async {
+    printedState = localState;
+    started.complete();
+    await release.future;
+    return const LocalKitchenSendResult(dispatchIds: {}, pendingAreas: []);
+  }
 }
 
 class _CloudHub extends StateNotifier<TerminalMode>
@@ -58,6 +83,13 @@ class _Printers extends PrintingRepository {
   _Printers(super.client);
   final printed = <String>[];
   final failedIps = <String>{};
+
+  @override
+  Future<String> resolveReachableNetworkIp({
+    required PrinterConfig printer,
+    required String cachedIp,
+    bool includeMacRecovery = true,
+  }) async => cachedIp;
 
   @override
   Future<void> printRawDirectTcp({
@@ -77,6 +109,8 @@ class _Printers extends PrintingRepository {
     required String ip,
     int port = 9100,
     required List<int> data,
+    String? mac,
+    String? printerId,
   }) async => throw StateError('Agente no disponible');
 }
 
@@ -289,6 +323,50 @@ void main() {
       );
     },
   );
+
+  for (final navigate in [true, false]) {
+    test('comanda tardía conserva selección y productos nuevos ($navigate)', () async {
+      final biz = 'late-kitchen-$navigate';
+      final printing = _DelayedKitchen(client);
+      final c = await containerFor(
+        biz,
+        CurrentOrderState(order: order('order-A'), origin: 'table'),
+        printing,
+      );
+      final vm = c.read(currentOrderProvider.notifier) as _Sales;
+      await vm.addItem(menuItemId: 'first', productName: 'Primero', productPrice: 100);
+      final original = c.read(currentOrderProvider);
+      final sending = vm.confirmOrder();
+      await printing.started.future;
+      if (navigate) {
+        vm.showForTest(CurrentOrderState(
+          order: order('order-B'), origin: 'table',
+          items: [original.items.single.copyWith(id: 'item-B', orderId: 'order-B')],
+        ));
+      } else {
+        await vm.addItem(menuItemId: 'second', productName: 'Segundo', productPrice: 50);
+      }
+      final selected = c.read(currentOrderProvider);
+      printing.release.complete();
+      await sending;
+      expect(printing.printedState?.order?.id, 'order-A');
+      expect(printing.printedState?.items, original.items);
+      if (navigate) {
+        expect(c.read(currentOrderProvider).order?.id, 'order-B');
+        expect(c.read(currentOrderProvider).items, selected.items);
+        final savedA = await OfflinePosService().loadSnapshot(
+          businessId: biz, slotId: 'session-order-A',
+        );
+        expect(savedA?.order?.id, 'order-A');
+        expect(savedA?.items.single.status, 'pending');
+      } else {
+        final items = c.read(currentOrderProvider).items;
+        expect(items, hasLength(2));
+        expect(items.first.status, 'pending');
+        expect(items.last.status, 'draft');
+      }
+    });
+  }
 
   test(
     'mesa existente: agrega y envía a la impresora LAN sin tocar nube',

@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/fiscal/ncf_types.dart';
 import '../../../core/fiscal/payment_stage.dart';
+import '../../../core/fiscal/sales_note_policy.dart';
 import '../../../core/network/connectivity_service.dart';
 import '../../../core/performance/performance_diagnostics.dart';
 import '../../../core/offline/offline_ncf_service.dart';
@@ -134,8 +135,8 @@ class PaymentSplitState {
   final String? offlineNcf;
 
   // ── Nota de venta (documento NO fiscal) ──
-  /// El negocio tiene prendida la nota de venta, así que el cobro ofrece
-  /// elegirla en vez del comprobante fiscal.
+  /// Este cobro es consumidor final, solo efectivo y todavía tiene notas
+  /// disponibles en el ciclo configurado del negocio.
   final bool salesNoteAvailable;
 
   /// El cajero eligió cobrar con nota de venta: esta venta no consume NCF.
@@ -310,6 +311,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   })?
   _enqueuePayment;
   final bool Function()? _connectionStatus;
+  SalesNotePolicy _salesNotePolicy;
 
   bool get _isConnected =>
       _connectionStatus?.call() ?? _connectivity.isConnected;
@@ -337,6 +339,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// Lectura del diario al abrir el modal. `confirmPayment` la espera la
   /// primera vez para no arrancar un cobro nuevo encima de uno interrumpido.
   Future<void>? _intentRestore;
+  Future<void>? _salesNotePolicyLoad;
 
   /// Intento interrumpido encontrado cuando el cajero ya había empezado a
   /// armar otro plan: se aplica al confirmar en vez de cobrar el plan nuevo.
@@ -386,8 +389,11 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     })?
     enqueuePayment,
     bool Function()? connectionStatus,
+    SalesNotePolicy? salesNotePolicy,
     PaymentIntentJournal intentJournal = const PaymentIntentJournal(),
-  }) : _intentJournal = intentJournal,
+  }) : _salesNotePolicy =
+           salesNotePolicy ?? const SalesNotePolicy(enabled: false),
+       _intentJournal = intentJournal,
        _checkId = checkId,
        _customerId = customerId,
        _customerRnc = customerRnc,
@@ -403,6 +409,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       unawaited(_connectivity.initialize());
       _loadOrderForReceipt();
       _loadTableDeposit();
+      _salesNotePolicyLoad = _loadSalesNotePolicy();
     }
     // Cortesía 100%: cuando total == 0 no hay nada que cobrar, pero el
     // flujo de cierre necesita pasar por processPayment para generar
@@ -422,6 +429,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         ],
       );
     }
+    _applySalesNotePolicy(resetSelection: true);
     _intentRestore = _restoreInterruptedIntent();
   }
 
@@ -802,7 +810,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     } catch (e) {
       debugPrint('Error loading order details: $e');
     }
+  }
 
+  Future<void> _loadSalesNotePolicy() async {
     // Nota de venta: documento NO fiscal. El flag sale de las features del
     // negocio (con caché local, así que también resuelve offline). Fail-soft:
     // si no se puede leer, la opción no aparece y el cobro es el de siempre.
@@ -812,12 +822,15 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         final features = await _ref
             .read(posSettingsRepositoryProvider)
             .getBusinessFeatures(businessId);
-        if (!_canEdit || !mounted) return;
-        state = state.copyWith(
-          salesNoteAvailable: features.salesNoteEnabled,
-          salesNoteSelected:
-              features.salesNoteEnabled && features.salesNoteDefault,
+        if (!mounted) return;
+        _salesNotePolicy = SalesNotePolicy(
+          enabled: features.salesNoteEnabled,
+          notesBeforeInvoice: features.salesNoteLimit,
+          currentCount: features.salesNoteCount,
         );
+        if (_canEdit) {
+          _applySalesNotePolicy(resetSelection: true);
+        }
       }
     } catch (_) {}
   }
@@ -841,8 +854,70 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// Alterna entre comprobante fiscal y NOTA DE VENTA para este cobro.
   void setSalesNote(bool value) {
     if (!_canEdit) return;
+    if (value && !state.salesNoteAvailable) return;
     if (state.salesNoteSelected == value) return;
     state = state.copyWith(salesNoteSelected: value);
+  }
+
+  String? get _effectiveFiscalType {
+    if (_fiscalType != null && _fiscalType.trim().isNotEmpty) {
+      return _fiscalType;
+    }
+    try {
+      if (!_ref.exists(currentOrderProvider)) return null;
+      return _ref.read(currentOrderProvider).fiscalType;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Mientras falta saldo, el método activo también forma parte del plan.
+  /// Al completarlo mandan los pagos cargados, aunque el selector conserve
+  /// el método que se usó antes de completar el efectivo.
+  Iterable<String> get _plannedMethodCodes sync* {
+    for (final tx in state.transactions) {
+      yield tx.method.name;
+    }
+    if (state.transactions.isEmpty || !state.isComplete) {
+      yield state.activeMethod.name;
+    }
+  }
+
+  void _applySalesNotePolicy({bool resetSelection = false}) {
+    final available = _salesNotePolicy.allowsNote(
+      fiscalType: _effectiveFiscalType,
+      paymentMethodCodes: _plannedMethodCodes,
+    );
+    final selectByDefault = resetSelection || !state.salesNoteAvailable;
+    state = state.copyWith(
+      salesNoteAvailable: available,
+      salesNoteSelected:
+          available &&
+          (selectByDefault
+              ? _salesNotePolicy.shouldSelectNote(
+                  fiscalType: _effectiveFiscalType,
+                  paymentMethodCodes: _plannedMethodCodes,
+                )
+              : state.salesNoteSelected),
+    );
+  }
+
+  /// Solo el efectivo de consumidor final participa en este ciclo.
+  String? get salesNoteCycleMessage {
+    final methods = _plannedMethodCodes.toList();
+    final eligible =
+        _salesNotePolicy.enabled &&
+        SalesNotePolicy.isConsumerFinal(_effectiveFiscalType) &&
+        methods.isNotEmpty &&
+        methods.every((code) => code == 'cash');
+    if (!eligible) return null;
+    final count = _salesNotePolicy.currentCount;
+    final limit = _salesNotePolicy.notesBeforeInvoice;
+    if (!state.salesNoteAvailable) {
+      return 'Se utilizaron $count de $limit notas de venta. '
+          'Este cobro será factura.';
+    }
+    return 'Notas de venta: $count de $limit. Después, factura.';
   }
 
   /// True cuando la serie del comprobante es electronica (Exx / e-CF).
@@ -851,7 +926,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
   /// dibujar la etapa de DGII: en NCF de papel (B01/B02) el numero sale de la
   /// secuencia local y esa espera no ocurre, asi que listarla haria creer que
   /// el cobro tarda mas de lo que tarda.
-  bool get isElectronicFiscal => isElectronicNcf(_fiscalType);
+  bool get isElectronicFiscal => isElectronicNcf(_effectiveFiscalType);
 
   /// Cierra el ciclo del cobro: apaga la impresion y deja el estado final a
   /// la vista. La pantalla lo sostiene un momento y despues cierra el modal.
@@ -920,6 +995,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // cajero tiene que volver a seleccionarla — UX explícita.
       selectedBankAccount: null,
     );
+    _applySalesNotePolicy();
     // Saldo de mesa: se precarga con lo que el saldo ALCANCE a cubrir, no con
     // todo lo pendiente. Si la cuenta es 9,500 y la mesa tiene 9,000, el campo
     // arranca en 9,000 y el cajero solo tiene que cobrar los 500 de diferencia
@@ -1076,6 +1152,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       // — el cajero podría querer fragmentar entre varias cuentas.
       selectedBankAccount: null,
     );
+    _applySalesNotePolicy();
   }
 
   void removeTransaction(String id) {
@@ -1094,6 +1171,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       currentInput: newRemaining > 0 ? newRemaining.toStringAsFixed(2) : '',
       validationError: null,
     );
+    _applySalesNotePolicy();
   }
 
   // --- CONFIRMATION & PRINTING ---
@@ -1243,12 +1321,13 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               // F4: el NCF asignado offline viaja SOLO en la primera transacción
               // (un comprobante por cobro). El server lo usa al sincronizar.
               if (i == 0 && offlineNcf != null) 'offline_ncf': offlineNcf,
-              'requested_ncf_type': state.salesNoteSelected ? null : ncfType,
+              'requested_ncf_type': ncfType,
               // NOTA DE VENTA: la marca viaja en la PRIMERA transacción para que
               // el replay la ponga antes de reproducir el cobro. Si llega
               // después, el cierre ya emitió NCF. Viaja el valor elegido
               // (incluido `false`) para que el replay no herede una marca vieja.
-              if (i == 0 && state.salesNoteAvailable)
+              if (i == 0 &&
+                  (_salesNotePolicy.enabled || state.salesNoteSelected))
                 'is_sales_note': state.salesNoteSelected,
               // Bank account se asocia post-RPC en el flujo online vía un
               // UPDATE puntual. Offline guardamos solo el id; el replay
@@ -1315,13 +1394,16 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
     // quedó a medias. Si apareció mientras el cajero armaba otro plan, se
     // muestra el interrumpido y NO se cobra lo que estaba en pantalla.
     final restore = _intentRestore;
-    if (restore != null) {
+    final policyLoad = _salesNotePolicyLoad;
+    if (restore != null || policyLoad != null) {
       _localProcessing = true;
       try {
         await restore;
+        await policyLoad;
       } finally {
         _localProcessing = false;
         _intentRestore = null;
+        _salesNotePolicyLoad = null;
       }
       final pending = _pendingIntent;
       if (pending != null) {
@@ -1329,6 +1411,7 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
         return null;
       }
     }
+    if (!_attemptLocked) _applySalesNotePolicy();
     if (state.transactions.isEmpty) {
       state = state.copyWith(
         validationError: 'Agrega al menos un pago antes de confirmar.',
@@ -1371,7 +1454,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           stage: PaymentStage.idle,
           // Hay caja en el negocio pero no en este equipo: decir dónde
           // cobrar en vez de "no hay caja".
-          validationError: _ref.read(cashierViewModelProvider).canSellWithOpenCash
+          validationError:
+              _ref.read(cashierViewModelProvider).canSellWithOpenCash
               ? CashierRepository.cashOnOtherDeviceMessage
               : 'No hay una caja abierta para procesar el cobro.',
         );
@@ -1404,7 +1488,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           'Recupera la conexion para completar este cobro.',
         );
       }
-      if (state.salesNoteAvailable && !useOffline) {
+      if ((_salesNotePolicy.enabled || state.salesNoteSelected) &&
+          !useOffline) {
         try {
           await _salesRepo
               .markAsSalesNote(
@@ -1552,9 +1637,9 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
           // RNC resuelto por sub-cuenta (o de la orden) desde el call site.
           // Solo aplica en la última transacción (la que emite el NCF).
           customerRnc: isLast ? _customerRnc : null,
-          // Con nota de venta no hay tipo de comprobante que pedir: dejarlo
-          // guardaría en el pago un NCF que nunca se emitió.
-          fiscalType: state.salesNoteSelected ? null : _fiscalType,
+          // El servidor conserva el tipo consumidor final incluso si otra
+          // caja consume la última nota disponible y este cobro debe facturar.
+          fiscalType: _effectiveFiscalType,
           cashierSessionId: sessionId,
           reference: tx.reference,
           splitSequence: _splitSequenceBase + i,
@@ -1682,6 +1767,10 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       }
       // Todos los abonos confirmados: ya no hay nada que retomar.
       await _finishIntent();
+      // La cuenta principal puede normalizarse a `null` en el servidor. Los
+      // documentos se buscan por el contenedor que realmente quedó cobrado.
+      final documentCheckId = createdPayments.last.checkId;
+      final documentId = createdPayments.last.fiscalDocumentId;
 
       // Para e-CF (Norma DGII 01-2020): invocamos emit-document SYNC despues
       // del processPayment para que cuando el caller imprima el ticket, el
@@ -1703,8 +1792,8 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
               .select('note_number')
               .eq('order_id', _orderId)
               .eq('status', 'active');
-          noteQuery = (_checkId != null && _checkId.isNotEmpty)
-              ? noteQuery.eq('check_id', _checkId)
+          noteQuery = (documentCheckId != null && documentCheckId.isNotEmpty)
+              ? noteQuery.eq('check_id', documentCheckId)
               : noteQuery.isFilter('check_id', null);
           final noteRow = await noteQuery
               .order('created_at', ascending: false)
@@ -1723,22 +1812,27 @@ class PaymentSplitViewModel extends StateNotifier<PaymentSplitState> {
       }
 
       try {
-        // Con nota de venta no se consulta el comprobante: no existe. El
-        // resto del bloque ya trata `null` como "no hay doc que emitir".
-        Map<String, dynamic>? fiscalDocRow;
-        if (!state.salesNoteSelected) {
-          var query = Supabase.instance.client
-              .from('fiscal_documents')
-              .select('id, is_electronic, ncf_number')
-              .eq('order_id', _orderId);
-          query = _checkId != null && _checkId.isNotEmpty
-              ? query.eq('check_id', _checkId)
+        // Otra caja pudo agotar el cupo entre abrir este modal y cerrar el
+        // cobro. El documento realmente emitido manda sobre la selección.
+        var query = Supabase.instance.client
+            .from('fiscal_documents')
+            .select('id, is_electronic, ncf_number')
+            .eq('status', 'active');
+        if (documentId != null && documentId.isNotEmpty) {
+          query = query.eq('id', documentId);
+        } else {
+          query = query.eq('order_id', _orderId);
+          query = documentCheckId != null && documentCheckId.isNotEmpty
+              ? query.eq('check_id', documentCheckId)
               : query.isFilter('check_id', null);
-          fiscalDocRow = await query
-              .order('created_at', ascending: false)
-              .limit(1)
-              .maybeSingle()
-              .timeout(const Duration(seconds: 3));
+        }
+        final fiscalDocRow = await query
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle()
+            .timeout(const Duration(seconds: 3));
+        if (fiscalDocRow != null) {
+          state = state.copyWith(salesNoteSelected: false);
         }
 
         final ncf = fiscalDocRow?['ncf_number'] as String?;

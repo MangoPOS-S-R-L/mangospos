@@ -21,16 +21,19 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
   final _rncController = TextEditingController();
   final _nameController = TextEditingController();
   final _salesNotePrefixController = TextEditingController();
+  final _salesNoteLimitController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     Future.microtask(() async {
       await ref.read(fiscalVmProvider.notifier).load(widget.businessId);
+      if (!mounted) return;
       final state = ref.read(fiscalVmProvider);
       _rncController.text = state.fiscalRnc;
       _nameController.text = state.fiscalName;
       _salesNotePrefixController.text = state.features.salesNotePrefix;
+      _salesNoteLimitController.text = state.features.salesNoteLimit.toString();
     });
   }
 
@@ -39,6 +42,7 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     _rncController.dispose();
     _nameController.dispose();
     _salesNotePrefixController.dispose();
+    _salesNoteLimitController.dispose();
     super.dispose();
   }
 
@@ -66,7 +70,26 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     await ref
         .read(fiscalVmProvider.notifier)
         .updateSalesNoteSettings(widget.businessId, prefix: value);
-    if (mounted) AppToast.success(context, 'Prefijo guardado');
+    if (mounted && ref.read(fiscalVmProvider).error == null) {
+      AppToast.success(context, 'Prefijo guardado');
+    }
+  }
+
+  Future<void> _saveSalesNoteLimit() async {
+    final value = int.tryParse(_salesNoteLimitController.text.trim());
+    if (value == null || value < 1) {
+      AppToast.error(context, 'Ingresa una cantidad mayor que cero.');
+      return;
+    }
+    _salesNoteLimitController.text = value.toString();
+    if (value == ref.read(fiscalVmProvider).features.salesNoteLimit) return;
+
+    await ref
+        .read(fiscalVmProvider.notifier)
+        .updateSalesNoteSettings(widget.businessId, limit: value);
+    if (mounted && ref.read(fiscalVmProvider).error == null) {
+      AppToast.success(context, 'Cantidad de notas de venta guardada');
+    }
   }
 
   @override
@@ -76,6 +99,14 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     ref.listen(fiscalVmProvider.select((s) => s.error), (prev, next) {
       if (next != null && next.isNotEmpty) {
         AppToast.error(context, next);
+      }
+    });
+    ref.listen(fiscalVmProvider.select((s) => s.features), (prev, next) {
+      if (prev?.salesNoteLimit != next.salesNoteLimit) {
+        _salesNoteLimitController.text = next.salesNoteLimit.toString();
+      }
+      if (prev?.salesNotePrefix != next.salesNotePrefix) {
+        _salesNotePrefixController.text = next.salesNotePrefix;
       }
     });
 
@@ -318,12 +349,11 @@ class _FiscalReceiptsViewState extends ConsumerState<FiscalReceiptsView> {
     return SalesNoteSettingsSection(
       features: vm.features,
       prefixController: _salesNotePrefixController,
+      limitController: _salesNoteLimitController,
       onEnabledChanged: (v) => ref
           .read(fiscalVmProvider.notifier)
           .updateSalesNoteSettings(widget.businessId, enabled: v),
-      onDefaultChanged: (v) => ref
-          .read(fiscalVmProvider.notifier)
-          .updateSalesNoteSettings(widget.businessId, asDefault: v),
+      onLimitSubmitted: _saveSalesNoteLimit,
       onPrefixSubmitted: _saveSalesNotePrefix,
     );
   }

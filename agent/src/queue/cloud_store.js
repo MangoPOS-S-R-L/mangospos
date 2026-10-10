@@ -11,6 +11,8 @@
 //     job listo para retry o terminal a los 5 intentos.
 //   - reclaimStale(): wrap de RPC fn_reclaim_stale_print_jobs(60). Llamar
 //     periódicamente para recuperar jobs huérfanos.
+//   - renewClaims(jobIds): wrap de RPC fn_renew_print_job_claims. Mantiene
+//     vigentes los claims de jobs que este agent todavía tiene en memoria.
 //
 // Resiliencia:
 //   - Si Supabase no responde (sin internet, RLS fallido, server caído),
@@ -131,6 +133,34 @@ const reclaimStale = async (maxAgeSeconds = 60) => {
 };
 
 /**
+ * Renueva el claim de los jobs que este agent todavía tiene (esperando su
+ * turno en una impresora o imprimiéndose). Sin esto, un ticket que espera
+ * detrás de una impresora lenta más de 60s queda DELIVERY_UNCERTAIN sin
+ * haber enviado un solo byte.
+ *
+ * @param {string[]} jobIds
+ * @returns {number|null} cuántos claims se renovaron, o null si Supabase no
+ *   respondió (sin internet: el agent sigue imprimiendo por LAN igual).
+ */
+const renewClaims = async (jobIds) => {
+    if (!isEnabled() || !jobIds || jobIds.length === 0) return 0;
+    try {
+        const { data, error } = await client.rpc('fn_renew_print_job_claims', {
+            p_agent_id: AGENT_UUID,
+            p_job_ids: jobIds,
+        });
+        if (error) {
+            logger.warn(`[cloud_store] renewClaims error: ${error.message}`);
+            return null;
+        }
+        return data || 0;
+    } catch (err) {
+        logger.warn(`[cloud_store] renewClaims excepcion: ${err.message}`);
+        return null;
+    }
+};
+
+/**
  * Convierte un row de print_jobs (formato Supabase) al payload que
  * espera processPrintJob() (formato legacy).
  *
@@ -198,6 +228,7 @@ module.exports = {
     claimNext,
     complete,
     reclaimStale,
+    renewClaims,
     fetchPrinter,
     buildLegacyJobPayload,
 };

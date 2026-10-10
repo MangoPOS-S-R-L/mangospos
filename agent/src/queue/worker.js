@@ -28,6 +28,12 @@
 //
 // Reclaim stale: cada RECLAIM_INTERVAL_MS llamamos fn_reclaim_stale_print_jobs
 // para recuperar jobs en 'printing' con claim viejo (>60s sin ACK).
+//
+// Renovación de claims: cada CLAIM_RENEW_INTERVAL_MS renovamos el claim de
+// todos los jobs que tenemos en memoria (esperando turno o imprimiéndose).
+// Así el reclaim solo alcanza claims de un agent que dejó de renovarlos
+// (crasheó o lleva >60s sin internet), no tickets que esperan detrás de una
+// impresora lenta.
 
 const { logger, CLOUD_WORKER_ENABLED } = require('../config');
 const sqliteQueue = require('./store');
@@ -38,6 +44,8 @@ const { processPrintJob } = require('../print/job_processor');
 const POLL_INTERVAL_MS = 500;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1h
 const RECLAIM_INTERVAL_MS = 60 * 1000; // 60s
+// Un tercio del umbral del reclaim (60s): tolera dos renovaciones fallidas.
+const CLAIM_RENEW_INTERVAL_MS = 20 * 1000;
 
 // Sprint 4 — cuántos jobs claimar por tick. Más alto = más throughput
 // inicial pero más jobs marcados 'printing' simultáneamente si el
@@ -49,6 +57,12 @@ let running = false;
 let stopRequested = false;
 let pruneTimer = null;
 let reclaimTimer = null;
+let renewTimer = null;
+let renewing = false;
+
+// Jobs ya claimados que todavía no llegaron al dispatcher (se está leyendo
+// la config de su impresora). También se renuevan.
+const resolving = new Set();
 
 /**
  * Resuelve la config completa de la impresora destino de un job.
@@ -65,18 +79,21 @@ const resolvePrinterCfg = async (jobRow) => {
     };
     if (jobRow.printer_id) {
         const fetched = await cloudStore.fetchPrinter(jobRow.printer_id);
-        if (fetched) {
-            printerCfg = {
-                type: fetched.type || 'network',
-                ip: fetched.ip_address || jobRow.ip,
-                port: fetched.port || jobRow.port || 9100,
-                name: fetched.name,
-                device_path: fetched.device_path,
-                mac: fetched.mac,
-                encoding: fetched.encoding,
-                paper_width: fetched.paper_width,
-            };
+        if (!fetched) {
+            // The job IP can belong to someone else after DHCP changes. A
+            // failed saved-printer lookup must never discard its MAC guard.
+            throw new Error(`Saved printer configuration unavailable: ${jobRow.printer_id}`);
         }
+        printerCfg = {
+            type: fetched.type || 'network',
+            ip: fetched.ip_address || jobRow.ip,
+            port: fetched.port || jobRow.port || 9100,
+            name: fetched.name,
+            device_path: fetched.device_path,
+            mac: fetched.mac,
+            encoding: fetched.encoding,
+            paper_width: fetched.paper_width,
+        };
     }
     return printerCfg;
 };
@@ -99,7 +116,17 @@ const tickCloud = async () => {
             `area=${jobRow.area_code || '-'}, retry=${jobRow.retry_count || 0})`,
         );
 
-        const printerCfg = await resolvePrinterCfg(jobRow);
+        let printerCfg;
+        resolving.add(jobId);
+        try { printerCfg = await resolvePrinterCfg(jobRow); }
+        catch (err) {
+            resolving.delete(jobId);
+            await cloudStore.complete(jobId, false, err.message || String(err));
+            logger.error(`[worker] CLOUD configuration failed ${jobId}: ${err.message}`);
+            claimed++;
+            continue;
+        }
+        resolving.delete(jobId);
         const accepted = printerDispatcher.dispatch(jobRow, printerCfg);
 
         if (!accepted) {
@@ -124,6 +151,31 @@ const tickCloud = async () => {
 };
 
 /**
+ * Renueva el claim de todo lo que este agent tiene en memoria. Si Supabase
+ * no responde, seguimos imprimiendo por LAN: el ACK final deja el estado
+ * correcto cuando vuelva la conexión.
+ */
+const renewHeldClaims = async () => {
+    if (renewing || !cloudStore.isEnabled()) return;
+    const ids = [...new Set([...resolving, ...printerDispatcher.heldJobIds()])];
+    if (ids.length === 0) return;
+    renewing = true;
+    try {
+        const renewed = await cloudStore.renewClaims(ids);
+        if (renewed !== null && renewed < ids.length) {
+            // Ya los reclamó otro (o el reclaim, tras >60s sin renovar).
+            // Igual se imprimen: el ACK de éxito los deja como impresos.
+            logger.warn(
+                `[worker] CLOUD renew: ${ids.length - renewed} de ${ids.length} ` +
+                'claims ya no eran de este agent',
+            );
+        }
+    } finally {
+        renewing = false;
+    }
+};
+
+/**
  * Procesa un job de la cola SQLite local (legacy/fallback).
  */
 const tickSqlite = async () => {
@@ -133,16 +185,19 @@ const tickSqlite = async () => {
     sqliteQueue.markPrinting(job.jobId);
     logger.info(`[worker] SQLITE procesando ${job.jobId} (ticket ${job.ticketId})`);
 
+    let sent = false;
     try {
         const internalJob = {
             id: job.jobId,
             ...job.payload,
         };
         await processPrintJob(internalJob);
+        sent = true;
         sqliteQueue.markDone(job.jobId);
         logger.info(`[worker] SQLITE done ${job.jobId}`);
     } catch (err) {
-        const msg = err?.message || String(err);
+        const detail = err?.message || String(err);
+        const msg = sent || err?.deliveryUncertain ? `[DELIVERY_UNCERTAIN] ${detail}` : detail;
         sqliteQueue.markFailed(job.jobId, msg);
         logger.error(`[worker] SQLITE failed ${job.jobId}: ${msg}`);
     }
@@ -221,6 +276,13 @@ const start = () => {
             logger.warn(`[worker] reclaim error: ${e.message}`);
         }
     }, RECLAIM_INTERVAL_MS);
+
+    // Renovar claims de los jobs en memoria cada 20s (cloud queue).
+    renewTimer = setInterval(() => {
+        renewHeldClaims().catch((e) => {
+            logger.warn(`[worker] renew error: ${e.message}`);
+        });
+    }, CLAIM_RENEW_INTERVAL_MS);
 };
 
 const stop = async () => {
@@ -232,6 +294,10 @@ const stop = async () => {
     if (reclaimTimer) {
         clearInterval(reclaimTimer);
         reclaimTimer = null;
+    }
+    if (renewTimer) {
+        clearInterval(renewTimer);
+        renewTimer = null;
     }
     // Esperar a que el loop termine la iteración actual (max 1 tick).
     let waited = 0;

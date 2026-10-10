@@ -52,6 +52,8 @@ class CashClosePrintService {
         salesByArea: extras.salesByArea,
         productsByArea: extras.productsByArea,
         creditPayments: extras.creditPayments,
+        openedAt: extras.openedAt,
+        closedAt: extras.closedAt,
         reprint: reprint,
         paperWidth: paperWidth,
       ),
@@ -86,6 +88,8 @@ class CashClosePrintService {
       salesByArea: extras.salesByArea,
       productsByArea: extras.productsByArea,
       creditPayments: extras.creditPayments,
+      openedAt: extras.openedAt,
+      closedAt: extras.closedAt,
       reprint: reprint,
     ).plainText;
   }
@@ -97,6 +101,8 @@ class CashClosePrintService {
       List<Map<String, dynamic>> salesByArea,
       List<Map<String, dynamic>> productsByArea,
       Map<String, dynamic>? creditPayments,
+      DateTime? openedAt,
+      DateTime? closedAt,
     })
   >
   _loadTicketExtras(String? sessionId) async {
@@ -105,9 +111,14 @@ class CashClosePrintService {
         salesByArea: const <Map<String, dynamic>>[],
         productsByArea: const <Map<String, dynamic>>[],
         creditPayments: null,
+        openedAt: null,
+        closedAt: null,
       );
     }
+    final period = await _loadSessionPeriod(sessionId);
     return (
+      openedAt: period.openedAt,
+      closedAt: period.closedAt,
       // Desglose por área de producción: solo si el negocio activó el toggle.
       // Best-effort — si falla, el cierre sale igual sin esta sección.
       salesByArea: await _loadSalesByAreaIfEnabled(sessionId),
@@ -118,6 +129,35 @@ class CashClosePrintService {
       // 20260902_0002 sin aplicar) o falla, el cierre sale sin esta sección.
       creditPayments: await _loadCreditPayments(sessionId),
     );
+  }
+
+  /// Apertura y cierre de la sesión para el encabezado del ticket. Una caja
+  /// puede quedar abierta varios días; sin la apertura, la hoja de cierre no
+  /// decía qué periodo cubría. Best-effort: sin red, o con una caja abierta
+  /// sin conexión (`local-cash-session-…`), el ticket sale como antes, con la
+  /// fecha y hora de impresión.
+  Future<({DateTime? openedAt, DateTime? closedAt})> _loadSessionPeriod(
+    String sessionId,
+  ) async {
+    if (sessionId.startsWith('local-cash-session-')) {
+      return (openedAt: null, closedAt: null);
+    }
+    try {
+      final row = await _client
+          .from('cash_register_sessions')
+          .select('opened_at, closed_at')
+          .eq('id', sessionId)
+          .maybeSingle();
+      DateTime? parse(Object? raw) =>
+          raw == null ? null : DateTime.tryParse(raw.toString());
+      return (
+        openedAt: parse(row?['opened_at']),
+        closedAt: parse(row?['closed_at']),
+      );
+    } catch (e) {
+      debugPrint('[CashClosePrint] apertura de la sesión no disponible: $e');
+      return (openedAt: null, closedAt: null);
+    }
   }
 
   /// Reimprime el ticket de cierre de una sesión YA cerrada (ver
@@ -585,6 +625,14 @@ class CashClosePrintService {
     /// `fn_cash_session_credit_payments`. `null` = no se pudo cargar o la
     /// migración no está aplicada: la sección no se imprime.
     Map<String, dynamic>? creditPayments,
+
+    /// Apertura de la caja. `null` = no se pudo leer: el encabezado sale como
+    /// siempre (fecha y hora de [printedAt]).
+    DateTime? openedAt,
+
+    /// Cierre real de la sesión. `null` (cierre aún sin sincronizar) = se usa
+    /// [printedAt].
+    DateTime? closedAt,
     bool reprint = false,
     /// Ancho del papel de la impresora del cierre (58 u 80). Default 80 =
     /// comportamiento histórico.
@@ -610,8 +658,20 @@ class CashClosePrintService {
       gen.textCentered('** REIMPRESION **');
       gen.setBold(false);
     }
-    gen.textCentered('Fecha: ${formatDateEsDo(printedAt)}');
-    gen.textCentered('Hora: ${formatTimeEsDo(printedAt)}');
+    // Periodo del turno: una caja puede quedar abierta varios días y la hoja
+    // tiene que decir desde cuándo. Sin la apertura, el encabezado de siempre.
+    if (openedAt != null) {
+      final closed = closedAt ?? printedAt;
+      gen.textCentered(
+        'Apertura: ${formatDateEsDo(openedAt)} ${formatTimeEsDo(openedAt)}',
+      );
+      gen.textCentered(
+        'Cierre: ${formatDateEsDo(closed)} ${formatTimeEsDo(closed)}',
+      );
+    } else {
+      gen.textCentered('Fecha: ${formatDateEsDo(printedAt)}');
+      gen.textCentered('Hora: ${formatTimeEsDo(printedAt)}');
+    }
     gen.doubleSeparator();
 
     gen.setBold(true);

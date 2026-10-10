@@ -3,6 +3,11 @@ v2.0.0
 
 A high-performance, background service for LAN printing integration with MangoPOS. Supports Network, USB, and other POS printers.
 
+The production entry point is `src/index.js`, with HTTP on port **4000**.
+The API examples below describe the older `src/main.js` server. For the
+current MAC recovery endpoints, retry behavior and Windows release procedure,
+see [automatic printer IP recovery](PRINTER_IP_RECOVERY.md).
+
 ## Features
 - **Auto-Discovery**: Detects printers on the local network (Port 9100) automatically.
 - **Queue Management**: Reliable job queuing with retries and timeout handling.

@@ -255,9 +255,17 @@ class BusinessFeatures {
   /// Prefijo del correlativo de notas de venta. Solo cosmético.
   final String salesNotePrefix;
 
-  /// Si true, el cobro arranca preseleccionado en Nota de venta. El cajero
-  /// puede cambiarlo antes de confirmar.
+  /// Ajuste anterior, conservado para compatibilidad. La selección actual
+  /// depende del método de pago, tipo de comprobante y límite del ciclo.
   final bool salesNoteDefault;
+
+  /// Cantidad de notas de venta en efectivo a consumidor final antes de que
+  /// el siguiente cobro de ese tipo requiera factura con comprobante.
+  final int salesNoteLimit;
+
+  /// Notas usadas en el ciclo vigente. Lo mantiene el servidor al emitir
+  /// documentos; nunca se escribe al guardar la configuración del negocio.
+  final int salesNoteCount;
 
   const BusinessFeatures({
     this.salesModeTableEnabled = true,
@@ -285,6 +293,8 @@ class BusinessFeatures {
     this.salesNoteEnabled = false,
     this.salesNotePrefix = 'NV-',
     this.salesNoteDefault = false,
+    this.salesNoteLimit = 3,
+    this.salesNoteCount = 0,
   });
 
   /// Defaults aplicados cuando no hay fila en business_settings o
@@ -326,9 +336,19 @@ class BusinessFeatures {
       deliveryFeePresets: _parseFeePresets(map['delivery_fee_presets']),
       // Columnas de 20260910_0001. En un servidor sin la migración no vienen
       // en el SELECT y la feature queda apagada, que es el estado legacy.
-      salesNoteEnabled: map['sales_note_enabled'] == true,
+      // Sin ambas columnas el servidor no puede aplicar el ciclo. Facturar
+      // hasta instalar la migración evita notas de venta sin límite.
+      salesNoteEnabled: map['sales_note_enabled'] == true &&
+          map.containsKey('sales_note_limit') &&
+          map.containsKey('sales_note_count'),
       salesNotePrefix: _salesNotePrefixOrDefault(map['sales_note_prefix']),
       salesNoteDefault: map['sales_note_default'] == true,
+      salesNoteLimit: _salesNoteInteger(map['sales_note_limit'], fallback: 3),
+      salesNoteCount: _salesNoteInteger(
+        map['sales_note_count'],
+        fallback: 0,
+        allowZero: true,
+      ),
     );
   }
 
@@ -337,6 +357,15 @@ class BusinessFeatures {
   static String _salesNotePrefixOrDefault(dynamic raw) {
     final clean = raw?.toString().trim() ?? '';
     return clean.isEmpty ? 'NV-' : clean;
+  }
+
+  static int _salesNoteInteger(
+    dynamic raw, {
+    required int fallback,
+    bool allowZero = false,
+  }) {
+    final value = raw is int ? raw : int.tryParse(raw?.toString() ?? '');
+    return value != null && value >= (allowZero ? 0 : 1) ? value : fallback;
   }
 
   /// numeric de Postgres puede llegar como num o String (según el driver).
@@ -384,6 +413,8 @@ class BusinessFeatures {
     bool? salesNoteEnabled,
     String? salesNotePrefix,
     bool? salesNoteDefault,
+    int? salesNoteLimit,
+    int? salesNoteCount,
   }) {
     return BusinessFeatures(
       salesModeTableEnabled:
@@ -421,6 +452,8 @@ class BusinessFeatures {
       salesNoteEnabled: salesNoteEnabled ?? this.salesNoteEnabled,
       salesNotePrefix: salesNotePrefix ?? this.salesNotePrefix,
       salesNoteDefault: salesNoteDefault ?? this.salesNoteDefault,
+      salesNoteLimit: salesNoteLimit ?? this.salesNoteLimit,
+      salesNoteCount: salesNoteCount ?? this.salesNoteCount,
     );
   }
 
@@ -1335,6 +1368,7 @@ class PosSettingsRepository {
       'sales_note_enabled': features.salesNoteEnabled,
       'sales_note_prefix': features.salesNotePrefix,
       'sales_note_default': features.salesNoteDefault,
+      'sales_note_limit': features.salesNoteLimit,
     };
 
     try {

@@ -17,6 +17,8 @@ const { describePrinter, resolveUsbSelection } = require('./usb_selection');
 const { printRawViaWinspoolWindows } = require('./winspool');
 const { printPreCheck } = require('./templates/precheck');
 const { printInvoice } = require('./templates/invoice');
+const { renderNetworkContent } = require('./network_content');
+const { printNetworkPayload } = require('../network/network_printer');
 
 /**
  * Detecta un trabajo en modo raster de Star (StarGraphic / futurePRNT, la
@@ -66,6 +68,14 @@ const processPrintJob = (job) => new Promise(async (resolve, reject) => {
             // Fallback a escpos.USB() si winspool falla. Si Zadig está
             // OK funciona; sino, ambos fallan y el caller ve el error.
         }
+    }
+
+    if (printerConfig.type === 'network') {
+        try {
+            const payload = await renderNetworkContent(content, job);
+            const target = await printNetworkPayload(printerConfig, payload);
+            return resolve(target);
+        } catch (err) { return reject(err); }
     }
 
     try {

@@ -75,7 +75,8 @@ class EcfRequestCard extends ConsumerWidget {
                 SizedBox(height: 2),
                 Text(
                   'MangoPOS registra tu empresa con su proveedor y te acompaña en la '
-                  'certificación ante la DGII. Necesitas tu certificado de firma digital (.p12).',
+                  'certificación ante la DGII. Necesitas tu certificado digital (.p12 o .pfx) '
+                  'y el acceso a tu Oficina Virtual de la DGII.',
                   style: TextStyle(fontSize: 13, color: Colors.grey),
                 ),
               ],

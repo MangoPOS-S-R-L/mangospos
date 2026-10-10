@@ -38,8 +38,9 @@ script:
 ### Requisitos en la máquina de build
 
 - Windows x64.
-- **Node.js 18 LTS** (`node --version` → `v18.x`). Imprescindible para que el
-  binario nativo `usb` se incluya correctamente. Si compilás en Mac/Linux el
+- **Node.js 20** (`node --version` → `v20.x`), acorde al target `node20-win-x64`
+  de `agent/package.json`. Instala los módulos nativos en Windows x64 usando
+  ese runtime antes de empaquetar. Si compilás en Mac/Linux el
   `.exe` falla en runtime con
   `No native build was found for platform=win32 arch=x64 ...`.
 - Flutter SDK en PATH.

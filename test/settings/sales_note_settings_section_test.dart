@@ -1,15 +1,3 @@
-// Sección de NOTA DE VENTA en Configuración Fiscal.
-//
-// Existe por un fallo real: la primera versión ponía un `Expanded` dentro de
-// un `Row` anidado que el `Row` de afuera dejaba sin acotar, y la pantalla
-// reventaba al abrirse con "RenderFlex children have non-zero flex but
-// incoming width constraints are unbounded". `flutter analyze` no ve eso —
-// solo aparece al renderizar.
-//
-// Por eso las pruebas montan la sección de verdad, a los anchos donde corre
-// el POS: la tablet del salón (1024x600), una ventana de escritorio y una
-// angosta.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
@@ -17,22 +5,22 @@ import 'package:mangopos/presentation/settings/more%20settings/system%20settings
 
 Widget _host({
   required BusinessFeatures features,
-  required TextEditingController controller,
+  required TextEditingController prefixController,
+  required TextEditingController limitController,
   ValueChanged<bool>? onEnabled,
-  ValueChanged<bool>? onDefault,
+  VoidCallback? onLimit,
   VoidCallback? onPrefix,
 }) {
   return MaterialApp(
     home: Scaffold(
       body: SingleChildScrollView(
-        // Padding como el de la tarjeta real: la sección nunca recibe el
-        // ancho pelado de la pantalla.
         padding: const EdgeInsets.all(24),
         child: SalesNoteSettingsSection(
           features: features,
-          prefixController: controller,
+          prefixController: prefixController,
+          limitController: limitController,
           onEnabledChanged: onEnabled ?? (_) {},
-          onDefaultChanged: onDefault ?? (_) {},
+          onLimitSubmitted: onLimit ?? () {},
           onPrefixSubmitted: onPrefix ?? () {},
         ),
       ),
@@ -41,15 +29,24 @@ Widget _host({
 }
 
 void main() {
-  late TextEditingController controller;
+  late TextEditingController prefixController;
+  late TextEditingController limitController;
 
-  setUp(() => controller = TextEditingController(text: 'NV-'));
-  tearDown(() => controller.dispose());
+  setUp(() {
+    prefixController = TextEditingController(text: 'NV-');
+    limitController = TextEditingController(text: '3');
+  });
+  tearDown(() {
+    prefixController.dispose();
+    limitController.dispose();
+  });
 
   group('Layout', () {
-    // 1024x600 es la tablet del salón; 1440 una ventana de escritorio; 420 el
-    // caso angosto donde el campo del prefijo compite con el texto.
-    for (final size in const [Size(1024, 600), Size(1440, 900), Size(420, 800)]) {
+    for (final size in const [
+      Size(1024, 600),
+      Size(1440, 900),
+      Size(420, 800),
+    ]) {
       testWidgets('renderiza sin desbordes a ${size.width.toInt()} dp', (
         tester,
       ) async {
@@ -59,16 +56,12 @@ void main() {
 
         await tester.pumpWidget(
           _host(
-            features: const BusinessFeatures(
-              salesNoteEnabled: true,
-              salesNoteDefault: true,
-            ),
-            controller: controller,
+            features: const BusinessFeatures(salesNoteEnabled: true),
+            prefixController: prefixController,
+            limitController: limitController,
           ),
         );
 
-        // Cualquier excepción de layout (incluida la del flex sin acotar)
-        // queda registrada acá.
         expect(tester.takeException(), isNull);
         expect(find.text('Vender por nota de venta'), findsOneWidget);
       });
@@ -78,22 +71,21 @@ void main() {
       await tester.pumpWidget(
         _host(
           features: const BusinessFeatures(),
-          controller: controller,
+          prefixController: prefixController,
+          limitController: limitController,
         ),
       );
 
       expect(tester.takeException(), isNull);
       expect(find.text('Vender por nota de venta'), findsOneWidget);
-      // Los ajustes de detalle no tienen por qué estar si la feature no está
-      // prendida.
-      expect(find.text('Preseleccionar al cobrar'), findsNothing);
+      expect(find.text('Notas de venta antes de una factura'), findsNothing);
       expect(find.text('Prefijo de la numeración'), findsNothing);
       expect(find.byType(Switch), findsOneWidget);
     });
   });
 
   group('Contenido', () {
-    testWidgets('muestra cómo va a salir impreso el prefijo guardado', (
+    testWidgets('muestra el prefijo guardado y el progreso del ciclo', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -101,52 +93,100 @@ void main() {
           features: const BusinessFeatures(
             salesNoteEnabled: true,
             salesNotePrefix: 'NOTA-',
+            salesNoteLimit: 5,
+            salesNoteCount: 2,
           ),
-          controller: controller,
+          prefixController: prefixController,
+          limitController: limitController,
+        ),
+      );
+
+      expect(find.textContaining('NOTA-000123'), findsOneWidget);
+      expect(
+        find.textContaining('Después de 5 notas de venta'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Notas utilizadas desde la última factura: 2'),
+        findsOneWidget,
+      );
+      expect(find.text('Preseleccionar al cobrar'), findsNothing);
+      expect(find.textContaining('El próximo cobro'), findsNothing);
+    });
+
+    testWidgets('avisa cuando la próxima venta requiere factura', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          features: const BusinessFeatures(
+            salesNoteEnabled: true,
+            salesNoteCount: 3,
+          ),
+          prefixController: prefixController,
+          limitController: limitController,
         ),
       );
 
       expect(
-        find.textContaining('NOTA-000123'),
+        find.textContaining('El próximo cobro en efectivo a consumidor final'),
         findsOneWidget,
-        reason: 'el dueño tiene que ver el número real, no un ejemplo fijo',
       );
     });
 
-    testWidgets('dice que no consume NCF', (tester) async {
+    testWidgets('explica qué pagos requieren comprobante', (tester) async {
       await tester.pumpWidget(
         _host(
           features: const BusinessFeatures(salesNoteEnabled: true),
-          controller: controller,
+          prefixController: prefixController,
+          limitController: limitController,
         ),
       );
 
       expect(find.textContaining('NO consume NCF'), findsOneWidget);
+      expect(
+        find.textContaining('Tarjeta, transferencia y crédito fiscal siempre'),
+        findsOneWidget,
+      );
     });
   });
 
   group('Interacción', () {
-    testWidgets('los switches avisan del cambio', (tester) async {
+    testWidgets('el switch avisa del cambio', (tester) async {
       bool? enabled;
-      bool? asDefault;
 
       await tester.pumpWidget(
         _host(
           features: const BusinessFeatures(salesNoteEnabled: true),
-          controller: controller,
+          prefixController: prefixController,
+          limitController: limitController,
           onEnabled: (v) => enabled = v,
-          onDefault: (v) => asDefault = v,
         ),
       );
 
-      final switches = find.byType(Switch);
-      expect(switches, findsNWidgets(2));
+      expect(find.byType(Switch), findsOneWidget);
+      await tester.tap(find.byType(Switch));
+      expect(enabled, isFalse);
+    });
 
-      await tester.tap(switches.first);
-      expect(enabled, isFalse, reason: 'estaba prendida: el toque la apaga');
+    testWidgets('permite guardar la cantidad y solo acepta dígitos', (
+      tester,
+    ) async {
+      var saves = 0;
+      await tester.pumpWidget(
+        _host(
+          features: const BusinessFeatures(salesNoteEnabled: true),
+          prefixController: prefixController,
+          limitController: limitController,
+          onLimit: () => saves++,
+        ),
+      );
 
-      await tester.tap(switches.last);
-      expect(asDefault, isTrue);
+      final limitField = find.widgetWithText(TextField, 'Cantidad de notas');
+      await tester.enterText(limitField, '5a');
+      expect(limitController.text, '5');
+      await tester.tap(find.byTooltip('Guardar cantidad de notas'));
+      expect(saves, equals(1));
     });
 
     testWidgets('el botón del prefijo dispara el guardado', (tester) async {
@@ -155,7 +195,8 @@ void main() {
       await tester.pumpWidget(
         _host(
           features: const BusinessFeatures(salesNoteEnabled: true),
-          controller: controller,
+          prefixController: prefixController,
+          limitController: limitController,
           onPrefix: () => saves++,
         ),
       );

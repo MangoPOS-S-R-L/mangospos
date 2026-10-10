@@ -409,21 +409,29 @@ double? _parseCartRatePercent(String label) {
 ///    cuenta).
 /// 3. **`opened_by` + auth.users.full_name** → si no hay registro de
 ///    empleado, usar el full_name del auth user.
-/// 4. **`sessionProvider.userName`** → fallback final cuando todo lo
-///    anterior falla.
+///
+/// Sin red, con la orden aún local o sin respuesta del servidor: lo que ESTE
+/// equipo sabe de la orden — quién la abrió sin red (anotado al abrirla) o el
+/// mozo que el salón ya muestra en la tarjeta de la mesa. Si nada de eso hay,
+/// `null` y el papel sale sin nombre.
+///
+/// NUNCA cae al usuario logueado: el que imprime no es quien abrió la mesa
+/// (la caja cobra mesas de todos; en multimesero la cuenta del equipo es
+/// compartida). Ese respaldo era el que sacaba comandas y facturas a nombre
+/// de quien tenía la sesión iniciada cada vez que la consulta fallaba.
+///
 /// El que abrió la mesa no cambia en la vida de la orden: se memoriza para no
 /// consultarlo en cada envío a cocina, precuenta y factura.
 final Map<String, String> _waiterNameByOrder = {};
 
 Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
-  final fallback = ref.read(sessionProvider).userName;
   final known = _waiterNameByOrder[orderId];
   if (known != null) return known;
   // Orden local (el servidor no la conoce) o sin red: la consulta solo
   // retrasaría el envío a cocina y la impresión. Corre ANTES de cada una.
   if (orderId.startsWith('local-order-') ||
       !ConnectivityService().isConnected) {
-    return fallback;
+    return _knownWaiterNameLocally(ref, orderId);
   }
   final client = Supabase.instance.client;
 
@@ -435,9 +443,7 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
   //
   // Llamamos a la RPC `fn_order_opener_name` en vez de hacer SELECTs
   // directos a `employees` porque RLS bloqueaba esos SELECTs para
-  // cajeros sin permisos especiales — el helper silenciosamente caía
-  // al `fallback = sessionProvider.userName` y el ticket terminaba
-  // imprimiendo el nombre del cajero logueado, no del opener real.
+  // cajeros sin permisos especiales.
   try {
     final result = await client
         .rpc('fn_order_opener_name', params: {'p_order_id': orderId})
@@ -450,7 +456,35 @@ Future<String?> _loadWaiterName(WidgetRef ref, String orderId) async {
     debugPrint('[audit] fn_order_opener_name falló: $e');
   }
 
-  return fallback;
+  return _knownWaiterNameLocally(ref, orderId);
+}
+
+/// Respaldo sin servidor de [_loadWaiterName]: datos de la ORDEN que este
+/// equipo ya tiene, nunca la sesión. No se memoriza: en cuanto haya red, la
+/// respuesta del servidor manda.
+Future<String?> _knownWaiterNameLocally(WidgetRef ref, String orderId) async {
+  final businessId = ref.read(sessionProvider).activeBusinessId ?? '';
+  final opener = await OfflinePosService().localOrderOpener(
+    businessId: businessId,
+    orderId: orderId,
+  );
+  if (opener?.name != null) return opener!.name;
+
+  // La tarjeta del salón ya trae el mozo resuelto por el servidor con la
+  // misma prioridad (`v_zone_table_status.waiter_name`).
+  final order = ref.read(currentOrderProvider).order;
+  final sessionId = order?.id == orderId ? order?.sessionId : null;
+  if (sessionId == null || sessionId.isEmpty) return null;
+  for (final tables in ref.read(byZoneVmProvider).statusByZone.values) {
+    for (final table in tables) {
+      if (table.sessionId != sessionId) continue;
+      final name = table.waiterName?.trim();
+      return (name == null || name.isEmpty)
+          ? null
+          : preferredDisplayName(fullName: name);
+    }
+  }
+  return null;
 }
 
 /// Bloque de totales de la pre-cuenta EN PANTALLA, con el mismo criterio que
@@ -520,6 +554,7 @@ Future<FiscalDocument?> _loadFiscalDocument(
   WidgetRef ref,
   String orderId, {
   String? fiscalDocumentId,
+  String? checkId,
 }) async {
   try {
     // Si conocemos el fd_id (vino con el payment recién cobrado), lo
@@ -532,7 +567,7 @@ Future<FiscalDocument?> _loadFiscalDocument(
     }
     return await ref
         .read(salesRepositoryProvider)
-        .getOrderFiscalDocument(orderId);
+        .getFiscalDocumentForScope(orderId: orderId, checkId: checkId);
   } catch (_) {
     return null;
   }
@@ -989,7 +1024,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (!changed || !context.mounted) return;
 
     // El "MESERO:" de la precuenta sale del opener que resuelve el servidor:
-    // sin releer, la próxima impresión seguiría con el nombre viejo.
+    // sin releer (y sin olvidar el memorizado), la próxima impresión seguiría
+    // con el nombre viejo.
+    _waiterNameByOrder.remove(order.id);
     await ref.read(currentOrderProvider.notifier).reloadOrderNow();
   }
 
@@ -1200,6 +1237,25 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }) async {
     final orderState = ref.read(currentOrderProvider);
     if (orderState.order == null) return;
+
+    // Cuenta cobrada sin internet: anularla borraba su cobro. Se anula el
+    // pago desde el Historial cuando haya subido, como cualquier venta.
+    if (await ref
+        .read(currentOrderProvider.notifier)
+        .currentOrderHasQueuedPayment()) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFFF59E0B),
+          content: Text(
+            'Esta cuenta ya se cobró sin internet y no se puede anular aquí. '
+            'Cuando suba, anula el pago desde el Historial de ventas.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!context.mounted) return;
 
     // El owner del negocio se salta el PIN. Quien tenga [bypassPermission]
     // (p. ej. un mesero con 'ventas.mesas.liberar') también pasa directo.
@@ -1722,6 +1778,19 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       content: Text(
                         'Error: $errorMsg\nPor favor envíame una captura de este mensaje.',
                         maxLines: 4,
+                      ),
+                    ),
+                  );
+                  return;
+                }
+                // Sin el permiso, addItem guarda el error en el estado y esta
+                // pantalla no lo muestra: el toque «no hacía nada».
+                if (!operatorHasPermission(ref, 'ventas.orden.agregar_item')) {
+                  ScaffoldMessenger.of(context).showAppSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'No tienes permiso para agregar productos a la orden. '
+                        'Pídele al dueño que lo active en Roles y permisos.',
                       ),
                     ),
                   );
@@ -2809,6 +2878,39 @@ class _CartView extends ConsumerWidget {
       unawaited(ref.read(cashDrawerServiceProvider).openOnPayButton());
     }
 
+    // Venta local (abierta sin red, o en venta rápida durante la ventana de
+    // 20 s tras una lectura lenta): su cobro va por la cola offline e imprime
+    // PRECUENTA. Si ya hay internet, se sube primero y se cobra la orden real
+    // con su factura. Va antes del bloque de cocina, que necesita el id real.
+    if (checkId == null && order.id.startsWith('local-order-')) {
+      final orderNotifier = ref.read(currentOrderProvider.notifier);
+      // Segundo toque mientras sube: abriría un cobro offline en paralelo.
+      if (orderNotifier.isPromotingLocalOrder) return;
+      if (ConnectivityService().isConnected) {
+        final remoteId = await orderNotifier.promoteLocalOrderForPayment(
+          order.id,
+        );
+        if (!context.mounted) return;
+        final promotedState = ref.read(currentOrderProvider);
+        final promoted = promotedState.order;
+        if (remoteId != null && promoted != null && promoted.id == remoteId) {
+          order = promoted;
+          // Mismo cálculo que el botón "Pagar", ahora sobre los ítems del
+          // servidor (el guard de cobertura de abajo compara contra este).
+          total = summarizeOrderPricing(
+            promoted,
+            promotedState.items.where((i) {
+              if (!_isOpenItem(i)) return false;
+              return !promotedState.checks.any(
+                (c) => c.id == i.checkId && c.isClosed,
+              );
+            }).toList(),
+            forcedOrigin: promotedState.origin,
+          ).total;
+        }
+      }
+    }
+
     // Feature flag `kitchen_enabled`: si la cocina está apagada y hay
     // items draft/pending, los marcamos `ready` antes de abrir el pago
     // para no atascarnos en validaciones de estado. NO imprimimos
@@ -2835,6 +2937,9 @@ class _CartView extends ConsumerWidget {
               .read(salesRepositoryProvider)
               .markOrderItemsAsReady(order.id);
           if (!context.mounted) return;
+          // Marcar ready puede descontar inventario aunque luego se cancele
+          // el modal de pago. Actualizar el badge sin esperar a Realtime.
+          unawaited(ref.read(menuBrowserVmProvider.notifier).refreshStock());
           await ref.read(currentOrderProvider.notifier).refreshOrder();
         } catch (e) {
           debugPrint('[order] markOrderItemsAsReady falló: $e');
@@ -3269,13 +3374,43 @@ class _CartView extends ConsumerWidget {
     }) async {
       if (!context.mounted) return;
 
-      if (origin == OrderOrigin.table &&
-          checkId == null &&
-          payments.isNotEmpty) {
+      // El pago confirmado puede haber descontado stock. La lectura no
+      // bloquea la impresión y excluye los pagos pendientes de sincronizar.
+      if (payments.any((payment) => payment.status == 'completed')) {
+        unawaited(ref.read(menuBrowserVmProvider.notifier).refreshStock());
+      }
+
+      // Antes de soltar la orden de la pantalla (abajo): la factura la imprime.
+      final deliveryAddress = ref.read(currentOrderProvider).deliveryAddress;
+
+      // Venta rápida/manual cobrada sin internet: el servidor no la cierra
+      // hasta sincronizar, así que seguía en pantalla como si no se hubiera
+      // cobrado mientras abría la siguiente (o para siempre si no abría). Desde
+      // ahí "Descartar venta" o "Salir" al cambiar de pantalla la borraban con
+      // su cobro. Sale de la pantalla ya, igual que una mesa cobrada. Retail no:
+      // su cambio de carrito lo maneja refreshOrder(clearIfPaid).
+      final paidOfflineQuickOrManual =
+          (origin == OrderOrigin.quick || origin == OrderOrigin.manual) &&
+          !ref.read(currentBusinessModelProvider).isRetail &&
+          payments.isNotEmpty &&
+          payments.every((payment) => payment.status == 'pending');
+      if (checkId == null &&
+          payments.isNotEmpty &&
+          (origin == OrderOrigin.table || paidOfflineQuickOrManual)) {
         await ref
             .read(currentOrderProvider.notifier)
             .markPaidOrderLocally(order.id);
       }
+      // Venta rápida/manual cobrada EN LÍNEA: marca local de cerrada antes de
+      // imprimir (la de onFinish llega después de la impresión).
+      await ref
+          .read(currentOrderProvider.notifier)
+          .markVirtualSalePaidLocally(
+            orderId: order.id,
+            origin: origin.name,
+            checkId: checkId,
+            payments: payments,
+          );
 
       final items = List<OrderItem>.from(prePaymentItems);
       final printOrder = prePaymentOrder;
@@ -3325,17 +3460,22 @@ class _CartView extends ConsumerWidget {
         ref,
         order.id,
         fiscalDocumentId: fdIdFromPayment,
+        checkId: payments.isNotEmpty ? payments.last.checkId : checkId,
       );
       final waiterNameFuture = _loadWaiterName(ref, order.id);
       // Nota de venta del mismo scope que se acaba de cobrar. Arranca en
       // paralelo con el resto; si el cobro fue fiscal devuelve null y
       // nada cambia.
-      final salesNoteFuture = _loadSalesNote(ref, order.id, checkId: checkId);
+      final salesNoteFuture = _loadSalesNote(
+        ref,
+        order.id,
+        checkId: payments.isNotEmpty ? payments.last.checkId : checkId,
+      );
       final businessProfile = await businessProfileFuture;
       final fiscalDoc = await fiscalDocFuture;
       final salesNote = await salesNoteFuture;
-      final waiterName =
-          await waiterNameFuture ?? ref.read(sessionProvider).userName;
+      // Quien ABRIÓ la mesa; nunca quien está cobrando (ver _loadWaiterName).
+      final waiterName = await waiterNameFuture;
       final issuedAt =
           fiscalDoc?.issuedAt ??
           (payments.isNotEmpty
@@ -3344,9 +3484,6 @@ class _CartView extends ConsumerWidget {
                     .reduce((a, b) => a.isAfter(b) ? a : b)
               : order.createdAt);
 
-      final ncfFromPayment = payments.isNotEmpty
-          ? payments.last.reference
-          : null;
       final printedFiscalType = fiscalDoc?.ncfType ?? finalFiscalType;
 
       if (!context.mounted) return;
@@ -3370,14 +3507,12 @@ class _CartView extends ConsumerWidget {
         'phone': businessProfile.phone,
         'address': businessProfile.address,
         'salesNote': salesNote?.noteNumber,
-        'ncf': isSalesNoteInvoice
-            ? null
-            : (ncfFromPayment ?? fiscalDoc?.ncfNumber),
+        'ncf': isSalesNoteInvoice ? null : fiscalDoc?.ncfNumber,
         'fiscalType': isSalesNoteInvoice ? null : printedFiscalType,
         'customerName': finalCustomerName,
         'customerLegalName': finalCustomerLegalName,
         'customerTaxId': finalCustomerTaxId,
-        'deliveryAddress': ref.read(currentOrderProvider).deliveryAddress,
+        'deliveryAddress': deliveryAddress,
         'issuedAt': issuedAt.toIso8601String(),
         'tableName': tableName,
         'waiterName': waiterName,
@@ -5606,12 +5741,10 @@ class _CartView extends ConsumerWidget {
                         }) async {
                           await _runLockedAction(ref, sendKitchenLockKey, () async {
                             try {
-                              final waiterName =
-                                  await _loadWaiterName(
-                                    ref,
-                                    orderState.order!.id,
-                                  ) ??
-                                  ref.read(sessionProvider).userName;
+                              final waiterName = await _loadWaiterName(
+                                ref,
+                                orderState.order!.id,
+                              );
                               if (!context.mounted) return;
                               final kitchenResult = await ref
                                   .read(currentOrderProvider.notifier)
@@ -5800,6 +5933,11 @@ class _CartView extends ConsumerWidget {
                               final notifier = ref.read(
                                 currentOrderProvider.notifier,
                               );
+                              // Ya cobrada sin internet: no se anula (se
+                              // perdía el cobro); cancelCurrentOrder solo la
+                              // saca de pantalla y la cola la sube.
+                              final alreadyPaid = await notifier
+                                  .currentOrderHasQueuedPayment();
                               await notifier.cancelCurrentOrder(
                                 reason: 'Venta rápida descartada',
                               );
@@ -5808,8 +5946,15 @@ class _CartView extends ConsumerWidget {
                               await notifier.openQuick(forceRestart: true);
                               if (context.mounted) {
                                 ScaffoldMessenger.of(context).showAppSnackBar(
-                                  const SnackBar(
-                                    content: Text('Venta descartada'),
+                                  SnackBar(
+                                    content: Text(
+                                      alreadyPaid
+                                          ? 'Esta venta ya se cobró sin '
+                                                'internet: no se descartó. Se '
+                                                'subirá con su comprobante al '
+                                                'volver la conexión.'
+                                          : 'Venta descartada',
+                                    ),
                                   ),
                                 );
                               }
@@ -6058,9 +6203,10 @@ class _CartView extends ConsumerWidget {
                                 );
                                 final businessProfile =
                                     await _loadBusinessReceiptProfile(ref);
-                                final waiterName =
-                                    await _loadWaiterName(ref, freshOrder.id) ??
-                                    ref.read(sessionProvider).userName;
+                                final waiterName = await _loadWaiterName(
+                                  ref,
+                                  freshOrder.id,
+                                );
                                 final precheckTotals =
                                     await _buildPrecheckTotalsPayload(
                                       ref,

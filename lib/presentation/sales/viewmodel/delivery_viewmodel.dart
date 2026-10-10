@@ -5,20 +5,36 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../data/utils/business_id_resolver.dart';
 import '../state/delivery_state.dart';
+import '../../../services/session/session_controller.dart';
 import 'sales_viewmodel.dart';
 
-final deliveryVmProvider =
-    NotifierProvider<DeliveryViewModel, DeliveryState>(DeliveryViewModel.new);
+final deliveryVmProvider = NotifierProvider<DeliveryViewModel, DeliveryState>(
+  DeliveryViewModel.new,
+);
 
 class DeliveryViewModel extends Notifier<DeliveryState> {
   RealtimeChannel? _rt;
   String? _rtBusinessId;
   Timer? _debounce;
+  int _loadGeneration = 0;
 
   static const _debounceDuration = Duration(milliseconds: 400);
 
   @override
   DeliveryState build() {
+    ref.listen(sessionProvider.select((s) => s.activeBusinessId), (
+      previous,
+      next,
+    ) {
+      if (previous == next) return;
+      ++_loadGeneration;
+      _debounce?.cancel();
+      _rt?.unsubscribe();
+      _rt = null;
+      _rtBusinessId = null;
+      state = const DeliveryState();
+      if (next != null && next.isNotEmpty) unawaited(load(next));
+    });
     ref.onDispose(() {
       _rt?.unsubscribe();
       _rt = null;
@@ -30,6 +46,7 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
   }
 
   Future<void> load(String businessId) async {
+    final generation = ++_loadGeneration;
     state = state.copyWith(loading: true, error: null);
 
     try {
@@ -37,6 +54,7 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
         Supabase.instance.client,
         businessId,
       );
+      if (generation != _loadGeneration) return;
       if (bizId == null) {
         state = state.copyWith(
           loading: false,
@@ -49,6 +67,8 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
           .read(salesRepositoryProvider)
           .listDeliveryOrders(businessId: bizId);
 
+      if (generation != _loadGeneration) return;
+
       state = state.copyWith(
         orders: rows.map(DeliveryOrderSummary.fromMap).toList(),
         loading: false,
@@ -57,6 +77,7 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
 
       _subscribeRealtime(bizId);
     } catch (e) {
+      if (generation != _loadGeneration) return;
       state = state.copyWith(loading: false, error: '$e');
     }
   }
@@ -68,9 +89,23 @@ class DeliveryViewModel extends Notifier<DeliveryState> {
   }
 
   Future<Map<String, dynamic>> createOrder(String deliveryType) async {
+    final session = ref.read(sessionProvider);
+    final businessId = session.activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      throw StateError('No se pudo identificar el negocio del delivery.');
+    }
+    // Sin la migración 20261009_0004, solo un usuario con un único negocio
+    // puede usar la firma vieja: el servidor no tiene otro que elegir.
+    final businesses = session.availableBusinesses;
+    final singleBusiness =
+        businesses.length == 1 && businesses.single.id == businessId;
     final result = await ref
         .read(salesRepositoryProvider)
-        .openDeliveryOrder(deliveryType: deliveryType);
+        .openDeliveryOrder(
+          deliveryType: deliveryType,
+          businessId: businessId,
+          allowLegacyBusinessFallback: singleBusiness,
+        );
     // Refrescar la lista tras crear
     unawaited(refresh());
     return result;

@@ -5,280 +5,398 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
-/// Recovery de impresoras de red por MAC SIN agente local.
-///
-/// En escritorio (Windows/macOS) la captura de MAC y el escaneo de LAN los
-/// hace el agente Node (`/api/printers/mac-for-ip`, `/resolve-by-mac`). En
-/// Android no hay agente, así que este módulo replica esas dos operaciones
-/// dentro de la app:
-///
-///   - [captureMacForIp]: averigua el MAC de la impresora que responde en
-///     una IP. Primero `ip neigh` (tabla de vecinos del kernel — funciona en
-///     la mayoría de los Android sin root; `/proc/net/arp` está bloqueado
-///     desde Android 10), y si no, SNMP v1 GETNEXT sobre `ifPhysAddress`
-///     (UDP 161, community `public`) que las térmicas de red típicas
-///     (Epson, 3nStar, Xprinter, Bixolon) responden.
-///   - [resolveIpByMac]: barre el /24 de cada interfaz local sondando el
-///     puerto de impresión y compara el MAC de los candidatos que aceptan
-///     conexión contra el MAC guardado. Devuelve la IP nueva si aparece.
-///
-/// Solo se activa en Android ([isSupported]); en el resto de plataformas el
-/// caller sigue con el agente como hasta ahora. Sin dependencias nuevas.
+/// Injectable network operations. Production operations only open a TCP
+/// connection, read neighbor entries, and read SNMP interface addresses;
+/// they never send print data or change the printer/network configuration.
+@visibleForTesting
+class LanMacRecoveryIo {
+  const LanMacRecoveryIo({
+    required this.localIpv4Addresses,
+    required this.probePort,
+    required this.neighborMac,
+    required this.snmpMacs,
+  });
+
+  final Future<List<String>> Function(Duration timeout) localIpv4Addresses;
+  final Future<bool> Function(String ip, int port, Duration timeout) probePort;
+  final Future<String?> Function(String ip, Duration timeout) neighborMac;
+  final Future<List<String>> Function(String ip, Duration timeout) snmpMacs;
+}
+
+/// Native LAN identity discovery, including desktops without a Node agent.
+/// iOS uses SNMP because it cannot read the operating system neighbor table.
+/// No DHCP result is cached: every returned endpoint has a fresh TCP probe
+/// and a matching hardware identity. A reachable IP alone is insufficient.
 class LanMacRecovery {
   LanMacRecovery._();
 
-  /// Plataformas donde la app puede resolver MAC por su cuenta.
-  ///
-  /// Antes era solo Android, asumiendo que en escritorio siempre habria
-  /// agente. En la practica una caja Windows con el agente detenido (o
-  /// instalado sin el componente Agent) se quedaba SIN MAC para siempre: no
-  /// se capturaba al agregar, ni tras imprimir, ni con "Probar impresion", y
-  /// entonces el recovery por MAC nunca podia dispararse. Ahora el
-  /// capturador nativo cubre tambien Windows/macOS/Linux via `arp`, y el
-  /// agente queda como via preferente, no como unica.
-  ///
-  /// iOS queda fuera: no expone la tabla de vecinos a apps de terceros.
   static bool get isSupported =>
       !kIsWeb &&
       (Platform.isAndroid ||
           Platform.isWindows ||
           Platform.isMacOS ||
-          Platform.isLinux);
+          Platform.isLinux ||
+          Platform.isIOS);
 
-  /// ifPhysAddress (1.3.6.1.2.1.2.2.1.6) — MAC por interfaz en MIB-2.
   static const List<int> _ifPhysAddressOid = [1, 3, 6, 1, 2, 1, 2, 2, 1, 6];
+  static const int _probeConcurrency = 32;
+  static const int _identityConcurrency = 4;
+  static const int _maximumSubnets = 4;
+  static const int _maximumCandidates = 32;
+  static const Duration _probeTimeout = Duration(milliseconds: 350);
+  static const Duration _identityTimeout = Duration(seconds: 2);
 
-  // =========================================================================
-  // Captura de MAC para una IP conocida
-  // =========================================================================
+  static final _nativeIo = LanMacRecoveryIo(
+    localIpv4Addresses: _localIpv4Addresses,
+    probePort: _probePort,
+    neighborMac: _macFromNeighborTable,
+    snmpMacs: _macsViaSnmp,
+  );
 
-  /// Devuelve el MAC (normalizado `aa:bb:cc:dd:ee:ff`) del dispositivo que
-  /// vive en [ip], o null si no se pudo resolver. No lanza.
+  /// Captures only a valid unicast hardware address. A neighbor-table entry
+  /// is usable only after a successful TCP handshake. When SNMP contradicts
+  /// the neighbor entry, neither identity is accepted. [expectedMac] can
+  /// identify a known printer among several SNMP interface addresses when
+  /// the platform cannot read its neighbor table. A different unambiguous
+  /// observed identity is returned so callers can reject the endpoint.
   static Future<String?> captureMacForIp(
     String ip, {
     int tcpPort = 9100,
+    String? expectedMac,
+    Duration timeout = const Duration(seconds: 2),
+    @visibleForTesting LanMacRecoveryIo? io,
   }) async {
-    if (!isSupported) return null;
-    final target = ip.trim();
-    if (target.isEmpty) return null;
-
-    // Tocar la IP por TCP primero: puebla/refresca la entrada del vecino en
-    // el kernel para que `ip neigh` tenga algo que decir. Si el caller viene
-    // de un print exitoso la entrada ya está caliente y esto es un no-op
-    // rápido; si falla la conexión igual seguimos (SNMP no la necesita).
-    try {
-      final socket = await Socket.connect(
-        target,
-        tcpPort,
-        timeout: const Duration(milliseconds: 700),
-      );
-      socket.destroy();
-    } catch (_) {}
-
-    final viaTable = await _macFromNeighborTable(target);
-    if (viaTable != null) return viaTable;
-    return _macViaSnmp(target);
-  }
-
-  /// Tabla de vecinos del sistema, con el comando que corresponda a cada
-  /// plataforma. `ip neigh` en Android/Linux (en Android 10+ `/proc/net/arp`
-  /// esta bloqueado, pero `ip` sigue funcionando sin root) y `arp` en
-  /// Windows/macOS. Si el binario no existe o falla, devuelve null y el
-  /// caller cae a SNMP.
-  static Future<String?> _macFromNeighborTable(String ip) async {
-    if (Platform.isAndroid || Platform.isLinux) {
-      final viaNeigh = await _macFromIpNeigh(ip);
-      if (viaNeigh != null) return viaNeigh;
-    }
-    return _macFromArp(ip);
-  }
-
-  /// `arp -a <ip>` (Windows) / `arp -n <ip>` (macOS, Linux).
-  static Future<String?> _macFromArp(String ip) async {
-    final args = Platform.isWindows ? ['-a', ip] : ['-n', ip];
-    try {
-      final result =
-          await Process.run('arp', args).timeout(const Duration(seconds: 2));
-      // En Windows `arp -a` de una IP sin entrada devuelve exitCode != 0; en
-      // macOS imprime "no entry". Ambos casos caen a null via el parser.
-      return parseArpOutput(result.stdout?.toString() ?? '', ip);
-    } catch (_) {
+    if (io == null && !isSupported) return null;
+    final target = _ipv4(ip);
+    final expected = normalizeMac(expectedMac);
+    if (target == null ||
+        !_validPort(tcpPort) ||
+        (expectedMac != null && expected == null) ||
+        timeout <= Duration.zero) {
       return null;
     }
-  }
-
-  /// Extrae el MAC de la linea de [ip] en la salida de `arp`. Publico para
-  /// tests porque el formato cambia por plataforma e idioma del sistema:
-  ///
-  ///   Windows es:  `  192.168.1.50          00-11-22-33-44-55     dinamico`
-  ///   macOS:       `? (192.168.1.50) at 0:11:22:33:44:55 on en0 ifscope`
-  ///   Linux:       `192.168.1.50  ether  00:11:22:33:44:55  C  eth0`
-  ///
-  /// macOS omite el cero a la izquierda de cada grupo, asi que hay que
-  /// rellenarlos antes de normalizar (si no, quedan 11 digitos y se
-  /// descarta un MAC valido).
-  @visibleForTesting
-  static String? parseArpOutput(String output, String ip) {
-    // Delimitar por la IP EXACTA: sin esto, buscar 192.168.1.5 casaba con la
-    // linea de 192.168.1.50 y se guardaba el MAC de otro equipo.
-    final ipPattern = RegExp(
-      '(^|[^0-9.])${RegExp.escape(ip)}([^0-9.]|\$)',
+    final operations = io ?? _nativeIo;
+    final budget = _RecoveryBudget(timeout);
+    final reachable =
+        await budget.run(
+          (limit) => operations.probePort(target, tcpPort, limit),
+          maximum: const Duration(milliseconds: 700),
+        ) ??
+        false;
+    return _identityForIp(
+      target,
+      operations,
+      _RecoveryBudget(budget.cap(const Duration(milliseconds: 1200))),
+      allowNeighbor: reachable,
+      expectedMac: expected,
     );
-    final macPattern =
-        RegExp(r'([0-9a-fA-F]{1,2}[:-]){5}[0-9a-fA-F]{1,2}');
-
-    for (final line in const LineSplitter().convert(output)) {
-      if (!ipPattern.hasMatch(line)) continue;
-      final match = macPattern.firstMatch(line);
-      if (match == null) continue;
-      final groups = match.group(0)!.split(RegExp('[:-]'));
-      final padded = groups.map((g) => g.padLeft(2, '0')).join(':');
-      final normalized = normalizeMac(padded);
-      if (normalized != null) return normalized;
-    }
-    return null;
   }
 
-  /// Lee la tabla de vecinos del kernel vía `ip neigh show <ip>`.
-  static Future<String?> _macFromIpNeigh(String ip) async {
-    try {
-      final result = await Process.run('ip', ['neigh', 'show', ip])
-          .timeout(const Duration(seconds: 2));
-      if (result.exitCode != 0) return null;
-      return parseIpNeighOutput(result.stdout?.toString() ?? '');
-    } catch (_) {
-      // Binario ausente, permiso denegado, timeout — da igual: fallback SNMP.
-      return null;
-    }
-  }
-
-  /// Extrae el `lladdr` de la salida de `ip neigh show`. Público para tests.
-  @visibleForTesting
-  static String? parseIpNeighOutput(String output) {
-    final match =
-        RegExp(r'lladdr\s+([0-9a-fA-F:]{17})').firstMatch(output);
-    if (match == null) return null;
-    return normalizeMac(match.group(1));
-  }
-
-  // =========================================================================
-  // Escaneo de la subred buscando un MAC
-  // =========================================================================
-
-  /// Barre los /24 de las interfaces locales buscando el dispositivo con
-  /// [mac] escuchando en [tcpPort]. Devuelve su IP actual o null. No lanza.
+  /// Searches all attached private IPv4 /24s, retaining the configured print
+  /// port. Hints only prioritize attached networks; they never add arbitrary
+  /// remote ranges. [previousIp] is verified like any other candidate.
   ///
-  /// Coste típico: ~3s (sonda TCP de 254 hosts en lotes de 32) + un chequeo
-  /// de MAC por candidato (los hosts con 9100 abierto suelen ser 1-3).
+  /// Returns null on conflicting MACs, duplicate matching endpoints, an
+  /// incomplete/time-limited scan, or excessive candidate networks/devices.
   static Future<String?> resolveIpByMac({
     required String mac,
     int tcpPort = 9100,
     String? excludeIp,
+    String? previousIp,
+    Iterable<String> subnetHints = const [],
+    Duration timeout = const Duration(seconds: 12),
+    @visibleForTesting LanMacRecoveryIo? io,
   }) async {
-    if (!isSupported) return null;
+    if (io == null && !isSupported) return null;
     final wanted = normalizeMac(mac);
-    if (wanted == null) return null;
+    if (wanted == null || !_validPort(tcpPort) || timeout <= Duration.zero) {
+      return null;
+    }
+    final operations = io ?? _nativeIo;
+    final budget = _RecoveryBudget(timeout);
+    final addresses = await budget.run(
+      operations.localIpv4Addresses,
+      maximum: const Duration(seconds: 1),
+    );
+    if (addresses == null) return null;
+    final local = addresses.map(_ipv4).whereType<String>().toSet();
+    final attached = local.where(_isPrivateIpv4).map(_subnetBase).toSet();
+    if (attached.isEmpty || attached.length > _maximumSubnets) return null;
 
-    for (final subnetBase in await _localSubnetBases()) {
-      final candidates = await _sweepOpenPort(
-        subnetBase,
-        tcpPort,
-        excludeIp: excludeIp?.trim(),
-      );
-      for (final candidate in candidates) {
-        final found = await _macFromNeighborTable(candidate) ??
-            await _macViaSnmp(candidate);
-        if (found == wanted) {
-          debugPrint(
-            '[LanMacRecovery] $wanted encontrado en $candidate',
-          );
-          return candidate;
-        }
+    final excluded = _ipv4(excludeIp);
+    final previous = _ipv4(previousIp);
+    final bases = <String>{};
+    for (final hint in [?previous, ...subnetHints]) {
+      final hintIp = _ipv4(hint.endsWith('.') ? '${hint}1' : hint);
+      if (hintIp != null && attached.contains(_subnetBase(hintIp))) {
+        bases.add(_subnetBase(hintIp));
       }
     }
-    return null;
+    bases.addAll(attached);
+    final hosts = <String>[
+      if (previous != null &&
+          previous != excluded &&
+          attached.contains(_subnetBase(previous)) &&
+          !local.contains(previous))
+        previous,
+      for (final base in bases)
+        for (var host = 1; host <= 254; host++)
+          if ('$base$host' != excluded &&
+              '$base$host' != previous &&
+              !local.contains('$base$host'))
+            '$base$host',
+    ];
+    final matches = <String>{};
+    var candidateCount = 0;
+    for (var start = 0; start < hosts.length; start += _probeConcurrency) {
+      if (budget.expired) return null;
+      final batch = hosts.sublist(
+        start,
+        min(start + _probeConcurrency, hosts.length),
+      );
+      final probes = await Future.wait(
+        batch.map((ip) async {
+          final open = await budget.run(
+            (limit) => operations.probePort(ip, tcpPort, limit),
+            maximum: _probeTimeout,
+          );
+          return open == true ? ip : null;
+        }),
+      );
+      if (budget.expired) return null;
+      final candidates = probes.whereType<String>().toList();
+      candidateCount += candidates.length;
+      if (candidateCount > _maximumCandidates) return null;
+      for (
+        var offset = 0;
+        offset < candidates.length;
+        offset += _identityConcurrency
+      ) {
+        final group = candidates.sublist(
+          offset,
+          min(offset + _identityConcurrency, candidates.length),
+        );
+        final identities = await Future.wait(
+          group.map((ip) async {
+            final identity = await _identityForIp(
+              ip,
+              operations,
+              _RecoveryBudget(budget.cap(_identityTimeout)),
+              allowNeighbor: true,
+              expectedMac: wanted,
+            );
+            return identity == wanted ? ip : null;
+          }),
+        );
+        matches.addAll(identities.whereType<String>());
+        if (matches.length > 1 || budget.expired) return null;
+      }
+    }
+    return matches.length == 1 ? matches.single : null;
   }
 
-  /// Bases `/24` ("192.168.1.") de las interfaces IPv4 locales, sin
-  /// loopback ni link-local. Normalmente una sola (wlan0).
-  static Future<List<String>> _localSubnetBases() async {
+  static Future<String?> _identityForIp(
+    String ip,
+    LanMacRecoveryIo io,
+    _RecoveryBudget budget, {
+    required bool allowNeighbor,
+    String? expectedMac,
+  }) async {
+    if (budget.expired) return null;
+    final results = await Future.wait<Object?>([
+      if (allowNeighbor)
+        budget.run<String?>(
+          (limit) => io.neighborMac(ip, limit),
+          maximum: _identityTimeout,
+        )
+      else
+        Future<String?>.value(null),
+      budget.run<List<String>>(
+        (limit) => io.snmpMacs(ip, limit),
+        maximum: _identityTimeout,
+      ),
+    ]);
+    final neighbor = normalizeMac(results[0] as String?);
+    final reported = (results[1] as List<String>? ?? const <String>[])
+        .map(normalizeMac)
+        .whereType<String>()
+        .toSet();
+    if (neighbor != null) {
+      if (reported.isNotEmpty && !reported.contains(neighbor)) return null;
+      return neighbor;
+    }
+    if (expectedMac != null && reported.contains(expectedMac)) {
+      return expectedMac;
+    }
+    return reported.length == 1 ? reported.single : null;
+  }
+
+  static Future<bool> _probePort(String ip, int port, Duration timeout) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(ip, port, timeout: timeout);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      socket?.destroy();
+    }
+  }
+
+  static Future<List<String>> _localIpv4Addresses(Duration timeout) async {
     try {
       final interfaces = await NetworkInterface.list(
         includeLoopback: false,
         type: InternetAddressType.IPv4,
-      );
-      final bases = <String>{};
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final ip = addr.address;
-          if (ip.startsWith('169.254.')) continue; // link-local, sin DHCP
-          final lastDot = ip.lastIndexOf('.');
-          if (lastDot <= 0) continue;
-          bases.add(ip.substring(0, lastDot + 1));
-        }
-      }
-      return bases.toList(growable: false);
+      ).timeout(timeout);
+      return [
+        for (final iface in interfaces)
+          ...iface.addresses.map((a) => a.address),
+      ];
     } catch (_) {
       return const [];
     }
   }
 
-  /// Sondea `base1..254:port` por TCP en lotes y devuelve las IPs que
-  /// aceptaron el handshake.
-  static Future<List<String>> _sweepOpenPort(
-    String base,
-    int port, {
-    String? excludeIp,
-    int batchSize = 32,
-    Duration timeout = const Duration(milliseconds: 350),
-  }) async {
-    final open = <String>[];
-    final hosts = [
-      for (var i = 1; i <= 254; i++)
-        if ('$base$i' != excludeIp) '$base$i',
-    ];
-    for (var start = 0; start < hosts.length; start += batchSize) {
-      final batch = hosts.sublist(start, min(start + batchSize, hosts.length));
-      final results = await Future.wait(batch.map((ip) async {
-        try {
-          final socket = await Socket.connect(ip, port, timeout: timeout);
-          socket.destroy();
-          return ip;
-        } catch (_) {
-          return null;
-        }
-      }));
-      open.addAll(results.whereType<String>());
+  static Future<String?> _macFromNeighborTable(
+    String ip,
+    Duration timeout,
+  ) async {
+    if (Platform.isIOS) return null;
+    final budget = _RecoveryBudget(timeout);
+    if (Platform.isAndroid || Platform.isLinux) {
+      final output = await _runCommand('ip', [
+        'neigh',
+        'show',
+        ip,
+      ], budget.remaining);
+      final viaNeigh = parseIpNeighOutput(output ?? '', ip: ip);
+      if (viaNeigh != null) return viaNeigh;
     }
-    return open;
+    if (budget.expired) return null;
+    final output = await _runCommand(
+      'arp',
+      Platform.isWindows ? ['-a', ip] : ['-n', ip],
+      budget.remaining,
+    );
+    return parseArpOutput(output ?? '', ip);
   }
 
-  // =========================================================================
-  // SNMP v1 mínimo (solo GETNEXT de ifPhysAddress) — sin dependencias
-  // =========================================================================
+  /// Kill timed-out subprocesses; Future.timeout alone leaves Process.run
+  /// running in the background on every repeated discovery attempt.
+  static Future<String?> _runCommand(
+    String command,
+    List<String> arguments,
+    Duration timeout,
+  ) async {
+    if (timeout <= Duration.zero) return null;
+    final budget = _RecoveryBudget(timeout);
+    Process? process;
+    var finished = false;
+    try {
+      final started = Process.start(command, arguments);
+      unawaited(
+        started.then((value) {
+          if (finished) value.kill();
+        }, onError: (Object _) {}),
+      );
+      process = await started.timeout(budget.remaining);
+      final output = await Future.wait<Object>([
+        process.stdout.transform(systemEncoding.decoder).join(),
+        process.stderr.drain<void>().then<Object>((_) => ''),
+        process.exitCode,
+      ]).timeout(budget.remaining);
+      if (output[2] != 0) return null;
+      return output[0] as String;
+    } catch (_) {
+      return null;
+    } finally {
+      finished = true;
+      process?.kill();
+    }
+  }
 
-  /// Camina `ifPhysAddress.*` por GETNEXT hasta encontrar un MAC de 6 bytes
-  /// no nulo. Las impresoras suelen tener 1-2 interfaces, así que esto
-  /// resuelve en 1-2 requests.
-  static Future<String?> _macViaSnmp(
-    String ip, {
-    Duration timeout = const Duration(milliseconds: 900),
-  }) async {
+  @visibleForTesting
+  static String? parseArpOutput(String output, String ip) {
+    final target = _ipv4(ip);
+    if (target == null) return null;
+    return _parseNeighborLines(output, ip: target, requireLladdr: false);
+  }
+
+  @visibleForTesting
+  static String? parseIpNeighOutput(String output, {String? ip}) {
+    final target = _ipv4(ip);
+    if (ip != null && target == null) return null;
+    return _parseNeighborLines(output, ip: target, requireLladdr: true);
+  }
+
+  static String? _parseNeighborLines(
+    String output, {
+    String? ip,
+    required bool requireLladdr,
+  }) {
+    final ipPattern = ip == null
+        ? null
+        : RegExp('(^|[^0-9.])${RegExp.escape(ip)}([^0-9.]|\$)');
+    final macPattern = RegExp(
+      r'(^|[^0-9a-fA-F:.-])((?:[0-9a-fA-F]{1,2}[:-]){5}[0-9a-fA-F]{1,2})($|[^0-9a-fA-F:.-])',
+    );
+    final identities = <String>{};
+    for (final line in const LineSplitter().convert(output)) {
+      if (ipPattern != null && !ipPattern.hasMatch(line)) continue;
+      if (RegExp(
+        r'\b(FAILED|INCOMPLETE|STALE|DELAY|PROBE)\b',
+        caseSensitive: false,
+      ).hasMatch(line)) {
+        continue;
+      }
+      final input = requireLladdr
+          ? RegExp(
+              r'\blladdr\s+(.+)',
+              caseSensitive: false,
+            ).firstMatch(line)?.group(1)
+          : line;
+      if (input == null) continue;
+      final match = macPattern.firstMatch(input);
+      if (match == null) continue;
+      if (match.group(2)!.contains(':') && match.group(2)!.contains('-')) {
+        continue;
+      }
+      final padded = match
+          .group(2)!
+          .split(RegExp('[:-]'))
+          .map((group) => group.padLeft(2, '0'))
+          .join(':');
+      final normalized = normalizeMac(padded);
+      if (normalized != null) identities.add(normalized);
+    }
+    return identities.length == 1 ? identities.single : null;
+  }
+
+  // SNMP v1, read-only GETNEXT of the MIB-2 interface hardware addresses.
+  static Future<List<String>> _macsViaSnmp(String ip, Duration timeout) async {
+    final budget = _RecoveryBudget(timeout);
     var oid = List<int>.of(_ifPhysAddressOid);
-    for (var step = 0; step < 8; step++) {
-      final reply = await _snmpGetNext(ip, oid, timeout: timeout);
-      if (reply == null) return null;
+    final addresses = <String>{};
+    for (var step = 0; step < 8 && !budget.expired; step++) {
+      final reply = await _snmpGetNext(
+        ip,
+        oid,
+        timeout: budget.cap(const Duration(milliseconds: 900)),
+      );
+      if (reply == null) break;
       final (nextOid, value) = reply;
-      // Fin del subárbol ifPhysAddress → no hay MAC que sacar.
-      if (!_oidHasPrefix(nextOid, _ifPhysAddressOid)) return null;
-      if (value != null && value.length == 6 && value.any((b) => b != 0)) {
-        return normalizeMac(
+      if (!_oidHasPrefix(nextOid, _ifPhysAddressOid)) break;
+      if (_compareOid(nextOid, oid) <= 0) return const [];
+      if (value != null && value.length == 6) {
+        final mac = normalizeMac(
           value.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':'),
         );
+        if (mac != null) addresses.add(mac);
       }
-      oid = nextOid; // interfaz sin MAC (loopback/ppp) — seguir caminando
+      oid = nextOid;
     }
-    return null;
+    return addresses.toList(growable: false);
   }
 
   static bool _oidHasPrefix(List<int> oid, List<int> prefix) {
@@ -289,8 +407,13 @@ class LanMacRecovery {
     return true;
   }
 
-  /// Un GETNEXT SNMPv1: devuelve (oid, valorOctetString?) del primer
-  /// varbind de la respuesta, o null ante timeout/error/formato raro.
+  static int _compareOid(List<int> a, List<int> b) {
+    for (var i = 0; i < min(a.length, b.length); i++) {
+      if (a[i] != b[i]) return a[i].compareTo(b[i]);
+    }
+    return a.length.compareTo(b.length);
+  }
+
   static Future<(List<int>, Uint8List?)?> _snmpGetNext(
     String ip,
     List<int> oid, {
@@ -298,33 +421,59 @@ class LanMacRecovery {
     String community = 'public',
     int port = 161,
   }) async {
+    if (timeout <= Duration.zero) return null;
+    final budget = _RecoveryBudget(timeout);
     RawDatagramSocket? socket;
+    StreamSubscription<RawSocketEvent>? subscription;
+    var finished = false;
     try {
-      socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      final requestId = Random().nextInt(0x7fffffff);
-      final request = _encodeGetNext(requestId, community, oid);
-      socket.send(request, InternetAddress(ip), port);
-
-      final completer = Completer<Datagram?>();
-      final sub = socket.listen((event) {
-        if (event == RawSocketEvent.read) {
-          final dg = socket!.receive();
-          if (dg != null && !completer.isCompleted) completer.complete(dg);
-        }
-      });
-      final datagram = await completer.future
-          .timeout(timeout, onTimeout: () => null);
-      await sub.cancel();
-      if (datagram == null) return null;
-      return _decodeGetResponse(datagram.data, requestId);
+      final binding = RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      unawaited(
+        binding.then((value) {
+          if (finished) value.close();
+        }, onError: (Object _) {}),
+      );
+      socket = await binding.timeout(budget.remaining);
+      final requestId = Random.secure().nextInt(0x7fffffff);
+      final completer = Completer<(List<int>, Uint8List?)?>();
+      subscription = socket.listen(
+        (event) {
+          if (event != RawSocketEvent.read) return;
+          Datagram? datagram;
+          while ((datagram = socket!.receive()) != null) {
+            final reply = datagram!;
+            if (reply.address.address != ip || reply.port != port) continue;
+            final decoded = decodeSnmpGetResponse(
+              reply.data,
+              requestId,
+              community: community,
+            );
+            if (decoded != null && !completer.isCompleted) {
+              completer.complete(decoded);
+            }
+          }
+        },
+        onError: (Object _) {
+          if (!completer.isCompleted) completer.complete(null);
+        },
+      );
+      socket.send(
+        _encodeGetNext(requestId, community, oid),
+        InternetAddress(ip),
+        port,
+      );
+      return await completer.future.timeout(
+        budget.remaining,
+        onTimeout: () => null,
+      );
     } catch (_) {
       return null;
     } finally {
+      finished = true;
       socket?.close();
+      await subscription?.cancel();
     }
   }
-
-  // --- BER encode -----------------------------------------------------------
 
   static Uint8List _encodeGetNext(
     int requestId,
@@ -333,24 +482,28 @@ class LanMacRecovery {
   ) {
     final varbind = _tlv(0x30, [
       ..._tlv(0x06, _encodeOidBody(oid)),
-      ..._tlv(0x05, const []), // NULL
+      ..._tlv(0x05, const []),
     ]);
     final pdu = _tlv(0xA1, [
-      // GetNextRequest-PDU
       ..._encodeInt(requestId),
-      ..._encodeInt(0), // error-status
-      ..._encodeInt(0), // error-index
+      ..._encodeInt(0),
+      ..._encodeInt(0),
       ..._tlv(0x30, varbind),
     ]);
-    return Uint8List.fromList(_tlv(0x30, [
-      ..._encodeInt(0), // version = SNMPv1
-      ..._tlv(0x04, community.codeUnits),
-      ...pdu,
-    ]));
+    return Uint8List.fromList(
+      _tlv(0x30, [
+        ..._encodeInt(0),
+        ..._tlv(0x04, community.codeUnits),
+        ...pdu,
+      ]),
+    );
   }
 
-  static List<int> _tlv(int tag, List<int> content) =>
-      [tag, ..._encodeLength(content.length), ...content];
+  static List<int> _tlv(int tag, List<int> content) => [
+    tag,
+    ..._encodeLength(content.length),
+    ...content,
+  ];
 
   static List<int> _encodeLength(int length) {
     if (length < 0x80) return [length];
@@ -364,62 +517,57 @@ class LanMacRecovery {
   }
 
   static List<int> _encodeInt(int value) {
-    // Solo enteros no negativos (request-id, error fields, version).
-    var bytes = <int>[];
+    final bytes = <int>[];
     var v = value;
     do {
       bytes.insert(0, v & 0xff);
       v >>= 8;
     } while (v > 0);
-    if (bytes.first & 0x80 != 0) bytes.insert(0, 0); // mantener positivo
+    if (bytes.first & 0x80 != 0) bytes.insert(0, 0);
     return _tlv(0x02, bytes);
   }
 
   static List<int> _encodeOidBody(List<int> oid) {
     final body = <int>[40 * oid[0] + oid[1]];
     for (final sub in oid.skip(2)) {
-      if (sub < 0x80) {
-        body.add(sub);
-      } else {
-        final chunk = <int>[];
-        var v = sub;
-        while (v > 0) {
-          chunk.insert(0, (v & 0x7f) | 0x80);
-          v >>= 7;
-        }
-        chunk[chunk.length - 1] &= 0x7f;
-        body.addAll(chunk);
+      final chunk = <int>[sub & 0x7f];
+      var v = sub >> 7;
+      while (v > 0) {
+        chunk.insert(0, (v & 0x7f) | 0x80);
+        v >>= 7;
       }
+      body.addAll(chunk);
     }
     return body;
   }
 
-  // --- BER decode -----------------------------------------------------------
-
-  /// Extrae (oid, valor) del primer varbind de un GetResponse. Devuelve null
-  /// si el paquete no parsea, el request-id no coincide o viene con error.
-  static (List<int>, Uint8List?)? _decodeGetResponse(
+  @visibleForTesting
+  static (List<int>, Uint8List?)? decodeSnmpGetResponse(
     Uint8List data,
-    int expectedRequestId,
-  ) {
+    int expectedRequestId, {
+    String community = 'public',
+  }) {
     try {
-      final msg = _BerReader(data).readSequence(0x30);
-      msg.readInt(); // version
-      msg.readBytes(0x04); // community
-      final pdu = msg.readSequence(0xA2); // GetResponse-PDU
-      final requestId = pdu.readInt();
-      if (requestId != expectedRequestId) return null;
+      final envelope = _BerReader(data);
+      final msg = envelope.readSequence(0x30);
+      if (!envelope.atEnd || msg.readInt() != 0) return null;
+      if (!listEquals(msg.readBytes(0x04), community.codeUnits)) return null;
+      final pdu = msg.readSequence(0xA2);
+      if (!msg.atEnd || pdu.readInt() != expectedRequestId) return null;
       final errorStatus = pdu.readInt();
-      pdu.readInt(); // error-index
-      if (errorStatus != 0) return null;
+      final errorIndex = pdu.readInt();
+      if (errorStatus != 0 || errorIndex != 0) return null;
       final varbinds = pdu.readSequence(0x30);
+      if (!pdu.atEnd) return null;
       final first = varbinds.readSequence(0x30);
       final oid = _decodeOidBody(first.readBytes(0x06));
-      final valueTag = first.peekTag();
       Uint8List? value;
-      if (valueTag == 0x04) {
+      if (first.peekTag() == 0x04) {
         value = first.readBytes(0x04);
+      } else {
+        first.readBytes(first.peekTag());
       }
+      if (!first.atEnd || !varbinds.atEnd) return null;
       return (oid, value);
     } catch (_) {
       return null;
@@ -427,67 +575,122 @@ class LanMacRecovery {
   }
 
   static List<int> _decodeOidBody(Uint8List body) {
-    if (body.isEmpty) return const [];
-    final oid = <int>[body[0] ~/ 40, body[0] % 40];
+    if (body.isEmpty) throw const FormatException('Empty OID');
+    final first = body[0];
+    final oid = <int>[
+      min(first ~/ 40, 2),
+      first < 80 ? first % 40 : first - 80,
+    ];
     var value = 0;
-    for (var i = 1; i < body.length; i++) {
-      value = (value << 7) | (body[i] & 0x7f);
-      if (body[i] & 0x80 == 0) {
+    var unfinished = false;
+    for (final byte in body.skip(1)) {
+      value = (value << 7) | (byte & 0x7f);
+      if (value > 0xffffffff) throw const FormatException('OID overflow');
+      unfinished = byte & 0x80 != 0;
+      if (!unfinished) {
         oid.add(value);
         value = 0;
       }
     }
+    if (unfinished) throw const FormatException('Truncated OID');
     return oid;
   }
 
-  // =========================================================================
-  // Utilidades
-  // =========================================================================
-
-  /// Normaliza cualquier formato de MAC (`AA-BB-..`, `aabb.ccdd.eeff`,
-  /// `aa:bb:..`) a `aa:bb:cc:dd:ee:ff`. Null si no son 12 hex o es todo cero.
+  /// Accepts six octets, Cisco notation, or exactly twelve hex digits.
+  /// Rejects broadcast, multicast, all-zero, and embedded garbage; locally
+  /// administered unicast addresses remain valid hardware identities.
   static String? normalizeMac(String? raw) {
     if (raw == null) return null;
-    final hex = raw.replaceAll(RegExp(r'[^0-9a-fA-F]'), '').toLowerCase();
-    if (hex.length != 12) return null;
-    if (hex == '000000000000') return null;
-    final parts = <String>[
-      for (var i = 0; i < 12; i += 2) hex.substring(i, i + 2),
-    ];
-    return parts.join(':');
+    final input = raw.trim();
+    final valid =
+        RegExp(r'^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$').hasMatch(input) ||
+        RegExp(r'^(?:[0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}$').hasMatch(input) ||
+        RegExp(r'^[0-9a-fA-F]{4}(?:\.[0-9a-fA-F]{4}){2}$').hasMatch(input) ||
+        RegExp(r'^[0-9a-fA-F]{12}$').hasMatch(input);
+    if (!valid) return null;
+    final hex = input.replaceAll(RegExp(r'[:.-]'), '').toLowerCase();
+    if (hex == '000000000000' ||
+        (int.parse(hex.substring(0, 2), radix: 16) & 1) != 0) {
+      return null;
+    }
+    return [for (var i = 0; i < 12; i += 2) hex.substring(i, i + 2)].join(':');
+  }
+
+  static bool _validPort(int port) => port > 0 && port <= 65535;
+
+  static String? _ipv4(String? raw) {
+    if (raw == null) return null;
+    final input = raw.trim();
+    if (!RegExp(r'^(?:\d{1,3}\.){3}\d{1,3}$').hasMatch(input)) return null;
+    final octets = input.split('.').map(int.parse).toList();
+    if (octets.any((value) => value > 255) ||
+        octets.first == 0 ||
+        octets.first == 127 ||
+        octets.first >= 224) {
+      return null;
+    }
+    return octets.join('.');
+  }
+
+  static bool _isPrivateIpv4(String ip) {
+    final parts = ip.split('.').map(int.parse).toList();
+    return parts[0] == 10 ||
+        (parts[0] == 172 && parts[1] >= 16 && parts[1] <= 31) ||
+        (parts[0] == 192 && parts[1] == 168);
+  }
+
+  static String _subnetBase(String ip) =>
+      ip.substring(0, ip.lastIndexOf('.') + 1);
+}
+
+class _RecoveryBudget {
+  _RecoveryBudget(this.duration) : _watch = Stopwatch()..start();
+  final Duration duration;
+  final Stopwatch _watch;
+  Duration get remaining {
+    final left = duration - _watch.elapsed;
+    return left > Duration.zero ? left : Duration.zero;
+  }
+
+  bool get expired => remaining <= Duration.zero;
+  Duration cap(Duration maximum) => remaining < maximum ? remaining : maximum;
+  Future<T?> run<T>(
+    Future<T> Function(Duration) operation, {
+    required Duration maximum,
+  }) async {
+    final limit = cap(maximum);
+    if (limit <= Duration.zero) return null;
+    try {
+      return await operation(limit).timeout(limit);
+    } catch (_) {
+      return null;
+    }
   }
 }
 
-/// Cursor mínimo para leer estructuras BER (tag, longitud, contenido).
 class _BerReader {
-  _BerReader(this._data) : _offset = 0;
-
+  _BerReader(this._data);
   final Uint8List _data;
-  int _offset;
-
+  int _offset = 0;
+  bool get atEnd => _offset == _data.length;
   int peekTag() => _data[_offset];
-
   _BerReader readSequence(int expectedTag) =>
       _BerReader(readBytes(expectedTag));
 
   int readInt() {
     final bytes = readBytes(0x02);
-    var value = 0;
-    for (final b in bytes) {
-      value = (value << 8) | b;
+    if (bytes.isEmpty || bytes.length > 5 || bytes.first & 0x80 != 0) {
+      throw const FormatException('Invalid nonnegative BER integer');
     }
-    return value;
+    return bytes.fold(0, (value, byte) => (value << 8) | byte);
   }
 
   Uint8List readBytes(int expectedTag) {
-    final tag = _data[_offset];
-    if (tag != expectedTag) {
-      throw FormatException('BER: tag $tag, esperaba $expectedTag');
-    }
-    _offset++;
+    if (_data[_offset++] != expectedTag) throw const FormatException('BER tag');
     var length = _data[_offset++];
     if (length & 0x80 != 0) {
       final count = length & 0x7f;
+      if (count == 0 || count > 4) throw const FormatException('BER length');
       length = 0;
       for (var i = 0; i < count; i++) {
         length = (length << 8) | _data[_offset++];

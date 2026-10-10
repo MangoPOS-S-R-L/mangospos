@@ -53,7 +53,8 @@ const startCloudSocket = () => {
             logger.info(`Trabajo ${job.id} completado`);
         } catch (error) {
             logger.error(`Error imprimiendo trabajo ${job.id}: ${error.message}`);
-            if (ack) ack({ status: 'error', jobId: job.id, message: error.message });
+            if (ack) ack({ status: 'error', jobId: job.id, message: error.message,
+                deliveryUncertain: error.deliveryUncertain === true, safeToRetry: error.safeToRetry === true });
         }
     });
 

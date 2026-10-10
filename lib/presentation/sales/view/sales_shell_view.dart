@@ -12,6 +12,7 @@ import 'package:mangopos/app/theme/breakpoints.dart';
 import 'package:mangopos/app/theme/sizes.dart';
 import 'package:mangopos/core/business/business_features_provider.dart';
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
 import 'package:mangopos/core/printing/external_order_alerts.dart';
 import 'package:mangopos/core/printing/external_order_print_worker.dart';
 import 'package:mangopos/core/printing/cloud_print_queue_worker.dart';
@@ -409,6 +410,11 @@ class _SalesShellViewState extends ConsumerState<SalesShellView> {
   }
 }
 
+/// El banner de sincronización de Ventas, para probarlo sin montar el shell.
+@visibleForTesting
+Widget debugSalesSyncBanner(CurrentOrderState state) =>
+    _SalesSyncBanner(state: state);
+
 class _SalesSyncBanner extends ConsumerWidget {
   final CurrentOrderState state;
 
@@ -416,7 +422,11 @@ class _SalesSyncBanner extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isWarning = state.isOfflineMode || state.pendingOfflineActions > 0;
+    // Operaciones muertas (agotaron reintentos): no se reintentan solas, así
+    // que el banner nunca se pinta «al día» mientras existan.
+    final dead = ref.watch(offlineQueueStatusProvider.select((s) => s.dead));
+    final isWarning =
+        state.isOfflineMode || state.pendingOfflineActions > 0 || dead > 0;
     final background = isWarning
         ? const Color(0xFFFFF7ED)
         : const Color(0xFFECFDF3);
@@ -429,6 +439,8 @@ class _SalesSyncBanner extends ConsumerWidget {
         ? Icons.cloud_off_rounded
         : state.pendingOfflineActions > 0
         ? Icons.schedule_rounded
+        : dead > 0
+        ? Icons.error_outline_rounded
         : Icons.cloud_done_rounded;
     final text = state.syncStatus?.trim().isNotEmpty == true
         ? state.syncStatus!.trim()
@@ -436,6 +448,8 @@ class _SalesSyncBanner extends ConsumerWidget {
         ? 'Modo offline activo.'
         : state.pendingOfflineActions > 0
         ? 'Hay operaciones pendientes por sincronizar.'
+        : dead > 0
+        ? '$dead operación(es) sin resolver. Revísalas en la cola.'
         : 'Sincronización al día.';
 
     final lastSyncLabel = state.lastSyncAt == null

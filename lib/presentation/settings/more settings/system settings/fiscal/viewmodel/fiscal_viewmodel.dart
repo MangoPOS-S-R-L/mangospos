@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../../../core/business/business_features_provider.dart';
 import '../../../../../../services/fiscal/fiscal_service.dart';
 import '../../../../../../data/models/fiscal_models.dart';
 import '../../../../../../data/repositories/pos_settings_repository.dart';
@@ -243,14 +244,18 @@ class FiscalViewModel extends Notifier<FiscalState> {
   Future<void> updateSalesNoteSettings(
     String businessId, {
     bool? enabled,
-    bool? asDefault,
     String? prefix,
+    int? limit,
   }) async {
+    if (limit != null && limit < 1) {
+      state = state.copyWith(error: 'Ingresa una cantidad mayor que cero.');
+      return;
+    }
     final previous = state.features;
     final next = previous.copyWith(
       salesNoteEnabled: enabled,
-      salesNoteDefault: asDefault,
       salesNotePrefix: prefix,
+      salesNoteLimit: limit,
     );
     // Optimista: el switch responde al toque y se revierte si el guardado
     // falla, igual que hace la pantalla de funciones del negocio.
@@ -268,9 +273,12 @@ class FiscalViewModel extends Notifier<FiscalState> {
       if (notSaved.any((c) => c.startsWith('sales_note_'))) {
         state = state.copyWith(
           features: previous,
-          error: 'La nota de venta no se guardó: al servidor le falta la '
-              'migración de notas de venta (20260910_0001_sales_notes).',
+          error:
+              'La nota de venta no se guardó: al servidor le falta la '
+              'migración de notas de venta y su límite de facturación.',
         );
+      } else {
+        ref.invalidate(businessFeaturesProvider);
       }
     } catch (e) {
       state = state.copyWith(

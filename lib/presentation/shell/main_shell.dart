@@ -13,6 +13,7 @@ import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/agent/hub_server_controller.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
 import 'package:mangopos/presentation/shell/hub_host_uplink.dart';
+import 'package:mangopos/presentation/shell/offline_sales_uplink_provider.dart';
 import 'package:mangopos/core/offline/offline_refreshers.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/presentation/shell/offline_logout_guard.dart';
@@ -83,9 +84,13 @@ class _MainShellState extends ConsumerState<MainShell> {
     ref.read(hubServerProvider);
 
     // Drenaje rápido del op-log del Hub host (cada 4s) para que las ediciones
-    // de las cajas lleguen al servidor sin esperar el sync de 3 min → el cobro
+    // de las cajas lleguen al servidor sin esperar a la cola propia → el cobro
     // del cashier en la caja principal queda exacto. Inerte salvo en hubHost.
     ref.read(hubHostUplinkProvider);
+
+    // Cola propia: arranque, reconexión y reintentos sin depender de Ventas.
+    // Silencioso: solo corre si hay acciones listas y solo mueve contadores.
+    ref.read(offlineSalesUplinkProvider);
 
     // F6: mantiene vivo el coordinador de bajada desde el arranque del shell
     // (read, no watch). Refresca catálogo/zonas/inventario del negocio activo
@@ -119,12 +124,19 @@ class _MainShellState extends ConsumerState<MainShell> {
     // qué se sincronizó. El controller es singleton; usamos referencia
     // por identidad de OfflineQueueSyncResult para evitar duplicar la
     // notificación entre rebuilds de otras pantallas.
+    //
+    // Solo las pasadas pedidas por el cajero publican `lastResult`; las
+    // automáticas (uplink, reconexión) solo mueven pending/dead y NUNCA
+    // muestran snackbar. Un cambio de contadores conserva el mismo
+    // `lastResult`: no se repite un aviso viejo (p. ej. al reconstruirse el
+    // shell, cuando `_lastNotifiedResult` arranca vacío).
     ref.listen<OfflineQueueStatus>(offlineQueueStatusProvider, (
       previous,
       next,
     ) {
       final result = next.lastResult;
       if (result == null) return;
+      if (identical(result, previous?.lastResult)) return;
       if (identical(result, _lastNotifiedResult)) return;
       if (!result.didWork && result.pending == 0) {
         _lastNotifiedResult = result;
@@ -580,11 +592,29 @@ class _OfflineQueueBadge extends ConsumerWidget {
   }
 
   Future<void> _confirmAndClear(BuildContext context, WidgetRef ref) async {
-    // clearPendingActions borra todas las no-completadas (pendientes +
-    // dead-letter); el conteo del aviso debe reflejar ambas para no
-    // subestimar lo que se va a descartar.
-    final status = ref.read(offlineQueueStatusProvider);
-    final pending = status.pending + status.dead;
+    final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    // Cobros, caja y todo lo de una cuenta con un cobro pendiente nunca se
+    // descartan; lo demás se respalda en este equipo antes de borrarlo.
+    final preview = await OfflinePosService().previewClearPendingActions(
+      businessId,
+    );
+    if (!context.mounted) return;
+    if (preview.discardable == 0) {
+      AppToast.info(
+        context,
+        preview.kept == 0
+            ? 'No hay operaciones pendientes.'
+            : 'No hay nada que limpiar: las ${preview.kept} operación(es) '
+                  'pendiente(s) son cobros, caja o cuentas con cobros, y se '
+                  'conservan.',
+      );
+      return;
+    }
+    final keptNote = preview.kept == 0
+        ? ''
+        : 'Se conservan ${preview.kept}: los cobros, la caja y las cuentas con '
+              'cobros pendientes nunca se descartan.\n\n';
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -596,10 +626,12 @@ class _OfflineQueueBadge extends ConsumerWidget {
           ],
         ),
         content: Text(
-          'Vas a descartar $pending operacion(es) pendiente(s) sin sincronizar al server. '
-          'Solo usalo si estan bloqueadas por errores irresolubles (ej: referencias a recursos '
-          'borrados). Las operaciones YA aplicadas en server NO se ven afectadas.\n\n'
-          'Esta accion no se puede deshacer.',
+          'Vas a descartar ${preview.discardable} operación(es) sin '
+          'sincronizar. Queda una copia guardada en este equipo.\n\n'
+          '$keptNote'
+          'Úsalo solo si están bloqueadas por errores que no se pueden '
+          'resolver (por ejemplo, referencias a algo que se borró). Lo que ya '
+          'llegó al servidor no se ve afectado.',
         ),
         actions: [
           TextButton(
@@ -619,15 +651,23 @@ class _OfflineQueueBadge extends ConsumerWidget {
 
     if (ok != true || !context.mounted) return;
 
-    final businessId = ref.read(sessionProvider).activeBusinessId;
-    if (businessId == null || businessId.isEmpty) return;
-
-    final deleted = await OfflinePosService().clearPendingActions(businessId);
+    final int deleted;
+    try {
+      deleted = await OfflinePosService().clearPendingActions(
+        businessId,
+        discardedBy: ref.read(sessionProvider).userName,
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      AppToast.error(context, 'No se limpió la cola: $e');
+      return;
+    }
     await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
     if (!context.mounted) return;
     AppToast.success(
       context,
-      'Cola limpiada: $deleted operacion(es) descartada(s).',
+      'Cola limpiada: $deleted operación(es) descartada(s) y respaldada(s) '
+      'en este equipo.',
     );
   }
 

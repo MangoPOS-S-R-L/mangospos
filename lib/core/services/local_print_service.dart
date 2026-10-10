@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../printing/agent_discovery.dart';
+import '../printing/print_delivery_exception.dart';
+import '../../data/models/printing.dart' show normalizeNetworkPrinterMac;
 import 'agent_auth.dart';
 
 class LocalPrintService {
@@ -39,6 +41,11 @@ class LocalPrintService {
   final String? _apiToken;
 
   LocalPrintService({String? apiToken}) : _apiToken = apiToken;
+
+  bool get hasKnownAgentAddress =>
+      _resolvedBaseUrl != null ||
+      _sharedResolvedBaseUrl != null ||
+      _dbAgentUrl != null;
 
   /// Publish the agent URL to the DB so remote devices (tablets) can find it.
   static Future<void> publishAgentUrl(
@@ -150,6 +157,81 @@ class LocalPrintService {
   }
 
   String _normalizePrinterId(String ip, [int port = 9100]) => '$ip:$port';
+
+  Future<http.Response> _postPrint(
+    Uri uri,
+    String body, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    try {
+      final response = await http
+          .post(uri, headers: _headers(), body: body)
+          .timeout(timeout);
+      if (response.statusCode >= 500) {
+        dynamic error;
+        try {
+          error = jsonDecode(response.body);
+        } catch (_) {}
+        if (error is! Map || error['safeToRetry'] != true) {
+          throw PrintDeliveryUncertainException(
+            error is Map
+                ? error['error'] ?? 'Respuesta incierta del agente.'
+                : 'Respuesta incierta del agente.',
+          );
+        }
+      }
+      return response;
+    } on PrintDeliveryUncertainException {
+      rethrow;
+    } catch (e) {
+      final message = e.toString().toLowerCase();
+      // These failures precede a TCP connection. A lost response after
+      // submission cannot establish whether the agent accepted the ticket.
+      if (message.contains('connection refused') ||
+          message.contains('failed host lookup') ||
+          message.contains('network is unreachable') ||
+          message.contains('no route to host')) {
+        rethrow;
+      }
+      throw PrintDeliveryUncertainException(e);
+    }
+  }
+
+  dynamic _decodePrintResponse(String body) {
+    try {
+      return jsonDecode(body);
+    } catch (e) {
+      throw PrintDeliveryUncertainException(e);
+    }
+  }
+
+  /// Shared transport rules for an explicitly selected remote printer host.
+  Future<bool> printAtAgent({
+    required String agentUrl,
+    required Map<String, dynamic> payload,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final response = await _postPrint(
+      Uri.parse('$agentUrl/print'),
+      jsonEncode(payload),
+      timeout: timeout,
+    );
+    if (response.statusCode == 200 || response.statusCode == 202) {
+      final body = _decodePrintResponse(response.body);
+      _checkUncertainDelivery(body);
+      return acceptsPrintResponse(body);
+    }
+    dynamic body;
+    try {
+      body = jsonDecode(response.body);
+    } catch (_) {}
+    _checkUncertainDelivery(body);
+    throw _toUserFriendlyError(
+      body is Map
+          ? body['error']?.toString() ?? 'Error ${response.statusCode}'
+          : 'Error ${response.statusCode}',
+    );
+  }
 
   String? _resolvePrinterId(Map<String, dynamic>? printer) {
     if (printer == null) return null;
@@ -545,14 +627,14 @@ class LocalPrintService {
         'contentLength=${content.length} legacy=${_isLegacyAgentBaseUrl(baseUrl)}',
       );
 
-      final response = await http.post(
+      final response = await _postPrint(
         Uri.parse('$baseUrl/print'),
-        headers: _headers(),
-        body: json.encode(payload),
+        json.encode(payload),
       );
 
       if (response.statusCode == 200 || response.statusCode == 202) {
-        final data = json.decode(response.body);
+        final data = _decodePrintResponse(response.body);
+        _checkUncertainDelivery(data);
         _log('Agent accepted print job -> response=${response.body}');
         return acceptsPrintResponse(data);
       }
@@ -560,7 +642,10 @@ class LocalPrintService {
       String errorMsg = 'Error ${response.statusCode}';
       try {
         final body = json.decode(response.body);
+        _checkUncertainDelivery(body);
         if (body['error'] != null) errorMsg = body['error'].toString();
+      } on PrintDeliveryUncertainException {
+        rethrow;
       } catch (_) {
         if (response.body.isNotEmpty) errorMsg = response.body;
       }
@@ -581,6 +666,9 @@ class LocalPrintService {
   @visibleForTesting
   static bool acceptsPrintResponse(dynamic data) {
     if (data is! Map) return false;
+    if (data['deliveryUncertain'] == true || data['delivery_uncertain'] == true) {
+      return false;
+    }
     final status = data['status'];
     if (const ['failed', 'cancelled', 'error'].contains(status)) return false;
     if (data['success'] == false) return false;
@@ -594,6 +682,16 @@ class LocalPrintService {
           'pending',
           'done',
         ].contains(status);
+  }
+
+  static void _checkUncertainDelivery(dynamic body) {
+    if (body is Map &&
+        (body['deliveryUncertain'] == true ||
+            body['delivery_uncertain'] == true)) {
+      throw PrintDeliveryUncertainException(
+        body['error'] ?? 'Respuesta incierta del agente.',
+      );
+    }
   }
 
   Future<bool> testPrint({required String ip, int port = 9100}) async {
@@ -612,6 +710,7 @@ class LocalPrintService {
 
       if (response.statusCode == 200 || response.statusCode == 202) {
         final data = json.decode(response.body);
+        _checkUncertainDelivery(data);
         _log('Agent accepted test print -> response=${response.body}');
         return acceptsPrintResponse(data);
       }
@@ -667,6 +766,8 @@ class LocalPrintService {
     required String ip,
     int port = 9100,
     required List<int> data,
+    String? mac,
+    String? configuredPrinterId,
   }) async {
     try {
       final baseUrl = await _resolveBaseUrl();
@@ -676,44 +777,55 @@ class LocalPrintService {
         );
       }
 
-      final printerId = _normalizePrinterId(ip, port);
+      final printerId = configuredPrinterId ?? _normalizePrinterId(ip, port);
+      final printer = <String, dynamic>{
+        'id': printerId,
+        'type': 'network',
+        'ip': ip,
+        'port': port,
+        if (normalizeNetworkPrinterMac(mac) != null)
+          'mac': normalizeNetworkPrinterMac(mac),
+      };
       final rawContent = base64Encode(data);
       final payload = _isLegacyAgentBaseUrl(baseUrl)
           ? {
               'id': 'RAW-${DateTime.now().millisecondsSinceEpoch}',
               'printerId': printerId,
-              'printer': {
-                'id': printerId,
-                'type': 'network',
-                'ip': ip,
-                'port': port,
-              },
+              'printer': printer,
               'content': {'type': 'raw_base64', 'dataBase64': rawContent},
             }
-          : {'printerId': printerId, 'type': 'raw', 'content': rawContent};
+          : {
+              'printerId': printerId,
+              'printer': printer,
+              'type': 'raw',
+              'content': rawContent,
+            };
 
       _log(
         'POST $baseUrl/print (raw) -> printerId=$printerId '
         'bytes=${data.length} legacy=${_isLegacyAgentBaseUrl(baseUrl)}',
       );
 
-      final response = await http.post(
+      final response = await _postPrint(
         Uri.parse('$baseUrl/print'),
-        headers: _headers(),
-        body: json.encode(payload),
+        json.encode(payload),
       );
 
       if (response.statusCode == 200 || response.statusCode == 202) {
-        final data = json.decode(response.body);
+        final data = _decodePrintResponse(response.body);
         _log('Agent accepted raw print -> response=${response.body}');
+        _checkUncertainDelivery(data);
         return acceptsPrintResponse(data);
       } else {
         String errorMsg = 'Error ${response.statusCode}';
         try {
           final body = json.decode(response.body);
+          _checkUncertainDelivery(body);
           if (body['error'] != null) {
             errorMsg = body['error'].toString();
           }
+        } on PrintDeliveryUncertainException {
+          rethrow;
         } catch (_) {
           errorMsg = response.body.isNotEmpty ? response.body : errorMsg;
         }
@@ -726,6 +838,8 @@ class LocalPrintService {
     } catch (e) {
       _forgetResolvedBaseUrl(_resolvedBaseUrl);
       _log('Error sending raw data: $e');
+
+      if (e is PrintDeliveryUncertainException) rethrow;
 
       if (e.toString().contains('SocketException') ||
           e.toString().contains('ClientException')) {
@@ -815,21 +929,23 @@ class LocalPrintService {
   ///
   /// Devuelve la MAC normalizada (lowercase, `:`) o null si el agente no
   /// está disponible / no pudo resolver.
-  Future<String?> captureMacForIp(String ip) async {
-    final baseUrl = await _resolveBaseUrl();
-    if (baseUrl == null) return null;
+  Future<String?> captureMacForIp(String ip, {int port = 9100}) async {
     try {
+      final baseUrl = await _resolveBaseUrl().timeout(
+        const Duration(seconds: 4),
+      );
+      if (baseUrl == null) return null;
       final res = await http
           .post(
             Uri.parse('$baseUrl/api/printers/mac-for-ip'),
             headers: _headers(),
-            body: jsonEncode({'ip': ip}),
+            body: jsonEncode({'ip': ip, 'port': port}),
           )
           .timeout(const Duration(seconds: 6));
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
-        if (body is Map && body['mac'] is String) {
-          return (body['mac'] as String).toLowerCase();
+        if (body is Map && (body['ip'] == null || body['ip'] == ip)) {
+          return normalizeNetworkPrinterMac(body['mac']?.toString());
         }
       }
       _log('captureMacForIp $ip → status=${res.statusCode} body=${res.body}');
@@ -848,21 +964,29 @@ class LocalPrintService {
   Future<String?> resolveIpByMac({
     required String mac,
     String? printerId,
+    String? ip,
+    int port = 9100,
     // Si el caller acaba de fallar imprimiendo a la IP que el resolver
     // devolvió antes, debe pasar `skipCache: true` para forzar
     // re-resolución fresca (ARP + scan) en vez de recibir el mismo
     // valor stale del cache in-memory del agente.
     bool skipCache = false,
   }) async {
-    final baseUrl = await _resolveBaseUrl();
-    if (baseUrl == null) return null;
+    final expectedMac = normalizeNetworkPrinterMac(mac);
+    if (expectedMac == null) return null;
     try {
+      final baseUrl = await _resolveBaseUrl().timeout(
+        const Duration(seconds: 4),
+      );
+      if (baseUrl == null) return null;
       final res = await http
           .post(
             Uri.parse('$baseUrl/api/printers/resolve-by-mac'),
             headers: _headers(),
             body: jsonEncode({
-              'mac': mac,
+              'mac': expectedMac,
+              'port': port,
+              if (ip != null) 'ip': ip,
               if (printerId != null) 'printerId': printerId,
               if (skipCache) 'skipCache': true,
             }),
@@ -872,8 +996,21 @@ class LocalPrintService {
           .timeout(const Duration(seconds: 18));
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body);
-        if (body is Map && body['ip'] is String) {
-          return body['ip'] as String;
+        if (body is Map &&
+            body['ip'] is String &&
+            body['verified'] == true &&
+            normalizeNetworkPrinterMac(body['mac']?.toString()) ==
+                expectedMac &&
+            body['port'] == port) {
+          final address = (body['ip'] as String).trim();
+          final octets = address.split('.');
+            if (octets.length == 4 &&
+              octets.every((part) {
+                final n = int.tryParse(part);
+                return n != null && n >= 0 && n <= 255;
+                })) {
+              return address;
+            }
         }
       }
       _log('resolveIpByMac $mac → status=${res.statusCode} body=${res.body}');

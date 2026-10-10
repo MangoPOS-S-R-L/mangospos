@@ -262,13 +262,104 @@ void main() {
     );
     expect(await svc.pendingActionsCount(biz), 2);
 
-    await svc.discardLocalOrder(businessId: biz, localOrderId: localId);
+    expect(
+      await svc.discardLocalOrder(businessId: biz, localOrderId: localId),
+      isTrue,
+    );
 
     // Ni acciones pendientes (no se recrea la mesa al reconectar) ni
     // snapshot (el overlay suelta la mesa).
     expect(await svc.pendingActionsCount(biz), 0);
     expect(await svc.listPendingTableDrafts(biz), isEmpty);
     expect(await svc.loadSnapshot(businessId: biz, slotId: 'table-A'), isNull);
+  });
+
+  // Caso FOOD SHOP 2026-10-09 (#949B): venta rápida cobrada sin internet,
+  // precuenta entregada, y "Descartar venta"/"Salir" la borró de la cola con
+  // su cobro. Nunca llegó al servidor.
+  test('discardLocalOrder NO borra una venta local ya cobrada', () async {
+    const biz = 'biz-discard-paid';
+    final draft = await svc.createLocalDraft(businessId: biz, origin: 'quick');
+    final localId = draft.order!.id;
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'origin': 'quick',
+        'order_id': localId,
+        'item_id': 'tmp_1',
+        'qty': 1,
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'process_payment',
+        'origin': 'offline',
+        'order_id': localId,
+        'amount': 309.66,
+        'close_order': true,
+      },
+    );
+    expect(
+      await svc.hasQueuedPayment(businessId: biz, orderId: localId),
+      isTrue,
+    );
+
+    expect(
+      await svc.discardLocalOrder(businessId: biz, localOrderId: localId),
+      isFalse,
+    );
+
+    // La venta entera sigue en la cola para subir: productos y cobro.
+    final left = await svc.unsettledActions(biz);
+    expect(left.map((a) => a['type']), ['add_item', 'process_payment']);
+    expect(await svc.loadSnapshot(businessId: biz, slotId: 'quick'), isNotNull);
+  });
+
+  test('hasQueuedPayment solo cuenta cobros sin subir de esa orden', () async {
+    const biz = 'biz-queued-payment';
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'id': 'paid-already',
+        'type': 'process_payment',
+        'order_id': 'local-order-A',
+        'amount': 100,
+        'status': 'completed',
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'add_item',
+        'order_id': 'local-order-B',
+        'item_id': 'tmp_2',
+        'qty': 1,
+      },
+    );
+    await svc.enqueueAction(
+      businessId: biz,
+      action: {
+        'type': 'process_payment',
+        'order_id': 'order-real-C',
+        'amount': 50,
+      },
+    );
+
+    // Ya subido, solo productos, y cobro pendiente de una orden del servidor.
+    expect(
+      await svc.hasQueuedPayment(businessId: biz, orderId: 'local-order-A'),
+      isFalse,
+    );
+    expect(
+      await svc.hasQueuedPayment(businessId: biz, orderId: 'local-order-B'),
+      isFalse,
+    );
+    expect(
+      await svc.hasQueuedPayment(businessId: biz, orderId: 'order-real-C'),
+      isTrue,
+    );
   });
 
   test(

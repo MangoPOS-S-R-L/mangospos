@@ -3,6 +3,7 @@ const cors = require('cors');
 const { config, logger } = require('../config');
 const printerManager = require('../core/printer_manager');
 const discoveryService = require('../core/discovery');
+const { installPrinterRecoveryRoutes } = require('../network/printer_routes');
 
 const app = express();
 const PORT = config.service.port || 9100;
@@ -135,7 +136,11 @@ Service Status: ONLINE
 });
 
 app.post('/api/printers/raw', authenticate, async (req, res) => {
-    const { printerId, ip, port, dataBase64 } = req.body;
+    const { printerId, dataBase64 } = req.body;
+    const inline = req.body.printer && typeof req.body.printer === 'object' ? req.body.printer : {};
+    const ip = inline.ip || req.body.ip;
+    const port = inline.port ?? req.body.port ?? 9100;
+    const mac = inline.mac || req.body.mac;
     const normalizedPrinterId = printerId || (ip ? `${ip}:${port || 9100}` : null);
 
     if (!normalizedPrinterId || !dataBase64) {
@@ -145,6 +150,7 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
     try {
         const jobId = printerManager.addJob({
             printerId: normalizedPrinterId,
+            printer: ip || mac ? { ...inline, type: 'network', ip, port, mac, id: printerId || inline.id } : undefined,
             data: {
                 type: 'raw',
                 content: dataBase64,
@@ -155,6 +161,8 @@ app.post('/api/printers/raw', authenticate, async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
+installPrinterRecoveryRoutes(app, authenticate);
 
 app.use(express.static(require('path').join(__dirname, '../../public')));
 

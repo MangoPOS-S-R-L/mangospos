@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:mangopos/core/fiscal/payment_stage.dart';
+import 'package:mangopos/core/fiscal/sales_note_policy.dart';
 import 'package:mangopos/data/models/payment_attempt_lease.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/sales_repository_improved.dart';
@@ -131,6 +132,7 @@ void main() {
                 0,
                 ref: ref,
                 initialize: false,
+                salesNotePolicy: const SalesNotePolicy(enabled: true),
                 fiscalType: 'B02',
                 sessionResolver: ({bool skipLocal = false}) async => 'session',
                 connectionStatus: () => true,
@@ -207,6 +209,7 @@ void main() {
             100,
             ref: ref,
             initialize: false,
+            salesNotePolicy: const SalesNotePolicy(enabled: true),
             fiscalType: 'B02',
             sessionResolver: ({bool skipLocal = false}) async => 'session',
             connectionStatus: () => true,
@@ -251,6 +254,7 @@ void main() {
             100,
             ref: ref,
             initialize: false,
+            salesNotePolicy: const SalesNotePolicy(enabled: true),
             fiscalType: 'B02',
             sessionResolver: ({bool skipLocal = false}) async => 'session',
             connectionStatus: () => true,
@@ -289,6 +293,7 @@ void main() {
               100,
               ref: ref,
               initialize: false,
+              salesNotePolicy: const SalesNotePolicy(enabled: true),
               fiscalType: 'B02',
               sessionResolver: ({bool skipLocal = false}) async => 'session',
               businessResolver: () async => 'biz',
@@ -321,6 +326,8 @@ void main() {
       expect(attempts.map((a) => a['paid_at']).toSet().length, 1);
       expect(attempts.first['close_order'], isFalse);
       expect(attempts.last['close_order'], isTrue);
+      expect(attempts.first['is_sales_note'], isTrue);
+      expect(attempts.map((a) => a['requested_ncf_type']), everyElement('B02'));
       expect(container.read(provider).offlineQueued, isTrue);
       expect(sales.calls, isEmpty);
     },
