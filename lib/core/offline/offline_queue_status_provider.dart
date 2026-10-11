@@ -12,7 +12,13 @@ import 'offline_pos_service.dart';
 /// cajero para que la UI pueda mostrar el resultado (las pasadas
 /// automáticas solo mueven los contadores).
 class OfflineQueueStatus {
-  const OfflineQueueStatus({this.pending = 0, this.dead = 0, this.lastResult});
+  const OfflineQueueStatus({
+    this.pending = 0,
+    this.dead = 0,
+    this.lastResult,
+    this.lastPassAt,
+    this.lastProgressAt,
+  });
 
   final int pending;
 
@@ -22,14 +28,25 @@ class OfflineQueueStatus {
   final int dead;
   final OfflineQueueSyncResult? lastResult;
 
+  /// Última pasada de subida en este equipo (automática o pedida).
+  final DateTime? lastPassAt;
+
+  /// Última pasada que de verdad subió o concilió algo. Con pendientes y una
+  /// hora vieja aquí, la cola no avanza aunque las pasadas sigan corriendo.
+  final DateTime? lastProgressAt;
+
   OfflineQueueStatus copyWith({
     int? pending,
     int? dead,
     OfflineQueueSyncResult? lastResult,
+    DateTime? lastPassAt,
+    DateTime? lastProgressAt,
   }) => OfflineQueueStatus(
     pending: pending ?? this.pending,
     dead: dead ?? this.dead,
     lastResult: lastResult ?? this.lastResult,
+    lastPassAt: lastPassAt ?? this.lastPassAt,
+    lastProgressAt: lastProgressAt ?? this.lastProgressAt,
   );
 }
 
@@ -117,16 +134,24 @@ class OfflineQueueStatusController extends StateNotifier<OfflineQueueStatus> {
     OfflineQueueSyncResult result, {
     bool automatic = false,
   }) {
+    final now = DateTime.now();
+    final progressed = result.completed > 0 || result.reconciled > 0;
     if (automatic) {
-      if (result.pending != state.pending || result.dead != state.dead) {
-        state = state.copyWith(pending: result.pending, dead: result.dead);
-      }
+      // Conserva el MISMO lastResult: el shell no avisa nada.
+      state = state.copyWith(
+        pending: result.pending,
+        dead: result.dead,
+        lastPassAt: now,
+        lastProgressAt: progressed ? now : null,
+      );
       return;
     }
     state = OfflineQueueStatus(
       pending: result.pending,
       dead: result.dead,
       lastResult: result,
+      lastPassAt: now,
+      lastProgressAt: progressed ? now : state.lastProgressAt,
     );
   }
 

@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../../../core/business/business_resolver.dart';
+import '../../../../../../core/offline/offline_pos_service.dart';
 import '../../../../../../core/offline/pending_kitchen_prints.dart';
 import '../../../../../../data/models/printing_v2.dart';
 import '../../../../../../data/repositories/printing_repository.dart';
@@ -159,7 +160,22 @@ class PrintingHealthViewModel extends Notifier<PrintingHealthState> {
   Future<void> dismissPendingKitchenPrint(String id) async {
     final bid = _businessId;
     if (bid == null) return;
-    await PendingKitchenPrints.instance.dismiss(businessId: bid, id: id);
+    final pending = (await PendingKitchenPrints.instance.list(
+      bid,
+    )).where((entry) => entry.id == id).firstOrNull;
+    // Comanda local INCIERTA revisada = sí salió: se confirma en cocina sin
+    // imprimir (si su ronda sigue en la cola).
+    final resolved =
+        pending != null &&
+        pending.uncertain &&
+        await OfflinePosService().resolveUncertainKitchenRound(
+          businessId: bid,
+          roundId: pending.roundId,
+          printed: true,
+        );
+    if (!resolved) {
+      await PendingKitchenPrints.instance.dismiss(businessId: bid, id: id);
+    }
     state = state.copyWith(
       pendingKitchenPrints: await PendingKitchenPrints.instance.list(bid),
     );

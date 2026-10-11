@@ -56,3 +56,14 @@ echo "🎉 ¡Proceso finalizado con éxito!"
 echo "Siguientes pasos:"
 echo "1. El archivo '$FINAL_EXE_NAME' y el nuevo 'appcast.xml' están listos en la carpeta /build y en la raíz."
 echo "2. Sube AMBOS archivos a tu servidor (https://mangopos.com/)."
+
+# Aviso en la app (app_releases, 20261010_0025): después de subir el archivo a
+# https://mangopos.com/, pegar esta fila en el SQL Editor para que los equipos
+# windows vean «Actualización disponible».
+BUILD=$(grep "^version:" pubspec.yaml | awk '{print $2}' | cut -d'+' -f2)
+echo ""
+echo "📣 Para avisar en la app, después de subir el archivo, corre en el SQL Editor:"
+echo "insert into public.app_releases (platform, version, build, download_url, notes)"
+echo "values ('windows', '$VERSION', $BUILD, 'https://mangopos.com/MangoPOS-${VERSION}-windows.exe', null)"
+echo "on conflict (platform, build) do update set version = excluded.version,"
+echo "  download_url = excluded.download_url, notes = excluded.notes, published_at = now();"

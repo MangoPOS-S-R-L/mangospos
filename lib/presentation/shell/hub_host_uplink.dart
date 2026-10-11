@@ -8,6 +8,7 @@ import '../../core/network/connectivity_service.dart';
 import '../../core/offline/hub/hub_config.dart';
 import '../../core/offline/hub/hub_lease_service.dart';
 import '../../core/offline/hub/hub_mode_controller.dart';
+import '../../core/offline/hub/hub_op_log.dart';
 import '../../core/offline/offline_pos_service.dart';
 import '../../data/repositories/cashier_repository.dart';
 import '../../data/repositories/inventory_repository.dart';
@@ -31,12 +32,21 @@ class HubHostUplink {
       (_, mode) => _apply(mode),
       fireImmediately: true,
     );
+    // Una op recién guardada en el op-log sube en el acto; el timer queda
+    // de respaldo.
+    _appendedSub = HubOpLog.appended.listen((businessId) {
+      if (_timer == null) return;
+      if (businessId != _ref.read(sessionProvider).activeBusinessId) return;
+      unawaited(_drain());
+    });
   }
 
   final Ref _ref;
   ProviderSubscription<TerminalMode>? _sub;
+  StreamSubscription<String>? _appendedSub;
   Timer? _timer;
   bool _busy = false;
+  bool _drainAgain = false;
   DateTime? _lastLeaseCheck;
 
   static const Duration _interval = Duration(seconds: 4);
@@ -52,7 +62,12 @@ class HubHostUplink {
   }
 
   Future<void> _drain() async {
-    if (_busy) return;
+    if (_busy) {
+      // Lo guardado durante este drenaje no estaba en lo que leyó: uno más
+      // al terminar.
+      _drainAgain = true;
+      return;
+    }
     if (!ConnectivityService().isConnected) return;
     final businessId = _ref.read(sessionProvider).activeBusinessId;
     if (businessId == null || businessId.isEmpty) return;
@@ -94,11 +109,17 @@ class HubHostUplink {
       debugPrint('[HubHostUplink] drenaje falló (ignorado): $e');
     } finally {
       _busy = false;
+      if (_drainAgain && _timer != null) {
+        _drainAgain = false;
+        scheduleMicrotask(() => unawaited(_drain()));
+      }
     }
   }
 
   void dispose() {
     _sub?.close();
+    unawaited(_appendedSub?.cancel());
+    _appendedSub = null;
     _timer?.cancel();
     _timer = null;
   }

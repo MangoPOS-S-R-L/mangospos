@@ -212,3 +212,14 @@ if [ "$CAN_SIGN" -eq 0 ]; then
     echo "⚠️  Para repartirlo a clientes hace falta un certificado"
     echo "⚠️  'Developer ID Application' (ver el aviso del inicio)."
 fi
+
+# Aviso en la app (app_releases, 20261010_0025): después de subir el archivo a
+# https://mangopos.com/, pegar esta fila en el SQL Editor para que los equipos
+# macos vean «Actualización disponible».
+BUILD=$(grep "^version:" pubspec.yaml | awk '{print $2}' | cut -d'+' -f2)
+echo ""
+echo "📣 Para avisar en la app, después de subir el archivo, corre en el SQL Editor:"
+echo "insert into public.app_releases (platform, version, build, download_url, notes)"
+echo "values ('macos', '$VERSION', $BUILD, 'https://mangopos.com/MangoPOS-${VERSION}-macOS.dmg', null)"
+echo "on conflict (platform, build) do update set version = excluded.version,"
+echo "  download_url = excluded.download_url, notes = excluded.notes, published_at = now();"

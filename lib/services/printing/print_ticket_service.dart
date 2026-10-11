@@ -837,8 +837,9 @@ class PrintTicketService {
 
       // Impuestos por item: NO se muestran aquí (solo consolidados en TOTALES);
       // el snapshot en `order_item_tax_lines` se mantiene para la factura.
+      // Las notas del ítem (instrucciones para cocina y marcadores internos
+      // como [REDUCCION:motivo]) NO salen aquí: solo los modificadores.
       final displayQty = _formatQty(item.quantity);
-      final cleanNote = cleanOrderItemNote(item.notes);
       final baseTotal = _printableItemBaseTotal(
         order,
         item,
@@ -868,7 +869,6 @@ class PrintTicketService {
                     : '',
               ),
           ],
-          note: cleanNote,
         );
       } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
@@ -887,14 +887,11 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
-        if (cleanNote.isNotEmpty) {
-          gen.text('   NOTA: $cleanNote');
-        }
         // Líneas seguidas: sin renglón en blanco entre ítems.
       } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Modificadores
-        // (con precio) y nota indentados debajo; un renglón en blanco separa
-        // cada ítem.
+        // (con precio) indentados debajo; un renglón en blanco separa cada
+        // ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
           _formatMoney(baseTotal),
@@ -908,9 +905,6 @@ class PrintTicketService {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
-        if (cleanNote.isNotEmpty) {
-          gen.text('   NOTA: $cleanNote');
         }
         gen.lineFeed(); // espacio entre ítems
       } else {
@@ -951,17 +945,6 @@ class PrintTicketService {
               gen.text(modLine);
             }
           }
-        }
-
-        // Notas especiales destacadas
-        if (cleanNote.isNotEmpty) {
-          gen.setBold(true);
-          if (narrow) {
-            _writeWrappedLine(gen, '  NOTA: $cleanNote', gen.maxChars);
-          } else {
-            gen.text('  NOTA: $cleanNote');
-          }
-          gen.setBold(false);
         }
 
         // Espacio ligero entre items
@@ -1624,6 +1607,8 @@ class PrintTicketService {
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
+      // Las notas del ítem (instrucciones para cocina y marcadores internos
+      // como [REDUCCION:motivo]) NO salen aquí: solo los modificadores.
       final displayQty = _formatQty(item.quantity);
       // Base de la línea consistente con el SUBTOTAL recomputado (en
       // post_discount ya trae el descuento descontado del gross). El precio
@@ -1649,7 +1634,6 @@ class PrintTicketService {
               item,
               preferStoredItemTotals: preferStoredItemTotals,
             );
-      final cleanNote = cleanOrderItemNote(item.notes);
 
       if (modern) {
         // El precio unitario solo cuando aporta: en una línea de 1 unidad,
@@ -1672,7 +1656,6 @@ class PrintTicketService {
                     : '',
               ),
           ],
-          note: cleanNote,
         );
       } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
@@ -1691,14 +1674,11 @@ class PrintTicketService {
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
         }
-        if (cleanNote.isNotEmpty) {
-          gen.text('   NOTA: $cleanNote');
-        }
         // Líneas seguidas: sin renglón en blanco entre ítems.
       } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Los
-        // modificadores (con precio) y la nota van indentados debajo, y un
-        // renglón en blanco separa cada ítem.
+        // modificadores (con precio) van indentados debajo, y un renglón en
+        // blanco separa cada ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
           _formatMoney(lineTotal),
@@ -1712,9 +1692,6 @@ class PrintTicketService {
           final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
           final modTotal = mod.price * itemQty * mod.qty;
           gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
-        if (cleanNote.isNotEmpty) {
-          gen.text('   NOTA: $cleanNote');
         }
         gen.lineFeed(); // espacio entre ítems
       } else {
@@ -1753,16 +1730,6 @@ class PrintTicketService {
               gen.text(modLine);
             }
           }
-        }
-
-        if (cleanNote.isNotEmpty) {
-          gen.setBold(true);
-          if (narrow) {
-            _writeWrappedLine(gen, '  NOTA: $cleanNote', gen.maxChars);
-          } else {
-            gen.text('  NOTA: $cleanNote');
-          }
-          gen.setBold(false);
         }
 
         if (i < consolidatedItems.length - 1) {

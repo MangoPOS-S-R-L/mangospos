@@ -2925,6 +2925,45 @@ class SalesRepository {
     }
   }
 
+  /// «Enviar Pedido» de una ronda capturada: confirma a cocina SOLO
+  /// [itemIds] (20261010_0002) y sella la ronda como [sendToKitchen], con su
+  /// ventana de fusión. [sendToKitchen] confirma todos los borradores de la
+  /// orden: una línea agregada mientras se imprimía quedaba «enviada» sin
+  /// haber salido en el papel. No envuelve el error: sin la migración
+  /// (PGRST202) quien llama falla con un aviso visible; nunca se confirma la
+  /// orden entera en su lugar.
+  Future<({bool merged, DateTime roundStamp})> confirmRoundToKitchen(
+    String orderId,
+    List<String> itemIds,
+  ) async {
+    await _client.rpc(
+      SalesQueries.rpcConfirmOrderItemsToKitchen,
+      params: {'p_order_id': orderId, 'p_item_ids': itemIds},
+    );
+    final round = await _resolveRoundStamp(orderId);
+    try {
+      await _client
+          .from('order_items')
+          .update({'kitchen_sent_at': round.stamp.toIso8601String()})
+          .eq('order_id', orderId)
+          .inFilter('id', itemIds)
+          .isFilter('kitchen_sent_at', null)
+          .inFilter('status', ['pending', 'preparing']);
+    } catch (_) {
+      // La marca de ronda es best-effort; las líneas ya entraron a cocina.
+    }
+    try {
+      await _client
+          .from('orders')
+          .update({'kitchen_done_at': null})
+          .eq('id', orderId)
+          .not('kitchen_done_at', 'is', null);
+    } catch (_) {
+      // El des-sellado es best-effort (ver sendToKitchen).
+    }
+    return (merged: round.merged, roundStamp: round.stamp);
+  }
+
   /// Replay de una comanda ya impresa por la LAN: confirma a cocina SOLO
   /// [itemIds] (20261010_0002). [sendToKitchen] confirma todos los borradores
   /// de la orden, también los agregados después de imprimir, que quedaban

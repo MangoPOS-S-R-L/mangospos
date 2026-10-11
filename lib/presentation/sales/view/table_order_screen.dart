@@ -2808,6 +2808,140 @@ class _CartView extends ConsumerWidget {
     );
   }
 
+  /// Pre-Cuenta con productos sin enviar a cocina: se muestran y se decide.
+  /// Null = se cerró sin elegir.
+  Future<_UnsentChoice?> _askUnsentBeforePrecheck(
+    BuildContext context,
+    List<OrderItem> unsent, {
+    required bool canSend,
+  }) {
+    final qty = NumberFormat('#,##0.##');
+    return showDialog<_UnsentChoice>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Hay productos sin enviar a cocina'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final item in unsent)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    '${qty.format(item.quantity)} × ${item.productName}',
+                  ),
+                ),
+              const SizedBox(height: 12),
+              const Text(
+                'Si ya salieron de la barra o la cocina, puedes imprimir la '
+                'precuenta igual.',
+                style: TextStyle(color: _salesTextSecondary),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_UnsentChoice.cancel),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_UnsentChoice.printAnyway),
+            child: const Text('Imprimir igual'),
+          ),
+          if (canSend)
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(_UnsentChoice.send),
+              child: const Text('Enviar a cocina'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Tras imprimir la precuenta: comandas de la cuenta que aún no terminan.
+  void _showPendingKitchenRounds(
+    BuildContext context,
+    ({int pendingSync, Set<String> uncertainAreas, Set<String> unprintedAreas})
+    rounds,
+  ) {
+    final String message;
+    if (rounds.uncertainAreas.isNotEmpty) {
+      message =
+          'Revisa la comanda de ${rounds.uncertainAreas.join(', ')}: no se '
+          'confirmó si salió (Ajustes › Impresión › Salud).';
+    } else if (rounds.unprintedAreas.isNotEmpty) {
+      message =
+          'La comanda de ${rounds.unprintedAreas.join(', ')} no se imprimió '
+          '(Ajustes › Impresión › Salud).';
+    } else if (rounds.pendingSync > 0) {
+      message =
+          'Hay una comanda enviada en local: se confirma en cocina al '
+          'sincronizar.';
+    } else {
+      return;
+    }
+    ScaffoldMessenger.of(context).showAppSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFFB45309),
+        duration: const Duration(seconds: 7),
+        content: Text(message),
+      ),
+    );
+  }
+
+  /// Aviso tras mandar una ronda a cocina, según lo que pasó en cada área.
+  /// Incierta va primero: nunca se anuncia como impresa ni se invita a
+  /// reimprimir sin revisar.
+  void _showKitchenSendResult(BuildContext context, KitchenSendResult? result) {
+    if (result != null && result.uncertainPrintAreas.isNotEmpty) {
+      final areas = result.uncertainPrintAreas.join(', ');
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFB45309),
+          duration: const Duration(seconds: 9),
+          content: Text(
+            'No se pudo confirmar si salió la comanda de: $areas. Revisa en '
+            'el área antes de reimprimir (Ajustes › Impresión › Salud).',
+          ),
+        ),
+      );
+    } else if (result != null && result.pendingPrintAreas.isNotEmpty) {
+      final areas = result.pendingPrintAreas.join(', ');
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFB45309),
+          duration: const Duration(seconds: 7),
+          content: Text(
+            'Orden guardada, pero NO se imprimió la comanda de: $areas. Revisa '
+            'la impresora o la ruta de cocina.',
+          ),
+        ),
+      );
+    } else if (result != null && result.hadAnyEscalation) {
+      final areas = result.escalatedAreas.join(', ');
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFF59E0B),
+          duration: const Duration(seconds: 4),
+          content: Text(
+            'Orden enviada a cocina. Las impresoras de $areas no '
+            'respondieron, el sistema lo está intentando de otra forma — las '
+            'comandas saldrán en unos segundos.',
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFF22C55E),
+          content: Text('Orden enviada a cocina'),
+        ),
+      );
+    }
+  }
+
   /// "¿Dónde imprime COCINA?" para un área con 2+ impresoras de comanda:
   /// la misma hoja de la precuenta, con las impresoras del área + "Todas".
   /// Devuelve el `persistKey` elegido o null si se cerró sin elegir.
@@ -5849,51 +5983,7 @@ class _CartView extends ConsumerWidget {
                                     .read(menuBrowserVmProvider.notifier)
                                     .refreshStock(),
                               );
-                              // Si alguna área tuvo que escalar al
-                              // worker, mostramos snackbar amigable
-                              // amarillo en lugar del verde de éxito.
-                              if (kitchenResult != null &&
-                                  kitchenResult.pendingPrintAreas.isNotEmpty) {
-                                final areas = kitchenResult.pendingPrintAreas
-                                    .join(', ');
-                                ScaffoldMessenger.of(context).showAppSnackBar(
-                                  SnackBar(
-                                    backgroundColor: const Color(0xFFB45309),
-                                    duration: const Duration(seconds: 7),
-                                    content: Text(
-                                      'Orden guardada, pero NO se imprimió '
-                                      'la comanda de: $areas. Revisa la '
-                                      'impresora o la ruta de cocina.',
-                                    ),
-                                  ),
-                                );
-                              } else if (kitchenResult != null &&
-                                  kitchenResult.hadAnyEscalation) {
-                                final areas = kitchenResult.escalatedAreas.join(
-                                  ', ',
-                                );
-                                ScaffoldMessenger.of(context).showAppSnackBar(
-                                  SnackBar(
-                                    backgroundColor: const Color(0xFFF59E0B),
-                                    duration: const Duration(seconds: 4),
-                                    content: Text(
-                                      'Orden enviada a cocina. Las '
-                                      'impresoras de $areas no '
-                                      'respondieron, el sistema lo '
-                                      'está intentando de otra forma '
-                                      '— las comandas saldrán en '
-                                      'unos segundos.',
-                                    ),
-                                  ),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).showAppSnackBar(
-                                  const SnackBar(
-                                    backgroundColor: Color(0xFF22C55E),
-                                    content: Text('Orden enviada a cocina'),
-                                  ),
-                                );
-                              }
+                              _showKitchenSendResult(context, kitchenResult);
 
                               // Auto-close para delivery externo (ya pagado)
                               final dt = orderState.deliveryType;
@@ -6175,17 +6265,122 @@ class _CartView extends ConsumerWidget {
                               required bool forcePicker,
                             }) async {
                               await _runLockedAction(ref, precheckLockKey, () async {
-                                if (orderState.order == null) return;
+                                final tappedOrder = orderState.order;
+                                if (tappedOrder == null) return;
+                                final notifier = ref.read(
+                                  currentOrderProvider.notifier,
+                                );
                                 // FRESH: recargar la orden del server antes
                                 // de imprimir, para no sacar una precuenta
                                 // con ítems stale (Realtime pudo perder
                                 // eventos / otra caja agregó ítems). No-op
                                 // offline o en orden local.
-                                await ref
-                                    .read(currentOrderProvider.notifier)
-                                    .reloadOrderNow();
+                                await notifier.reloadOrderNow();
                                 if (!context.mounted) return;
+                                // La cuenta que se tocó: si durante la espera
+                                // se cambió de mesa o de subcuenta, no se
+                                // imprime otra.
+                                bool sameAccount(CurrentOrderState s) =>
+                                    s.order?.id == tappedOrder.id &&
+                                    s.selectedCheckId == selectedCheckId;
+                                void accountChanged() =>
+                                    ScaffoldMessenger.of(
+                                      context,
+                                    ).showAppSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'La cuenta cambió mientras se '
+                                          'verificaba. Vuelve a tocar '
+                                          'Pre-Cuenta.',
+                                        ),
+                                      ),
+                                    );
                                 var freshState = ref.read(currentOrderProvider);
+                                if (!sameAccount(freshState)) {
+                                  accountChanged();
+                                  return;
+                                }
+                                // Productos que la recarga trajo sin enviar a
+                                // cocina (otra caja los agregó, o la copia
+                                // guardada estaba vieja): antes salían en la
+                                // precuenta sin aviso (mesa A26, 10-10).
+                                final unsent = freshState.items
+                                    .where(
+                                      (i) =>
+                                          i.status == 'draft' &&
+                                          (selectedCheckId == null ||
+                                              i.checkId == selectedCheckId),
+                                    )
+                                    .toList(growable: false);
+                                if (unsent.isNotEmpty) {
+                                  final canSend =
+                                      ref
+                                          .read(businessFeaturesProvider)
+                                          .value
+                                          ?.kitchenEnabled !=
+                                      false;
+                                  final choice = await _askUnsentBeforePrecheck(
+                                    context,
+                                    unsent,
+                                    canSend: canSend,
+                                  );
+                                  if (!context.mounted ||
+                                      choice == null ||
+                                      choice == _UnsentChoice.cancel) {
+                                    return;
+                                  }
+                                  if (choice == _UnsentChoice.send) {
+                                    try {
+                                      final waiter = await _loadWaiterName(
+                                        ref,
+                                        tappedOrder.id,
+                                      );
+                                      if (!context.mounted) return;
+                                      final sent = await notifier.confirmOrder(
+                                        tableName: tableCode,
+                                        waiterName: waiter,
+                                        choosePrinter:
+                                            (areaName, printers, current) =>
+                                                _chooseKitchenPrinter(
+                                                  context,
+                                                  ref,
+                                                  areaName,
+                                                  printers,
+                                                  current,
+                                                ),
+                                      );
+                                      if (!context.mounted) return;
+                                      _showKitchenSendResult(context, sent);
+                                    } catch (e) {
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showAppSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'No se pudo enviar a cocina: $e',
+                                          ),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    await notifier.reloadOrderNow();
+                                    if (!context.mounted) return;
+                                  }
+                                  // Después de decidir, la misma cuenta.
+                                  freshState = ref.read(currentOrderProvider);
+                                  if (!sameAccount(freshState)) {
+                                    accountChanged();
+                                    return;
+                                  }
+                                }
+                                // Comandas de la cuenta que aún no terminan:
+                                // se avisa al imprimir, sin ofrecer otro envío
+                                // de esas rondas.
+                                final rounds = await notifier
+                                    .kitchenRoundsOfCurrentOrder();
+                                if (!context.mounted) return;
                                 var freshOrder = freshState.order;
                                 if (freshOrder == null) return;
                                 // ── Gate de FEE DE DELIVERY PROPIO ──
@@ -6351,6 +6546,9 @@ class _CartView extends ConsumerWidget {
                                     orderItems: freshItems,
                                     forcePicker: forcePicker,
                                   );
+                                  if (context.mounted) {
+                                    _showPendingKitchenRounds(context, rounds);
+                                  }
                                 } catch (e) {
                                   if (context.mounted) {
                                     // Precuenta: no bloquea otra
@@ -6377,15 +6575,21 @@ class _CartView extends ConsumerWidget {
                               });
                             }
 
+                            // Con la copia guardada en pantalla, mientras
+                            // responde el servidor, no se imprime: la
+                            // recarga podía meter productos sin enviar.
+                            final verifying =
+                                orderState.accountCheck ==
+                                AccountCheck.verifying;
                             return _SecondaryActionButton(
-                              label: 'Pre-Cuenta',
+                              label: verifying ? 'Verificando…' : 'Pre-Cuenta',
                               icon: Icons.receipt_long_outlined,
-                              onPressed: precheckLocked
+                              onPressed: precheckLocked || verifying
                                   ? null
                                   : () => runPrecheck(forcePicker: false),
                               // Long press → fuerza el picker para cambiar
                               // la impresora fijada (UX de Slice 2).
-                              onLongPress: precheckLocked
+                              onLongPress: precheckLocked || verifying
                                   ? null
                                   : () => runPrecheck(forcePicker: true),
                             );
@@ -12759,3 +12963,6 @@ class _CourtesyDialogState extends ConsumerState<_CourtesyDialog> {
     );
   }
 }
+
+/// Respuesta al aviso de productos sin enviar antes de la Pre-Cuenta.
+enum _UnsentChoice { send, printAnyway, cancel }

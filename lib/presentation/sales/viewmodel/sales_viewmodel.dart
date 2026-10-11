@@ -12,6 +12,7 @@ import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/order_item_snapshot.dart';
+import 'package:mangopos/core/offline/pending_kitchen_prints.dart';
 import 'package:mangopos/core/offline/offline_catalog_service.dart';
 import 'package:mangopos/core/offline/pos_lookup_offline_cache.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
@@ -109,6 +110,33 @@ class _KitchenRoundEditBlocked implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// Cómo terminó el alta de una línea temporal (`tmp_`), para el envío a
+/// cocina que la espera ([SalesViewModel.confirmOrder]).
+enum _RoundAddState {
+  /// Guardada en el servidor con sus extras: [_RoundAdd.itemId] es su id real.
+  saved,
+
+  /// Guardada en el servidor, pero no informó su id (servidor sin la RPC
+  /// idempotente de ofertas): no se puede confirmar por ids.
+  savedUnknownId,
+
+  /// Quedó en la cola local (sin red, o la respuesta se perdió): el servidor
+  /// no tiene la ronda completa.
+  queued,
+
+  /// No se guardó y la línea salió de la cuenta.
+  failed,
+
+  /// Sigue en vuelo cuando se agotó la espera del envío.
+  pending,
+}
+
+class _RoundAdd {
+  const _RoundAdd(this.state, [this.itemId]);
+  final _RoundAddState state;
+  final String? itemId;
 }
 
 /// El servidor no anuló una venta en una anulación automática
@@ -287,6 +315,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // del eco Realtime de una acción previa) NO descarta el item optimista; se
   // mantiene en la lista. Sin esto, el item recién tocado "sale y vuelve".
   final Set<String> _inFlightAddTmpIds = {};
+  // Altas con línea temporal en curso (producto u oferta) → cómo terminaron.
+  // «Enviar Pedido» las espera ([kitchenSendAddWaitBudget]) para mandar la
+  // ronda por la nube en vez de caer a la LAN solo porque una línea seguía
+  // guardándose. Un set de ids `tmp_` no basta: hay que poder esperar el
+  // resultado. Se completa al quedar guardado el contenido de cocina (con
+  // extras), antes de la autoría y la recarga; se retira al terminar el alta.
+  final Map<String, Completer<_RoundAdd>> _roundAdds = {};
   // Mapeo `tmp_` → id real (lo devuelve `addItemFromMenu`). Permite SOLTAR el
   // optimista solo cuando el server YA trae su contraparte real, evitando un
   // duplicado (tmp + real) en la recarga post-commit.
@@ -346,6 +381,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // terminar esa, y quien lo pidió espera ESA pasada (antes regresaba de
   // inmediato sin sincronizar nada).
   Completer<void>? _forcedSyncRerun;
+  // Pedido automático (uplink, reconexión) que llegó con una pasada en curso.
+  // Antes se descartaba: una operación aceptada después de que esa pasada
+  // leyó la cola esperaba al siguiente timer. Corre otra pasada SIN force al
+  // terminar (respeta backoff y dead-letter), solo si hay algo listo.
+  Completer<void>? _automaticSyncRerun;
+  bool _automaticSyncRerunReload = false;
   String? _taxSettingsBusinessId;
   DateTime? _lastTaxLoad;
   String? _fiscalSettingsBusinessId;
@@ -857,6 +898,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _refreshOrderDebounceTimer = null;
       _loadingWatchdogTimer?.cancel();
       _loadingWatchdogTimer = null;
+      _accountCheckTimer?.cancel();
+      _accountCheckTimer = null;
       _connectivitySubscription?.cancel();
       _connectivitySubscription = null;
     });
@@ -1947,6 +1990,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final myOpenToken = ++_openTableToken;
     _activeTableId = tableId;
     final cached = _tableCache[tableId];
+    _watchAccountCheck(myOpenToken);
     if (cached != null) {
       state = _normalizeHydratedState(
         cached.copyWith(
@@ -1954,6 +1998,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           error: null,
           checks: const [],
           clearSelectedCheck: true,
+          accountCheck: AccountCheck.verifying,
         ),
       );
     } else {
@@ -2054,6 +2099,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         caller: 'openTable',
         preloadedBundle: result.bundle,
       );
+      _settleAccountCheck(myOpenToken, AccountCheck.verified);
 
       // Fix #1: si soy el Hub host, publico la apertura al op-log para que las
       // cajas cliente vean esta mesa por la LAN (mapea order↔table).
@@ -2093,6 +2139,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               loading: false,
               error: 'Modo offline: usando copia local de la mesa.',
               origin: 'table',
+              accountCheck: AccountCheck.localCopy,
             ),
           );
           _tableCache[tableId] = state;
@@ -2124,6 +2171,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               loading: false,
               error:
                   'Mesa abierta offline: los items se sincronizarán al recuperar conexión.',
+              accountCheck: AccountCheck.localCopy,
             ),
           );
           _tableCache[tableId] = state;
@@ -2132,6 +2180,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
       state = state.copyWith(loading: false, error: e.toString());
+      _settleAccountCheck(myOpenToken, AccountCheck.refreshFailed);
+    }
+  }
+
+  /// Tope de la verificación de una cuenta recién abierta (ver
+  /// [AccountCheck]): pasado, la copia queda marcada como posiblemente vieja
+  /// y la Pre-Cuenta vuelve a poder usarse (recarga antes de imprimir).
+  @visibleForTesting
+  static Duration accountCheckTimeout = const Duration(seconds: 12);
+  Timer? _accountCheckTimer;
+
+  void _watchAccountCheck(int openToken) {
+    _accountCheckTimer?.cancel();
+    _accountCheckTimer = Timer(accountCheckTimeout, () {
+      _settleAccountCheck(openToken, AccountCheck.refreshFailed);
+    });
+  }
+
+  /// Cierra la verificación de la apertura [openToken] si sigue vigente y
+  /// todavía estaba verificando.
+  void _settleAccountCheck(int openToken, AccountCheck result) {
+    if (openToken != _openTableToken) return;
+    _accountCheckTimer?.cancel();
+    _accountCheckTimer = null;
+    final current = state.accountCheck;
+    // Una respuesta tardía del servidor sí corrige el «no respondió a tiempo».
+    if (current == AccountCheck.verifying ||
+        (result == AccountCheck.verified &&
+            current == AccountCheck.refreshFailed)) {
+      state = state.copyWith(accountCheck: result);
     }
   }
 
@@ -2212,6 +2290,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           checks: const [],
           clearSelectedCheck: true,
           origin: 'table',
+          accountCheck: AccountCheck.verifying,
         ),
       );
     } catch (_) {}
@@ -4126,6 +4205,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (_isMutationOrderActive(mutation)) {
         _inFlightAddTmpIds.add(optimisticItem.id);
       }
+      _trackRoundAdd(optimisticItem.id);
       final addedItem = optimisticItem;
       _applyOrderMutation(
         mutation,
@@ -4179,6 +4259,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           itemSavedOnServer = true;
           savedItemId = realId;
           if (optimisticItem != null) {
+            _settleRoundAdd(
+              optimisticItem.id,
+              _RoundAdd(_RoundAddState.saved, realId),
+            );
             final optId = optimisticItem.id;
             if (_isMutationOrderActive(mutation)) {
               _tmpToRealItemId[optId] = realId;
@@ -4259,6 +4343,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             modifiers: modifiers,
           );
         }
+      }
+
+      // Contenido de cocina completo en el servidor (línea + extras): un
+      // «Enviar» que esperaba esta línea ya puede ir por la nube. La autoría
+      // y la recarga de abajo no cambian lo que sale en la comanda.
+      if (optimisticItem != null) {
+        _settleRoundAdd(
+          optimisticItem.id,
+          added.itemExists && itemId.isNotEmpty
+              ? _RoundAdd(_RoundAddState.saved, itemId)
+              : const _RoundAdd(_RoundAddState.failed),
+        );
       }
 
       // Audit trail del item: ver `_resolveItemEmployeeId` arriba. Va DESPUÉS
@@ -4351,6 +4447,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 .toList(growable: false),
           },
         );
+        _settleRoundAdd(
+          optimisticItem.id,
+          const _RoundAdd(_RoundAddState.queued),
+        );
         final addedItem = optimisticItem;
         await _persistOrderMutation(mutation, (source) {
           if (source.items.any((item) => item.id == addedItem.id)) return source;
@@ -4388,6 +4488,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (optimisticItem != null) {
         _inFlightAddTmpIds.remove(optimisticItem.id);
         _tmpToRealItemId.remove(optimisticItem.id);
+        _releaseRoundAdd(optimisticItem.id);
       }
     }
   }
@@ -4538,6 +4639,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         taxLines: synthTaxLines,
       );
 
+      _trackRoundAdd(optimisticItem.id);
       final optimisticItems = [...state.items, optimisticItem];
       final updatedSummary = summarizeOrderPricing(
         previousOrder.copyWith(serviceFee: 0),
@@ -4580,6 +4682,14 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           realId: dealItemId,
         );
       }
+      if (optimisticItem != null) {
+        _settleRoundAdd(
+          optimisticItem.id,
+          dealItemId != null
+              ? _RoundAdd(_RoundAddState.saved, dealItemId)
+              : const _RoundAdd(_RoundAddState.savedUnknownId),
+        );
+      }
       await _loadOrderDetail(
         orderId,
         selectionToken: selectionToken,
@@ -4605,6 +4715,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // Error de red: el servidor pudo haber guardado la línea igual. Recargar
       // muestra la verdad en vez de invitar a tocar otra vez (= duplicado).
       if (OfflinePosService.isTransportError(e)) refreshOrder();
+    } finally {
+      // La línea temporal de la oferta salió de la cuenta si falló: un envío
+      // que la esperaba la deja fuera de su ronda.
+      if (optimisticItem != null) _releaseRoundAdd(optimisticItem.id);
     }
   }
 
@@ -4757,6 +4871,163 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     } catch (e) {
       debugPrint('[SalesVM] mapeo de la línea de la comanda: $e');
     }
+  }
+
+  /// Comandas de la cuenta en pantalla que todavía no terminan: enviadas por
+  /// la LAN con su confirmación por subir ([pendingSync]), con resultado
+  /// incierto o sin imprimir, por área. La Pre-Cuenta lo avisa sin ofrecer
+  /// un segundo envío de esas rondas. Nunca lanza.
+  Future<
+    ({int pendingSync, Set<String> uncertainAreas, Set<String> unprintedAreas})
+  >
+  kitchenRoundsOfCurrentOrder() async {
+    final businessId = _activeBusinessId;
+    final orderId = state.order?.id;
+    var pendingSync = 0;
+    final uncertain = <String>{};
+    final unprinted = <String>{};
+    if (businessId == null || businessId.isEmpty || orderId == null) {
+      return (
+        pendingSync: pendingSync,
+        uncertainAreas: uncertain,
+        unprintedAreas: unprinted,
+      );
+    }
+    Future<bool> isThisOrder(String? id) async {
+      if (id == null || id.isEmpty) return false;
+      if (id == orderId) return true;
+      if (!id.startsWith('local-order-')) return false;
+      return await _offlinePos.mappedRemoteOrderId(
+            businessId: businessId,
+            localOrderId: id,
+          ) ==
+          orderId;
+    }
+
+    try {
+      for (final action in await _offlinePos.unsettledActions(businessId)) {
+        if (action['type'] != 'confirm_local_order') continue;
+        if (!await isThisOrder(action['order_id']?.toString())) continue;
+        if (action['kitchen_uncertain'] == true) {
+          for (final area in (action['uncertain_areas'] as List?) ?? const []) {
+            uncertain.add(area.toString());
+          }
+        } else {
+          pendingSync++;
+        }
+      }
+      for (final pending in await PendingKitchenPrints.instance.list(
+        businessId,
+      )) {
+        if (!await isThisOrder(pending.orderId)) continue;
+        (pending.uncertain ? uncertain : unprinted).add(pending.areaCode);
+      }
+    } catch (e) {
+      debugPrint('[SalesVM] comandas pendientes de la cuenta: $e');
+    }
+    return (
+      pendingSync: pendingSync,
+      uncertainAreas: uncertain,
+      unprintedAreas: unprinted..removeAll(uncertain),
+    );
+  }
+
+  /// Líneas locales en borrador que el servidor ya tiene ENVIADAS a cocina
+  /// (misma línea, por su id o por su mapeo `tmp_` → real, y misma cantidad)
+  /// pasan a ese estado; todo lo demás de la copia local se conserva (notas,
+  /// cantidades y líneas sin subir). Nunca baja una línea enviada a borrador
+  /// (una lectura vieja no borra un envío local pendiente de subir) ni marca
+  /// enviado un incremento posterior: si la cantidad no coincide, ese
+  /// contenido sigue pendiente. Null si no cambió nada.
+  Future<List<OrderItem>?> _withServerKitchenConfirmations({
+    required String businessId,
+    required List<OrderItem> local,
+    required List<OrderItem> server,
+  }) async {
+    const sentStatuses = {'pending', 'preparing', 'ready', 'served'};
+    final serverById = {for (final item in server) item.id: item};
+    var changed = false;
+    final merged = <OrderItem>[];
+    for (final item in local) {
+      if (item.status != 'draft' && item.status != 'open') {
+        merged.add(item);
+        continue;
+      }
+      var remoteId = item.id;
+      if (remoteId.startsWith('tmp_')) {
+        remoteId =
+            _tmpToRealItemId[remoteId] ??
+            await _offlinePos.mappedRemoteItemId(
+              businessId: businessId,
+              localItemId: remoteId,
+            ) ??
+            remoteId;
+      }
+      final onServer = serverById[remoteId];
+      if (onServer == null ||
+          !sentStatuses.contains(onServer.status) ||
+          (onServer.quantity - item.quantity).abs() > 0.0001) {
+        merged.add(item);
+        continue;
+      }
+      merged.add(item.copyWith(status: onServer.status));
+      changed = true;
+    }
+    return changed ? merged : null;
+  }
+
+  /// Cuánto espera «Enviar Pedido» a que terminen de guardarse las líneas
+  /// temporales de su ronda antes de mandarla por la LAN. Lo que no termine
+  /// a tiempo sigue su alta (con su mismo client_op_id) y su comanda se
+  /// confirma al guardarse el mapeo.
+  @visibleForTesting
+  static Duration kitchenSendAddWaitBudget = const Duration(seconds: 4);
+
+  void _trackRoundAdd(String tmpId) {
+    _roundAdds[tmpId] = Completer<_RoundAdd>();
+  }
+
+  /// El contenido de cocina de la línea ya quedó (o no) en el servidor. No
+  /// la retira: hasta que el alta termine, la pantalla puede seguir con el
+  /// id temporal y el envío debe encontrar su resultado.
+  void _settleRoundAdd(String tmpId, _RoundAdd outcome) {
+    final pending = _roundAdds[tmpId];
+    if (pending != null && !pending.isCompleted) pending.complete(outcome);
+  }
+
+  /// Fin del alta (en su `finally`): si nadie la resolvió, no se guardó.
+  void _releaseRoundAdd(String tmpId) {
+    _settleRoundAdd(tmpId, const _RoundAdd(_RoundAddState.failed));
+    _roundAdds.remove(tmpId);
+  }
+
+  /// Espera, con [kitchenSendAddWaitBudget], las altas de las líneas
+  /// temporales [tmpIds] de una ronda. Una línea temporal sin alta en curso
+  /// vive en la cola local (se agregó sin red): cuenta como [queued].
+  Future<Map<String, _RoundAdd>> _awaitRoundAdds(
+    Iterable<String> tmpIds,
+  ) async {
+    final results = <String, _RoundAdd>{};
+    final waits = <Future<void>>[];
+    for (final tmpId in tmpIds) {
+      final pending = _roundAdds[tmpId];
+      if (pending == null) {
+        results[tmpId] = const _RoundAdd(_RoundAddState.queued);
+        continue;
+      }
+      waits.add(pending.future.then((outcome) => results[tmpId] = outcome));
+    }
+    if (waits.isNotEmpty) {
+      try {
+        await Future.wait(waits).timeout(kitchenSendAddWaitBudget);
+      } on TimeoutException {
+        // Lo que siga en vuelo queda 'pending': la ronda va por la LAN.
+      }
+    }
+    return {
+      for (final tmpId in tmpIds)
+        tmpId: results[tmpId] ?? const _RoundAdd(_RoundAddState.pending),
+    };
   }
 
   /// True si [itemId] es una línea de la comanda que se imprime ahora mismo
@@ -6479,11 +6750,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return null;
     }
-    final sentState = state;
-    final orderId = sentState.order?.id;
+    // La ronda es lo que había en pantalla al tocar «Enviar»: lo agregado
+    // después (también mientras se espera un alta) va en su propia ronda.
+    final capturedState = state;
+    final orderId = capturedState.order?.id;
     if (orderId == null) return null;
+    // Se decide con lo que valía al tocar: una lectura ajena que agota su
+    // tiempo mientras se espera un alta (promociones, 6 s) no debe mandar a
+    // la LAN una ronda que el servidor ya tiene completa. La conexión sí se
+    // vuelve a mirar antes de elegir el camino.
+    final preferLocalAtPress = _preferLocalOperations;
     final sentBusinessId = _activeBusinessId;
-    final sentOrigin = sentState.origin;
+    final sentOrigin = capturedState.origin;
     final sentTableId = _activeTableId;
     final sentSlotId = _resolvePersistSlotId(sentOrigin ?? 'table', sentTableId);
     bool stillSelected() =>
@@ -6508,7 +6786,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     final printing = (
       businessId: sentBusinessId ?? '',
       itemIds: {
-        for (final item in sentState.items)
+        for (final item in capturedState.items)
           if (item.status == 'draft' || item.status == 'open') item.id,
       },
       renamedIds: <String, String>{},
@@ -6529,6 +6807,33 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
       }
       if (sentOrigin == null) throw StateError('Orden sin origen.');
+
+      // Líneas de la ronda que todavía se guardan: se esperan (con tope) en
+      // vez de mandar la ronda por la LAN solo por eso. Antes cualquier
+      // `tmp_` la mandaba por la LAN estando online y su confirmación quedaba
+      // en la cola de este equipo; las demás cajas la veían «por confirmar»
+      // (caso Medio Tiempo, mesa A26, 10-10). Sin red o con venta local no
+      // hay a quién esperar: va por la LAN como siempre.
+      final roundAdds = preferLocalAtPress || orderId.startsWith('local-order-')
+          ? const <String, _RoundAdd>{}
+          : await _awaitRoundAdds([
+              for (final id in printing.itemIds)
+                if (id.startsWith('tmp_')) id,
+            ]);
+      // Las que no se guardaron ya salieron de la cuenta: fuera de la ronda.
+      final failedAdds = {
+        for (final entry in roundAdds.entries)
+          if (entry.value.state == _RoundAddState.failed) entry.key,
+      };
+      printing.itemIds.removeAll(failedAdds);
+      final sentState = failedAdds.isEmpty
+          ? capturedState
+          : capturedState.copyWith(
+              items: capturedState.items
+                  .where((item) => !failedAdds.contains(item.id))
+                  .toList(growable: false),
+            );
+
       await _offlinePos.saveSnapshot(
         businessId: businessId,
         slotId: sentSlotId,
@@ -6601,7 +6906,11 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             return item;
           }).toList(growable: false),
           loading: false,
-          error: localResult.pendingAreas.isEmpty
+          error: localResult.uncertainAreas.isNotEmpty
+              ? 'No se pudo confirmar si salió la comanda en: '
+                    '${localResult.uncertainAreas.join(", ")}. Revisa en el '
+                    'área antes de reimprimir.'
+              : localResult.pendingAreas.isEmpty
               ? 'Comanda enviada localmente. Pendiente de sincronizar.'
               : 'Comanda guardada. Pendiente de imprimir en: '
                     '${localResult.pendingAreas.join(", ")}. '
@@ -6644,6 +6953,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           directAreas: localResult.dispatchIds.keys.toList(growable: false),
           escalatedAreas: const [],
           pendingPrintAreas: localResult.pendingAreas,
+          uncertainPrintAreas: localResult.uncertainAreas,
         );
       }
 
@@ -6656,14 +6966,49 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
-      // Si hay ítems temporales, el servidor aún NO tiene la ronda completa.
-      // Enviar por nube aquí omitía los productos agregados durante el corte
-      // (o decía "no hay items"), incluso tras recuperar la conexión.
-      if (_preferLocalOperations ||
+      // El servidor aún NO tiene la ronda completa si un alta quedó en la
+      // cola o sigue en vuelo tras la espera, o si queda una línea temporal
+      // de otra ronda (impresa sin red, aún sin subir). Enviar por nube aquí
+      // omitía esos productos (o decía "no hay items"), incluso tras
+      // recuperar la conexión.
+      final roundIncomplete = roundAdds.values.any(
+        (add) =>
+            add.state == _RoundAddState.queued ||
+            add.state == _RoundAddState.pending,
+      );
+      final otherTemporaryLines = sentState.items.any(
+        (item) => item.id.startsWith('tmp_') && !roundAdds.containsKey(item.id),
+      );
+      if (preferLocalAtPress ||
+          !_connectivity.isConnected ||
           orderId.startsWith('local-order-') ||
-          sentState.items.any((item) => item.id.startsWith('tmp_'))) {
+          roundIncomplete ||
+          otherTemporaryLines) {
         return sendLocally();
       }
+
+      // Solo las líneas de la ronda capturada, con su id real: una línea
+      // agregada mientras se esperaba o se imprimía no se marca enviada sin
+      // haber salido. Si un alta no informó su id (servidor sin la RPC de
+      // ofertas idempotente), no se puede confirmar solo esta ronda y NO se
+      // amplía a la orden entera: aviso visible, nada impreso; al terminar
+      // el alta la línea ya tiene su id y el siguiente «Enviar» funciona.
+      if (roundAdds.values.any(
+        (add) => add.state == _RoundAddState.savedUnknownId,
+      )) {
+        throw StateError(
+          'Una oferta recién agregada todavía no tiene su identificador del '
+          'servidor. No se envió nada: espera un momento y vuelve a tocar '
+          '«Enviar Pedido».',
+        );
+      }
+      final roundItemIds = {
+        for (final id in printing.itemIds)
+          if (id.startsWith('tmp_'))
+            roundAdds[id]?.itemId ?? printing.renamedIds[id] ?? id
+          else
+            id,
+      };
 
       // Ítems que ESTE device ya sabe enviados (p.ej. impresos por el camino
       // local/offline con replay aún pendiente): el server puede tenerlos
@@ -6685,6 +7030,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               fallbackWaiterName:
                   waiterName ?? await _localOpenerName(businessId, orderId),
               excludeItemIds: locallySentIds,
+              onlyItemIds: roundItemIds,
               choosePrinter: chooser,
               forceChoosePrinter: forceChoosePrinter,
             );
@@ -7360,7 +7706,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   ///
   /// Sin [force] es una pasada automática (uplink del shell, reconexión):
   /// silenciosa, solo actualiza los contadores del badge/banner. Si llega con
-  /// otra pasada en curso no hace nada (esa ya hace el trabajo).
+  /// otra pasada en curso, queda pedida: al terminar esa corre otra pasada
+  /// automática si hay algo listo (lo encolado después no estaba en la lista
+  /// que leyó la anterior), y el Future termina con ella.
   ///
   /// La venta activa se recarga solo si la pasada completó o concilió algo,
   /// o si [reloadActiveOrder] lo pide (reconexión).
@@ -7369,7 +7717,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     bool reloadActiveOrder = false,
   }) async {
     if (_syncInFlight) {
-      if (!force) return;
+      if (!force) {
+        _automaticSyncRerunReload |= reloadActiveOrder;
+        return (_automaticSyncRerun ??= Completer<void>()).future;
+      }
       // promoteLocalOrderForPayment, _retryDead y el botón leen la cola justo
       // después de esperar este Future: debe terminar cuando la pasada que
       // pidieron haya corrido, no antes.
@@ -7485,9 +7836,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         }
       }
 
+      // «Todo sincronizado» solo sin nada pendiente NI por revisar: una
+      // comanda incierta o un cobro por decidir quedan en dead-letter.
       final syncMessage = !result.didWork
           ? (result.pending > 0
                 ? 'Sync pendiente. Operaciones en espera.'
+                : result.dead > 0
+                ? 'Hay operaciones que requieren revisión.'
                 : 'Todo sincronizado.')
           : result.hasFailures
           ? 'Sync offline parcial: ${result.completed} ok, ${result.failed} con error.'
@@ -7526,22 +7881,68 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // pasada ya, sin que otra se cuele, y su Future termina con ella.
       final rerun = _forcedSyncRerun;
       _forcedSyncRerun = null;
+      final automaticRerun = _automaticSyncRerun;
+      final automaticReload = _automaticSyncRerunReload;
+      _automaticSyncRerun = null;
+      _automaticSyncRerunReload = false;
       if (rerun != null) {
+        // La pasada forzada cubre también el pedido automático.
         if (ref.mounted) {
           unawaited(
-            syncPendingOfflineActions(force: true).then<void>(
-              (_) => rerun.complete(),
-              onError: rerun.completeError,
+            syncPendingOfflineActions(
+              force: true,
+              reloadActiveOrder: automaticReload,
+            ).then<void>(
+              (_) {
+                rerun.complete();
+                automaticRerun?.complete();
+              },
+              onError: (Object e, StackTrace st) {
+                rerun.completeError(e, st);
+                automaticRerun?.complete();
+              },
             ),
           );
         } else {
           rerun.complete();
+          automaticRerun?.complete();
+        }
+      } else if (automaticRerun != null) {
+        if (ref.mounted) {
+          unawaited(
+            _runAutomaticSyncRerun(
+              reloadActiveOrder: automaticReload,
+            ).whenComplete(automaticRerun.complete),
+          );
+        } else {
+          automaticRerun.complete();
         }
       }
       // Sin syncInFlight explícito: si arrancó la pasada pedida, el banner
       // debe seguir mostrando que hay una en curso.
       await _refreshOfflineMonitor();
     }
+  }
+
+  /// Pasada automática pedida mientras corría otra ([_automaticSyncRerun]).
+  /// Sin force: solo corre si hay algo listo (o si la reconexión pidió
+  /// recargar la venta), así no encadena pasadas vacías.
+  Future<void> _runAutomaticSyncRerun({required bool reloadActiveOrder}) async {
+    final businessId = _activeBusinessId;
+    if (businessId == null || businessId.isEmpty) return;
+    if (!reloadActiveOrder) {
+      try {
+        // Mientras corre otra pasada (p.ej. el reenvío al Hub) la cola
+        // responde «nada listo»: se espera a que termine para preguntar.
+        await _offlinePos.whenQueueIdle(businessId);
+        if (!await _offlinePos.hasActionsReadyToSync(businessId)) return;
+      } catch (e) {
+        debugPrint('[SalesVM] revisión de la cola tras una pasada: $e');
+        return;
+      }
+    }
+    if (!ref.mounted || _activeBusinessId != businessId) return;
+    await syncPendingOfflineActions(reloadActiveOrder: reloadActiveOrder);
   }
 
   Future<void> _refreshActiveOrderAfterSync(String businessId) async {
@@ -8097,7 +8498,23 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       }
       if (keepLocal) {
         if (state.order?.id != orderId) return;
-        if (state.loading) state = state.copyWith(loading: false);
+        // Lo de pantalla manda, salvo una confirmación de cocina que el
+        // servidor YA tiene para la misma línea (otra caja la envió, o subió
+        // la comanda de este equipo). Antes cualquier operación pendiente de
+        // la cuenta (p. ej. una nota) hacía ignorar el servidor entero y la
+        // caja seguía viendo «por confirmar» lo que cocina ya tenía.
+        final confirmed = await _withServerKitchenConfirmations(
+          businessId: queueBusinessId,
+          local: state.items,
+          server: items,
+        );
+        if (superseded() || state.order?.id != orderId) return;
+        if (confirmed != null) {
+          state = state.copyWith(items: confirmed, loading: false);
+          await _persistCurrentState(localOnly: true);
+        } else if (state.loading) {
+          state = state.copyWith(loading: false);
+        }
         // Realtime sigue activo: es lo que avisa si otro equipo la cierra.
         _subscribeToOrderUpdates(orderId);
         return;

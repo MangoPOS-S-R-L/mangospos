@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'offline_queue_trace.dart';
+import 'offline_queue_work.dart';
 import 'order_item_snapshot.dart';
 import 'payment_intent_journal.dart';
 import 'pending_kitchen_prints.dart';
@@ -112,15 +114,25 @@ class _OfflineSyncSkip implements Exception {
 ///   sigue en la cola, o falta la migración en el servidor).
 /// - [terminal]: no se resuelve sola (acción de una versión anterior sin sus
 ///   ids): pasa directo a dead-letter para recuperarla a mano.
+/// - [waitingItemIds]: el único motivo es que faltan estos ids remotos; al
+///   guardarse el mapeo, la espera se suelta sin aguardar su backoff.
+/// - [actionPatch]: cambios que la acción conserva al quedar retenida.
 class _KitchenRoundHold implements Exception {
   const _KitchenRoundHold(
     this.message, {
     this.countsAttempt = true,
     this.terminal = false,
+    this.waitingItemIds = const [],
+    this.actionPatch = const {},
   });
   final String message;
   final bool countsAttempt;
   final bool terminal;
+  final List<String> waitingItemIds;
+
+  /// Campos que la acción guarda al quedar retenida (p. ej. la parte de la
+  /// comanda que ya se confirmó sale de ella y queda solo lo incierto).
+  final Map<String, Object?> actionPatch;
   @override
   String toString() => message;
 }
@@ -172,6 +184,10 @@ enum _ReplayGate {
 
   /// Su orden quedó detenida por una acción anterior en esta pasada.
   blockedBehind,
+
+  /// Comanda que este proceso todavía está imprimiendo por la LAN: el
+  /// replay no la toca hasta que termine o su reclamo venza.
+  claimed,
 
   /// Se reenvía al servidor.
   replay,
@@ -327,6 +343,11 @@ class OfflinePosService {
   final HubLeaseService _hubLease = HubLeaseService();
   final Map<String, Future<OfflineQueueSyncResult>> _hubUplinkInFlight = {};
   final Map<String, Future<OfflineQueueSyncResult>> _queueSyncInFlight = {};
+  // Trabajo aceptado (ver [acceptedWorkRevision]) cuando empezó la pasada en
+  // curso de cada negocio: lo aceptado después no está en la lista que leyó.
+  final Map<String, int> _queuePassStartWork = {};
+  final Map<String, Future<OfflineQueueSyncResult>> _queueSyncFollowUps = {};
+  final Set<String> _queueSyncFollowUpForce = {};
   final Map<String, Future<void>> _queueMutations = {};
   final Map<String, Future<void>> _snapshotMutations = {};
 
@@ -1064,6 +1085,19 @@ class OfflinePosService {
       current.add(normalized);
       await _writeQueue(businessId, _compactQueue(current));
     });
+    // Ya guardada y con el candado suelto: pedir la subida ahora, sin
+    // esperar al timer. Si la escritura falló, el await lanzó y no se avisa.
+    OfflineQueueTrace.instance.record(
+      businessId,
+      'guardada',
+      op: normalized['id']?.toString(),
+      type: normalized['type']?.toString(),
+      order: normalized['order_id']?.toString(),
+      detail: normalized['device_id'] == null
+          ? null
+          : 'equipo ${normalized['device_id']}',
+    );
+    _announceWork(businessId, OfflineQueueWorkReason.enqueued);
     if (_hubUploader != null) {
       unawaited(
         flushPendingToHub(businessId).then<void>(
@@ -1080,12 +1114,18 @@ class OfflinePosService {
   /// already attempted against cloud to another replay authority.
   Future<OfflineQueueSyncResult> flushPendingToHub(String businessId) {
     final active = _queueSyncInFlight[businessId];
-    if (active != null) return active;
-    final run = _flushPendingToHubOnce(businessId).whenComplete(() {
-      _queueSyncInFlight.remove(businessId);
-    });
-    _queueSyncInFlight[businessId] = run;
-    return run;
+    if (active != null) {
+      return _joinActiveQueuePass(
+        businessId: businessId,
+        active: active,
+        force: false,
+        runAgain: (_) => flushPendingToHub(businessId),
+      );
+    }
+    return _startQueuePass(
+      businessId,
+      () => _flushPendingToHubOnce(businessId),
+    );
   }
 
   Future<OfflineQueueSyncResult> _flushPendingToHubOnce(
@@ -1110,9 +1150,13 @@ class OfflinePosService {
         final current = await _readQueue(businessId);
         final index = current.indexWhere((a) => a['id'] == action['id']);
         if (index < 0 || _isCompleted(current[index])) return null;
+        // Comanda que este equipo imprime ahora por la LAN: no va al Hub
+        // hasta terminar (o hasta que su reclamo venza y se tome).
+        if (isLocalKitchenRoundClaimed(current[index])) return null;
         final next = _normalizeAction(current[index])
           ..['hub_delivery_started'] = true
           ..['status'] = _statusPending;
+        _takeOverLocalKitchenRound(next);
         await _upsertActionUnlocked(businessId, next);
         return next;
       });
@@ -1204,7 +1248,9 @@ class OfflinePosService {
       final cloudOwnedOrders = _cloudOwnedOrders(queue);
       return queue.any(
         (action) =>
-            !_isCompleted(action) && !_isCloudOwned(action, cloudOwnedOrders),
+            !_isCompleted(action) &&
+            !_isCloudOwned(action, cloudOwnedOrders) &&
+            !isLocalKitchenRoundClaimed(action),
       );
     }
     if (!queue.any((action) => !_isSettled(action))) return false;
@@ -1384,6 +1430,7 @@ class OfflinePosService {
         .toList(growable: false);
     if (revived > 0) {
       await _writeQueue(businessId, next);
+      _announceWork(businessId, OfflineQueueWorkReason.revived);
     }
     return revived;
   }
@@ -1565,6 +1612,290 @@ class OfflinePosService {
     );
   }
 
+  // ── Comanda local durable ─────────────────────────────────────────────
+  // La ronda se registra en la cola ANTES de imprimir por la LAN, con un
+  // reclamo de este proceso; cada área anota su resultado al terminar. Si la
+  // app muere a mitad, el reclamo deja de valer (otro arranque) o vence, y el
+  // replay sabe qué salió, qué falta y qué quedó incierto. Una térmica no
+  // ofrece transacción con la base: lo que estaba «imprimiendo» al morir es
+  // INCIERTO y nunca se reimprime solo.
+
+  /// Identidad de este arranque de la app: el reclamo de otro arranque ya no
+  /// protege a nadie.
+  static final String _processId = _uuid.v4();
+
+  /// Vida de un reclamo de impresión local. Se renueva con cada área.
+  @visibleForTesting
+  static Duration localPrintClaimTtl = const Duration(minutes: 3);
+
+  static const String kitchenAreaPrinting = 'printing';
+  static const String kitchenAreaDelivered = 'delivered';
+  static const String kitchenAreaQueued = 'queued';
+  static const String kitchenAreaPending = 'pending';
+  static const String kitchenAreaUncertain = 'uncertain';
+
+  static Map<String, Object?> _newLocalPrintClaim(String claimId) {
+    final now = DateTime.now();
+    return {
+      'claim_id': claimId,
+      'process_id': _processId,
+      'claimed_at': now.toIso8601String(),
+      'expires_at': now.add(localPrintClaimTtl).toIso8601String(),
+    };
+  }
+
+  /// True mientras ESTE proceso imprime la comanda por la LAN.
+  static bool isLocalKitchenRoundClaimed(Map<String, dynamic> action) {
+    final claim = action['local_print_claim'];
+    if (claim is! Map || claim['process_id'] != _processId) return false;
+    final expires = DateTime.tryParse(claim['expires_at']?.toString() ?? '');
+    return expires != null && expires.isAfter(DateTime.now());
+  }
+
+  /// La comanda sigue siendo del envío local [claimId]: nadie la tomó (el
+  /// replay suelta el reclamo al tomarla) y no está en proceso ni completada.
+  static bool _holdsLocalPrintClaim(
+    Map<String, dynamic> action,
+    String claimId,
+  ) {
+    final claim = action['local_print_claim'];
+    return claim is Map &&
+        claim['claim_id'] == claimId &&
+        action['status']?.toString() != _statusProcessing &&
+        action['status']?.toString() != _statusCompleted;
+  }
+
+  /// Registra la comanda local en la cola antes de imprimir y devuelve el
+  /// reclamo del envío. Si esto falla, no se imprime: no sale papel sin
+  /// registro durable.
+  Future<String> beginLocalKitchenRound({
+    required String businessId,
+    required String roundId,
+    required String orderId,
+    required String? origin,
+    required String tableName,
+    required Map<String, List<String>> itemIdsByArea,
+    Map<String, double> itemQuantities = const {},
+  }) async {
+    final claimId = _uuid.v4();
+    await enqueueAction(
+      businessId: businessId,
+      action: {
+        'id': roundId,
+        'type': 'confirm_local_order',
+        'order_id': orderId,
+        'origin': origin,
+        'item_count': itemIdsByArea.values.fold<int>(
+          0,
+          (sum, ids) => sum + ids.length,
+        ),
+        'table_name': tableName,
+        'item_ids_by_area': itemIdsByArea,
+        'item_quantities': itemQuantities,
+        'printed_areas': <String>[],
+        'missing_areas': itemIdsByArea.keys.toList(growable: false),
+        'area_results': <String, String>{},
+        'local_print_claim': _newLocalPrintClaim(claimId),
+      },
+    );
+    return claimId;
+  }
+
+  /// Resultado de un área de la comanda local ([kitchenAreaPrinting] justo
+  /// antes de mandar el papel; luego entregada, en cola, pendiente o
+  /// incierta), solo si el envío [claimId] conserva la comanda; renueva su
+  /// reclamo. False = la comanda ya no es suya (venció y la tomó el replay)
+  /// o no se pudo guardar: con [kitchenAreaPrinting], NO se imprime.
+  Future<bool> recordLocalKitchenArea({
+    required String businessId,
+    required String roundId,
+    required String claimId,
+    required String areaCode,
+    required String result,
+  }) async {
+    try {
+      final saved = await _patchQueuedActionIf(businessId, roundId, (action) {
+        if (!_holdsLocalPrintClaim(action, claimId)) return false;
+        final results = Map<String, dynamic>.from(
+          action['area_results'] as Map? ?? const {},
+        );
+        results[areaCode] = result;
+        action['area_results'] = results;
+        action['local_print_claim'] = _newLocalPrintClaim(claimId);
+        return true;
+      });
+      OfflineQueueTrace.instance.record(
+        businessId,
+        'comanda: $areaCode',
+        op: roundId,
+        detail: saved ? result : '$result NO anotado (la comanda ya no es suya)',
+      );
+      return saved;
+    } catch (e) {
+      OfflineQueueTrace.instance.record(
+        businessId,
+        'comanda: $areaCode',
+        op: roundId,
+        detail: '$result NO anotado: $e',
+      );
+      return false;
+    }
+  }
+
+  /// Fin de la impresión local: suelta el reclamo y deja la comanda lista
+  /// para que el replay confirme (o imprima lo que faltó) en el acto. False
+  /// si la comanda ya no era de este envío (la tomó el replay).
+  Future<bool> finishLocalKitchenRound({
+    required String businessId,
+    required String roundId,
+    required String claimId,
+  }) async {
+    final found = await _patchQueuedActionIf(businessId, roundId, (action) {
+      if (!_holdsLocalPrintClaim(action, claimId)) return false;
+      _settleLocalKitchenAreas(action);
+      action.remove('local_print_claim');
+      OfflineQueueTrace.instance.record(
+        businessId,
+        'comanda impresa por LAN',
+        op: roundId,
+        order: action['order_id']?.toString(),
+        detail:
+            'impresas ${action['printed_areas']} · faltan '
+            '${action['missing_areas']} · inciertas ${action['uncertain_areas']}',
+      );
+      return true;
+    });
+    if (found) _announceWork(businessId, OfflineQueueWorkReason.kitchenRound);
+    return found;
+  }
+
+  /// Toma de una comanda local cuyo reclamo ya no vale (venció, o es de otro
+  /// arranque de la app): fija lo que anotó cada área y suelta el reclamo.
+  /// Va en el MISMO candado que la reclama el replay (o el reenvío al Hub):
+  /// desde ahí, la próxima marca del envío local falla y no imprime más.
+  static void _takeOverLocalKitchenRound(Map<String, dynamic> action) {
+    if (action['local_print_claim'] == null) return;
+    _settleLocalKitchenAreas(action);
+    action
+      ..remove('local_print_claim')
+      ..['local_print_taken_over_at'] = DateTime.now().toIso8601String();
+  }
+
+  /// Áreas de la comanda según lo que cada una anotó: entregada o en cola =
+  /// impresa; «imprimiendo» (la app murió) o incierta = incierta; pendiente
+  /// o sin intento = falta imprimir.
+  static void _settleLocalKitchenAreas(Map<String, dynamic> action) {
+    final byArea = action['item_ids_by_area'];
+    final areas = byArea is Map
+        ? byArea.keys.map((key) => key.toString()).toList()
+        : <String>[];
+    final results = action['area_results'] is Map
+        ? Map<String, dynamic>.from(action['area_results'] as Map)
+        : const <String, dynamic>{};
+    final printed = <String>[];
+    final missing = <String>[];
+    final uncertain = <String>[];
+    for (final area in areas) {
+      switch (results[area]) {
+        case kitchenAreaDelivered:
+        case kitchenAreaQueued:
+          printed.add(area);
+        case kitchenAreaPrinting:
+        case kitchenAreaUncertain:
+          uncertain.add(area);
+        default:
+          missing.add(area);
+      }
+    }
+    action['printed_areas'] = printed;
+    action['missing_areas'] = missing;
+    action['uncertain_areas'] = uncertain;
+  }
+
+  /// El cajero revisó en el área una comanda INCIERTA: [printed] = el papel
+  /// salió (se confirma en cocina sin imprimir) o no salió (se imprime esa
+  /// área y se confirma). Devuelve false si la comanda ya no está pendiente.
+  Future<bool> resolveUncertainKitchenRound({
+    required String businessId,
+    required String roundId,
+    required bool printed,
+  }) async {
+    var resolvedAreas = <String>{};
+    final found = await _patchQueuedAction(businessId, roundId, (action) {
+      final uncertain = ((action['uncertain_areas'] as List?) ?? const [])
+          .map((area) => area.toString())
+          .toList(growable: false);
+      resolvedAreas = uncertain.toSet();
+      action
+        ..['uncertain_areas'] = <String>[]
+        ..['printed_areas'] = printed ? uncertain : <String>[]
+        ..['missing_areas'] = printed ? <String>[] : uncertain
+        ..['area_results'] = {
+          for (final area in uncertain)
+            area: printed ? kitchenAreaDelivered : kitchenAreaPending,
+        }
+        ..['status'] = _statusPending
+        ..['attempts'] = 0
+        ..['last_error'] = null
+        ..['uncertain_resolved_at'] = DateTime.now().toIso8601String()
+        ..remove('kitchen_uncertain')
+        ..remove('kitchen_hold')
+        ..remove('dead_at')
+        ..remove('failed_at')
+        ..remove('next_retry_at')
+        ..remove('local_print_claim');
+    });
+    if (!found) return false;
+    OfflineQueueTrace.instance.record(
+      businessId,
+      'comanda revisada',
+      op: roundId,
+      detail: printed ? 'sí salió: se confirma' : 'no salió: se reimprime',
+    );
+    try {
+      await PendingKitchenPrints.instance.resolveAreas(
+        businessId: businessId,
+        roundId: roundId,
+        acceptedAreas: resolvedAreas,
+      );
+    } catch (e) {
+      debugPrint('[OfflinePos] aviso de comanda incierta: $e');
+    }
+    _announceWork(businessId, OfflineQueueWorkReason.kitchenRound);
+    return true;
+  }
+
+  /// Como [_patchQueuedAction], pero solo escribe si [change] devuelve true.
+  Future<bool> _patchQueuedActionIf(
+    String businessId,
+    String actionId,
+    bool Function(Map<String, dynamic> action) change,
+  ) => _withQueueMutation(businessId, () async {
+    final queue = await _readQueue(businessId);
+    final index = queue.indexWhere((action) => action['id'] == actionId);
+    if (index < 0 || _isCompleted(queue[index])) return false;
+    final updated = Map<String, dynamic>.from(queue[index]);
+    if (!change(updated)) return false;
+    await _upsertActionUnlocked(businessId, updated);
+    return true;
+  });
+
+  /// Cambia una acción NO completada de la cola (también una en dead-letter)
+  /// bajo el candado de escritura. False si ya no está.
+  Future<bool> _patchQueuedAction(
+    String businessId,
+    String actionId,
+    void Function(Map<String, dynamic> action) change,
+  ) => _withQueueMutation(businessId, () async {
+    final queue = await _readQueue(businessId);
+    final index = queue.indexWhere((action) => action['id'] == actionId);
+    if (index < 0 || _isCompleted(queue[index])) return false;
+    final updated = Map<String, dynamic>.from(queue[index]);
+    change(updated);
+    await _upsertActionUnlocked(businessId, updated);
+    return true;
+  });
+
   static bool _isKitchenRoundAction(Map<String, dynamic> action) {
     final type = action['type'];
     return type == 'confirm_local_order' || type == 'send_to_kitchen';
@@ -1587,10 +1918,30 @@ class OfflinePosService {
     r'[0-9a-fA-F]{12}$',
   );
 
-  /// Ids del servidor de las líneas que imprimió una comanda local. Nunca
-  /// devuelve la orden entera: si no se pueden resolver todas, retiene la
-  /// acción ([_KitchenRoundHold]).
-  Future<List<String>> _kitchenRoundItemIds({
+  /// Ids (tal como se imprimieron) de UNA área de la comanda.
+  static List<String> _kitchenRoundRawIdsOf(
+    Map<String, dynamic> action,
+    String areaCode,
+  ) {
+    final byArea = action['item_ids_by_area'];
+    final ids = byArea is Map ? byArea[areaCode] : null;
+    if (ids is! List) return <String>[];
+    return [
+      for (final id in ids)
+        if (id.toString().isNotEmpty) id.toString(),
+    ];
+  }
+
+  static Set<String> _stringSet(Object? raw) => {
+    if (raw is List)
+      for (final value in raw)
+        if (value != null && value.toString().isNotEmpty) value.toString(),
+  };
+
+  /// Ids del servidor de las líneas que imprimió una comanda local, por
+  /// área. Nunca devuelve la orden entera: si no se pueden resolver todas,
+  /// retiene la acción ([_KitchenRoundHold]).
+  Future<Map<String, List<String>>> _kitchenRoundItemIdsByArea({
     required String businessId,
     required Map<String, dynamic> action,
   }) async {
@@ -1604,17 +1955,24 @@ class OfflinePosService {
       );
     }
     final itemMap = await _readItemMap(businessId);
-    final resolved = <String>{};
-    final unresolved = <String>[];
-    for (final id in raw) {
+    String? resolve(String id) {
       final remote = id.startsWith('tmp_') ? itemMap[id]?.toString() : id;
-      if (remote != null && _uuidPattern.hasMatch(remote)) {
-        resolved.add(remote);
-      } else {
-        unresolved.add(id);
-      }
+      return remote != null && _uuidPattern.hasMatch(remote) ? remote : null;
     }
-    if (unresolved.isEmpty) return resolved.toList(growable: false);
+
+    final unresolved = [
+      for (final id in raw)
+        if (resolve(id) == null) id,
+    ];
+    if (unresolved.isEmpty) {
+      final byArea = action['item_ids_by_area'] as Map;
+      return {
+        for (final area in byArea.keys.map((key) => key.toString()))
+          area: {
+            for (final id in _kitchenRoundRawIdsOf(action, area)) resolve(id)!,
+          }.toList(growable: false),
+      };
+    }
     // El alta de la línea sigue en la cola (va detrás, o falló y reintenta):
     // al subir guarda el mapeo. Se espera sin gastar intentos.
     final pending = await unsettledActions(businessId);
@@ -1631,6 +1989,7 @@ class OfflinePosService {
           : 'No se pudo identificar ${unresolved.length} producto(s) de la '
                 'comanda para confirmarla en cocina.',
       countsAttempt: !addPending,
+      waitingItemIds: unresolved,
     );
   }
 
@@ -2102,20 +2461,32 @@ class OfflinePosService {
     bool force = false,
   }) {
     final active = _queueSyncInFlight[businessId];
-    if (active != null) return active;
-    final run =
-        _syncPendingActionsOnce(
+    if (active != null) {
+      return _joinActiveQueuePass(
+        businessId: businessId,
+        active: active,
+        force: force,
+        runAgain: (forced) => syncPendingActions(
           businessId: businessId,
           salesRepository: salesRepository,
           printingService: printingService,
           inventoryRepository: inventoryRepository,
           cashierRepository: cashierRepository,
-          force: force,
-        ).whenComplete(() {
-          _queueSyncInFlight.remove(businessId);
-        });
-    _queueSyncInFlight[businessId] = run;
-    return run;
+          force: forced,
+        ),
+      );
+    }
+    return _startQueuePass(
+      businessId,
+      () => _syncPendingActionsOnce(
+        businessId: businessId,
+        salesRepository: salesRepository,
+        printingService: printingService,
+        inventoryRepository: inventoryRepository,
+        cashierRepository: cashierRepository,
+        force: force,
+      ),
+    );
   }
 
   Future<OfflineQueueSyncResult> _syncPendingActionsOnce({
@@ -2127,6 +2498,7 @@ class OfflinePosService {
     required bool force,
   }) async {
     if (_hubUploader != null) return _flushPendingToHubOnce(businessId);
+    final passStartedAt = DateTime.now();
     final queue = await _readQueue(businessId);
     if (queue.isEmpty) {
       // Sin acciones pendientes → toda comanda offline ya se re-despachó
@@ -2166,6 +2538,7 @@ class OfflinePosService {
         case _ReplayGate.hubOwned:
         case _ReplayGate.waitingRetry:
         case _ReplayGate.blockedBehind:
+        case _ReplayGate.claimed:
           skipped++;
           continue;
         case _ReplayGate.reconcile:
@@ -2186,10 +2559,15 @@ class OfflinePosService {
         final current = await _readQueue(businessId);
         final index = current.indexWhere((a) => a['id'] == actionId);
         if (index < 0 || _isCompleted(current[index])) return null;
+        // El envío local pudo renovar su reclamo después de la revisión:
+        // sigue siendo suyo. Si no, el replay la toma (y el envío local, al
+        // perderla, deja de imprimir): nunca imprimen los dos.
+        if (isLocalKitchenRoundClaimed(current[index])) return null;
         final claimed =
             _normalizeAction(Map<String, dynamic>.from(current[index]))
               ..['status'] = _statusProcessing
               ..['processing_started_at'] = DateTime.now().toIso8601String();
+        _takeOverLocalKitchenRound(claimed);
         await _upsertActionUnlocked(businessId, claimed);
         return claimed;
       });
@@ -2272,6 +2650,12 @@ class OfflinePosService {
           ..['last_error'] = hold.message
           ..['failed_at'] = DateTime.now().toIso8601String()
           ..['kitchen_hold'] = true;
+        if (hold.waitingItemIds.isNotEmpty && !dies) {
+          updated[kitchenHoldWaitingItemsKey] = hold.waitingItemIds;
+        } else {
+          updated.remove(kitchenHoldWaitingItemsKey);
+        }
+        updated.addAll(hold.actionPatch);
         if (dies) {
           updated['status'] = _statusDead;
           updated['dead_at'] = DateTime.now().toIso8601String();
@@ -2365,6 +2749,24 @@ class OfflinePosService {
       // UPSERT puntual del action final (completed o failed). Idem
       // optimización anterior: evita reescribir la cola entera.
       await _upsertAction(businessId, queue[i]);
+      final outcome = queue[i];
+      final outcomeStatus = outcome['status']?.toString();
+      OfflineQueueTrace.instance.record(
+        businessId,
+        outcomeStatus == _statusCompleted
+            ? 'subida'
+            : outcomeStatus == _statusDead
+            ? 'revisión'
+            : outcome['kitchen_hold'] == true
+            ? 'retenida'
+            : 'error',
+        op: actionId,
+        type: outcome['type']?.toString(),
+        order: orderId,
+        detail: outcomeStatus == _statusCompleted
+            ? null
+            : 'intento ${outcome['attempts'] ?? 0}: ${outcome['last_error']}',
+      );
       if (breakLoop) break;
     }
 
@@ -2375,6 +2777,18 @@ class OfflinePosService {
     await _drainStalePrintQueue(businessId, remaining);
     final pending = remaining.where((item) => !_isSettled(item)).length;
     final dead = remaining.where(_isDead).length;
+    // Una línea por pasada: con pendientes y pasadas que solo «saltan», la
+    // operación espera (backoff, retenida, detrás de otra); sin pasadas, el
+    // uplink no estaba corriendo.
+    OfflineQueueTrace.instance.record(
+      businessId,
+      force ? 'pasada (forzada)' : 'pasada',
+      detail:
+          '${queue.length} en cola · $processed intentadas · $completed '
+          'subidas · $failed con error · $skipped saltadas · $pending '
+          'pendientes · $dead por revisar · '
+          '${DateTime.now().difference(passStartedAt).inMilliseconds} ms',
+    );
     return OfflineQueueSyncResult(
       processed: processed,
       completed: completed,
@@ -2763,6 +3177,107 @@ class OfflinePosService {
 
   void _bumpQueueRevision(String businessId) =>
       _queueRevisions[businessId] = queueRevision(businessId) + 1;
+
+  // Avisos de trabajo nuevo. Aparte de [queueRevision] a propósito: esa
+  // cambia también en un `finally` aunque la escritura falle y durante el
+  // replay (claims, contadores), y usarla para despertar subidas las
+  // dispararía sin commit o en ciclo.
+  final StreamController<OfflineQueueWork> _queueWork =
+      StreamController<OfflineQueueWork>.broadcast();
+  final Map<String, int> _acceptedWork = <String, int>{};
+
+  /// Trabajo nuevo y ya guardado en la cola de algún negocio: operaciones
+  /// encoladas y mapeos local → remoto que pueden destrabar otras. Los
+  /// cambios internos de la pasada (processing, completed, intentos,
+  /// errores) no se avisan. Ver [OfflineQueueWork].
+  Stream<OfflineQueueWork> get queueWork => _queueWork.stream;
+
+  /// Cuántos avisos de [queueWork] lleva [businessId] en este proceso.
+  int acceptedWorkRevision(String businessId) => _acceptedWork[businessId] ?? 0;
+
+  /// Solo después de un commit correcto y fuera de [_withQueueMutation]. La
+  /// entrega es asíncrona: un observador que falla no llega a quien guardó.
+  void _announceWork(String businessId, OfflineQueueWorkReason reason) {
+    final revision = acceptedWorkRevision(businessId) + 1;
+    _acceptedWork[businessId] = revision;
+    _queueWork.add(
+      OfflineQueueWork(
+        businessId: businessId,
+        reason: reason,
+        revision: revision,
+      ),
+    );
+  }
+
+  /// Termina cuando no hay ninguna pasada de la cola de [businessId] en
+  /// curso (nube o Hub). El uplink la espera antes de preguntar si hay algo
+  /// listo: mientras corre una pasada, [hasActionsReadyToSync] responde que
+  /// no, y una operación aceptada después de que esa pasada leyó la cola se
+  /// perdía hasta el siguiente timer.
+  Future<void> whenQueueIdle(String businessId) async {
+    while (true) {
+      final active = _queueSyncInFlight[businessId];
+      if (active == null) return;
+      try {
+        await active;
+      } catch (_) {
+        // El error es de esa pasada; aquí solo importa que terminó.
+      }
+    }
+  }
+
+  /// Registra el inicio de una pasada de [businessId] (nube o Hub) con el
+  /// trabajo aceptado hasta ahora, y la suelta al terminar.
+  Future<OfflineQueueSyncResult> _startQueuePass(
+    String businessId,
+    Future<OfflineQueueSyncResult> Function() body,
+  ) {
+    _queuePassStartWork[businessId] = acceptedWorkRevision(businessId);
+    final run = body().whenComplete(() {
+      _queueSyncInFlight.remove(businessId);
+      _queuePassStartWork.remove(businessId);
+    });
+    _queueSyncInFlight[businessId] = run;
+    return run;
+  }
+
+  /// Llamada con una pasada en curso: esa pasada leyó la cola al empezar, así
+  /// que devolverla no prueba que procese lo aceptado después. Si llegó
+  /// trabajo nuevo desde entonces, se encadena UNA pasada más al terminar
+  /// (las llamadas que lleguen mientras tanto la comparten). Sin force, solo
+  /// corre si hay algo listo: nunca una pasada vacía en ciclo.
+  Future<OfflineQueueSyncResult> _joinActiveQueuePass({
+    required String businessId,
+    required Future<OfflineQueueSyncResult> active,
+    required bool force,
+    required Future<OfflineQueueSyncResult> Function(bool force) runAgain,
+  }) {
+    final startedWith = _queuePassStartWork[businessId];
+    final sawEverything =
+        startedWith != null && startedWith >= acceptedWorkRevision(businessId);
+    if (sawEverything && !_queueSyncFollowUps.containsKey(businessId)) {
+      return active;
+    }
+    if (force) _queueSyncFollowUpForce.add(businessId);
+    return _queueSyncFollowUps[businessId] ??= () async {
+      OfflineQueueSyncResult previous;
+      try {
+        previous = await active;
+      } catch (_) {
+        previous = const OfflineQueueSyncResult();
+      }
+      _queueSyncFollowUps.remove(businessId);
+      final forced = _queueSyncFollowUpForce.remove(businessId);
+      if (!forced && !await hasActionsReadyToSync(businessId)) {
+        // Nada listo, o ya corre otra pasada que empezó después de este
+        // trabajo y lo incluye.
+        final running = _queueSyncInFlight[businessId];
+        if (running != null) return await running;
+        return previous;
+      }
+      return runAgain(forced);
+    }();
+  }
 
   /// H7: confirma la lease del Hub en Supabase. Si es de OTRO equipo (un
   /// respaldo fue promovido), cede: pasa este equipo a respaldo y lo registra.
@@ -3541,6 +4056,9 @@ class OfflinePosService {
         )) {
       return _ReplayGate.reconcile;
     }
+    // Comanda que este proceso imprime ahora por la LAN: ni con force (una
+    // segunda impresión concurrente). No detiene su orden, como las retenidas.
+    if (isLocalKitchenRoundClaimed(action)) return _ReplayGate.claimed;
     if (!force && !_isReadyToRetry(action)) {
       if (orderId != null && !kitchenHold) blockedOrders.add(orderId);
       return _ReplayGate.waitingRetry;
@@ -4255,35 +4773,44 @@ class OfflinePosService {
         return releaseOrderId;
       case 'send_to_kitchen':
       case 'confirm_local_order':
+        // Reclamo de otro arranque de la app (o vencido): murió imprimiendo.
+        // Lo que quedó «imprimiendo» es INCIERTO; lo que no se intentó, falta.
+        final round = Map<String, dynamic>.from(action);
+        if (round['local_print_claim'] is Map) _settleLocalKitchenAreas(round);
+        final uncertainAreas = _stringSet(round['uncertain_areas']);
         // Primero los ids de la ronda: una comanda retenida no toca el
         // servidor (ni siquiera crea su orden).
-        final roundItemIds = await _kitchenRoundItemIds(
+        final idsByArea = await _kitchenRoundItemIdsByArea(
           businessId: businessId,
-          action: action,
+          action: round,
         );
+        // Lo incierto no se confirma ni se imprime solo: queda para que
+        // alguien revise en el área (abajo).
+        final roundItemIds = {
+          for (final entry in idsByArea.entries)
+            if (!uncertainAreas.contains(entry.key)) ...entry.value,
+        }.toList(growable: false);
         final resolvedOrderId = await _resolveOrderIdForAction(
           businessId: businessId,
-          action: action,
+          action: round,
           salesRepository: salesRepository,
         );
-        final printedAreas = ((action['printed_areas'] as List?) ?? const [])
-            .map((e) => e.toString())
-            .where((s) => s.isNotEmpty)
-            .toSet();
-        final missingAreas = ((action['missing_areas'] as List?) ?? const [])
-            .map((e) => e.toString())
-            .where((s) => s.isNotEmpty)
-            .toSet();
+        final printedAreas = _stringSet(round['printed_areas']);
+        final missingAreas = _stringSet(round['missing_areas'])
+          ..removeAll(uncertainAreas);
+        final roundId = round['id']?.toString();
 
-        // Comanda YA impresa localmente en todas sus áreas: el replay solo
-        // debe confirmar los items en server (draft → pending), NO volver a
-        // imprimir. Antes re-despachaba todas las áreas = comanda duplicada
-        // (o entera, con rondas viejas) al sincronizar.
-        if (printedAreas.isNotEmpty && missingAreas.isEmpty) {
-          // Solo las líneas de esta comanda (20261010_0002). La orden entera
-          // pasaba a 'pending' también lo agregado después de imprimirla, que
-          // quedaba «enviado» sin haber salido a cocina. Sin todos sus ids,
-          // o sin la migración, la acción se conserva (_KitchenRoundHold).
+        if (roundItemIds.isEmpty) {
+          // Toda la comanda quedó incierta: nada que confirmar todavía.
+        } else if (missingAreas.isEmpty &&
+            (printedAreas.isNotEmpty || uncertainAreas.isNotEmpty)) {
+          // Comanda YA impresa localmente: el replay solo confirma sus
+          // líneas en el servidor (draft → pending), NO vuelve a imprimir.
+          // Antes re-despachaba todas las áreas = comanda duplicada (o
+          // entera, con rondas viejas) al sincronizar. Solo las líneas de
+          // esta comanda (20261010_0002): la orden entera pasaba a 'pending'
+          // también lo agregado después de imprimirla. Sin todos sus ids, o
+          // sin la migración, la acción se conserva (_KitchenRoundHold).
           try {
             await salesRepository.confirmItemsToKitchen(
               resolvedOrderId,
@@ -4298,74 +4825,120 @@ class OfflinePosService {
             }
             rethrow;
           }
-          return resolvedOrderId;
-        }
-
-        // Áreas que no salieron: se imprimen y confirman SOLO las líneas de
-        // esta comanda, nunca lo agregado después (ver arriba).
-        try {
-          final printResult = await printingService.sendOrderToKitchen(
-            orderId: resolvedOrderId,
-            businessId: businessId,
-            // Ver nota arriba: el replay nunca fusiona comandas.
-            allowKitchenMerge: false,
-            // Las áreas ya impresas localmente solo se marcan; se imprimen
-            // únicamente las que quedaron sin impresora.
-            excludeAreaCodes: printedAreas,
-            onlyItemIds: roundItemIds.toSet(),
-          );
-          final roundId = action['id']?.toString();
-          if (roundId != null && roundId.isNotEmpty) {
-            if (printResult.pendingPrintAreas.isNotEmpty) {
-              final rawItemsByArea = action['item_ids_by_area'];
-              await PendingKitchenPrints.instance.record(
+        } else {
+          // Áreas que no salieron: se imprimen y confirman SOLO las líneas
+          // de esta comanda, nunca lo agregado después (ver arriba).
+          try {
+            final printResult = await printingService.sendOrderToKitchen(
+              orderId: resolvedOrderId,
+              businessId: businessId,
+              // Ver nota arriba: el replay nunca fusiona comandas.
+              allowKitchenMerge: false,
+              // Las áreas ya impresas localmente solo se marcan; se imprimen
+              // únicamente las que quedaron sin impresora. Las inciertas ni
+              // se imprimen ni se marcan.
+              excludeAreaCodes: {...printedAreas, ...uncertainAreas},
+              onlyItemIds: roundItemIds.toSet(),
+              // Este replay anota sus áreas fallidas con su propia ronda.
+              recordFailedAreas: false,
+            );
+            if (roundId != null && roundId.isNotEmpty) {
+              final failed = [
+                ...printResult.pendingPrintAreas,
+                ...printResult.uncertainPrintAreas,
+              ];
+              if (failed.isNotEmpty) {
+                await PendingKitchenPrints.instance.record(
+                  businessId: businessId,
+                  roundId: roundId,
+                  orderId: round['order_id']?.toString() ?? resolvedOrderId,
+                  tableName: round['table_name']?.toString() ?? 'Mesa',
+                  itemIdsByArea: {
+                    for (final areaCode in failed)
+                      areaCode: _kitchenRoundRawIdsOf(round, areaCode),
+                  },
+                  uncertainAreas: printResult.uncertainPrintAreas.toSet(),
+                );
+              }
+              await PendingKitchenPrints.instance.resolveAreas(
                 businessId: businessId,
                 roundId: roundId,
-                orderId: action['order_id']?.toString() ?? resolvedOrderId,
-                tableName: action['table_name']?.toString() ?? 'Mesa',
-                itemIdsByArea: {
-                  for (final areaCode in printResult.pendingPrintAreas)
-                    areaCode:
-                        rawItemsByArea is Map &&
-                            rawItemsByArea[areaCode] is List
-                        ? (rawItemsByArea[areaCode] as List)
-                              .map((id) => id.toString())
-                              .toList(growable: false)
-                        : <String>[],
+                acceptedAreas: {
+                  ...printResult.directAreas,
+                  ...printResult.escalatedAreas,
                 },
               );
             }
-            await PendingKitchenPrints.instance.resolveAreas(
+          } catch (e) {
+            // Replay idempotente: si un intento previo (o otra caja) ya marcó
+            // los ítems enviados a cocina, la orden no tiene drafts y
+            // sendOrderToKitchen truena con un error PERMANENTE — reintentar
+            // jamás lo arregla y la operación se vuelve veneno en la cola
+            // (caso real 2026-07-25: "Crear orden · 7 intentos · No hay items
+            // nuevos pendientes de enviar a cocina"). El estado deseado ya
+            // existe en el server → resolvemos la operación como completada
+            // (salvo la parte incierta, que sigue abajo).
+            final msg = e.toString().toLowerCase();
+            final alreadySent =
+                msg.contains('no hay items nuevos pendientes') ||
+                msg.contains('la orden no tiene items');
+            if (alreadySent && uncertainAreas.isEmpty) {
+              throw _OfflineSyncSkip(
+                'Orden $resolvedOrderId ya estaba enviada a cocina en server.',
+              );
+            }
+            if (!alreadySent) {
+              if (_isMissingRpcError(e)) {
+                throw const _KitchenRoundHold(
+                  _kitchenRpcMissingMessage,
+                  countsAttempt: false,
+                );
+              }
+              rethrow;
+            }
+          }
+        }
+
+        if (uncertainAreas.isNotEmpty) {
+          // Visible en Salud de impresión y en la cola: «salió» confirma sin
+          // imprimir; «no salió» la imprime y confirma
+          // ([resolveUncertainKitchenRound]). Nunca se reimprime sola.
+          if (roundId != null && roundId.isNotEmpty) {
+            await PendingKitchenPrints.instance.record(
               businessId: businessId,
               roundId: roundId,
-              acceptedAreas: {
-                ...printResult.directAreas,
-                ...printResult.escalatedAreas,
+              orderId: round['order_id']?.toString() ?? resolvedOrderId,
+              tableName: round['table_name']?.toString() ?? 'Mesa',
+              itemIdsByArea: {
+                for (final areaCode in uncertainAreas)
+                  areaCode: _kitchenRoundRawIdsOf(round, areaCode),
               },
+              uncertainAreas: uncertainAreas,
             );
           }
-        } catch (e) {
-          // Replay idempotente: si un intento previo (o otra caja) ya marcó
-          // los ítems enviados a cocina, la orden no tiene drafts y
-          // sendOrderToKitchen truena con un error PERMANENTE — reintentar
-          // jamás lo arregla y la operación se vuelve veneno en la cola
-          // (caso real 2026-07-25: "Crear orden · 7 intentos · No hay items
-          // nuevos pendientes de enviar a cocina"). El estado deseado ya
-          // existe en el server → resolvemos la operación como completada.
-          final msg = e.toString().toLowerCase();
-          if (msg.contains('no hay items nuevos pendientes') ||
-              msg.contains('la orden no tiene items')) {
-            throw _OfflineSyncSkip(
-              'Orden $resolvedOrderId ya estaba enviada a cocina en server.',
-            );
-          }
-          if (_isMissingRpcError(e)) {
-            throw const _KitchenRoundHold(
-              _kitchenRpcMissingMessage,
-              countsAttempt: false,
-            );
-          }
-          rethrow;
+          final areas = (uncertainAreas.toList()..sort()).join(', ');
+          throw _KitchenRoundHold(
+            'No se pudo confirmar si salió la comanda de $areas. Revisa en el '
+            'área: si salió, márcala como impresa; si no, reimprímela.',
+            terminal: true,
+            countsAttempt: false,
+            // Lo ya confirmado sale de la acción: queda solo lo incierto.
+            actionPatch: {
+              'item_ids_by_area': {
+                for (final areaCode in uncertainAreas)
+                  areaCode: _kitchenRoundRawIdsOf(round, areaCode),
+              },
+              'printed_areas': <String>[],
+              'missing_areas': <String>[],
+              'uncertain_areas': uncertainAreas.toList(growable: false),
+              'area_results': {
+                for (final areaCode in uncertainAreas)
+                  areaCode: kitchenAreaUncertain,
+              },
+              'local_print_claim': null,
+              'kitchen_uncertain': true,
+            },
+          );
         }
         return resolvedOrderId;
       case 'set_delivery_fee':
@@ -4885,6 +5458,13 @@ class OfflinePosService {
         _bumpQueueRevision(businessId);
       }
     });
+    OfflineQueueTrace.instance.record(
+      businessId,
+      'mapeo de venta',
+      order: localOrderId,
+      detail: '→ $remoteOrderId',
+    );
+    _announceWork(businessId, OfflineQueueWorkReason.orderMapped);
   }
 
   /// Anota quién abrió una venta sin red, en el momento de abrirla: el
@@ -5009,8 +5589,54 @@ class OfflinePosService {
           'No se pudo guardar la identidad del item sincronizado.',
         );
       }
+      await _releaseKitchenHoldsWaitingOn(businessId, current);
     });
+    OfflineQueueTrace.instance.record(
+      businessId,
+      'mapeo de producto',
+      detail: '$localItemId → $remoteItemId',
+    );
+    _announceWork(businessId, OfflineQueueWorkReason.itemMapped);
   }
+
+  /// Comandas retenidas SOLO porque faltaba el id remoto de alguno de sus
+  /// productos ([kitchenHoldWaitingItemsKey]): las que ya tienen todos se
+  /// liberan de su espera de reintento, que venía de esa dependencia y no de
+  /// un error. Otras retenciones (falta de migración, error de red o del
+  /// servidor) conservan su espera. Corre dentro de [_withQueueMutation].
+  Future<void> _releaseKitchenHoldsWaitingOn(
+    String businessId,
+    Map<String, dynamic> itemMap,
+  ) async {
+    final queue = await _readQueue(businessId);
+    for (final action in queue) {
+      if (action['kitchen_hold'] != true ||
+          action['status']?.toString() != _statusFailed) {
+        continue;
+      }
+      final waiting = action[kitchenHoldWaitingItemsKey];
+      if (waiting is! List || waiting.isEmpty) continue;
+      final stillMissing = [
+        for (final id in waiting.map((e) => e.toString()))
+          if (!_uuidPattern.hasMatch(itemMap[id]?.toString() ?? '')) id,
+      ];
+      if (stillMissing.length == waiting.length) continue;
+      final updated = Map<String, dynamic>.from(action);
+      if (stillMissing.isEmpty) {
+        updated
+          ..remove(kitchenHoldWaitingItemsKey)
+          ..remove('next_retry_at')
+          ..['dependency_resolved_at'] = DateTime.now().toIso8601String();
+      } else {
+        updated[kitchenHoldWaitingItemsKey] = stillMissing;
+      }
+      await _upsertActionUnlocked(businessId, updated);
+    }
+  }
+
+  /// Ids (tal como se imprimieron) que una comanda retenida espera para
+  /// confirmarse. Solo existe mientras ese es su único motivo de espera.
+  static const String kitchenHoldWaitingItemsKey = 'kitchen_hold_waiting_items';
 
   Map<String, dynamic> _encodeState(CurrentOrderState state) {
     return {

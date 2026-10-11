@@ -22,6 +22,26 @@ class EditConflictNotice extends Equatable {
   List<Object?> get props => [id, message, detail];
 }
 
+/// Qué tan al día está la cuenta en pantalla. Al abrir una mesa se pinta
+/// primero la copia guardada y luego llega el servidor: mientras tanto
+/// ([verifying]) la Pre-Cuenta no se puede imprimir (antes se imprimía sobre
+/// esa copia y la recarga metía productos sin enviar sin avisar). Bandera
+/// propia con tope de tiempo, no el `loading` general, que puede quedar
+/// pegado.
+enum AccountCheck {
+  /// Leída del servidor en esta apertura (o sin copia previa que verificar).
+  verified,
+
+  /// Mostrando la copia guardada mientras responde el servidor.
+  verifying,
+
+  /// Sin servidor: se trabaja con la copia local (modo offline).
+  localCopy,
+
+  /// El servidor no respondió a tiempo: la copia puede estar vieja.
+  refreshFailed,
+}
+
 class CurrentOrderState extends Equatable {
   final bool loading;
   final String? error;
@@ -64,6 +84,9 @@ class CurrentOrderState extends Equatable {
   /// Conflicto de edición pendiente de la decisión del operador (T04).
   final EditConflictNotice? editConflict;
 
+  /// Ver [AccountCheck].
+  final AccountCheck accountCheck;
+
   const CurrentOrderState({
     this.loading = false,
     this.error,
@@ -92,6 +115,7 @@ class CurrentOrderState extends Equatable {
     this.fiscalSequencesLoadError,
     this.excludedTaxIds = const {},
     this.editConflict,
+    this.accountCheck = AccountCheck.verified,
   });
 
   CurrentOrderState copyWith({
@@ -132,6 +156,7 @@ class CurrentOrderState extends Equatable {
     Set<String>? excludedTaxIds,
     EditConflictNotice? editConflict,
     bool clearEditConflict = false,
+    AccountCheck? accountCheck,
   }) {
     return CurrentOrderState(
       loading: loading ?? this.loading,
@@ -178,6 +203,7 @@ class CurrentOrderState extends Equatable {
       editConflict: clearEditConflict
           ? null
           : (editConflict ?? this.editConflict),
+      accountCheck: accountCheck ?? this.accountCheck,
     );
   }
 
@@ -210,5 +236,6 @@ class CurrentOrderState extends Equatable {
     fiscalSequencesLoadError,
     excludedTaxIds,
     editConflict,
+    accountCheck,
   ];
 }

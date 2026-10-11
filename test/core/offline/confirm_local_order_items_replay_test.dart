@@ -97,6 +97,7 @@ class _Printing extends PrintingService {
     KitchenAreaPrinterChooser? choosePrinter,
     bool forceChoosePrinter = false,
     Set<String>? onlyItemIds,
+    bool recordFailedAreas = true,
   }) async {
     calls.add((only: onlyItemIds, excludedAreas: excludeAreaCodes));
     return const KitchenSendResult(

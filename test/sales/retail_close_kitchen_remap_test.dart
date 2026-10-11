@@ -151,6 +151,7 @@ class _DelayedKitchen extends PrintingService {
     KitchenAreaPrinterChooser? choosePrinter,
     bool forceChoosePrinter = false,
     Set<String>? onlyItemIds,
+    bool recordFailedAreas = true,
   }) async {
     onlineExcluded.add(excludeItemIds);
     return const KitchenSendResult(

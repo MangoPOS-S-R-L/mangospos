@@ -1,6 +1,7 @@
 import 'package:mangopos/presentation/shell/external_order_alert_overlay.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +10,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mangopos/core/auth/device_session_reporter.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
 import 'package:mangopos/core/offline/offline_queue_status_provider.dart';
+import 'package:mangopos/core/offline/offline_queue_wait_reason.dart';
+import 'package:mangopos/core/offline/offline_queue_trace.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/agent/hub_server_controller.dart';
 import 'package:mangopos/core/offline/hub/hub_mode_controller.dart';
@@ -29,6 +32,8 @@ import 'package:mangopos/presentation/cashier/services/cash_drawer_service.dart'
 import '../../app/theme/mango_colors.dart';
 import '../../app/router/routes.dart';
 import '../../app/widgets/app_version_badge.dart';
+import '../settings/widgets/app_update_provider.dart';
+import '../settings/widgets/system_update_dialog.dart';
 import '../billing/widgets/access_guard.dart';
 import '../billing/widgets/billing_guard.dart';
 import '../onboarding/pending_approval_guard.dart';
@@ -762,6 +767,40 @@ class _OfflineQueueBadge extends ConsumerWidget {
   }
 }
 
+/// Una línea para diagnosticar la cola sin abrir cada operación: la más
+/// antigua sin subir, la última pasada y el último avance real. Con
+/// pendientes viejos y sin avance, la subida está trabada (no solo lenta).
+@visibleForTesting
+String offlineQueueSummaryLine(
+  List<Map<String, dynamic>> actions,
+  OfflineQueueStatus status, {
+  DateTime? now,
+}) {
+  final at = now ?? DateTime.now();
+  String two(int v) => v.toString().padLeft(2, '0');
+  String clock(DateTime t) {
+    final l = t.toLocal();
+    return '${two(l.hour)}:${two(l.minute)}:${two(l.second)}';
+  }
+
+  DateTime? oldest;
+  for (final action in actions) {
+    final queued = DateTime.tryParse(action['queued_at']?.toString() ?? '');
+    if (queued != null && (oldest == null || queued.isBefore(oldest))) {
+      oldest = queued;
+    }
+  }
+  final parts = <String>[
+    if (oldest != null)
+      'Más antigua: hace ${at.difference(oldest).inMinutes} min',
+    if (status.lastPassAt != null) 'Última pasada ${clock(status.lastPassAt!)}',
+    status.lastProgressAt == null
+        ? 'Sin avance en esta sesión'
+        : 'Último avance ${clock(status.lastProgressAt!)}',
+  ];
+  return parts.join(' · ');
+}
+
 /// Visor de la cola offline: lista cada operación no sincronizada con su
 /// estado, intentos y el último error real (`last_error`). Antes este
 /// detalle no era visible en ninguna vista, así que un atasco solo tenía
@@ -777,6 +816,36 @@ Future<void> showOfflineQueueDetailDialog(
 
   final actions = await OfflinePosService().unsettledActions(businessId);
   if (!context.mounted) return;
+  final online = ConnectivityService().isConnected;
+  final summary = offlineQueueSummaryLine(
+    actions,
+    ref.read(offlineQueueStatusProvider),
+  );
+  Future<void> resolveKitchen(
+    BuildContext dialogContext,
+    Map<String, dynamic> action, {
+    required bool printed,
+  }) async {
+    final roundId = action['id']?.toString();
+    if (roundId == null) return;
+    final ok = await OfflinePosService().resolveUncertainKitchenRound(
+      businessId: businessId,
+      roundId: roundId,
+      printed: printed,
+    );
+    if (!dialogContext.mounted) return;
+    Navigator.of(dialogContext).pop();
+    await ref.read(offlineQueueStatusProvider.notifier).refreshNow();
+    if (!context.mounted) return;
+    if (ok) {
+      AppToast.success(
+        context,
+        printed
+            ? 'Comanda marcada como impresa: se confirma en cocina.'
+            : 'La comanda se reimprime y se confirma al sincronizar.',
+      );
+    }
+  }
 
   await showDialog<void>(
     context: context,
@@ -808,6 +877,13 @@ Future<void> showOfflineQueueDetailDialog(
                     'automáticos; "Sincronizar ahora" las reintenta todas.',
                     style: TextStyle(fontSize: 13),
                   ),
+                  if (summary.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      summary,
+                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Flexible(
                     child: ConstrainedBox(
@@ -818,6 +894,23 @@ Future<void> showOfflineQueueDetailDialog(
                         separatorBuilder: (_, _) => const Divider(height: 16),
                         itemBuilder: (_, i) => _OfflineQueueActionRow(
                           action: actions[i],
+                          online: online,
+                          onKitchenPrinted:
+                              actions[i]['kitchen_uncertain'] == true
+                              ? () => resolveKitchen(
+                                  dialogContext,
+                                  actions[i],
+                                  printed: true,
+                                )
+                              : null,
+                          onKitchenReprint:
+                              actions[i]['kitchen_uncertain'] == true
+                              ? () => resolveKitchen(
+                                  dialogContext,
+                                  actions[i],
+                                  printed: false,
+                                )
+                              : null,
                           // T07: cobro sin red que espera una decisión.
                           onResolve: actions[i]['payment_resolution'] == null
                               ? null
@@ -841,6 +934,11 @@ Future<void> showOfflineQueueDetailDialog(
       ),
       actions: [
         TextButton(
+          onPressed: () =>
+              unawaited(showOfflineQueueTraceDialog(dialogContext, businessId)),
+          child: const Text('Bitácora'),
+        ),
+        TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(),
           child: const Text('Cerrar'),
         ),
@@ -862,15 +960,77 @@ Future<void> showOfflineQueueDetailDialog(
   );
 }
 
+/// Bitácora de la cola de este equipo: lo guardado, cada pasada y cada
+/// intento, para explicar por qué algo tardó en subir. Se puede copiar.
+Future<void> showOfflineQueueTraceDialog(
+  BuildContext context,
+  String businessId,
+) async {
+  final events = await OfflineQueueTrace.instance.read(businessId);
+  if (!context.mounted) return;
+  final recent = events.length > 100
+      ? events.sublist(events.length - 100)
+      : events;
+  final text = OfflineQueueTrace.format(recent.reversed.toList());
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Bitácora de la cola'),
+      content: SizedBox(
+        width: 560,
+        height: 420,
+        child: text.isEmpty
+            ? const Text('Sin registros en este equipo.')
+            : SingleChildScrollView(
+                child: SelectableText(
+                  text,
+                  style: const TextStyle(fontSize: 11.5, height: 1.35),
+                ),
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: text.isEmpty
+              ? null
+              : () async {
+                  await Clipboard.setData(ClipboardData(text: text));
+                  if (dialogContext.mounted) {
+                    AppToast.success(dialogContext, 'Bitácora copiada.');
+                  }
+                },
+          child: const Text('Copiar'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    ),
+  );
+}
+
 /// Fila del visor: tipo legible + contexto (producto/monto), estado,
 /// intentos y último error de la operación encolada.
 class _OfflineQueueActionRow extends StatelessWidget {
-  const _OfflineQueueActionRow({required this.action, this.onResolve});
+  const _OfflineQueueActionRow({
+    required this.action,
+    required this.online,
+    this.onResolve,
+    this.onKitchenPrinted,
+    this.onKitchenReprint,
+  });
 
   final Map<String, dynamic> action;
 
+  /// Para el motivo de espera (sin conexión vs. reintento programado).
+  final bool online;
+
   /// Cobro sin red «por resolver» (T07): abre la decisión.
   final VoidCallback? onResolve;
+
+  /// Comanda incierta: alguien revisó en el área y SÍ salió / NO salió.
+  final VoidCallback? onKitchenPrinted;
+  final VoidCallback? onKitchenReprint;
 
   static String _label(String? type) {
     switch (type) {
@@ -897,7 +1057,7 @@ class _OfflineQueueActionRow extends StatelessWidget {
       case 'send_to_kitchen':
         return 'Enviar a cocina';
       case 'confirm_local_order':
-        return 'Crear orden';
+        return 'Comanda a cocina';
       case 'open_table':
         return 'Abrir mesa';
       case 'open_cash_session':
@@ -945,13 +1105,18 @@ class _OfflineQueueActionRow extends StatelessWidget {
                 '${_two(paidAt.day)}/${_two(paidAt.month)} '
                 '${_two(paidAt.hour)}:${_two(paidAt.minute)}';
     }
-    // Comanda retenida: de qué mesa es y, si vino del Hub, que la retuvo él.
-    if (a['kitchen_hold'] == true) {
+    // Comanda (retenida o no): de qué mesa es, qué áreas quedaron inciertas
+    // y, si vino del Hub, que la retuvo él.
+    if (a['kitchen_hold'] == true || a['type'] == 'confirm_local_order') {
       final table = a['table_name']?.toString().trim();
       final where = table == null || table.isEmpty ? 'Comanda' : 'Comanda · $table';
+      final uncertain = (a['uncertain_areas'] as List?) ?? const [];
+      final withAreas = uncertain.isEmpty
+          ? where
+          : '$where · incierta: ${uncertain.join(', ')}';
       return a['quarantined_from'] == 'hub_oplog'
-          ? '$where · retenida del Hub'
-          : where;
+          ? '$withAreas · retenida del Hub'
+          : withAreas;
     }
     return null;
   }
@@ -994,6 +1159,7 @@ class _OfflineQueueActionRow extends StatelessWidget {
             '${_two(queuedAt.hour)}:${_two(queuedAt.minute)}',
       if (attempts > 0) '$attempts intento(s)',
     ].join(' · ');
+    final reason = offlineQueueWaitReason(action, online: online);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1052,6 +1218,16 @@ class _OfflineQueueActionRow extends StatelessWidget {
                   meta,
                   style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
                 ),
+              Text(
+                reason,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: reason.startsWith('Revisión')
+                      ? const Color(0xFFB91C1C)
+                      : Colors.grey[700],
+                ),
+              ),
               if (lastError != null && lastError.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -1073,6 +1249,24 @@ class _OfflineQueueActionRow extends StatelessWidget {
                     label: const Text('Resolver'),
                     onPressed: onResolve,
                   ),
+                ),
+              if (onKitchenPrinted != null || onKitchenReprint != null)
+                Wrap(
+                  spacing: 4,
+                  children: [
+                    if (onKitchenPrinted != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.check_rounded, size: 16),
+                        label: const Text('Sí salió'),
+                        onPressed: onKitchenPrinted,
+                      ),
+                    if (onKitchenReprint != null)
+                      TextButton.icon(
+                        icon: const Icon(Icons.print_rounded, size: 16),
+                        label: const Text('No salió: reimprimir'),
+                        onPressed: onKitchenReprint,
+                      ),
+                  ],
                 ),
             ],
           ),
@@ -1453,6 +1647,8 @@ class _UserInfo extends ConsumerWidget {
               .maybeWhen(data: (v) => v, orElse: () => 0)
         : 0;
     final hasInventoryAlerts = lowStockCount > 0 || expiringLotsCount > 0;
+    // Hay una versión más nueva publicada para esta plataforma (app_releases).
+    final updateAvailable = ref.watch(appUpdateAvailableProvider);
 
     return Row(
       children: [
@@ -1564,6 +1760,12 @@ class _UserInfo extends ConsumerWidget {
                 break;
               case _UserMenuAction.settings:
                 context.go(AppRoutes.settings);
+                break;
+              case _UserMenuAction.updates:
+                await showDialog<void>(
+                  context: context,
+                  builder: (_) => const SystemUpdateDialog(),
+                );
                 break;
               case _UserMenuAction.offlinePreparation:
                 await showOfflinePreparationDialog(context, ref);
@@ -1760,6 +1962,27 @@ class _UserInfo extends ConsumerWidget {
                     iconColor: Color(0xFF2563EB),
                   ),
                 ),
+              // Junto a «Ajustes del sistema», para todos los roles: cualquiera
+              // debe enterarse de que su equipo tiene una versión vieja.
+              PopupMenuItem<_UserMenuAction>(
+                value: _UserMenuAction.updates,
+                padding: EdgeInsets.zero,
+                height: 56,
+                child: _UserMenuTile(
+                  icon: Icons.system_update_alt_rounded,
+                  label: updateAvailable
+                      ? 'Actualización disponible'
+                      : 'Actualizaciones',
+                  accent: updateAvailable
+                      ? const Color(0xFFFFEDD5)
+                      : const Color(0xFFF1F1F1),
+                  iconColor: updateAvailable
+                      ? const Color(0xFFF97316)
+                      : const Color(0xFF1C1917),
+                  badgeCount: updateAvailable ? 1 : null,
+                  badgeColor: const Color(0xFFF97316),
+                ),
+              ),
               const PopupMenuDivider(height: 1),
               const PopupMenuItem<_UserMenuAction>(
                 value: _UserMenuAction.logout,
@@ -1824,8 +2047,9 @@ class _UserInfo extends ConsumerWidget {
                 child: const Icon(Icons.person, color: Colors.white, size: 20),
               ),
               // Punto rojo: hay alertas de inventario (stock bajo o
-              // vencimientos) sin revisar; el detalle vive en el menú.
-              if (hasInventoryAlerts)
+              // vencimientos) sin revisar, o una versión nueva de la app; el
+              // detalle vive en el menú.
+              if (hasInventoryAlerts || updateAvailable)
                 Positioned(
                   top: -1,
                   right: -1,
@@ -1966,6 +2190,7 @@ Future<SessionBusiness?> _showBranchPicker(
 }
 
 enum _UserMenuAction {
+  updates,
   offlinePreparation,
   performanceDiagnostics,
   switchBranch,

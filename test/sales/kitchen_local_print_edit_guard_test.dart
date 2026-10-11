@@ -99,6 +99,7 @@ class _CloudDropsToLan extends PrintingService {
     KitchenAreaPrinterChooser? choosePrinter,
     bool forceChoosePrinter = false,
     Set<String>? onlyItemIds,
+    bool recordFailedAreas = true,
   }) async {
     if (!cloudStarted.isCompleted) cloudStarted.complete();
     await dropNetwork.future;
@@ -371,6 +372,8 @@ void main() {
   });
 
   setUp(() => ConnectivityService().simulateDisconnect());
+  final defaultAddWait = SalesViewModel.kitchenSendAddWaitBudget;
+  tearDown(() => SalesViewModel.kitchenSendAddWaitBudget = defaultAddWait);
 
   tearDownAll(() async {
     await db.close();
@@ -613,7 +616,9 @@ void main() {
     final vm = c.read(currentOrderProvider.notifier) as _Sales;
     ConnectivityService().simulateReconnect();
 
-    // El alta queda en vuelo con su línea temporal: «Enviar» va por la LAN.
+    // El alta queda en vuelo con su línea temporal y no termina dentro de la
+    // espera del envío: «Enviar» va por la LAN.
+    SalesViewModel.kitchenSendAddWaitBudget = Duration.zero;
     final adding = vm.addItem(
       menuItemId: 'pollo',
       productName: 'Pollo',
@@ -665,8 +670,10 @@ void main() {
     final vm = c.read(currentOrderProvider.notifier) as _Sales;
     ConnectivityService().simulateReconnect();
 
-    // El alta queda en vuelo con su línea temporal: «Enviar» va por la LAN y
-    // la comanda termina de imprimirse antes que el alta.
+    // El alta queda en vuelo con su línea temporal y no termina dentro de la
+    // espera del envío: «Enviar» va por la LAN y la comanda termina de
+    // imprimirse antes que el alta.
+    SalesViewModel.kitchenSendAddWaitBudget = Duration.zero;
     final adding = vm.addItem(
       menuItemId: 'pollo',
       productName: 'Pollo',

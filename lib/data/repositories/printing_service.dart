@@ -48,10 +48,28 @@ class LocalKitchenSendResult {
   const LocalKitchenSendResult({
     required this.dispatchIds,
     required this.pendingAreas,
+    this.uncertainAreas = const [],
   });
 
   final Map<String, String> dispatchIds;
   final List<String> pendingAreas;
+
+  /// Áreas cuyo papel pudo haber salido o no (la impresora no confirmó). No
+  /// se reimprimen solas: alguien debe revisar en el área.
+  final List<String> uncertainAreas;
+}
+
+/// El servidor no tiene `fn_confirm_order_items_to_kitchen`
+/// (20261010_0002): no se puede confirmar solo la ronda capturada y no se
+/// confirma la orden entera en su lugar. No sale papel; la ronda sigue por
+/// confirmar.
+class KitchenRoundRpcMissingException implements Exception {
+  const KitchenRoundRpcMissingException();
+  @override
+  String toString() =>
+      'Falta actualizar el servidor (migración 20261010_0002) para confirmar '
+      'esta ronda en cocina. No se envió nada: los productos siguen por '
+      'confirmar.';
 }
 
 /// Resultado consolidado de enviar una orden completa a cocina. La UI
@@ -72,17 +90,23 @@ class KitchenSendResult {
   /// estar en KDS o en cola, pero la UI no debe anunciar impresión exitosa.
   final List<String> pendingPrintAreas;
 
+  /// Áreas cuyo papel pudo haber salido o no: la UI pide revisar antes de
+  /// reimprimir, nunca anuncia impresión exitosa.
+  final List<String> uncertainPrintAreas;
+
   const KitchenSendResult({
     required this.dispatchIds,
     required this.directAreas,
     required this.escalatedAreas,
     this.pendingPrintAreas = const [],
+    this.uncertainPrintAreas = const [],
   });
 
   bool get hadAnyEscalation => escalatedAreas.isNotEmpty;
   bool get allDirect =>
       escalatedAreas.isEmpty &&
       pendingPrintAreas.isEmpty &&
+      uncertainPrintAreas.isEmpty &&
       directAreas.isNotEmpty;
 }
 
@@ -222,9 +246,13 @@ class PrintingService {
   late final SalesRepository _salesRepo;
   final OfflinePosService _offlinePos = OfflinePosService();
 
-  PrintingService(this._client, {PrintingRepository? printingRepository}) {
+  PrintingService(
+    this._client, {
+    PrintingRepository? printingRepository,
+    SalesRepository? salesRepository,
+  }) {
     _printingRepo = printingRepository ?? PrintingRepository(_client);
-    _salesRepo = SalesRepository(_client);
+    _salesRepo = salesRepository ?? SalesRepository(_client);
   }
 
   /// Enviar orden a cocina con agrupación automática por departamento.
@@ -234,6 +262,26 @@ class PrintingService {
   ///   - Áreas que imprimieron directo (camino feliz).
   ///   - Áreas que escalaron al worker (la impresora no respondió pero
   ///     el ticket está en cola — snackbar amigable, no alarma).
+  /// Confirma la ronda capturada de un envío en vivo. Sin la migración
+  /// 20261010_0002 en el servidor NO confirma la orden entera (marcaría
+  /// enviados productos que no salen en este papel): falla antes de imprimir
+  /// con un error visible y la ronda sigue por confirmar.
+  @visibleForTesting
+  Future<({bool merged, DateTime roundStamp})> confirmCapturedRound(
+    String orderId,
+    List<String> itemIds,
+  ) async {
+    try {
+      return await _salesRepo.confirmRoundToKitchen(orderId, itemIds);
+    } catch (e) {
+      final missingRpc =
+          e.toString().contains('PGRST202') &&
+          e.toString().contains('fn_confirm_order_items_to_kitchen');
+      if (!missingRpc) rethrow;
+      throw const KitchenRoundRpcMissingException();
+    }
+  }
+
   Future<KitchenSendResult> sendOrderToKitchen({
     required String orderId,
     required String businessId,
@@ -259,9 +307,16 @@ class PrintingService {
     // Mantener presionado «Enviar Pedido»: volver a preguntar aunque ya haya
     // una impresora fijada.
     bool forceChoosePrinter = false,
-    // Replay de una comanda local: imprime y confirma SOLO estas líneas
-    // (20261010_0002), nunca lo agregado a la orden después de imprimirla.
+    // Imprime y confirma SOLO estas líneas (20261010_0002), nunca lo agregado
+    // a la orden después: la ronda capturada al tocar «Enviar Pedido» o la
+    // comanda local que repite el replay. En el envío en vivo
+    // ([allowKitchenMerge]) conserva la fusión con la comanda anterior; sin
+    // la migración en el servidor falla antes de imprimir, sin ampliar la
+    // confirmación a la orden entera.
     Set<String>? onlyItemIds,
+    // Áreas que no imprimen tras confirmar: quedan en Salud de impresión. El
+    // replay de una comanda local las anota con su propia ronda (false).
+    bool recordFailedAreas = true,
   }) async {
     var printingStarted = false;
     try {
@@ -383,11 +438,13 @@ class PrintingService {
       // ítems se sumaron a la comanda anterior (misma tarjeta del KDS), no
       // que abrieron una ronda nueva → el ticket sale marcado "AGREGADO".
       final ({bool merged, DateTime roundStamp}) sendResult;
-      if (onlyItemIds != null) {
-        await _salesRepo.confirmItemsToKitchen(
-          orderId,
-          draftItems.map((item) => item.id).toList(growable: false),
-        );
+      final roundIds = draftItems
+          .map((item) => item.id)
+          .toList(growable: false);
+      if (onlyItemIds != null && allowKitchenMerge) {
+        sendResult = await confirmCapturedRound(orderId, roundIds);
+      } else if (onlyItemIds != null) {
+        await _salesRepo.confirmItemsToKitchen(orderId, roundIds);
         sendResult = (merged: false, roundStamp: DateTime.now().toUtc());
       } else {
         sendResult = await _salesRepo.sendToKitchen(
@@ -400,6 +457,7 @@ class PrintingService {
       final directAreas = <String>[];
       final escalatedAreas = <String>[];
       final pendingPrintAreas = <String>[];
+      final uncertainPrintAreas = <String>[];
 
       printingStarted = true;
       for (final entry in itemsByArea.entries) {
@@ -452,21 +510,38 @@ class PrintingService {
               paperWidth: printer.paperWidth,
             ).escPosCommands;
 
-        final outcome = await _dispatchKitchenTicket(
-          printers: printers,
-          buildBytes: buildKitchenBytes,
-          areaCode: areaCode,
-          fallbackData: {
-            'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
-            'body':
-                'Orden ${orderData['orderNumber'] ?? ''}\n'
-                'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
-                'Mesero: ${orderData['waiterName'] ?? 'N/A'}\n'
-                'Cliente: ${orderData['customerName'] ?? 'N/A'}',
-          },
-          businessId: businessId,
-          orderId: orderId,
-        );
+        // El servidor ya aceptó la ronda: un área que no imprime NO tumba el
+        // envío (antes lanzaba y la pantalla quedaba «por confirmar»,
+        // invitando a un segundo envío = comanda duplicada en las demás
+        // áreas). Se reporta por área: pendiente o incierta.
+        final KitchenPrintOutcome outcome;
+        try {
+          outcome = await _dispatchKitchenTicket(
+            printers: printers,
+            buildBytes: buildKitchenBytes,
+            areaCode: areaCode,
+            fallbackData: {
+              'title': 'COMANDA ${orderData['tableName'] ?? 'COCINA'}',
+              'body':
+                  'Orden ${orderData['orderNumber'] ?? ''}\n'
+                  'Mesa: ${orderData['tableName'] ?? 'N/A'}\n'
+                  'Mesero: ${orderData['waiterName'] ?? 'N/A'}\n'
+                  'Cliente: ${orderData['customerName'] ?? 'N/A'}',
+            },
+            businessId: businessId,
+            orderId: orderId,
+          );
+        } on PrintDeliveryUncertainException catch (e) {
+          debugPrint('[kitchen] $areaCode incierta tras confirmar: $e');
+          createdJobs.remove(areaCode);
+          uncertainPrintAreas.add(areaCode);
+          continue;
+        } catch (e) {
+          debugPrint('[kitchen] $areaCode sin imprimir tras confirmar: $e');
+          createdJobs.remove(areaCode);
+          pendingPrintAreas.add(areaCode);
+          continue;
+        }
 
         if (outcome == KitchenPrintOutcome.escalatedToCloud) {
           escalatedAreas.add(areaCode);
@@ -475,17 +550,42 @@ class PrintingService {
         }
       }
 
+      final failedAreas = [...pendingPrintAreas, ...uncertainPrintAreas];
+      if (recordFailedAreas && failedAreas.isNotEmpty) {
+        // Visibles en Salud de impresión para reimprimir o descartar a mano.
+        try {
+          await PendingKitchenPrints.instance.record(
+            businessId: businessId,
+            roundId:
+                'cloud-$orderId-${sendResult.roundStamp.microsecondsSinceEpoch}',
+            orderId: orderId,
+            tableName: orderData['tableName']?.toString() ?? 'Mesa',
+            itemIdsByArea: {
+              for (final areaCode in failedAreas)
+                areaCode: [for (final item in itemsByArea[areaCode]!) item.id],
+            },
+            uncertainAreas: uncertainPrintAreas.toSet(),
+          );
+        } catch (e) {
+          debugPrint('[kitchen] no se guardó el aviso de comanda: $e');
+        }
+      }
+
       return KitchenSendResult(
         dispatchIds: createdJobs,
         directAreas: directAreas,
         escalatedAreas: escalatedAreas,
         pendingPrintAreas: pendingPrintAreas,
+        uncertainPrintAreas: uncertainPrintAreas,
       );
     } on NoAssignedKitchenPrinterException {
       rethrow;
     } on ItemsWithoutPrintAreaException {
       rethrow;
     } on UnknownPrintAreaCodeException {
+      rethrow;
+    } on KitchenRoundRpcMissingException {
+      // Visible tal cual: no se imprimió ni se confirmó nada.
       rethrow;
     } catch (e) {
       if (!printingStarted && OfflinePosService.isTransportError(e)) {
@@ -520,6 +620,7 @@ class PrintingService {
     final errors = <String>[];
     String? firstDirectPrinterId;
     bool anyEscalated = false;
+    bool anyUncertain = false;
 
     for (final printer in printers) {
       try {
@@ -539,6 +640,7 @@ class PrintingService {
           anyEscalated = true;
         }
       } catch (e) {
+        if (e is PrintDeliveryUncertainException) anyUncertain = true;
         errors.add('${printer.name}: $e');
       }
     }
@@ -556,6 +658,13 @@ class PrintingService {
       // Nadie imprimió directo pero al menos una pudo escalar al cloud
       // queue. El cajero verá un snackbar amigable.
       return KitchenPrintOutcome.escalatedToCloud;
+    }
+
+    // Alguna impresora pudo haber sacado el papel: se avisa como INCIERTO
+    // (tipado) para que nadie lo reimprima a ciegas. Antes se aplanaba a un
+    // error genérico y el área quedaba como «no salió».
+    if (anyUncertain) {
+      throw PrintDeliveryUncertainException(errors.join(' | '));
     }
 
     if (errors.isNotEmpty) {
@@ -1296,11 +1405,51 @@ class PrintingService {
     final printerless = settings?['printerless_kitchen'] == true;
     final createdJobs = <String, String>{};
     final pendingAreas = <String>[];
+    final uncertainAreas = <String>[];
 
+    // La ronda queda en la cola ANTES del primer papel, reclamada por este
+    // proceso (el replay no la toca mientras imprime). Antes se encolaba al
+    // final: si la app moría a mitad, la comanda impresa no dejaba rastro y
+    // el siguiente «Enviar» la reimprimía entera. Si el registro falla, no
+    // se imprime.
+    final roundId = const Uuid().v4();
+    final claimId = await _offlinePos.beginLocalKitchenRound(
+      businessId: businessId,
+      roundId: roundId,
+      orderId: order.id,
+      origin: localState.origin,
+      tableName: tableName,
+      itemIdsByArea: {
+        for (final entry in itemsByArea.entries)
+          entry.key: entry.value.map((item) => item.id).toList(growable: false),
+      },
+      itemQuantities: {for (final item in draftItems) item.id: item.quantity},
+    );
+    // Sin la anotación, el área cuenta como no intentada (o incierta si ya
+    // decía «imprimiendo»): nunca como entregada. False también si la
+    // comanda dejó de ser de este envío (su reclamo venció y la tomó el
+    // replay).
+    Future<bool> recordArea(String areaCode, String result) =>
+        _offlinePos.recordLocalKitchenArea(
+          businessId: businessId,
+          roundId: roundId,
+          claimId: claimId,
+          areaCode: areaCode,
+          result: result,
+        );
+
+    // El envío se detiene si pierde la comanda: lo que falte lo imprime el
+    // replay, que la tomó. Nunca imprimen los dos la misma área.
+    var stopped = false;
     for (final entry in itemsByArea.entries) {
       final areaCode = entry.key;
+      if (stopped) {
+        pendingAreas.add(areaCode);
+        continue;
+      }
       if (printerless) {
         createdJobs[areaCode] = _createLocalDispatchId(areaCode);
+        await recordArea(areaCode, OfflinePosService.kitchenAreaDelivered);
         continue;
       }
       try {
@@ -1316,9 +1465,20 @@ class PrintingService {
         );
         if (printers.isEmpty) {
           pendingAreas.add(areaCode);
+          await recordArea(areaCode, OfflinePosService.kitchenAreaPending);
           continue;
         }
-        await _dispatchKitchenTicket(
+        // Justo antes del papel: si la app muere ahora, el área queda
+        // INCIERTA (pudo salir), nunca «no salió». Si la marca no quedó
+        // guardada a nombre de este envío, NO sale papel: la cola vería el
+        // área como no impresa y la volvería a mandar.
+        if (!await recordArea(areaCode, OfflinePosService.kitchenAreaPrinting)) {
+          debugPrint('[kitchen-local] $areaCode sin marca: se detiene el envío');
+          stopped = true;
+          pendingAreas.add(areaCode);
+          continue;
+        }
+        final outcome = await _dispatchKitchenTicket(
           printers: printers,
           buildBytes: (printer) => PrintTicketService.generateKitchenTicket(
             order: order,
@@ -1349,16 +1509,28 @@ class PrintingService {
         );
         // Solo registrar entrega después del éxito, nunca antes del await.
         createdJobs[areaCode] = _createLocalDispatchId(areaCode);
+        await recordArea(
+          areaCode,
+          outcome == KitchenPrintOutcome.escalatedToCloud
+              ? OfflinePosService.kitchenAreaQueued
+              : OfflinePosService.kitchenAreaDelivered,
+        );
+      } on PrintDeliveryUncertainException catch (e) {
+        debugPrint('[kitchen-local] $areaCode incierta: $e');
+        uncertainAreas.add(areaCode);
+        await recordArea(areaCode, OfflinePosService.kitchenAreaUncertain);
       } catch (e) {
         debugPrint('[kitchen-local] $areaCode pendiente: $e');
         pendingAreas.add(areaCode);
+        await recordArea(areaCode, OfflinePosService.kitchenAreaPending);
       }
     }
 
     // El fallo de una impresora no descarta la comanda ni las áreas que sí
-    // salieron. El replay conserva las pendientes y excluye las ya entregadas.
-    final roundId = const Uuid().v4();
-    if (pendingAreas.isNotEmpty) {
+    // salieron. El replay conserva las pendientes, excluye las entregadas y
+    // deja las inciertas para que alguien revise.
+    final failedAreas = [...pendingAreas, ...uncertainAreas];
+    if (failedAreas.isNotEmpty) {
       try {
         await PendingKitchenPrints.instance.record(
           businessId: businessId,
@@ -1366,40 +1538,33 @@ class PrintingService {
           orderId: order.id,
           tableName: tableName,
           itemIdsByArea: {
-            for (final areaCode in pendingAreas)
+            for (final areaCode in failedAreas)
               areaCode: itemsByArea[areaCode]!
                   .map((item) => item.id)
                   .toList(growable: false),
           },
+          uncertainAreas: uncertainAreas.toSet(),
         );
       } catch (error) {
-        // El aviso es auxiliar: la acción de cocina conserva los IDs por área
-        // y debe encolarse incluso si este almacenamiento falla.
+        // El aviso es auxiliar: la acción de cocina conserva los IDs por área.
         debugPrint('[kitchen-local] no se guardó el aviso: $error');
       }
     }
-    await _offlinePos.enqueueAction(
-      businessId: businessId,
-      action: {
-        'id': roundId,
-        'type': 'confirm_local_order',
-        'order_id': order.id,
-        'origin': localState.origin,
-        'item_count': draftItems.length,
-        'table_name': tableName,
-        'item_ids_by_area': {
-          for (final entry in itemsByArea.entries)
-            entry.key: entry.value
-                .map((item) => item.id)
-                .toList(growable: false),
-        },
-        'printed_areas': createdJobs.keys.toList(growable: false),
-        'missing_areas': pendingAreas,
-      },
-    );
+    // Suelta el reclamo: la confirmación sube en el acto. Si esto falla, el
+    // reclamo vence solo y el replay usa lo anotado por área.
+    try {
+      await _offlinePos.finishLocalKitchenRound(
+        businessId: businessId,
+        roundId: roundId,
+        claimId: claimId,
+      );
+    } catch (e) {
+      debugPrint('[kitchen-local] no se cerró la ronda $roundId: $e');
+    }
     return LocalKitchenSendResult(
       dispatchIds: createdJobs,
       pendingAreas: pendingAreas,
+      uncertainAreas: uncertainAreas,
     );
   }
 
@@ -1620,7 +1785,20 @@ class PrintingService {
       );
     }
     final unsettled = await _offlinePos.unsettledActions(businessId);
-    if (unsettled.any((action) => action['id'] == pending.roundId)) {
+    final round = unsettled
+        .where((action) => action['id'] == pending.roundId)
+        .firstOrNull;
+    if (round != null && round['kitchen_uncertain'] == true) {
+      // Comanda local INCIERTA: alguien revisó y no salió. La reimprime y la
+      // confirma el replay de esa misma ronda (sube en el acto).
+      await _offlinePos.resolveUncertainKitchenRound(
+        businessId: businessId,
+        roundId: pending.roundId,
+        printed: false,
+      );
+      return;
+    }
+    if (round != null) {
       throw StateError('Sincroniza esta ronda antes de reimprimirla.');
     }
     final orderId = pending.orderId.startsWith('local-order-')

@@ -568,7 +568,7 @@ void main() {
       expect(single, isNot(contains('c/u')));
     });
 
-    test('modificadores, nota y para-llevar siguen saliendo', () {
+    test('modificadores y para-llevar siguen saliendo; la nota no', () {
       final text =
           _modernInvoice(
             items: [_item(isTakeout: true, notes: 'Sin cebolla')],
@@ -576,8 +576,9 @@ void main() {
           '';
 
       expect(text, contains('Extra queso cheddar derretido'));
-      expect(text, contains('Nota: Sin cebolla'));
       expect(text, contains('Para llevar'));
+      expect(text, isNot(contains('Sin cebolla')));
+      expect(text, isNot(contains('Nota:')));
     });
   });
 }

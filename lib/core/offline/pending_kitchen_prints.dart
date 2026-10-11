@@ -11,6 +11,7 @@ class PendingKitchenPrint {
     required this.itemIds,
     required this.tableName,
     required this.queuedAt,
+    this.uncertain = false,
   });
 
   final String id;
@@ -21,6 +22,10 @@ class PendingKitchenPrint {
   final String tableName;
   final DateTime queuedAt;
 
+  /// El papel pudo haber salido o no (la impresora no confirmó): se revisa en
+  /// el área antes de reimprimir. Registros viejos sin el campo: false.
+  final bool uncertain;
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'round_id': roundId,
@@ -29,6 +34,7 @@ class PendingKitchenPrint {
     'item_ids': itemIds,
     'table_name': tableName,
     'queued_at': queuedAt.toIso8601String(),
+    if (uncertain) 'uncertain': true,
   };
 
   factory PendingKitchenPrint.fromJson(Map<String, dynamic> json) =>
@@ -40,6 +46,7 @@ class PendingKitchenPrint {
         itemIds: (json['item_ids'] as List).map((id) => id.toString()).toList(),
         tableName: json['table_name']?.toString() ?? 'Mesa',
         queuedAt: DateTime.parse(json['queued_at'] as String),
+        uncertain: json['uncertain'] == true,
       );
 }
 
@@ -62,6 +69,7 @@ class PendingKitchenPrints {
     required String orderId,
     required String tableName,
     required Map<String, List<String>> itemIdsByArea,
+    Set<String> uncertainAreas = const {},
   }) => _mutate(businessId, (entries) {
     final existing = entries.map((entry) => entry.id).toSet();
     for (final area in itemIdsByArea.entries) {
@@ -76,6 +84,7 @@ class PendingKitchenPrints {
           itemIds: List<String>.unmodifiable(area.value),
           tableName: tableName,
           queuedAt: DateTime.now(),
+          uncertain: uncertainAreas.contains(area.key),
         ),
       );
     }

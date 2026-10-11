@@ -876,6 +876,18 @@ class _PendingKitchenPrintCard extends StatelessWidget {
               '${pending.tableName} · ${pending.areaCode}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
+            if (pending.uncertain)
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Text(
+                  'Incierta: la impresora no confirmó; puede haber salido. '
+                  'Revisa en el área antes de reimprimir.',
+                  style: TextStyle(
+                    color: Color(0xFFB45309),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             const SizedBox(height: 4),
             Text(
               pending.itemIds.isEmpty
@@ -889,11 +901,17 @@ class _PendingKitchenPrintCard extends StatelessWidget {
               children: [
                 OutlinedButton(
                   onPressed: busy || pending.itemIds.isEmpty ? null : onRetry,
-                  child: const Text('Reintentar área'),
+                  child: Text(
+                    pending.uncertain
+                        ? 'No salió: reimprimir'
+                        : 'Reintentar área',
+                  ),
                 ),
                 TextButton(
                   onPressed: busy ? null : onDismiss,
-                  child: const Text('Marcar revisada'),
+                  child: Text(
+                    pending.uncertain ? 'Sí salió' : 'Marcar revisada',
+                  ),
                 ),
               ],
             ),

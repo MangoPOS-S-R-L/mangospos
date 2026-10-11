@@ -429,6 +429,72 @@ void main() {
     expect(await offline.pendingActionsCount(biz), 0);
   });
 
+  test('pedido automático durante otra pasada: no se descarta; corre una '
+      'pasada SIN force al terminar y sube lo encolado después', () async {
+    const biz = 'auto-waits-real-pass';
+    final c = container(biz, _sale('local-order-active-auto-rerun'));
+    final vm = c.read(currentOrderProvider.notifier);
+    repository.holdFirstAdd = Completer<void>();
+    await enqueueSale(biz, 'local-order-held-auto');
+    // Una muerta: el pedido automático no la reintenta (force sí lo haría).
+    await enqueueSale(
+      biz,
+      'local-order-dead-auto',
+      status: 'dead',
+      attempts: OfflinePosService.maxAttempts,
+    );
+
+    final first = vm.syncPendingOfflineActions();
+    for (var i = 0; i < 400 && repository.added.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(repository.added, ['remote-quick-held-auto']);
+
+    // Entra DESPUÉS de que la pasada en curso leyó la cola, y su aviso llega
+    // al VM con esa pasada todavía corriendo (antes: return inmediato).
+    await enqueueSale(biz, 'local-order-second-auto');
+    var secondDone = false;
+    final second = vm.syncPendingOfflineActions().then(
+      (_) => secondDone = true,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(secondDone, isFalse, reason: 'queda pedido, no regresa sin subir');
+
+    repository.holdFirstAdd!.complete();
+    await first;
+    await second.timeout(const Duration(seconds: 5));
+    expect(repository.added, [
+      'remote-quick-held-auto',
+      'remote-quick-second-auto',
+    ]);
+    final left = await offline.unsettledActions(biz);
+    expect(left.map((a) => a['status']), ['dead'], reason: 'sin force');
+    expect(
+      c.read(offlineQueueStatusProvider).lastResult,
+      isNull,
+      reason: 'automática: silenciosa',
+    );
+  });
+
+  test('pedido automático durante una pasada que ya vio todo: no encadena '
+      'otra pasada vacía', () async {
+    const biz = 'auto-no-empty-rerun';
+    final c = container(biz, _sale('local-order-active-auto-empty'));
+    final vm = c.read(currentOrderProvider.notifier);
+    repository.holdFirstAdd = Completer<void>();
+    await enqueueSale(biz, 'local-order-only-auto');
+    final first = vm.syncPendingOfflineActions();
+    for (var i = 0; i < 400 && repository.added.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    final second = vm.syncPendingOfflineActions();
+    repository.holdFirstAdd!.complete();
+    await first;
+    await second.timeout(const Duration(seconds: 5));
+    expect(repository.added, ['remote-quick-only-auto']);
+    expect(await offline.pendingActionsCount(biz), 0);
+  });
+
   test('pedido force pendiente y la pantalla se descarta: no se queda '
       'esperando ni corre otra pasada sin dueño', () async {
     const biz = 'force-rerun-after-dispose';

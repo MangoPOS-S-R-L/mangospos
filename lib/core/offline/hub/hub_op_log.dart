@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../storage/storage_service.dart';
@@ -57,10 +59,25 @@ class HubOpLog {
 
   String _key(String businessId) => 'hub_oplog_$businessId';
 
+  static final StreamController<String> _appended =
+      StreamController<String>.broadcast();
+
+  /// Negocio cuyo op-log acaba de guardar una op (después del commit, en este
+  /// proceso). El uplink del Hub lo usa para subir en el acto en vez de
+  /// esperar a su timer; el servidor dedicado de Windows corre aparte y sigue
+  /// dependiendo del timer.
+  static Stream<String> get appended => _appended.stream;
+
   /// Agrega una op al log y devuelve su `seq`. Idempotente: si ya existe una
   /// op con el mismo `op_id`, NO se vuelve a agregar y se devuelve su `seq`
   /// previo. La op se enriquece con `seq` y `hub_received_at`.
   Future<int> append(String businessId, Map<String, dynamic> op) async {
+    final seq = await _appendDurable(businessId, op);
+    _appended.add(businessId);
+    return seq;
+  }
+
+  Future<int> _appendDurable(String businessId, Map<String, dynamic> op) async {
     if (_useSqlite) return _dao.append(businessId, op);
 
     final storage = await _storage;
