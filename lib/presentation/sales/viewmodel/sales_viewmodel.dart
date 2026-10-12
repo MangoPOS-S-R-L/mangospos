@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mangopos/core/business/business_model.dart';
+import 'package:mangopos/core/fiscal/ncf_types.dart';
 import 'package:mangopos/core/multimesero/active_waiter_provider.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/offline/offline_pos_service.dart';
@@ -922,6 +923,26 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (normalized.isEmpty) return false;
     return sequence.tipo.toUpperCase() == normalized ||
         sequence.ncfType.toUpperCase() == type.trim().toUpperCase();
+  }
+
+  /// Codigo completo del enum `public.ncf_type` ('B02', 'E31'...) a partir de
+  /// un tipo que puede venir sin serie ('02'). Prefiere la serie de la
+  /// secuencia configurada en el negocio; si el tipo no corresponde a ninguna,
+  /// cae a `fullNcfCode` (el mapeo por sufijo que ya usa el resto del modulo).
+  ///
+  /// Devuelve null cuando no hay tipo: eso significa "volver al default del
+  /// negocio" y es lo que espera `setCheckNcfType`.
+  String? _toFullNcfCode(String? type) {
+    final raw = type?.trim().toUpperCase() ?? '';
+    if (raw.isEmpty) return null;
+
+    for (final sequence in state.fiscalSequences) {
+      if (_matchesFiscalSequenceType(sequence, raw)) {
+        return sequence.ncfType.toUpperCase();
+      }
+    }
+
+    return fullNcfCode(raw);
   }
 
   String _resolveFiscalTypeForState(
@@ -3540,8 +3561,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// `order_checks.requested_ncf_type` y lo consume el cobro por sub-cuenta;
   /// el bundle lo re-hidrata en recargas. La orden general conserva su tipo.
   Future<void> setFiscalTypeForCheck(String checkId, String type) async {
-    final normalized = _normalizeFiscalTypeValue(type);
-    final newValue = normalized.isEmpty ? null : normalized;
+    // `order_checks.requested_ncf_type` es del enum `public.ncf_type`, que
+    // solo acepta el codigo COMPLETO ('B02', 'E31'...). El dropdown entrega
+    // el tipo sin serie ('02'), y antes se escribia asi: Postgres rechazaba
+    // el UPDATE ("invalid input value for enum ncf_type") y el override de la
+    // sub-cuenta se perdia en silencio. La serie se toma de la secuencia real
+    // del negocio, no se asume por el numero.
+    final newValue = _toFullNcfCode(type);
 
     // Recordar la elección para reaplicarla tras los reload (ver
     // _checkNcfOverride): así no revierte a B02 aunque el bundle no devuelva

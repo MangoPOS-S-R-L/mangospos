@@ -409,10 +409,19 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
         (fs?['ecf_enabled'] == true) ||
         sortedTypes.any((t) => t.startsWith('E'));
 
-    // Default fallback: si default_ncf_type no está en disponibles, usar el
-    // primero (preferentemente Exx si ecf habilitado, sino B02).
+    // El comprobante predefinido del negocio MANDA: es el que sale al cobrar,
+    // sin importar cuantas secuencias se agreguen despues. Antes, si el tipo
+    // marcado no aparecia entre las disponibles (secuencia inactiva o rango
+    // agotado), esto caia solo al primer Exx/Bxx de la lista y emitia un
+    // comprobante distinto al configurado sin avisar a nadie. Ese cambio
+    // silencioso es justo lo que no puede pasar en fiscal: ahora se conserva
+    // el default y, si no se puede emitir, el cobro falla con mensaje claro
+    // (misma politica que el aviso de la pantalla de Configuracion fiscal).
+    //
+    // Solo cuando el negocio NO tiene predefinido guardado se toma uno de las
+    // disponibles, porque ahi no hay eleccion que respetar.
     String? resolvedDefault = defaultType;
-    if (resolvedDefault == null || !sortedTypes.contains(resolvedDefault)) {
+    if (resolvedDefault == null || resolvedDefault.isEmpty) {
       if (sortedTypes.isNotEmpty) {
         resolvedDefault = sortedTypes.firstWhere(
           (t) => ecfEnabled ? t.startsWith('E') : t.startsWith('B'),
@@ -421,16 +430,29 @@ class PaymentViewModel extends StateNotifier<PaymentState> {
       }
     }
 
+    // El predefinido entra en la lista aunque no tenga secuencia emitible:
+    // si no apareciera, el modal preseleccionaria un tipo que no muestra y
+    // ningun chip quedaria marcado — el cajero no sabria con que comprobante
+    // esta cobrando. Visible y marcado; si no se puede emitir, `generate_ncf`
+    // corta el cobro con "No hay secuencia NCF disponible para tipo X".
+    final offeredTypes = <String>[
+      ...sortedTypes,
+      if (resolvedDefault != null &&
+          resolvedDefault.isNotEmpty &&
+          !sortedTypes.contains(resolvedDefault))
+        resolvedDefault,
+    ];
+
     unawaited(
       _persistFiscalConfig(cacheKey, {
-        'types': sortedTypes,
+        'types': offeredTypes,
         'default_type': resolvedDefault,
         'ecf_enabled': ecfEnabled,
       }),
     );
 
     return (
-      types: sortedTypes,
+      types: offeredTypes,
       defaultType: resolvedDefault,
       ecfEnabled: ecfEnabled,
     );
