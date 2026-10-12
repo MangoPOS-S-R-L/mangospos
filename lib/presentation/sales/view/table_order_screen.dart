@@ -684,6 +684,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   bool _localReleaseScheduledByBack = false;
   TerminalMode? _terminalModeAtBuild;
   String? _hubUrlAtBuild;
+  bool _isRetailAtBuild = false;
 
   void _mirrorEmptyReleaseToHub({
     required bool released,
@@ -776,16 +777,21 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   @override
   void dispose() {
-    // Catch-all: si se sale de una MESA sin productos (orden vacía) por
-    // cualquier vía, liberar la mesa de inmediato. El _handleBack ya lo intenta
-    // para refrescar la zona al volver; esto garantiza que también ocurra
-    // cuando se sale por otra ruta o se destruye la pantalla abruptamente.
+    // Catch-all: si se sale de una MESA o de una VENTA RÁPIDA sin productos
+    // (orden vacía) por cualquier vía, liberarla de inmediato. El _handleBack
+    // ya lo intenta para refrescar la zona al volver; esto garantiza que
+    // también ocurra cuando se sale por otra ruta (el riel lateral, otro modo
+    // de venta) o se destruye la pantalla abruptamente. Venta rápida: regla
+    // del dueño (11-oct), sin productos se libera; antes quedaba abierta y los
+    // carriles se llenaban (50) hasta no poder vender. Retail no: sus carritos
+    // son pestañas que el cajero administra.
     // Usa una referencia capturada (no `ref`) y el cliente global de Supabase,
     // así sigue siendo válida durante el teardown. releaseEmptyTableIfNeeded es
     // idempotente: si ya se cerró/liberó, no hace nada.
-    if (widget.origin == OrderOrigin.table &&
-        _activeOrderEmpty &&
-        _activeOrderId != null) {
+    final releasesOnExit =
+        widget.origin == OrderOrigin.table ||
+        (widget.origin == OrderOrigin.quick && !_isRetailAtBuild);
+    if (releasesOnExit && _activeOrderEmpty && _activeOrderId != null) {
       final repo = _salesRepoRef ?? SalesRepository(Supabase.instance.client);
       final orderId = _activeOrderId!;
       final tableId = widget.tableId;
@@ -1658,6 +1664,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     } else if (widget.origin == OrderOrigin.manual) {
       notifier.ensureManualOrder();
     } else if (widget.origin == OrderOrigin.quick) {
+      // La venta rápida vacía que la salida anterior programó liberar es la
+      // que se va a retomar (va por id de orden, no tiene mesa propia).
+      SalesRepository.cancelPendingEmptyTableRelease(
+        ref.read(currentOrderProvider).order?.id,
+      );
       notifier.ensureQuickOrder();
     } else if (widget.origin == OrderOrigin.delivery &&
         widget.tableId != null) {
@@ -1771,6 +1782,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // LayoutBuilder, que corre en fase de layout) para registrar bien la
     // dependencia de rebuild.
     final isRetail = ref.watch(currentBusinessModelProvider).isRetail;
+    _isRetailAtBuild = isRetail;
 
     return Scaffold(
       backgroundColor: _salesSurface,

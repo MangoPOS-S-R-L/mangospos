@@ -34,7 +34,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'retail_carts_provider.dart';
 import 'menu_browser_viewmodel.dart' show MenuProduct;
-import 'sales_by_zone_viewmodel.dart' show byZoneVmProvider;
+import 'sales_by_zone_viewmodel.dart' show byZoneVmProvider, zonesRepoProvider;
 import '../state/sales_state.dart';
 import '../../../data/models/order_edit.dart';
 import '../../../data/models/sales_models.dart';
@@ -3708,6 +3708,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       final saved = snapshot?.order;
       if (snapshot != null && saved != null && _isReusableOpenOrder(saved)) {
         final savedId = saved.id;
+        // Se retoma: la liberación que dejó programada la salida anterior
+        // (venta vacía) ya no aplica.
+        SalesRepository.cancelPendingEmptyTableRelease(savedId);
         // Una venta del servidor no se toca hasta confirmarla (igual que el
         // cache de openTable): se pinta con loading y los toques y el lector
         // esperan. Antes se podía agregar durante esa lectura y la respuesta
@@ -3818,8 +3821,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       if (_preferLocalOperations) {
         throw TimeoutException('Sin conexión: se abre la venta local');
       }
-      final res = await ref
-          .read(salesRepositoryProvider)
+      final repository = ref.read(salesRepositoryProvider);
+      Future<Map<String, dynamic>> openOnServer() => repository
           .openManualOrQuick(
             origin: origin,
             customerName: null,
@@ -3827,8 +3830,34 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             businessId: businessId,
           )
           .timeout(const Duration(seconds: 10));
-      if (!stillSelected()) return;
+      if (origin == 'quick' && businessId != null && businessId.isNotEmpty) {
+        _maybeSweepEmptyVirtualSales(businessId);
+      }
+      Map<String, dynamic> res;
+      try {
+        res = await openOnServer();
+      } catch (e) {
+        // Carriles llenos (50 ventas sin cobrar, casi siempre vacías): se
+        // liberan las vacías y se intenta UNA vez más.
+        if (!_isNoFreeVirtualLaneError(e) ||
+            businessId == null ||
+            businessId.isEmpty) {
+          rethrow;
+        }
+        await _sweepEmptyVirtualSales(businessId);
+        if (!stillSelected()) return;
+        res = await openOnServer();
+      }
       final orderId = res['order_id'] as String;
+      // La pantalla ya pasó a otra cuenta (otra apertura, otra mesa): la
+      // venta que el servidor alcanzó a crear quedaba abierta y vacía para
+      // siempre, ocupando un carril. Se libera (solo si sigue sin productos).
+      if (!stillSelected()) {
+        if (res['resumed'] != true) {
+          _releaseAbandonedVirtualSale(orderId, businessId);
+        }
+        return;
+      }
       openedOrderId = orderId;
       await _loadOrderDetail(
         orderId,
@@ -3836,7 +3865,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         origin: origin,
         caller: 'openManualOrQuick:$origin',
       );
-      if (!stillSelected()) return;
+      if (!stillSelected()) {
+        if (res['resumed'] != true) {
+          _releaseAbandonedVirtualSale(orderId, businessId);
+        }
+        return;
+      }
       _applyNextOrderCustomer(origin);
     } catch (e) {
       if (!stillSelected()) return;
@@ -3873,6 +3907,64 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             'No se pudo abrir Venta ${origin == 'quick' ? 'Rápida' : 'Manual'}: $e',
       );
     }
+  }
+
+  /// Plazo con el que Venta Rápida barre las ventas vacías del negocio: el
+  /// mismo del cron (20 min). Una venta vacía más nueva puede ser la que otro
+  /// equipo tiene en pantalla ahora mismo.
+  static const int virtualSaleSweepGraceMinutes = 20;
+  static const Duration _virtualSaleSweepThrottle = Duration(minutes: 3);
+  DateTime? _lastVirtualSaleSweepAt;
+
+  static bool _isNoFreeVirtualLaneError(Object error) =>
+      error.toString().contains('no hay carril libre');
+
+  /// Libera las ventas (y mesas) vacías y viejas del negocio con el barrido
+  /// del servidor. Ese barrido solo lo disparaba el salón (o el cron, que no
+  /// existe en todos los servidores): un local que vende todo por Venta
+  /// Rápida nunca lo corría y los carriles se llenaban de ventas vacías hasta
+  /// no poder abrir otra (007 BAR N SNACK, 11-oct: 50 abiertas, 46 vacías).
+  /// Nunca toca una venta con productos. Nunca lanza.
+  Future<void> _sweepEmptyVirtualSales(String businessId) async {
+    _lastVirtualSaleSweepAt = DateTime.now();
+    try {
+      await ref
+          .read(zonesRepoProvider)
+          .releaseEmptyTables(
+            businessId,
+            graceMinutes: virtualSaleSweepGraceMinutes,
+          );
+    } catch (e) {
+      debugPrint('[SalesVM] barrido de ventas vacías: $e');
+    }
+  }
+
+  void _maybeSweepEmptyVirtualSales(String businessId) {
+    final last = _lastVirtualSaleSweepAt;
+    if (last != null &&
+        DateTime.now().difference(last) < _virtualSaleSweepThrottle) {
+      return;
+    }
+    unawaited(_sweepEmptyVirtualSales(businessId));
+  }
+
+  /// Venta que el servidor creó para una apertura que ya nadie muestra: se
+  /// libera si sigue sin productos (el servidor lo revisa con la mesa
+  /// bloqueada). Best-effort: si falla, la recoge el barrido.
+  void _releaseAbandonedVirtualSale(String orderId, String? businessId) {
+    final repository = ref.read(salesRepositoryProvider);
+    unawaited(() async {
+      try {
+        await repository.releaseEmptyTableIfNeeded(
+          orderId,
+          businessId: businessId,
+          deviceId: await DeviceUtils.getDeviceId(),
+          hasPendingWork: false,
+        );
+      } catch (e) {
+        debugPrint('[SalesVM] no se liberó la venta abandonada $orderId: $e');
+      }
+    }());
   }
 
   _OrderMutationContext _captureOrderMutation(String orderId) {
