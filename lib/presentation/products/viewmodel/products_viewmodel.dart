@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -43,6 +44,13 @@ class ProductsViewModel extends ChangeNotifier {
   String? _selectedMenuFilterId;
   String? _selectedPrintAreaFilterId;
   int _loadGeneration = 0;
+
+  /// menu_item_id → unidades sumando TODOS los almacenes activos. Se lee
+  /// aparte, sin frenar la lista, y se aplica a cada producto como
+  /// `stock_total_units`; se conserva entre recargas para no parpadear.
+  Map<String, int> _stockAcrossWarehouses = const {};
+  int _stockTotalsGeneration = 0;
+  bool _disposed = false;
 
   List<Map<String, dynamic>> get products => _products;
   List<Map<String, dynamic>> get filteredProducts {
@@ -182,6 +190,9 @@ class ProductsViewModel extends ChangeNotifier {
       _categories = catalog.categories;
       _menus = catalog.menus;
       _printAreasByProduct = areasByProduct;
+      if (businessChanged) _stockAcrossWarehouses = const {};
+      _applyStockAcrossWarehouses();
+      unawaited(_refreshStockAcrossWarehouses());
       // El RPC `get_products_catalog` puede no exponer `presentation`.
       // Merge defensivo: traemos id+presentation aparte para que el editor
       // prellene la etiqueta y NO la borre al re-guardar. Best-effort: si la
@@ -287,6 +298,46 @@ class ProductsViewModel extends ChangeNotifier {
   Future<void> _fetchProducts() async {
     if (_businessId == null) return;
     _products = await _repository.getProducts(_businessId!);
+    _applyStockAcrossWarehouses();
+    unawaited(_refreshStockAcrossWarehouses());
+  }
+
+  void _applyStockAcrossWarehouses() {
+    for (final p in _products) {
+      final units = _stockAcrossWarehouses[p['id']?.toString()];
+      if (units == null) {
+        p.remove('stock_total_units');
+      } else {
+        p['stock_total_units'] = units;
+      }
+    }
+  }
+
+  /// Best-effort: si falla (permisos, red), la lista sigue mostrando la
+  /// existencia del punto de venta como antes.
+  Future<void> _refreshStockAcrossWarehouses() async {
+    final businessId = _businessId;
+    if (businessId == null) return;
+    final generation = ++_stockTotalsGeneration;
+    try {
+      final units = await _repository.getStockAcrossWarehouses(businessId);
+      if (_disposed ||
+          generation != _stockTotalsGeneration ||
+          businessId != _businessId) {
+        return;
+      }
+      _stockAcrossWarehouses = units;
+      _applyStockAcrossWarehouses();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Existencia de todos los almacenes no disponible: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 
   Future<void> _fetchCategories() async {

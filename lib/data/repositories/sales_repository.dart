@@ -2022,6 +2022,38 @@ class SalesRepository {
     return (row?['version'] as num?)?.toInt();
   }
 
+  Future<OrderEditResult> applyItemGroup({
+    required String orderId,
+    required String opId,
+    required List<Map<String, dynamic>> actions,
+    bool force = false,
+  }) async {
+    final Object? response;
+    try {
+      response = await _client.rpc(
+        'fn_apply_order_item_group',
+        params: {
+          'p_order_id': orderId,
+          'p_op_id': opId,
+          'p_actions': actions,
+          'p_force': force,
+        },
+      );
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202') {
+        throw StateError(
+          'Falta aplicar la migración 20261015_0001 de ediciones agrupadas.',
+        );
+      }
+      rethrow;
+    }
+    if (response is! Map) {
+      throw StateError('Respuesta inválida al guardar el grupo.');
+    }
+    final result = OrderEditResult.fromMap(Map<String, dynamic>.from(response));
+    if (!result.applied) throw OrderEditConflict(result);
+    return result;
+  }
   Future<OrderEditResult> _editOrThrow(
     String failure,
     Future<OrderEditResult> Function() run,
@@ -2596,6 +2628,43 @@ class SalesRepository {
   }
 
   /// Obtener items de una orden
+  /// Lectura completa para comprobantes: el límite del detalle de venta no
+  /// puede truncar una factura con muchas rondas.
+  Future<List<OrderItem>> getAllOrderItems(
+    String orderId, {
+    String? businessId,
+  }) async {
+    const size = 250;
+    final items = await getOrderItems(
+      orderId,
+      limit: size,
+      businessId: businessId,
+    );
+    if (items.length < size) return items;
+    final result = [...items];
+    for (var offset = size; ; offset += size) {
+      final data = await _client
+          .from('order_items')
+          .select(_itemFieldsWithVersion)
+          .eq('order_id', orderId)
+          .order('created_at')
+          .order('id')
+          .range(offset, offset + size - 1);
+      final page = data.map((r) => OrderItem.fromMap(r)).toList();
+      final ids = page.map((i) => i.id).toList();
+      final modifiers = await _loadModifiersByItem(ids);
+      final taxes = await _loadTaxLinesByItem(ids);
+      result.addAll(
+        page.map(
+          (i) => i.copyWith(
+            modifiers: modifiers[i.id] ?? [],
+            taxLines: taxes[i.id] ?? [],
+          ),
+        ),
+      );
+      if (page.length < size) return result;
+    }
+  }
   Future<List<OrderItem>> getOrderItems(
     String orderId, {
     bool includeModifiers = true,
@@ -2630,10 +2699,11 @@ class SalesRepository {
             .from('order_items')
             .select(_itemFieldsWithVersion)
             .eq('order_id', orderId);
-        if (onlyOpen) {
-          query = query.not('status', 'in', '(paid,void)');
-        }
-        return query.order('created_at', ascending: true).limit(limit);
+        if (onlyOpen) query = query.not('status', 'in', '(paid,void)');
+        return query
+            .order('created_at', ascending: true)
+            .order('id')
+            .limit(limit);
       }
 
       List<dynamic> data;
@@ -2692,7 +2762,6 @@ class SalesRepository {
       throw Exception('Error al obtener items: $e');
     }
   }
-
   /// Elimina todos los items de un check y recalcula totales en DB
   Future<void> clearCheck(String checkId) async {
     throw UnsupportedError(

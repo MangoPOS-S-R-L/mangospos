@@ -603,6 +603,18 @@ class _SettingsViewState extends ConsumerState<SettingsView> {
               color: Color(0xFFEAF0FF),
               route: AppRoutes.settingsDevices,
             ),
+          // La RLS de change_history solo deja leer a dueño y administradores
+          // (is_admin_of_business); a otro rol la pantalla le saldría vacía.
+          if (ref.watch(sessionProvider).isOwner ||
+              ref.watch(sessionProvider).activeRole == PosRole.administrador)
+            const _SettingsOption(
+              title: 'Historial',
+              subtitle:
+                  'Quién creó, cambió o borró qué: productos, caja, cuentas…',
+              icon: Icons.history_rounded,
+              color: Color(0xFFFFF4E5),
+              route: AppRoutes.settingsHistory,
+            ),
           const _SettingsOption(
             title: 'Clientes',
             subtitle: 'Gestión de clientes y contactos',

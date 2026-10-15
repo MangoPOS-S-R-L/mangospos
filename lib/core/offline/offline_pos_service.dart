@@ -23,6 +23,7 @@ import 'package:mangopos/core/storage/storage_service.dart';
 import 'package:mangopos/data/models/offline_payment_replay.dart';
 import 'package:mangopos/data/models/order_edit.dart';
 import 'package:mangopos/data/models/sales_models.dart';
+import 'package:mangopos/data/utils/order_pricing_utils.dart';
 import 'package:mangopos/data/repositories/cashier_repository.dart';
 import 'package:mangopos/data/repositories/inventory_repository.dart';
 import 'package:mangopos/data/repositories/printing_service.dart';
@@ -748,6 +749,44 @@ class OfflinePosService {
     return updated;
   });
 
+  Future<CurrentOrderState> overlayQueuedItemGroups(
+    String businessId,
+    CurrentOrderState state,
+  ) async {
+    if (state.order == null) return state;
+    var rows = state.items;
+    for (final action in await unsettledActions(businessId)) {
+      if (action['type'] != 'edit_item_group' ||
+          (action['order_id'] != state.order?.id &&
+              action['resolved_order_id'] != state.order?.id)) {
+        continue;
+      }
+      final result = ((action['result_items'] as List?) ?? [])
+          .whereType<Map>()
+          .map(
+            (r) => OrderItemSnapshot.decode(
+              Map<String, dynamic>.from(r),
+            ).copyWith(orderId: state.order!.id),
+          )
+          .toList();
+      final ids = {
+        ...((action['removed_ids'] as List?) ?? []).map((id) => id.toString()),
+        ...result.map((i) => i.id),
+      };
+      rows = [...rows.where((i) => !ids.contains(i.id)), ...result];
+    }
+    final summary = summarizeOrderPricing(state.order, rows);
+    return state.copyWith(
+      items: rows,
+      order: state.order?.copyWith(
+        subtotal: summary.subtotal,
+        tax: summary.tax,
+        discounts: summary.discounts,
+        serviceFee: summary.serviceFee,
+        total: summary.total,
+      ),
+    );
+  }
   Future<CurrentOrderState?> loadSnapshot({
     required String businessId,
     required String slotId,
@@ -775,7 +814,7 @@ class OfflinePosService {
       );
       // Una lectura no reescribe: el cajero pudo guardar productos nuevos
       // mientras se resolvían los mappings. Reescribir aquí perdía esos items.
-      return _decodeState(reconciledState);
+      return await overlayQueuedItemGroups(businessId, _decodeState(reconciledState));
     } catch (e) {
       debugPrint('OfflinePosService.loadSnapshot error: $e');
       return null;
@@ -3523,6 +3562,18 @@ class OfflinePosService {
           continue;
         }
         if (!seen || _isSettled(action)) continue;
+        if(action['type']=='edit_item_group' && itemId!=null && action['order_id']==orderId) {
+          var changed=false;
+          final children=(action['actions'] as List).map((raw) {
+            final child=Map<String,dynamic>.from(raw as Map);
+            if(child['item_id']==itemId && (child['base_version'] as num?)?.toInt()==from) {
+              child['base_version']=to;changed=true;
+            }
+            return child;
+          }).toList();
+          if(changed) await _upsertActionUnlocked(businessId,{...action,'actions':children});
+          continue;
+        }
         final sameTarget = itemId != null && itemId.isNotEmpty
             ? action['item_id']?.toString() == itemId
             : action['item_id'] == null &&
@@ -4482,6 +4533,39 @@ class OfflinePosService {
         } catch (_) {
           return null;
         }
+      case 'edit_item_group':
+        final resolvedOrder=await _resolveOrderIdForAction(businessId:businessId,action:action,salesRepository:salesRepository);
+        final children=<Map<String,dynamic>>[];
+        for(final raw in action['actions'] as List) {
+          final child=Map<String,dynamic>.from(raw as Map);
+          if(child['kind']!='add') {
+            child['item_id']=await _resolveItemIdForAction(businessId:businessId,
+              action:{'item_id':child['item_id']},salesRepository:salesRepository);
+          } else {
+            child['source_id']=await _resolveItemIdForAction(businessId:businessId,
+              action:{'item_id':child['source_id']},salesRepository:salesRepository);
+          }
+          children.add(child);
+        }
+        final OrderEditResult result;
+        try {
+          result=await salesRepository.applyItemGroup(orderId:resolvedOrder,
+            opId:_uuid.v5(Namespace.url.value,'mangopos-item-group:${action['op_id']??action['id']}'),
+            actions:children,force:action['force_apply']==true);
+        } on OrderEditConflict catch(conflict) {
+          throw _EditConflict('El cambio completo del grupo no se aplicó: ${conflict.message}',current:conflict.result.current);
+        }
+        for(final child in (action['actions'] as List).whereType<Map>()) {
+          final from=(child['base_version'] as num?)?.toInt();
+          final rawId=child['item_id']?.toString();
+          if(from==null || rawId==null) continue;
+          final mapped=await _resolveItemIdForAction(businessId:businessId,
+            action:{'item_id':rawId},salesRepository:salesRepository);
+          final to=result.versions[mapped];
+          if(to!=null && to!=from) {await _rebaseFollowingEdits(businessId:businessId,
+            after:{...action,'item_id':rawId},from:from,to:to);}
+        }
+        return resolvedOrder;
       case 'update_item_quantity':
         try {
           final resolvedItemId = await _resolveItemIdForAction(

@@ -11,6 +11,14 @@ import '../state/recipes_state.dart';
 import '../viewmodel/recipes_viewmodel.dart';
 import 'widgets/searchable_select_field.dart';
 
+/// Minúsculas y sin tildes, para que «jamon» encuentre «Jamón».
+String _fold(String s) {
+  const accents = {'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u', 'ü': 'u', 'ñ': 'n'};
+  var out = s.toLowerCase();
+  accents.forEach((k, v) => out = out.replaceAll(k, v));
+  return out;
+}
+
 class RecipesView extends ConsumerStatefulWidget {
   const RecipesView({super.key});
 
@@ -19,12 +27,42 @@ class RecipesView extends ConsumerStatefulWidget {
 }
 
 class _RecipesViewState extends ConsumerState<RecipesView> {
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(recipesViewModelProvider).init();
     });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  /// Filtra por nombre del plato, de sus ingredientes o su SKU. Cada palabra
+  /// escrita tiene que aparecer en alguno («pechuga crema»), sin importar
+  /// mayúsculas ni tildes: así «papas» trae todas las recetas que la usan.
+  List<RecipeSummary> _filter(List<RecipeSummary> recipes) {
+    final words = _fold(_query)
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList(growable: false);
+    if (words.isEmpty) return recipes;
+    return recipes.where((recipe) {
+      final haystack = _fold([
+        recipe.menuItemName,
+        for (final i in recipe.ingredients) ...[
+          i.inventoryItemName,
+          i.inventoryItemSku,
+        ],
+      ].join(' '));
+      return words.every(haystack.contains);
+    }).toList(growable: false);
   }
 
   @override
@@ -45,6 +83,7 @@ class _RecipesViewState extends ConsumerState<RecipesView> {
       0,
       (sum, recipe) => sum + recipe.totalCost,
     );
+    final visible = _filter(state.recipes);
 
     return Scaffold(
       backgroundColor: MangoTokens.background,
@@ -101,6 +140,44 @@ class _RecipesViewState extends ConsumerState<RecipesView> {
                   ),
                 ],
                 const SizedBox(height: 24),
+                if (state.recipes.isNotEmpty) ...[
+                  TextField(
+                    controller: _searchCtrl,
+                    onChanged: (value) => setState(() => _query = value),
+                    decoration: InputDecoration(
+                      hintText: 'Buscar por plato o ingrediente',
+                      prefixIcon: const Icon(Icons.search, size: 20),
+                      suffixIcon: _query.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Limpiar',
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () {
+                                _searchCtrl.clear();
+                                setState(() => _query = '');
+                              },
+                            ),
+                      filled: true,
+                      fillColor: MangoTokens.card,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(MangoTokens.radius),
+                        borderSide: const BorderSide(color: MangoTokens.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(MangoTokens.radius),
+                        borderSide: const BorderSide(color: MangoTokens.border),
+                      ),
+                    ),
+                  ),
+                  if (_query.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '${visible.length} de ${state.recipes.length} recetas',
+                      style: MangoTokens.label(),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                ],
                 Container(
                   decoration: BoxDecoration(
                     color: MangoTokens.card,
@@ -120,8 +197,16 @@ class _RecipesViewState extends ConsumerState<RecipesView> {
                               style: TextStyle(color: MangoTokens.mutedForeground),
                             ),
                           )
+                        : visible.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Text(
+                              'Ninguna receta coincide con «${_query.trim()}».',
+                              style: const TextStyle(color: MangoTokens.mutedForeground),
+                            ),
+                          )
                         : Column(
-                            children: state.recipes
+                            children: visible
                                 .map(
                                   (recipe) => Padding(
                                     padding: const EdgeInsets.only(bottom: 16),

@@ -227,10 +227,10 @@ class ReportsRepository {
       final qty = qtyRaw != 0 ? qtyRaw : _toDouble(row['quantity']);
       final subtotal = _toDouble(row['subtotal']);
       final disc = _toDouble(row['discounts']);
-      // En líneas [DEAL:] el subtotal viene NETO (bruto - descuento); en el
-      // resto es bruto pre-descuento. Ver order_pricing_utils.dart §148.
-      final gross = isDeal ? subtotal + disc : subtotal;
-      final net = isDeal ? subtotal : subtotal - disc;
+      // Contrato de fn_compute_item_totals: base antes del descuento,
+      // también para las ofertas vendidas como paquete.
+      final gross = subtotal;
+      final net = subtotal - disc;
 
       // Dos métricas por línea, ambas confiables:
       //   - valor a precio de menú = cantidad × precio unitario (lo que valía a

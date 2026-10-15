@@ -27,6 +27,13 @@
 /// LÍMITE (baseline): solo reconstruye órdenes CREADAS durante la ventana hub
 /// (sus ops están en el op-log). Las mesas abiertas ANTES de entrar a modo hub
 /// requieren un snapshot base al arrancar el Hub (paso de activación, H3/H4).
+library;
+
+import '../../../data/utils/offer_deal_pricing.dart';
+import '../../tax/tax_engine.dart' show catalogGrossAmount;
+
+import 'grouped_ops.dart';
+
 class HubOrderProjector {
   /// Detalle de una orden a partir de [ops] (order_id o table_id). Null si no
   /// hay una orden abierta que coincida.
@@ -114,7 +121,7 @@ class HubOrderProjector {
       return acc;
     }
 
-    for (final op in sorted) {
+    for (final op in sorted.expand(expandGroupedOps)) {
       final type = op['type']?.toString();
       final orderId = op['order_id']?.toString() ?? '';
       if (orderId.isEmpty) continue;
@@ -398,6 +405,34 @@ class _ItemAcc {
       if (amount is num) {
         snapshot[field] = double.parse((amount * ratio).toStringAsFixed(2));
       }
+    }
+    final rule = OfferDealRule.fromNotes(notes);
+    if (rule != null && !(notes ?? '').contains('[CORTESIA:')) {
+      snapshot['discounts'] = rule.discountFor(quantity);
+      // Igual que summarizeOrderPricing: un precio inclusive se ancla al
+      // importe de catálogo capturado en la venta. Sumar componentes ya
+      // redondeados puede cobrar un centavo de más (8 -> 6 cervezas).
+      final gross = snapshot['tax_mode'] == 'inclusive'
+          ? catalogGrossAmount(
+              unitPrice: unitPrice,
+              quantity: quantity,
+              modifiers: ((snapshot['modifiers'] as List?) ?? const [])
+                  .whereType<Map>()
+                  .map(
+                    (m) => (
+                      price: ((m['price'] as num?) ?? 0).toDouble(),
+                      qty: ((m['qty'] as num?) ?? 1).toDouble(),
+                    ),
+                  )
+                  .toList(growable: false),
+            )
+          : ((snapshot['subtotal'] as num?) ?? 0).toDouble() +
+                ((snapshot['tax'] as num?) ?? 0).toDouble();
+      snapshot['total'] = double.parse(
+        (gross - (snapshot['discounts'] as num))
+            .clamp(0, double.infinity)
+            .toStringAsFixed(2),
+      );
     }
     snapshot['tax_lines'] = ((snapshot['tax_lines'] as List?) ?? const [])
         .whereType<Map>()

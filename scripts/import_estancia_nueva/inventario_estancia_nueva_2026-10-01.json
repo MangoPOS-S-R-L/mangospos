@@ -1,0 +1,6350 @@
+{
+  "meta": {
+    "negocio": "Estancia Nueva Sports Club",
+    "fecha_conteo": "2026-10-01",
+    "fuentes": [
+      "Inventario_Estancia_Nueva_01-10.xlsx (hoja PARA SUBIR y CREAR EN SISTEMA)",
+      "conteo_PC-2026-000004 (Almacén, 98 items)"
+    ],
+    "regla": "cantidad_total = cantidad_cafeteria (Excel) + cantidad_almacen (PDF), por código del sistema",
+    "estados": {
+      "LISTO": "Subir tal cual",
+      "VALIDAR": "Revisar observación antes de subir",
+      "CREAR": "No existe en el sistema; crear primero"
+    }
+  },
+  "resumen": {
+    "lineas": 339,
+    "por_estado": {
+      "LISTO": 236,
+      "VALIDAR": 39,
+      "CREAR": 64
+    },
+    "lineas_con_codigo": 275,
+    "lineas_solo_almacen": 21,
+    "lineas_cafeteria_y_almacen": 77,
+    "lineas_a_crear": 64,
+    "unidades_cafeteria": 2861,
+    "unidades_almacen": 4036.0,
+    "unidades_total_con_codigo": 6897.0,
+    "unidades_a_crear": 527.0,
+    "valor_total_con_codigo": 727621.61
+  },
+  "items": [
+    {
+      "codigo": "016000264694",
+      "descripcion": "BARRAS NATURE VALLERY",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 27,
+      "cantidad_cafeteria": 23,
+      "cantidad_almacen": 30.0,
+      "cantidad_total": 53.0,
+      "valor_total": 1749.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "5000329002230",
+      "descripcion": "BOTELLA BEEFEATER LONDON",
+      "unidad": "UD",
+      "costo_unitario": 1400,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1400,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "4750021000157",
+      "descripcion": "BOTELLA STOLI",
+      "unidad": "UD",
+      "costo_unitario": 900,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 6.0,
+      "valor_total": 5400.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "5000299225028",
+      "descripcion": "CHIVA 18 BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 4520.44,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 4520.44,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "764090052850",
+      "descripcion": "CRACHI MAS MAS ROCKY",
+      "unidad": "UD",
+      "costo_unitario": 13.67,
+      "existencia_sistema": 26,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 13.67,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "\"...CRAKIS\": posible Crachi Más Más Rocky. Validar."
+    },
+    {
+      "codigo": "044000020071",
+      "descripcion": "GALLETA MINI CHIPS AHOY",
+      "unidad": "UD",
+      "costo_unitario": 36.25,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 10.0,
+      "cantidad_total": 18.0,
+      "valor_total": 652.5,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "044000020170",
+      "descripcion": "GALLETA MINI OREO",
+      "unidad": "UD",
+      "costo_unitario": 36.25,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 20,
+      "cantidad_almacen": 10.0,
+      "cantidad_total": 30.0,
+      "valor_total": 1087.5,
+      "areas": [
+        "Cafetería - Estante",
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "El sistema tiene dos Oreo mini (044000020170 y 044000011703). Se asignó la funda 1.5 oz. Confirmar código en el empaque. Nota previa: ya contado en Estante. Validar si este 1 es adicional. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "044000020255",
+      "descripcion": "GALLETA RITZ BITS CHEESE",
+      "unidad": "UD",
+      "costo_unitario": 36.25,
+      "existencia_sistema": 15,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 40.0,
+      "cantidad_total": 41.0,
+      "valor_total": 1486.25,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "027800072723",
+      "descripcion": "GALLETAS KEEBLER CHIPS DELUXE",
+      "unidad": "UD",
+      "costo_unitario": 41.67,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 208.35,
+      "areas": [
+        "Cafetería - Estante",
+        "Cafetería - Mostrador"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Keebler Chips Deluxe Minis con M&M's asignado a Galletas Keebler Chips Deluxe. Nota previa: ya contado en Estante. Validar si este 1 es adicional. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "044000061494",
+      "descripcion": "GALLETAS MINI OREO GOLDEN",
+      "unidad": "UD",
+      "costo_unitario": 28.81,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 60.0,
+      "cantidad_total": 68.0,
+      "valor_total": 1959.08,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "3147699118344",
+      "descripcion": "GIBSON,S PINK PREMIUN GIN",
+      "unidad": "UD",
+      "costo_unitario": 983.56,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 3.0,
+      "valor_total": 2950.68,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "034856008187",
+      "descripcion": "GOMITAS WELCH PEQUEÑAS",
+      "unidad": "UD",
+      "costo_unitario": 16.29,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 75,
+      "cantidad_almacen": 66.0,
+      "cantidad_total": 141.0,
+      "valor_total": 2296.89,
+      "areas": [
+        "Cafetería - Estante",
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Sobres 0.8 oz asignados a Gomitas Welch pequeñas. El sistema también tiene Mixed Fruit grande (034856028987). Nota previa: ya incluido en Welch's del estante (65). Validar si los 10 son adicionales. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "038000219856",
+      "descripcion": "KELLOGGS  APPLE JACKS",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 10.0,
+      "cantidad_total": 17.0,
+      "valor_total": 561.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "038000219474",
+      "descripcion": "KELLOGGS  POPS",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 10,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 8.0,
+      "cantidad_total": 9.0,
+      "valor_total": 297.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "038000219528",
+      "descripcion": "KELLOGGS COCOA KRISPIES",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 10,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 8.0,
+      "cantidad_total": 10.0,
+      "valor_total": 330.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "038000219634",
+      "descripcion": "KELLOGGS FROSTED FLAKES",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 12,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 12.0,
+      "cantidad_total": 13.0,
+      "valor_total": 429.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "00985234",
+      "descripcion": "KINDER JOY",
+      "unidad": "UD",
+      "costo_unitario": 90,
+      "existencia_sistema": -19,
+      "cantidad_cafeteria": 41,
+      "cantidad_almacen": 30.0,
+      "cantidad_total": 71.0,
+      "valor_total": 6390.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "021000010875",
+      "descripcion": "MAC & CHEESE MACARRONES",
+      "unidad": "UD",
+      "costo_unitario": 82.92,
+      "existencia_sistema": 30,
+      "cantidad_cafeteria": 17,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 41.0,
+      "valor_total": 3399.72,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "038000184949",
+      "descripcion": "PRINGLES CEBOLLA LATA GRANDE",
+      "unidad": "UD",
+      "costo_unitario": 150,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 3.0,
+      "cantidad_total": 5.0,
+      "valor_total": 750.0,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "038000846748",
+      "descripcion": "PRINGLES CREMA Y CEBOLLA",
+      "unidad": "UD",
+      "costo_unitario": 53.75,
+      "existencia_sistema": 18,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 16.0,
+      "cantidad_total": 18.0,
+      "valor_total": 967.5,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lata pequeña asignada a Pringles Crema y Cebolla regular."
+    },
+    {
+      "codigo": "038000846731",
+      "descripcion": "PRINGLES ORIGINAL",
+      "unidad": "UD",
+      "costo_unitario": 53.75,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 10.0,
+      "cantidad_total": 14.0,
+      "valor_total": 752.5,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lata pequeña asignada a Pringles Original regular."
+    },
+    {
+      "codigo": "038000846755",
+      "descripcion": "PRINGLES QUESO",
+      "unidad": "UD",
+      "costo_unitario": 53.75,
+      "existencia_sistema": 8,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 8.0,
+      "cantidad_total": 9.0,
+      "valor_total": 483.75,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lata pequeña asignada a Pringles Queso regular."
+    },
+    {
+      "codigo": "1232",
+      "descripcion": "SIBONEY 1920 BOTELLA 700 ML",
+      "unidad": "UD",
+      "costo_unitario": 1076.16,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1076.16,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "1186",
+      "descripcion": "SOPA ISIM POLLO",
+      "unidad": "UD",
+      "costo_unitario": 33.16,
+      "existencia_sistema": 102,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 90.0,
+      "cantidad_total": 97.0,
+      "valor_total": 3216.52,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "757528048532",
+      "descripcion": "TAKIS FUEGO PEQUEÑO",
+      "unidad": "UD",
+      "costo_unitario": 40.76,
+      "existencia_sistema": 42,
+      "cantidad_cafeteria": 42,
+      "cantidad_almacen": 0,
+      "cantidad_total": 42,
+      "valor_total": 1711.92,
+      "areas": [
+        "Cafetería - Estante",
+        "Cafetería - Mostrador"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Asignado a Takis Fuego PEQUEÑO. Confirmar que no haya medianos. Nota previa: ya contado en Estante. Validar si este 1 es adicional. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "5011166081104",
+      "descripcion": "WHITLEY NEILL GIN BLOOD ORANGE",
+      "unidad": "UD",
+      "costo_unitario": 1521.85,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 3.0,
+      "valor_total": 4565.55,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Botella ámbar/naranja de Whitley Neill = Blood Orange."
+    },
+    {
+      "codigo": "5011166068020",
+      "descripcion": "WHITLEY NEILL GIN BLUE DISTILLER,S",
+      "unidad": "UD",
+      "costo_unitario": 1521.85,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 3.0,
+      "valor_total": 4565.55,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "5011166081128",
+      "descripcion": "WHITLEY NEILL GIN RHUBARB",
+      "unidad": "UD",
+      "costo_unitario": 1521.84,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 3.0,
+      "valor_total": 4565.52,
+      "areas": [
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Botella morada = Rhubarb & Ginger."
+    },
+    {
+      "codigo": "073390002022",
+      "descripcion": "AIR HEADS",
+      "unidad": "UD",
+      "costo_unitario": 5.82,
+      "existencia_sistema": 50,
+      "cantidad_cafeteria": 32,
+      "cantidad_almacen": 0,
+      "cantidad_total": 32,
+      "valor_total": 186.24,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100678",
+      "descripcion": "BABY BOTTLE POP",
+      "unidad": "UD",
+      "costo_unitario": 68.75,
+      "existencia_sistema": 51,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 80.0,
+      "cantidad_total": 86.0,
+      "valor_total": 5912.5,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "016000439894",
+      "descripcion": "BARRAS NATURE VALLEY CHEWY FRUIT NUT",
+      "unidad": "UD",
+      "costo_unitario": 13.56,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 0,
+      "cantidad_total": 8,
+      "valor_total": 108.48,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "040000000327",
+      "descripcion": "CHOCOLATE M&M AMARILLO",
+      "unidad": "UD",
+      "costo_unitario": 64.5,
+      "existencia_sistema": 113,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 113.0,
+      "cantidad_total": 115.0,
+      "valor_total": 7417.5,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "040000602040",
+      "descripcion": "CHOCOLATE MILKYWAY",
+      "unidad": "UD",
+      "costo_unitario": 62,
+      "existencia_sistema": 31,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 29.0,
+      "valor_total": 1798.0,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "040000004356",
+      "descripcion": "CHOCOLATE TWIX 2 COOKIE BARS",
+      "unidad": "UD",
+      "costo_unitario": 63.1,
+      "existencia_sistema": 10,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 8.0,
+      "valor_total": 504.8,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7500478001200",
+      "descripcion": "CHOKIS MIX CHOCOLATE",
+      "unidad": "UD",
+      "costo_unitario": 49.61,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": 347.27,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000604685",
+      "descripcion": "CHOKIS RELLENA",
+      "unidad": "UD",
+      "costo_unitario": 49.61,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 99.22,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7500478013609",
+      "descripcion": "EMPERADOR CHOCOLATE BEE CAM",
+      "unidad": "UD",
+      "costo_unitario": 41.3,
+      "existencia_sistema": 19,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 123.9,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7500478013616",
+      "descripcion": "EMPERADOR VAINILLA CAM",
+      "unidad": "UD",
+      "costo_unitario": 41.3,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": 289.1,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7500478012404",
+      "descripcion": "EMPERADOR VAINILLA CS PEQUEÑA",
+      "unidad": "UD",
+      "costo_unitario": 19.33,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 38.66,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000601745",
+      "descripcion": "FLORENTINA DULCE DE LECHE CAJETA",
+      "unidad": "UD",
+      "costo_unitario": 49.61,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 49.61,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000601738",
+      "descripcion": "FLORENTINAS FRESA",
+      "unidad": "UD",
+      "costo_unitario": 49.61,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 248.05,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000634118",
+      "descripcion": "GALLETA AVENA QUAKER DE ALMEN/GRANOLA DR",
+      "unidad": "UD",
+      "costo_unitario": 28.92,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 115.68,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000634132",
+      "descripcion": "GALLETA AVENA QUAKER FRESA ROJAS",
+      "unidad": "UD",
+      "costo_unitario": 28.92,
+      "existencia_sistema": 7,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 144.6,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1135",
+      "descripcion": "GALLETAS CUQUI AVENA CON COCO",
+      "unidad": "UD",
+      "costo_unitario": 30,
+      "existencia_sistema": 21,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11,
+      "valor_total": 330,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "El sistema lo tiene como \"Avena con coco\"; la etiqueta dice avena con pasas y arándanos. Corregir descripción. Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "1136",
+      "descripcion": "GALLETAS CUQUI CHOCOLOSCHI",
+      "unidad": "UD",
+      "costo_unitario": 30,
+      "existencia_sistema": 16,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 90,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "1133",
+      "descripcion": "GALLETAS CUQUI SALUDABLE VAINILLA",
+      "unidad": "UD",
+      "costo_unitario": 30,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 120,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "854929006557",
+      "descripcion": "LENGUITAS SOUR BELTS",
+      "unidad": "UD",
+      "costo_unitario": 6.51,
+      "existencia_sistema": 146,
+      "cantidad_cafeteria": 12,
+      "cantidad_almacen": 400.0,
+      "cantidad_total": 412.0,
+      "valor_total": 2682.12,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lenguitas Sour Belts. Conteo en cintas sueltas."
+    },
+    {
+      "codigo": "7467515320048",
+      "descripcion": "MISSCOOKIE CLASICA",
+      "unidad": "UD",
+      "costo_unitario": 35,
+      "existencia_sistema": 10,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 315,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1115",
+      "descripcion": "MISSCOOKIE CLASICA COCO",
+      "unidad": "UD",
+      "costo_unitario": 35,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 70,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "7467515320079",
+      "descripcion": "MISSCOOKIE CLASICA JENJIBRE",
+      "unidad": "UD",
+      "costo_unitario": 35,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 105,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "016000507661",
+      "descripcion": "NATURE VALLEY PROTEIN",
+      "unidad": "UD",
+      "costo_unitario": 51.53,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 4.0,
+      "cantidad_total": 8.0,
+      "valor_total": 412.24,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "041116005343",
+      "descripcion": "PUSHPOP",
+      "unidad": "UD",
+      "costo_unitario": 56.25,
+      "existencia_sistema": 123,
+      "cantidad_cafeteria": 24,
+      "cantidad_almacen": 96.0,
+      "cantidad_total": 120.0,
+      "valor_total": 6750.0,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100238",
+      "descripcion": "RING POP",
+      "unidad": "UD",
+      "costo_unitario": 26.75,
+      "existencia_sistema": 100,
+      "cantidad_cafeteria": 16,
+      "cantidad_almacen": 80.0,
+      "cantidad_total": 96.0,
+      "valor_total": 2568.0,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Ring Pop: el sistema tiene un solo código para todos los sabores. Código interno. Código interno: imprimir etiqueta de código de barras. Código interno: imprimir etiqueta de código de barras. Suma de 4 líneas de conteo."
+    },
+    {
+      "codigo": "040000514251",
+      "descripcion": "SNICKERS",
+      "unidad": "UD",
+      "costo_unitario": 55.83,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 11.0,
+      "cantidad_total": 18.0,
+      "valor_total": 1004.94,
+      "areas": [
+        "Cafetería - Mostrador",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "014113911856",
+      "descripcion": "WONDERFUL PISTACHIOS",
+      "unidad": "UD",
+      "costo_unitario": 52.29,
+      "existencia_sistema": 11,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 0,
+      "cantidad_total": 8,
+      "valor_total": 418.32,
+      "areas": [
+        "Cafetería - Mostrador"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7463172803320",
+      "descripcion": "7 UP REFRESCO",
+      "unidad": "UD",
+      "costo_unitario": 14.17,
+      "existencia_sistema": 12,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 127.53,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000409772",
+      "descripcion": "AGUA DASANI GRANDE",
+      "unidad": "UD",
+      "costo_unitario": 12.3,
+      "existencia_sistema": -54,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 36.9,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000551808",
+      "descripcion": "AGUA DASANI PEQUEÑA",
+      "unidad": "UD",
+      "costo_unitario": 12.3,
+      "existencia_sistema": 607,
+      "cantidad_cafeteria": 40,
+      "cantidad_almacen": 340.0,
+      "cantidad_total": 380.0,
+      "valor_total": 4674.0,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7465383000321",
+      "descripcion": "CANADA DRY AGUA TONICA",
+      "unidad": "UD",
+      "costo_unitario": 25.33,
+      "existencia_sistema": 46,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 12.0,
+      "cantidad_total": 25.0,
+      "valor_total": 633.25,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7465383000307",
+      "descripcion": "CANADA DRY SODA 400ML",
+      "unidad": "UD",
+      "costo_unitario": 25.33,
+      "existencia_sistema": 71,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 59.0,
+      "valor_total": 1494.47,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000071993",
+      "descripcion": "COCA COLA SIN AZUCAR",
+      "unidad": "UD",
+      "costo_unitario": 25,
+      "existencia_sistema": 50,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 28.0,
+      "valor_total": 700.0,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000057638",
+      "descripcion": "COCA-COLA 400ML",
+      "unidad": "UD",
+      "costo_unitario": 25,
+      "existencia_sistema": 73,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 32.0,
+      "valor_total": 800.0,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Asignado a Coca-Cola 400 ml. El sistema también tiene 591 ml (049000006209). Confirmar tamaño."
+    },
+    {
+      "codigo": "049000057676",
+      "descripcion": "COUNTRY CLUB FRAMBUESA 400ML",
+      "unidad": "UD",
+      "costo_unitario": 20.33,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11,
+      "valor_total": 223.63,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000057669",
+      "descripcion": "COUNTRY CLUB MERENGUE 400ML",
+      "unidad": "UD",
+      "costo_unitario": 20.33,
+      "existencia_sistema": 11,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 182.97,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000147",
+      "descripcion": "GATORADE DE MELON GRANDE FIERCE 600ML",
+      "unidad": "UD",
+      "costo_unitario": 43.31,
+      "existencia_sistema": 10,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 7.0,
+      "valor_total": 303.17,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000178",
+      "descripcion": "GATORADE LEMON LIME",
+      "unidad": "UD",
+      "costo_unitario": 42.44,
+      "existencia_sistema": 15,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 9.0,
+      "cantidad_total": 13.0,
+      "valor_total": 551.72,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000161",
+      "descripcion": "GATORADE MORADO UVA GRANDE 600ML",
+      "unidad": "UD",
+      "costo_unitario": 42.44,
+      "existencia_sistema": 96,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 80.0,
+      "cantidad_total": 91.0,
+      "valor_total": 3862.04,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000185",
+      "descripcion": "GATORADE NARANJA  ORANGE GRANDE 600ML",
+      "unidad": "UD",
+      "costo_unitario": 41.25,
+      "existencia_sistema": 27,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 22.0,
+      "cantidad_total": 29.0,
+      "valor_total": 1196.25,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000017",
+      "descripcion": "GATORADE PEQUEÑO AZUL/ BLUE COOL 350ML",
+      "unidad": "UD",
+      "costo_unitario": 27.57,
+      "existencia_sistema": 60,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 70.0,
+      "cantidad_total": 78.0,
+      "valor_total": 2150.46,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Mora pequeño = Gatorade azul Cool Blue 350 ml."
+    },
+    {
+      "codigo": "7460548000048",
+      "descripcion": "GATORADE PEQUEÑO NARANJA 350 ML",
+      "unidad": "UD",
+      "costo_unitario": 25,
+      "existencia_sistema": 13,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 225,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000024",
+      "descripcion": "GATORADE PEQUEÑO ROJO/ FRUIT PUNCH 350M",
+      "unidad": "UD",
+      "costo_unitario": 27.56,
+      "existencia_sistema": 83,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 71.0,
+      "cantidad_total": 73.0,
+      "valor_total": 2011.88,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000031",
+      "descripcion": "GATORADE PEQUEÑO UVA 350 ML",
+      "unidad": "UD",
+      "costo_unitario": 27.56,
+      "existencia_sistema": 83,
+      "cantidad_cafeteria": 15,
+      "cantidad_almacen": 55.0,
+      "cantidad_total": 70.0,
+      "valor_total": 1929.2,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548000154",
+      "descripcion": "GATORADE ROJO GRANDE/FRUIT PUNCH 600ML",
+      "unidad": "UD",
+      "costo_unitario": 42.44,
+      "existencia_sistema": 65,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 46.0,
+      "cantidad_total": 48.0,
+      "valor_total": 2037.12,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548002127",
+      "descripcion": "GATORADE ZERO AZUL BERRY BLUE 500ML",
+      "unidad": "UD",
+      "costo_unitario": 34.09,
+      "existencia_sistema": 44,
+      "cantidad_cafeteria": 17,
+      "cantidad_almacen": 47.0,
+      "cantidad_total": 64.0,
+      "valor_total": 2181.76,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548002134",
+      "descripcion": "GATORADE ZERO ROJO 500 ML",
+      "unidad": "UD",
+      "costo_unitario": 34.09,
+      "existencia_sistema": 38,
+      "cantidad_cafeteria": 18,
+      "cantidad_almacen": 10.0,
+      "cantidad_total": 28.0,
+      "valor_total": 954.52,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548002141",
+      "descripcion": "GATORLIT MORA AZUL 12/591 ML",
+      "unidad": "UD",
+      "costo_unitario": 53.57,
+      "existencia_sistema": 19,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 52.0,
+      "valor_total": 2785.64,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548002165",
+      "descripcion": "GATORLIT RECOVER UVA 12/591ML",
+      "unidad": "UD",
+      "costo_unitario": 53.58,
+      "existencia_sistema": 37,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 33.0,
+      "cantidad_total": 38.0,
+      "valor_total": 2036.04,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "096619204212",
+      "descripcion": "JUGO KIRKLAND ACAI BLUEBERRY",
+      "unidad": "UD",
+      "costo_unitario": 48,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 48,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Duplicado en sistema: 110000100313 VITARAIN BLUEBERRY."
+    },
+    {
+      "codigo": "096619204205",
+      "descripcion": "JUGO KIRKLAND DRAGON FRUIT",
+      "unidad": "UD",
+      "costo_unitario": 48.33,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 96.66,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Duplicado en sistema: 110000100312 VITARAI DRAGON FRUIT."
+    },
+    {
+      "codigo": "096619192328",
+      "descripcion": "JUGO KIRKLAND LEMONADE",
+      "unidad": "UD",
+      "costo_unitario": 48.33,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 48.33,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Duplicado en sistema: 110000100314 VITARAIN LEMONADE."
+    },
+    {
+      "codigo": "096619204014",
+      "descripcion": "JUGO KIRKLAND TROPICAL MANGO",
+      "unidad": "UD",
+      "costo_unitario": 48.33,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 96.66,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código de barras real. Hay un código duplicado en el sistema (110000100315 VITARAIN TROP. MANGO) que conviene inactivar."
+    },
+    {
+      "codigo": "7463172803467",
+      "descripcion": "RED ROCK FRAMBUESA",
+      "unidad": "UD",
+      "costo_unitario": 14.17,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 15,
+      "cantidad_almacen": 0,
+      "cantidad_total": 15,
+      "valor_total": 212.55,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7463172803528",
+      "descripcion": "RED ROCK MERENGUE",
+      "unidad": "UD",
+      "costo_unitario": 14.17,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 56.68,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7463172803580",
+      "descripcion": "RED ROCK UVA",
+      "unidad": "UD",
+      "costo_unitario": 14.17,
+      "existencia_sistema": 8,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 14.17,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "049000057690",
+      "descripcion": "SPRITE 400 ML",
+      "unidad": "UD",
+      "costo_unitario": 20.33,
+      "existencia_sistema": 20,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 12.0,
+      "cantidad_total": 14.0,
+      "valor_total": 284.62,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1239",
+      "descripcion": "SPRITE SIN AZUCAR 400 ML",
+      "unidad": "UD",
+      "costo_unitario": 20.33,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 81.32,
+      "areas": [
+        "Cafetería - Neveras Gatorade/refrescos"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "4014086096518",
+      "descripcion": "5,0 ORIGINAL CRAFT BEER",
+      "unidad": "UD",
+      "costo_unitario": 110,
+      "existencia_sistema": 18,
+      "cantidad_cafeteria": 16,
+      "cantidad_almacen": 0,
+      "cantidad_total": 16,
+      "valor_total": 1760,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "4014086096365",
+      "descripcion": "5,0 ORIGINAL PILS BEER",
+      "unidad": "UD",
+      "costo_unitario": 110,
+      "existencia_sistema": 28,
+      "cantidad_cafeteria": 12,
+      "cantidad_almacen": 17.0,
+      "cantidad_total": 29.0,
+      "valor_total": 3190.0,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "8002270676819",
+      "descripcion": "AGUA SAN PEREGRINO ARANCIATA",
+      "unidad": "UD",
+      "costo_unitario": 89.39,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 178.78,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Se asignó a Sanpellegrino Aranciata (naranja). Confirmar sabor de la lata."
+    },
+    {
+      "codigo": "1215",
+      "descripcion": "ALHAMDRA RESERVAS 1925 BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 141.55,
+      "existencia_sistema": 33,
+      "cantidad_cafeteria": 33,
+      "cantidad_almacen": 0,
+      "cantidad_total": 33,
+      "valor_total": 4671.15,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "8412598004964",
+      "descripcion": "CERVEZA 1906 LA MIL NUEVE",
+      "unidad": "UD",
+      "costo_unitario": 115,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 460,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "08787337",
+      "descripcion": "CERVEZA BLUE MOON BELGION WHITE",
+      "unidad": "UD",
+      "costo_unitario": 145.83,
+      "existencia_sistema": 37,
+      "cantidad_cafeteria": 28,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 76.0,
+      "valor_total": 11083.08,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "03456217",
+      "descripcion": "CERVEZA MILLER BOTELLA - 12OZ",
+      "unidad": "UD",
+      "costo_unitario": 108.77,
+      "existencia_sistema": 49,
+      "cantidad_cafeteria": 28,
+      "cantidad_almacen": 0,
+      "cantidad_total": 28,
+      "valor_total": 3045.56,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "4066600303336",
+      "descripcion": "CERVEZA PAULANER DUNKEL 500 ML",
+      "unidad": "UD",
+      "costo_unitario": 225,
+      "existencia_sistema": 20,
+      "cantidad_cafeteria": 20,
+      "cantidad_almacen": 0,
+      "cantidad_total": 20,
+      "valor_total": 4500,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "4066600060741",
+      "descripcion": "CERVEZA PAULANER WEISSBIER RUBIA 500ML",
+      "unidad": "UD",
+      "costo_unitario": 220,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 1320,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1231",
+      "descripcion": "CERVEZA PERONI CERO 21/330 ML",
+      "unidad": "UD",
+      "costo_unitario": 146.76,
+      "existencia_sistema": 22,
+      "cantidad_cafeteria": 17,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 41.0,
+      "valor_total": 6017.16,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "087975903550",
+      "descripcion": "CERVEZA SAPPORO LIGHT",
+      "unidad": "UD",
+      "costo_unitario": 180,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 14,
+      "cantidad_almacen": 0,
+      "cantidad_total": 14,
+      "valor_total": 2520,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "74601325",
+      "descripcion": "CERVEZA THE ONE",
+      "unidad": "UD",
+      "costo_unitario": 84.45,
+      "existencia_sistema": 20,
+      "cantidad_cafeteria": 17,
+      "cantidad_almacen": 0,
+      "cantidad_total": 17,
+      "valor_total": 1435.65,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "07199044",
+      "descripcion": "COORS LIGHT BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 107.04,
+      "existencia_sistema": 13,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 107.04,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "08780936",
+      "descripcion": "COORS ORIGINAL BANQUET BOTELLA - 12OZ",
+      "unidad": "UD",
+      "costo_unitario": 120.85,
+      "existencia_sistema": 158,
+      "cantidad_cafeteria": 71,
+      "cantidad_almacen": 144.0,
+      "cantidad_total": 215.0,
+      "valor_total": 25982.75,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7503044233180",
+      "descripcion": "CORONA CERO 355ML",
+      "unidad": "UD",
+      "costo_unitario": 80.02,
+      "existencia_sistema": 7,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 0,
+      "cantidad_total": 10,
+      "valor_total": 800.2,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7503034941200",
+      "descripcion": "CORONA EXTRA 330ML",
+      "unidad": "UD",
+      "costo_unitario": 115.83,
+      "existencia_sistema": 58,
+      "cantidad_cafeteria": 46,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 94.0,
+      "valor_total": 10888.02,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7503034941217",
+      "descripcion": "CORONITA EXTRA",
+      "unidad": "UD",
+      "costo_unitario": 80.97,
+      "existencia_sistema": 18,
+      "cantidad_cafeteria": 20,
+      "cantidad_almacen": 0,
+      "cantidad_total": 20,
+      "valor_total": 1619.4,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "9002490204006",
+      "descripcion": "ENERGIZANTE RED BULL 250 ML PEQUEÑO",
+      "unidad": "UD",
+      "costo_unitario": 84.13,
+      "existencia_sistema": 22,
+      "cantidad_cafeteria": 18,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 66.0,
+      "valor_total": 5552.58,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Se asignó a Red Bull 250 ml. Confirmar que no sean de 355 ml."
+    },
+    {
+      "codigo": "3263280120470",
+      "descripcion": "ESPUMANTE JP CHENET FIZZY ROSE LATA 250",
+      "unidad": "UD",
+      "costo_unitario": 195,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 780,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "072890004994",
+      "descripcion": "HEINEKEN BOTELLA PEQUEÑA 330 ML",
+      "unidad": "UD",
+      "costo_unitario": 129.55,
+      "existencia_sistema": 38,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 37.0,
+      "valor_total": 4793.35,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "072890006196",
+      "descripcion": "HEINEKEN BOTELLA SIN ALCOHOL",
+      "unidad": "UD",
+      "costo_unitario": 124.98,
+      "existencia_sistema": 13,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": 874.86,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "01833225",
+      "descripcion": "MICHELOB ULTRA 330 ML",
+      "unidad": "UD",
+      "costo_unitario": 101.22,
+      "existencia_sistema": 576,
+      "cantidad_cafeteria": 174,
+      "cantidad_almacen": 372.0,
+      "cantidad_total": 546.0,
+      "valor_total": 55266.12,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "75031589",
+      "descripcion": "MODELO NEGRA 330 ML",
+      "unidad": "UD",
+      "costo_unitario": 128.5,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": 899.5,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7463172802996",
+      "descripcion": "MODELO RUBIA ESPECIAL 330ML",
+      "unidad": "UD",
+      "costo_unitario": 145,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 0,
+      "cantidad_total": 10,
+      "valor_total": 1450,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "8008440222008",
+      "descripcion": "PERONI 330 ML",
+      "unidad": "UD",
+      "costo_unitario": 162.99,
+      "existencia_sistema": 34,
+      "cantidad_cafeteria": 25,
+      "cantidad_almacen": 0,
+      "cantidad_total": 25,
+      "valor_total": 4074.75,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "74621774",
+      "descripcion": "PRESIDENTE LIGHT 12OZ",
+      "unidad": "UD",
+      "costo_unitario": 93.98,
+      "existencia_sistema": 29,
+      "cantidad_cafeteria": 22,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 46.0,
+      "valor_total": 4323.08,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "El sistema tiene Presidente Light 12 oz y GRANDE. Se asignó 12 oz (botella de nevera). Confirmar tamaño."
+    },
+    {
+      "codigo": "74621767",
+      "descripcion": "PRESIDENTE REGULAR 12 OZ",
+      "unidad": "UD",
+      "costo_unitario": 93.98,
+      "existencia_sistema": 20,
+      "cantidad_cafeteria": 19,
+      "cantidad_almacen": 0,
+      "cantidad_total": 19,
+      "valor_total": 1785.62,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "El sistema tiene Presidente regular 12 oz y GRANDE. Se asignó 12 oz. Confirmar tamaño."
+    },
+    {
+      "codigo": "8002270916588",
+      "descripcion": "SANPELLEGRINO TONICA",
+      "unidad": "UD",
+      "costo_unitario": 140,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 0,
+      "cantidad_total": 13,
+      "valor_total": 1820,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "082000727477",
+      "descripcion": "SMIRNOFF ICE GREEN APPLE",
+      "unidad": "UD",
+      "costo_unitario": 125,
+      "existencia_sistema": 20,
+      "cantidad_cafeteria": 18,
+      "cantidad_almacen": 0,
+      "cantidad_total": 18,
+      "valor_total": 2250,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "082000723844",
+      "descripcion": "SMIRNOFF ICE ORIGINAL 355 ML",
+      "unidad": "UD",
+      "costo_unitario": 125,
+      "existencia_sistema": 13,
+      "cantidad_cafeteria": 14,
+      "cantidad_almacen": 0,
+      "cantidad_total": 14,
+      "valor_total": 1750,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501064199141",
+      "descripcion": "STELLA ARTOIS 330 ML",
+      "unidad": "UD",
+      "costo_unitario": 128.4,
+      "existencia_sistema": 16,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 72.0,
+      "cantidad_total": 78.0,
+      "valor_total": 10015.2,
+      "areas": [
+        "Cafetería - Neveras cervezas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "635985500018",
+      "descripcion": "WHITE CLAW BLACK CHERRY LATA",
+      "unidad": "UD",
+      "costo_unitario": 150,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 1350,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "El sistema solo tiene White Claw Black Cherry. Confirmar que todas las latas sean de ese sabor."
+    },
+    {
+      "codigo": "632565000029",
+      "descripcion": "AGUA FIJI 1 LITRO",
+      "unidad": "UD",
+      "costo_unitario": 172.08,
+      "existencia_sistema": 32,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 24.0,
+      "cantidad_total": 31.0,
+      "valor_total": 5334.48,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Cafetería - Estante",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Se suma con Fiji grande del estante (otra ubicación). Otra ubicación. Se suma con Fiji grande de neveras. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "632565000012",
+      "descripcion": "AGUA FIJI 500ML",
+      "unidad": "UD",
+      "costo_unitario": 88.96,
+      "existencia_sistema": 79,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 72.0,
+      "cantidad_total": 76.0,
+      "valor_total": 6760.96,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "8002270966576",
+      "descripcion": "AGUA PANNA PEQUENA 500ML",
+      "unidad": "UD",
+      "costo_unitario": 80.83,
+      "existencia_sistema": 114,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 96.0,
+      "cantidad_total": 106.0,
+      "valor_total": 8567.98,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "8000815355250",
+      "descripcion": "AGUA PANNA TUSCANY 1 LT",
+      "unidad": "UD",
+      "costo_unitario": 139.17,
+      "existencia_sistema": 52,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 43.0,
+      "cantidad_total": 52.0,
+      "valor_total": 7236.84,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "842595135534",
+      "descripcion": "C4 ENERGY BITTEN CITRUS",
+      "unidad": "UD",
+      "costo_unitario": 156.25,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 781.25,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "842595136050",
+      "descripcion": "C4 ENERGY GUMMY SPLASH",
+      "unidad": "UD",
+      "costo_unitario": 156.25,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 156.25,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "842595109368",
+      "descripcion": "C4 ENREGY ORANGE",
+      "unidad": "UD",
+      "costo_unitario": 156.25,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 156.25,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "07811102",
+      "descripcion": "CANADA DRY GINGER ALE BLACKBERRY 24/12",
+      "unidad": "UD",
+      "costo_unitario": 45.83,
+      "existencia_sistema": 55,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 60.0,
+      "cantidad_total": 66.0,
+      "valor_total": 3024.78,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "07844508",
+      "descripcion": "CANADA DRY GINGER ALE FRUIT SPLASH",
+      "unidad": "UD",
+      "costo_unitario": 45.83,
+      "existencia_sistema": 35,
+      "cantidad_cafeteria": 14,
+      "cantidad_almacen": 0,
+      "cantidad_total": 14,
+      "valor_total": 641.62,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lata rosada (strawberry) asignada a Canada Dry Ginger Ale Fruit Splash, único sabor de fruta en el sistema."
+    },
+    {
+      "codigo": "07811403",
+      "descripcion": "CANADA DRY GINGER ALE LATA 24 /12",
+      "unidad": "UD",
+      "costo_unitario": 45.83,
+      "existencia_sistema": 32,
+      "cantidad_cafeteria": 27,
+      "cantidad_almacen": 0,
+      "cantidad_total": 27,
+      "valor_total": 1237.41,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7460548002189",
+      "descripcion": "GATORLIT RECOVER FRESA KIWIT",
+      "unidad": "UD",
+      "costo_unitario": 53.57,
+      "existencia_sistema": 43,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 40.0,
+      "cantidad_total": 45.0,
+      "valor_total": 2410.65,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Cafetería - Neveras Gatorade/refrescos",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "\"Gatorlit Recover rojo\" asignado a Fresa Kiwi (botella roja). Se suma con Gatorlit fresa de la otra hoja. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "7460548002172",
+      "descripcion": "GATORLIT RECOVER NARANJA",
+      "unidad": "UD",
+      "costo_unitario": 53.57,
+      "existencia_sistema": 13,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 214.28,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "893919001301",
+      "descripcion": "ICELANDIC AGUA MINERAL 1 LT",
+      "unidad": "UD",
+      "costo_unitario": 162,
+      "existencia_sistema": 19,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 18.0,
+      "cantidad_total": 29.0,
+      "valor_total": 4698.0,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Grande = 1 litro."
+    },
+    {
+      "codigo": "893919001509",
+      "descripcion": "ICELANDIC AGUA MINERAL 750ML CHUPI",
+      "unidad": "UD",
+      "costo_unitario": 183.33,
+      "existencia_sistema": 32,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 39.0,
+      "cantidad_total": 43.0,
+      "valor_total": 7883.19,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Mediana = 750 ml."
+    },
+    {
+      "codigo": "790330021270",
+      "descripcion": "JUGO RICA FRUIT PUNCH",
+      "unidad": "UD",
+      "costo_unitario": 33.1,
+      "existencia_sistema": 42,
+      "cantidad_cafeteria": 28,
+      "cantidad_almacen": 0,
+      "cantidad_total": 28,
+      "valor_total": 926.8,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "790330021171",
+      "descripcion": "JUGO RICA MANZANA",
+      "unidad": "UD",
+      "costo_unitario": 33.12,
+      "existencia_sistema": 14,
+      "cantidad_cafeteria": 14,
+      "cantidad_almacen": 0,
+      "cantidad_total": 14,
+      "valor_total": 463.68,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "790330021089",
+      "descripcion": "JUGO RICA NARANJA 100% CON AZUCAR",
+      "unidad": "UD",
+      "costo_unitario": 52.1,
+      "existencia_sistema": 18,
+      "cantidad_cafeteria": 15,
+      "cantidad_almacen": 0,
+      "cantidad_total": 15,
+      "valor_total": 781.5,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "790330021140",
+      "descripcion": "JUGO RICA NARANJA 100% SIN AZUCAR",
+      "unidad": "UD",
+      "costo_unitario": 61.09,
+      "existencia_sistema": 24,
+      "cantidad_cafeteria": 17,
+      "cantidad_almacen": 0,
+      "cantidad_total": 17,
+      "valor_total": 1038.53,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "01208500",
+      "descripcion": "MOUNTAIN DEW VERDE REGULAR",
+      "unidad": "UD",
+      "costo_unitario": 58.33,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 15,
+      "cantidad_almacen": 12.0,
+      "cantidad_total": 27.0,
+      "valor_total": 1574.91,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "016571910327",
+      "descripcion": "SPARKLING ICE KIWI STRAWBERRY",
+      "unidad": "UD",
+      "costo_unitario": 85.06,
+      "existencia_sistema": 21,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 34.0,
+      "cantidad_total": 44.0,
+      "valor_total": 3742.64,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "016571911256",
+      "descripcion": "SPARKLING ICE LEMON LIME",
+      "unidad": "UD",
+      "costo_unitario": 85.06,
+      "existencia_sistema": 43,
+      "cantidad_cafeteria": 12,
+      "cantidad_almacen": 31.0,
+      "cantidad_total": 43.0,
+      "valor_total": 3657.58,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Asignado a Sparkling Ice Lemon Lime, único limón en botella del sistema."
+    },
+    {
+      "codigo": "016571953867",
+      "descripcion": "SPARKLING LATA BLACK RASPBERRY",
+      "unidad": "UD",
+      "costo_unitario": 92.43,
+      "existencia_sistema": 38,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 41.0,
+      "cantidad_total": 48.0,
+      "valor_total": 4436.64,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Lata. El sistema también tiene Black Raspberry en botella (016571910303)."
+    },
+    {
+      "codigo": "016571953843",
+      "descripcion": "SPARKLING LATA BLUE RASPBERRY",
+      "unidad": "UD",
+      "costo_unitario": 92.43,
+      "existencia_sistema": 54,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 42.0,
+      "cantidad_total": 52.0,
+      "valor_total": 4806.36,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "016571952839",
+      "descripcion": "SPARKLING LATA STRAWBERRY CITRUS",
+      "unidad": "UD",
+      "costo_unitario": 92.43,
+      "existencia_sistema": 27,
+      "cantidad_cafeteria": 15,
+      "cantidad_almacen": 6.0,
+      "cantidad_total": 21.0,
+      "valor_total": 1941.03,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "016571954369",
+      "descripcion": "SPARKLINK ICE FRUIT PUNCH",
+      "unidad": "UD",
+      "costo_unitario": 85.06,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 13.0,
+      "cantidad_total": 18.0,
+      "valor_total": 1531.08,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "650240063213",
+      "descripcion": "SUEROX FRESA-KIWI",
+      "unidad": "UD",
+      "costo_unitario": 150.45,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 15.0,
+      "cantidad_total": 18.0,
+      "valor_total": 2708.1,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "650240069192",
+      "descripcion": "SUEROX FRUTOS ROJOS TROPICALES",
+      "unidad": "UD",
+      "costo_unitario": 150.45,
+      "existencia_sistema": 24,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 18.0,
+      "cantidad_total": 23.0,
+      "valor_total": 3460.35,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "650240063220",
+      "descripcion": "SUEROX MANZANA",
+      "unidad": "UD",
+      "costo_unitario": 150.45,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 6.0,
+      "cantidad_total": 12.0,
+      "valor_total": 1805.4,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas",
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "7501000636921",
+      "descripcion": "MAMUT 30G",
+      "unidad": "UD",
+      "costo_unitario": 19.33,
+      "existencia_sistema": 27,
+      "cantidad_cafeteria": 21,
+      "cantidad_almacen": 0,
+      "cantidad_total": 21,
+      "valor_total": 405.93,
+      "areas": [
+        "Cafetería - Rack picaderas",
+        "Cafetería - Mostrador"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Nota previa: ya contado en Picaderas. Validar si este 1 es adicional. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "7501000610228",
+      "descripcion": "MINI CHOKIS",
+      "unidad": "UD",
+      "costo_unitario": 41.3,
+      "existencia_sistema": 17,
+      "cantidad_cafeteria": 19,
+      "cantidad_almacen": 0,
+      "cantidad_total": 19,
+      "valor_total": 784.7,
+      "areas": [
+        "Cafetería - Rack picaderas",
+        "Cafetería - Mostrador"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Nota previa: ya contado en Picaderas. Validar si este 1 es adicional. Suma de 2 líneas de conteo."
+    },
+    {
+      "codigo": "1149",
+      "descripcion": "RANCH EXCITANT GRANDE",
+      "unidad": "UD",
+      "costo_unitario": 71.63,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 214.89,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Estaba en el bloque de presentaciones grandes de la hoja. Asignado a Ranch Excitant GRANDE (código interno). Confirmar. Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "1653265",
+      "descripcion": "RANCH NACH EXCITANT PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 16.67,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 83.35,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "750894603404",
+      "descripcion": "RANCH NACH PIZZA PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 16.67,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 100.02,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894614288",
+      "descripcion": "RANCH NACHO QUESO PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 16.67,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11,
+      "valor_total": 183.37,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Asignado a Ranchitas Nacho Queso pequeña. Confirmar presentación."
+    },
+    {
+      "codigo": "750894606399",
+      "descripcion": "RANCHITA DE QUESO GRANDE",
+      "unidad": "UD",
+      "costo_unitario": 71.62,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 71.62,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Asignado a Ranchita de Queso GRANDE."
+    },
+    {
+      "codigo": "750894612550",
+      "descripcion": "TAQUE CHILETOR PEQ",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": -29,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 0,
+      "cantidad_total": 13,
+      "valor_total": 270.79,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Duplicado en sistema: 154545845 TAQUERITOS CHILE TOREADO."
+    },
+    {
+      "codigo": "750894611645",
+      "descripcion": "YUMMIPOP QUESO PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 16.67,
+      "existencia_sistema": -2,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 100.02,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894610709",
+      "descripcion": "ZAMBOS PLATANO CEVICHE PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 28,
+      "cantidad_cafeteria": 28,
+      "cantidad_almacen": 0,
+      "cantidad_total": 28,
+      "valor_total": 583.24,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894607181",
+      "descripcion": "ZAMBOS PLATANO MADURITO GRANDE",
+      "unidad": "UD",
+      "costo_unitario": 100.18,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 400.72,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894602131",
+      "descripcion": "ZAMBOS PLATANO MADURITO PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 32,
+      "cantidad_cafeteria": 32,
+      "cantidad_almacen": 0,
+      "cantidad_total": 32,
+      "valor_total": 666.56,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894602988",
+      "descripcion": "ZAMBOS PLATANO ORIGINAL PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 28,
+      "cantidad_cafeteria": 28,
+      "cantidad_almacen": 0,
+      "cantidad_total": 28,
+      "valor_total": 583.24,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894613571",
+      "descripcion": "ZAMBOS PLATANO TAJIN PEQ",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 23,
+      "cantidad_cafeteria": 22,
+      "cantidad_almacen": 0,
+      "cantidad_total": 22,
+      "valor_total": 458.26,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894606719",
+      "descripcion": "ZIBAS PAPA CLASICAS PEQ.",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 104.15,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1222",
+      "descripcion": "ZIBAS PAPA JALAPEÑA PEQ",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 62.49,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Código interno: imprimir etiqueta de código de barras."
+    },
+    {
+      "codigo": "750894611812",
+      "descripcion": "ZIBAS PAPA MIEL MOSTAZA PEQ",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 124.98,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "750894611799",
+      "descripcion": "ZIBAS PAPA QUESO  PEQ",
+      "unidad": "UD",
+      "costo_unitario": 20.83,
+      "existencia_sistema": 9,
+      "cantidad_cafeteria": 9,
+      "cantidad_almacen": 0,
+      "cantidad_total": 9,
+      "valor_total": 187.47,
+      "areas": [
+        "Cafetería - Rack picaderas"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100280",
+      "descripcion": "EMPANADA DE PIZZA",
+      "unidad": "UD",
+      "costo_unitario": 59,
+      "existencia_sistema": -54,
+      "cantidad_cafeteria": 39,
+      "cantidad_almacen": 0,
+      "cantidad_total": 39,
+      "valor_total": 2301,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100281",
+      "descripcion": "EMPANADA DE POLLO CREMA",
+      "unidad": "UD",
+      "costo_unitario": 59,
+      "existencia_sistema": -16,
+      "cantidad_cafeteria": 53,
+      "cantidad_almacen": 0,
+      "cantidad_total": 53,
+      "valor_total": 3127,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100282",
+      "descripcion": "EMPANADA DE QUESO",
+      "unidad": "UD",
+      "costo_unitario": 59,
+      "existencia_sistema": 43,
+      "cantidad_cafeteria": 51,
+      "cantidad_almacen": 0,
+      "cantidad_total": 51,
+      "valor_total": 3009,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100464",
+      "descripcion": "EMPANADITAS CATIVIA",
+      "unidad": "UD",
+      "costo_unitario": 30,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 12,
+      "cantidad_almacen": 0,
+      "cantidad_total": 12,
+      "valor_total": 360,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1175",
+      "descripcion": "PAN MEDIA BANGUETTE",
+      "unidad": "UD",
+      "costo_unitario": 33.8,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 16,
+      "cantidad_almacen": 0,
+      "cantidad_total": 16,
+      "valor_total": 540.8,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100277",
+      "descripcion": "PORCION CARNE SALADA",
+      "unidad": "UD",
+      "costo_unitario": 114.41,
+      "existencia_sistema": -38,
+      "cantidad_cafeteria": 19,
+      "cantidad_almacen": 0,
+      "cantidad_total": 19,
+      "valor_total": 2173.79,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Contado en \"fundas\". El sistema maneja UD: confirmar equivalencia."
+    },
+    {
+      "codigo": "1176",
+      "descripcion": "QUESO MOZZARELLA RICA",
+      "unidad": "UD",
+      "costo_unitario": 4278.35,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 8556.7,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Contado en \"barras\". El sistema maneja UD: confirmar equivalencia."
+    },
+    {
+      "codigo": "110000100308",
+      "descripcion": "QUIPE DE CABRA Y CEBOLLA CARAMELIZADA",
+      "unidad": "UD",
+      "costo_unitario": 61.36,
+      "existencia_sistema": 16,
+      "cantidad_cafeteria": 76,
+      "cantidad_almacen": 0,
+      "cantidad_total": 76,
+      "valor_total": 4663.36,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100309",
+      "descripcion": "QUIPE DE POLLO",
+      "unidad": "UD",
+      "costo_unitario": 53.1,
+      "existencia_sistema": 37,
+      "cantidad_cafeteria": 66,
+      "cantidad_almacen": 0,
+      "cantidad_total": 66,
+      "valor_total": 3504.6,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100310",
+      "descripcion": "QUIPE DE RES",
+      "unidad": "UD",
+      "costo_unitario": 56.64,
+      "existencia_sistema": -23,
+      "cantidad_cafeteria": 75,
+      "cantidad_almacen": 0,
+      "cantidad_total": 75,
+      "valor_total": 4248.0,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100657",
+      "descripcion": "SERVICIO DE CHICHARRON",
+      "unidad": "UD",
+      "costo_unitario": 170,
+      "existencia_sistema": -76,
+      "cantidad_cafeteria": 16,
+      "cantidad_almacen": 0,
+      "cantidad_total": 16,
+      "valor_total": 2720,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Contado en \"PORCIONES (FUNDAS PORCIONADAS)\". El sistema maneja UD: confirmar equivalencia."
+    },
+    {
+      "codigo": "1224",
+      "descripcion": "ADIDAS ARROW HIT JUNIOR",
+      "unidad": "UD",
+      "costo_unitario": 6900,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 13800,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8435739405925",
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "X001X38ZF1",
+      "descripcion": "BODY PROX RODILLERA",
+      "unidad": "UD",
+      "costo_unitario": 1450,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1450,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100718",
+      "descripcion": "BULLPADEL JUNIOR LINE PALA",
+      "unidad": "UD",
+      "costo_unitario": 4000,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 8000,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100421",
+      "descripcion": "CALCETINES VIBOR-A KAIT MEDIA CAÑA (39-",
+      "unidad": "UD",
+      "costo_unitario": 293.32,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 293.32,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100009",
+      "descripcion": "CAMISETA ARGENTINA MUNDIAL VISITANTE MO",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100022",
+      "descripcion": "CAMISETA ESPAÑA EUROCOPA LOCAL 2024 SIZ",
+      "unidad": "UD",
+      "costo_unitario": 1254.24,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1254.24,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100036",
+      "descripcion": "CAMISETA ITALIA TEMPORADA NUEVA AZUL S",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100536",
+      "descripcion": "CAMISETA JUVENTUS LOCAL M",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100039",
+      "descripcion": "CAMISETA MANCHESTER CITY TEMPORADA 2024",
+      "unidad": "UD",
+      "costo_unitario": 1127.12,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 3381.36,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100537",
+      "descripcion": "CAMISETA MANCHESTER CITY VERDE M",
+      "unidad": "UD",
+      "costo_unitario": 1205.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1205.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100538",
+      "descripcion": "CAMISETA MEXICO MUNDIA VISITANTE",
+      "unidad": "UD",
+      "costo_unitario": 1305,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100539",
+      "descripcion": "CAMISETA PORTUGAL EUROCOPA M",
+      "unidad": "UD",
+      "costo_unitario": 1305,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100041",
+      "descripcion": "CAMISETA PSG LOCAL TEMPORADA 22 M",
+      "unidad": "UD",
+      "costo_unitario": 1127.12,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 2254.24,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100042",
+      "descripcion": "CAMISETA PSG LOCAL TEMPORADA 22 S",
+      "unidad": "UD",
+      "costo_unitario": 1127.12,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": 4508.48,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100044",
+      "descripcion": "CAMISETA PSG NEGRA CON AMARILLO S",
+      "unidad": "UD",
+      "costo_unitario": 1127.12,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 2254.24,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100402",
+      "descripcion": "CAMISETA REAL MADRID GRIS 24-25 SIZE M",
+      "unidad": "UD",
+      "costo_unitario": 1539.99,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 3079.98,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100398",
+      "descripcion": "CAMISETA REAL MADRID NARANJA 24-25 SIZE",
+      "unidad": "UD",
+      "costo_unitario": 1539.99,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1539.99,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100397",
+      "descripcion": "CAMISETA REAL MADRID NARANJA 24-25 SIZE",
+      "unidad": "UD",
+      "costo_unitario": 1539.99,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1539.99,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100049",
+      "descripcion": "CAMISETA RETRO ARGENTINA 1990 SIZE M",
+      "unidad": "UD",
+      "costo_unitario": 1601.69,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1601.69,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100424",
+      "descripcion": "CAMISETA VIBOR-A KAIT ADULTO (ROYAL, M)",
+      "unidad": "UD",
+      "costo_unitario": 1122.39,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1122.39,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100058",
+      "descripcion": "CAMISETA VISITANTE ARGENTINA MUNDIAL 20",
+      "unidad": "UD",
+      "costo_unitario": 1008.47,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1008.47,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100060",
+      "descripcion": "COLCHONETA PILATE YOGA 4MM",
+      "unidad": "UD",
+      "costo_unitario": 1271.18,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 3813.54,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100395",
+      "descripcion": "CONJUNTO ARGENTINA EUROPA LOCAL 20",
+      "unidad": "UD",
+      "costo_unitario": 1539.99,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1539.99,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100070",
+      "descripcion": "CONJUNTO BARCA LOCAL TEMPORADA PASADA 2",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100407",
+      "descripcion": "CONJUNTO BARCA NEGRO NUEVA TEMPORADA 24",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100075",
+      "descripcion": "CONJUNTO BARCA TEMPORADA 24-25 SIZE 24",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 2610.16,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100083",
+      "descripcion": "CONJUNTO CITY TEMPORADA PASADA 20",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + corregir etiqueta (código erróneo)",
+      "codigo_barras_alterno": "110000100225",
+      "observaciones": "La etiqueta física dice 110000100225, que en el sistema es \"CAMISETA MOCA FC NEGRA SIZE 12\". Reetiquetar con 110000100083."
+    },
+    {
+      "codigo": "110000100095",
+      "descripcion": "CONJUNTO MANGA LARGA BARCA NARANJA 12",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100097",
+      "descripcion": "CONJUNTO MANGA LARGA BARCA NARANJA 16",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100098",
+      "descripcion": "CONJUNTO MANGA LARGA BARCA NARANJA 18",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100100",
+      "descripcion": "CONJUNTO MANGA LARGA PSG AZUL 16",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100107",
+      "descripcion": "CONJUNTO REAL MADRID BLANCO 22",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 2610.16,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100108",
+      "descripcion": "CONJUNTO REAL MADRID LOCAL TEMPORADA 24",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100111",
+      "descripcion": "CONJUNTO REAL MADRID MANGA LARGA MORADO",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100113",
+      "descripcion": "CONJUNTO REAL MADRID MANGA LARGA NEGRO",
+      "unidad": "UD",
+      "costo_unitario": 3347,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3347,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100409",
+      "descripcion": "CONJUNTO REAL MADRID NARANJA SIZE 24",
+      "unidad": "UD",
+      "costo_unitario": 1305.08,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1305.08,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100117",
+      "descripcion": "CUBITT SPORT BELT",
+      "unidad": "UD",
+      "costo_unitario": 830.51,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": 2491.53,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100247",
+      "descripcion": "ESPINILLERA SPORT NEGRA",
+      "unidad": "UD",
+      "costo_unitario": 237.29,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 11,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11,
+      "valor_total": 2610.19,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100707",
+      "descripcion": "FALDA BLANCA ADIDAS",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100694",
+      "descripcion": "FALDA DE PADEL ROSADA MAMEI",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100715",
+      "descripcion": "GORRA ESTANCIA NUEVA SPORT CLUB",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "685987743678",
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100122",
+      "descripcion": "GORRA REAL MADRID",
+      "unidad": "UD",
+      "costo_unitario": 762.71,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 762.71,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "706405924964",
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100123",
+      "descripcion": "GORRA REAL MADRID AZUL",
+      "unidad": "UD",
+      "costo_unitario": 762.71,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 762.71,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100726",
+      "descripcion": "GRIPS WILSON",
+      "unidad": "UD",
+      "costo_unitario": 130.91,
+      "existencia_sistema": -42,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 785.46,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1130",
+      "descripcion": "GUANTE DE PORTERIA TRITON BUFFTON",
+      "unidad": "UD",
+      "costo_unitario": 1433.33,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1433.33,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "7503612044",
+      "observaciones": null
+    },
+    {
+      "codigo": "1213",
+      "descripcion": "GUANTERAS DBK NIÑO",
+      "unidad": "UD",
+      "costo_unitario": 1500,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": 9000,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100363",
+      "descripcion": "MANGAS",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100250",
+      "descripcion": "MEDIAS ANTIDESLIZANTE",
+      "unidad": "UD",
+      "costo_unitario": 275,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 275,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1208",
+      "descripcion": "MEDIAS GIVOVA BABY BLANCA",
+      "unidad": "UD",
+      "costo_unitario": 380,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 18,
+      "cantidad_almacen": 0,
+      "cantidad_total": 18,
+      "valor_total": 6840,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8034044286511",
+      "observaciones": null
+    },
+    {
+      "codigo": "1209",
+      "descripcion": "MEDIAS GIVOVA BLANCA BOY",
+      "unidad": "UD",
+      "costo_unitario": 407.1,
+      "existencia_sistema": 30,
+      "cantidad_cafeteria": 36,
+      "cantidad_almacen": 0,
+      "cantidad_total": 36,
+      "valor_total": 14655.6,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8034044286528",
+      "observaciones": null
+    },
+    {
+      "codigo": "1210",
+      "descripcion": "MEDIAS GIVOVA BLANCA SENIOR",
+      "unidad": "UD",
+      "costo_unitario": 380,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 20,
+      "cantidad_almacen": 0,
+      "cantidad_total": 20,
+      "valor_total": 7600,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8034044286535",
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100427",
+      "descripcion": "MOCHILA SOFTEE CAR (NEGRO)",
+      "unidad": "UD",
+      "costo_unitario": 3499.88,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3499.88,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8445090037611",
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100134",
+      "descripcion": "MOCHILAS REAL MADRID AZULES",
+      "unidad": "UD",
+      "costo_unitario": 1864.4,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 3728.8,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1105",
+      "descripcion": "MUÑEQUERA ANCHA VIBOR A (BLANCA)",
+      "unidad": "UD",
+      "costo_unitario": 286.01,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 286.01,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8445090058180",
+      "observaciones": null
+    },
+    {
+      "codigo": "1108",
+      "descripcion": "MUÑEQUERAS WILSON DOBLE WHITE",
+      "unidad": "UD",
+      "costo_unitario": 413,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 0,
+      "cantidad_total": 8,
+      "valor_total": 3304,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "883813997503",
+      "observaciones": null
+    },
+    {
+      "codigo": "1238",
+      "descripcion": "OVERGRIPS LISO ENEBE",
+      "unidad": "UD",
+      "costo_unitario": 24.56,
+      "existencia_sistema": 99,
+      "cantidad_cafeteria": 97,
+      "cantidad_almacen": 0,
+      "cantidad_total": 97,
+      "valor_total": 2382.32,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8445090132293",
+      "observaciones": null
+    },
+    {
+      "codigo": "1228",
+      "descripcion": "OVERGRIPS PRO NOX",
+      "unidad": "UD",
+      "costo_unitario": 93.53,
+      "existencia_sistema": 200,
+      "cantidad_cafeteria": 194,
+      "cantidad_almacen": 0,
+      "cantidad_total": 194,
+      "valor_total": 18144.82,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100418",
+      "descripcion": "PALA PADEL SOFTEE FREEZER CARBON GREEN",
+      "unidad": "UD",
+      "costo_unitario": 10593,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 10593,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100417",
+      "descripcion": "PALA PADEL SOFTEE SUMMIT GREEN POWER",
+      "unidad": "UD",
+      "costo_unitario": 8400,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 8400,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100413",
+      "descripcion": "PALA PADEL SOFTEE SWAT RED",
+      "unidad": "UD",
+      "costo_unitario": 3367,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3367,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100415",
+      "descripcion": "PALA PADEL VIBOR-A BAMBOO LIQUID EDITIO",
+      "unidad": "UD",
+      "costo_unitario": 8051,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 8051,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100416",
+      "descripcion": "PALA PADEL VIBOR-A SERPENT ADVANCE",
+      "unidad": "UD",
+      "costo_unitario": 7204,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 7204,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Producto EN CONSIGNACIÓN: confirmar si se carga como inventario propio."
+    },
+    {
+      "codigo": "110000100483",
+      "descripcion": "PALA SIUX SPIDER",
+      "unidad": "UD",
+      "costo_unitario": 88,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 88,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + imprimir etiqueta con el código del sistema",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "8435536789372",
+      "descripcion": "PELOTAS SIUX NEO",
+      "unidad": "UD",
+      "costo_unitario": 442.5,
+      "existencia_sistema": 57,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 0,
+      "cantidad_total": 8,
+      "valor_total": 3540.0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "097512831048",
+      "descripcion": "PELOTAS WILSON NEGRAS",
+      "unidad": "UD",
+      "costo_unitario": 414.05,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 828.1,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "VALIDAR",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1106",
+      "descripcion": "PROTECTOR SIUX TRANSPARENTE",
+      "unidad": "UD",
+      "costo_unitario": 885,
+      "existencia_sistema": -1,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 1770,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad + agregar código de barras del fabricante como alterno",
+      "codigo_barras_alterno": "8435762900008",
+      "observaciones": null
+    },
+    {
+      "codigo": "6165010781128",
+      "descripcion": "SACK PACK WILSON NAVY",
+      "unidad": "UD",
+      "costo_unitario": 460.2,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 0,
+      "cantidad_total": 13,
+      "valor_total": 5982.6,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "6165010781050",
+      "descripcion": "SACK PACK WILSON RED",
+      "unidad": "UD",
+      "costo_unitario": 460.2,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": 3221.4,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "6165010781111",
+      "descripcion": "SACK PACK WILSON ROYAL",
+      "unidad": "UD",
+      "costo_unitario": 460.2,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 0,
+      "cantidad_total": 10,
+      "valor_total": 4602.0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100695",
+      "descripcion": "T SHIRT AZUL CLARA WOMEN",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1023",
+      "descripcion": "TOP GRIS GALA SPORT",
+      "unidad": "UD",
+      "costo_unitario": 825,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 825,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1022",
+      "descripcion": "TOP NEGRO SENCILLO",
+      "unidad": "UD",
+      "costo_unitario": 750,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 750,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "1024",
+      "descripcion": "TOP ROSADO SENCILLO",
+      "unidad": "UD",
+      "costo_unitario": 600,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 600,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "196608848431",
+      "descripcion": "TOP VERDE OLIVO",
+      "unidad": "UD",
+      "costo_unitario": 1000,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 1000,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100549",
+      "descripcion": "VESTIDO ADIDDAS NEGRO",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100550",
+      "descripcion": "VESTIDO ADIDDAS ROSADO",
+      "unidad": "UD",
+      "costo_unitario": 0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 0,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100141",
+      "descripcion": "ZAPATILLA ADIDAS GOLETO NEGRO SIZE 3.5",
+      "unidad": "UD",
+      "costo_unitario": 3813.56,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 3813.56,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100154",
+      "descripcion": "ZAPATILLA ADIDAS SPEED PORTAL VERDE SIZ",
+      "unidad": "UD",
+      "costo_unitario": 4576.27,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 4576.27,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "110000100465",
+      "descripcion": "ZAPATILLA PUMA ATTACANTO SIZE 4 VERDES",
+      "unidad": "UD",
+      "costo_unitario": 4661.01,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": 4661.01,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": null
+    },
+    {
+      "codigo": "5000267190150",
+      "descripcion": "WHISKY JOHNINIE NEGRO BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 2175,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 2.0,
+      "valor_total": 4350.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "5000267107776",
+      "descripcion": "WHISKY JOHNINIE GOLD BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 1,
+      "existencia_sistema": 3,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 3.0,
+      "cantidad_total": 3.0,
+      "valor_total": 3.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004). Costo en 0 en el PDF del almacén; se usó el último costo del sistema. Validar costo."
+    },
+    {
+      "codigo": "7460855238066",
+      "descripcion": "TRIPLE RESERVA BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 1,
+      "existencia_sistema": 2,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 2.0,
+      "valor_total": 2.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004). Costo en 0 en el PDF del almacén; se usó el último costo del sistema. Validar costo."
+    },
+    {
+      "codigo": "3263285152896",
+      "descripcion": "TEQUILA AGAVITA",
+      "unidad": "UD",
+      "costo_unitario": 1075,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 5.0,
+      "valor_total": 5375.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "016571910303",
+      "descripcion": "SPARKLING ICE BLACK RASPBERRY",
+      "unidad": "UD",
+      "costo_unitario": 85.06,
+      "existencia_sistema": -3,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 48.0,
+      "cantidad_total": 48.0,
+      "valor_total": 4082.88,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "7460736904721",
+      "descripcion": "ROM MACORIX BLANCO 700ML",
+      "unidad": "UD",
+      "costo_unitario": 510,
+      "existencia_sistema": 15,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 17.0,
+      "cantidad_total": 17.0,
+      "valor_total": 8670.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "8410702039628",
+      "descripcion": "PROVENTO JAUME SERRA CAVA BRUT",
+      "unidad": "UD",
+      "costo_unitario": 670,
+      "existencia_sistema": 12,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 15.0,
+      "cantidad_total": 15.0,
+      "valor_total": 10050.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "7503018819501",
+      "descripcion": "OJO DE TIGRE 750ML",
+      "unidad": "UD",
+      "costo_unitario": 2350,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 1.0,
+      "cantidad_total": 1.0,
+      "valor_total": 2350.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "9661931395",
+      "descripcion": "KIRKLAND CHOCOLATE SOFT & CHEWY",
+      "unidad": "UD",
+      "costo_unitario": 20.15,
+      "existencia_sistema": 31,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 27.0,
+      "cantidad_total": 27.0,
+      "valor_total": 544.05,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "038000219740",
+      "descripcion": "KELLOGGS  FROOT LOOPS",
+      "unidad": "UD",
+      "costo_unitario": 33,
+      "existencia_sistema": 12,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 12.0,
+      "cantidad_total": 12.0,
+      "valor_total": 396.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "110000100671",
+      "descripcion": "ICE POPS NIEVE DE FRUTAS",
+      "unidad": "UD",
+      "costo_unitario": 8.85,
+      "existencia_sistema": 235,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 120.0,
+      "cantidad_total": 120.0,
+      "valor_total": 1062.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "3147690060703",
+      "descripcion": "GIBSON,S LONDON DRY GIN",
+      "unidad": "UD",
+      "costo_unitario": 946.96,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 1.0,
+      "cantidad_total": 1.0,
+      "valor_total": 946.96,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "044000020361",
+      "descripcion": "GALLETA TEDDY GRAHAMS",
+      "unidad": "UD",
+      "costo_unitario": 36.25,
+      "existencia_sistema": 7,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 6.0,
+      "cantidad_total": 6.0,
+      "valor_total": 217.5,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "044000011703",
+      "descripcion": "GALLETAS MINI OREO CHOCOLATE",
+      "unidad": "UD",
+      "costo_unitario": 28.81,
+      "existencia_sistema": 28,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 20.0,
+      "cantidad_total": 20.0,
+      "valor_total": 576.2,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "044000020187",
+      "descripcion": "GALLETA NUTTER BUTTER BITES",
+      "unidad": "UD",
+      "costo_unitario": 36.25,
+      "existencia_sistema": 4,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 4.0,
+      "cantidad_total": 4.0,
+      "valor_total": 145.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "110000100585",
+      "descripcion": "EXTRA VIEJO BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 0.0,
+      "existencia_sistema": 0,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 2.0,
+      "cantidad_total": 2.0,
+      "valor_total": 0.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004). Costo en 0 en el PDF del almacén; se usó el último costo del sistema. Validar costo."
+    },
+    {
+      "codigo": "7460855233498",
+      "descripcion": "DOBLE RESERVA BOTELLA",
+      "unidad": "UD",
+      "costo_unitario": 865,
+      "existencia_sistema": 6,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 5.0,
+      "valor_total": 4325.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "040000000310",
+      "descripcion": "CHOCOLATE M&M MARRON",
+      "unidad": "UD",
+      "costo_unitario": 64.5,
+      "existencia_sistema": 91,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 87.0,
+      "cantidad_total": 87.0,
+      "valor_total": 5611.5,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "1049",
+      "descripcion": "BOTELLA LICOR FERNET BRANCA",
+      "unidad": "UD",
+      "costo_unitario": 1285,
+      "existencia_sistema": 5,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 5.0,
+      "valor_total": 6425.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "5000299618073",
+      "descripcion": "BOTELLA BEEFEATER PINK STRAWBERRY",
+      "unidad": "UD",
+      "costo_unitario": 1300,
+      "existencia_sistema": 1,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 1.0,
+      "cantidad_total": 1.0,
+      "valor_total": 1300.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": "8002230000302",
+      "descripcion": "BOTELLA  APEROL",
+      "unidad": "UD",
+      "costo_unitario": 1110,
+      "existencia_sistema": 7,
+      "cantidad_cafeteria": 0,
+      "cantidad_almacen": 5.0,
+      "cantidad_total": 5.0,
+      "valor_total": 5550.0,
+      "areas": [
+        "Almacén"
+      ],
+      "estado": "LISTO",
+      "accion": "Subir cantidad. No tocar código",
+      "codigo_barras_alterno": null,
+      "observaciones": "Solo en almacén (PDF PC-2026-000004)."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Heineken lata -> Heineken",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Neveras cervezas"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Heineken en lata no existe en el sistema. Crear producto."
+    },
+    {
+      "codigo": null,
+      "descripcion": "VITAMIN ZERO",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Neveras jugos/aguas"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "\"Vitamin zero\" sin sabor. Puede ser Vitarain Zero (ya contado por sabor en otra hoja). Validar antes de subir."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Tanqueray Ginebra London Dry (botella verde)",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Tanqueray London Dry en botella no existe en el sistema (solo el trago). Crear producto."
+    },
+    {
+      "codigo": null,
+      "descripcion": "BRUGAL BLANCO  Botella transparente tapa roja No visible",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Brugal Blanco no existe en el sistema. Crear producto."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Valentina Salsa picante Original",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Salsa Valentina: insumo de cocina, no está en el sistema."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Tajín Sazonador Clásico",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Tajín: insumo de cocina, no está en el sistema."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Wala Salsa / sazonador No visible",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Wala: insumo de cocina, no está en el sistema."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Pringles cebolla mediana -> Pringles Papitas Crema y cebolla",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Pringles cebolla MEDIANA: el sistema solo tiene grande y la lata regular. Crear o confirmar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Ritz Bits Galleta sándwich Funda roja",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Ritz Bits funda roja: sabor no identificado, sin código. Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "Kleenex Pañuelos N/A",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Cafetería - Estante"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Kleenex: insumo, no se vende."
+    },
+    {
+      "codigo": null,
+      "descripcion": "PAPAS FRITAS CONGELADAS (fundas)",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 11.5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11.5,
+      "valor_total": null,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Marcado en la hoja como PENDIENTE DE INCLUIR. También aparece en la hoja ALMACEN DE COCINA: contar una sola vez."
+    },
+    {
+      "codigo": null,
+      "descripcion": "EMPANADITAS CATIVIA QUESO (UNIDADES)",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": null,
+      "areas": [
+        "Cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1218",
+      "posible_descripcion": "EMPANADA CATIBIA QUESO PAQUETE DE 3",
+      "observaciones": "Marcado en la hoja como PENDIENTE DE INCLUIR. También aparece en la hoja ALMACEN DE COCINA: contar una sola vez."
+    },
+    {
+      "codigo": null,
+      "descripcion": "BULLPADEL KIDLINE AZUL",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": "8445402993932",
+      "posible_codigo_existente": "1223",
+      "posible_descripcion": "BULLPADEL ÍNDIGA BOY",
+      "observaciones": "Posible BULLPADEL ÍNDIGA BOY o 110000100718 BULLPADEL JUNIOR LINE. Validar. EN CONSIGNACIÓN."
+    },
+    {
+      "codigo": null,
+      "descripcion": "CAMISETA ITALIA  SIZE S",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": "110000100034",
+      "posible_codigo_existente": "110000100034",
+      "posible_descripcion": "CAMISETA ITALIA VISITANTE EUROCOPA S VE",
+      "observaciones": "El código de la etiqueta YA EXISTE en el sistema. No crear: cargar la cantidad a ese código."
+    },
+    {
+      "codigo": null,
+      "descripcion": "FALDA AZUL PARA PADEL",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": "196474090941",
+      "posible_codigo_existente": "110000100495",
+      "posible_descripcion": "FALDITA AZUL",
+      "observaciones": "Posible FALDITA AZUL. Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "FALDA ROJA SIZE S",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "FALDA ROJA SIZE XS",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA L",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA M",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA S",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": null,
+      "cantidad_almacen": 0,
+      "cantidad_total": null,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla. Sin cantidad en la hoja: contar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA SIZE 10-11",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA SIZE 12-13",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA SIZE 14-15",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA SIZE 6-7",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA SIZE 8-9",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla."
+    },
+    {
+      "codigo": null,
+      "descripcion": "LICRA NEGRA XS",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": null,
+      "cantidad_almacen": 0,
+      "cantidad_total": null,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1033",
+      "posible_descripcion": "LICRA NEGRA",
+      "observaciones": "El sistema tiene una sola LICRA NEGRA sin talla. Decidir si se crean por talla. Sin cantidad en la hoja: contar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "MANGA BRAZO PEQUELA (NEGRA Y BLANCA)",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 0,
+      "cantidad_total": 13,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PALA  NOX  PRO-CUP HARD",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": "8435778902720",
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PALA  NOX  PRO-CUP SOFT",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": "8435778902737",
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PALA NOX  ULTRALIGHT NEGRA",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "EN CONSIGNACIÓN."
+    },
+    {
+      "codigo": null,
+      "descripcion": "SUERA NEGRA GYM",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1030",
+      "posible_descripcion": "SUERA MANGA LARGA M GYM",
+      "observaciones": "Posible SUERA MANGA LARGA M GYM. Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT LADY MOCA PADEL  SIZE FL",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT LADY MOCA PADEL  SIZE FM",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT LADY MOCA PADEL  SIZE FS",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT MOCA PADEL KIDS SIZE 10",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "El sistema tiene T SHIRT MOCA PADEL CLUB XS a XL (adulto). Las de dama y niño no existen."
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT MOCA PADEL KIDS SIZE 12",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "El sistema tiene T SHIRT MOCA PADEL CLUB XS a XL (adulto). Las de dama y niño no existen."
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT MOCA PADEL KIDS SIZE 6",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 4,
+      "cantidad_almacen": 0,
+      "cantidad_total": 4,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "El sistema tiene T SHIRT MOCA PADEL CLUB XS a XL (adulto). Las de dama y niño no existen."
+    },
+    {
+      "codigo": null,
+      "descripcion": "T-SHIRT MOCA PADEL KIDS SIZE 8",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "El sistema tiene T SHIRT MOCA PADEL CLUB XS a XL (adulto). Las de dama y niño no existen."
+    },
+    {
+      "codigo": null,
+      "descripcion": "ZAPATILLA TOLEDO AZUL/ROJO SIZE 4",
+      "unidad": "UD",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Tienda deportiva"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "peperoni",
+      "unidad": "fundas ",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "masa para pizza",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 24,
+      "cantidad_almacen": 0,
+      "cantidad_total": 24,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "tocineta bacon",
+      "unidad": "paquete",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 6,
+      "cantidad_almacen": 0,
+      "cantidad_total": 6,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PAN DE HAMBURGUESA LOS ROBLES",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 20,
+      "cantidad_almacen": 0,
+      "cantidad_total": 20,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "CARNE DE HAMBURGUESA REGULAR",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 19,
+      "cantidad_almacen": 0,
+      "cantidad_total": 19,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PAN BLANCO DE SANDWICH LUMIJOR",
+      "unidad": "FUNDA",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "QUESO AMERICANO",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 144,
+      "cantidad_almacen": 0,
+      "cantidad_total": 144,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "PANZA DE CERDO",
+      "unidad": "PORCIONES ",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 27,
+      "cantidad_almacen": 0,
+      "cantidad_total": 27,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "144 UN. POR PORCION"
+    },
+    {
+      "codigo": null,
+      "descripcion": "PECHUGA",
+      "unidad": "LIBRAS",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 30,
+      "cantidad_almacen": 0,
+      "cantidad_total": 30,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "2 PAPAS CORTE RECTO MCCAIN PAPAS FRITAS 5.5 LBS",
+      "unidad": "fundas ",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": null
+    },
+    {
+      "codigo": null,
+      "descripcion": "CARNE DE HAMBURGUESA ANGUS  BEEF",
+      "unidad": "PAQUETE ",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 10,
+      "cantidad_almacen": 0,
+      "cantidad_total": 10,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "15 UN POR PAQUETE"
+    },
+    {
+      "codigo": null,
+      "descripcion": "MANTECA  DE FREIDORES",
+      "unidad": "CAJAS ",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "28 LB POR CAJA"
+    },
+    {
+      "codigo": null,
+      "descripcion": "SALSA DE TOMATE TRITURADS (PARA PIZZA)",
+      "unidad": "LATAS",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 8,
+      "cantidad_almacen": 0,
+      "cantidad_total": 8,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "LATAS"
+    },
+    {
+      "codigo": null,
+      "descripcion": "MAYONESA",
+      "unidad": "GALON",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 1,
+      "cantidad_almacen": 0,
+      "cantidad_total": 1,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "GALON"
+    },
+    {
+      "codigo": null,
+      "descripcion": "EMPANADITAS CATIVIA QUESO",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 7,
+      "cantidad_almacen": 0,
+      "cantidad_total": 7,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "1218",
+      "posible_descripcion": "EMPANADA CATIBIA QUESO PAQUETE DE 3",
+      "observaciones": "Aparece también en la hoja COCINA como \"pendiente de incluir\": contar una sola vez."
+    },
+    {
+      "codigo": null,
+      "descripcion": "papas fritas congeladas",
+      "unidad": "fundas",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 11.5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 11.5,
+      "valor_total": null,
+      "areas": [
+        "Almacén de cocina"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "Aparece también en la hoja COCINA como \"pendiente de incluir\": contar una sola vez."
+    },
+    {
+      "codigo": null,
+      "descripcion": "CHEETOS ROJOS",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 31,
+      "cantidad_almacen": 0,
+      "cantidad_total": 31,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": null,
+      "posible_descripcion": null,
+      "observaciones": "No se identifica con certeza. Posible Cheetos Flamin Hot o Hamburguesa (7460496804293). Validar empaque."
+    },
+    {
+      "codigo": null,
+      "descripcion": "platanitos natuchips maduros",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496801476",
+      "posible_descripcion": "CARIBAS NATU MADURO PU CS",
+      "observaciones": "Posible CARIBAS NATU MADURO PU CS. Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "platanitos natuchips naturales",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 19,
+      "cantidad_almacen": 0,
+      "cantidad_total": 19,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496800523",
+      "posible_descripcion": "NATUCHIPS PL ORIGINAL RD",
+      "observaciones": "Posible NATUCHIPS PL ORIGINAL RD. Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "doritos rojos",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 5,
+      "cantidad_almacen": 0,
+      "cantidad_total": 5,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496803999",
+      "posible_descripcion": "DORITOS NACHO CS",
+      "observaciones": "Posible DORITOS NACHO CS (funda roja). Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "RUFLES DE QUESO",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 2,
+      "cantidad_almacen": 0,
+      "cantidad_total": 2,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "721282402787",
+      "posible_descripcion": "RUFFLES CHEEDAR CS",
+      "observaciones": "Existe como RUFFLES CHEEDAR CS."
+    },
+    {
+      "codigo": null,
+      "descripcion": "RUFLES DE CARNE",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 3,
+      "cantidad_almacen": 0,
+      "cantidad_total": 3,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "721282402770",
+      "posible_descripcion": "RUFFLES CARDE ASADA CS",
+      "observaciones": "Existe como RUFFLES CARDE ASADA CS."
+    },
+    {
+      "codigo": null,
+      "descripcion": "HOJUELITAS AMARILLA",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 13,
+      "cantidad_almacen": 0,
+      "cantidad_total": 13,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496803616",
+      "posible_descripcion": "HOJUELITAS DE QUESO CS",
+      "observaciones": "Posible HOJUELITAS DE QUESO CS (funda amarilla). Validar."
+    },
+    {
+      "codigo": null,
+      "descripcion": "CHEETOS AZULES",
+      "unidad": "unidades",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 14,
+      "cantidad_almacen": 0,
+      "cantidad_total": 14,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496804286",
+      "posible_descripcion": "CHEETOS CRUNCHY CS",
+      "observaciones": "Posible CHEETOS CRUNCHY CS. Validar empaque."
+    },
+    {
+      "codigo": null,
+      "descripcion": "CHEETOS BLANCOS",
+      "unidad": "UNIDADES",
+      "costo_unitario": null,
+      "existencia_sistema": null,
+      "cantidad_cafeteria": 27,
+      "cantidad_almacen": 0,
+      "cantidad_total": 27,
+      "valor_total": null,
+      "areas": [
+        "Cafetería"
+      ],
+      "estado": "CREAR",
+      "accion": "Crear producto en el sistema y luego cargar la cantidad",
+      "codigo_barras_fisico": null,
+      "posible_codigo_existente": "7460496803685",
+      "posible_descripcion": "CHEETOS QUESO BLANCO",
+      "observaciones": "Existe como CHEETOS QUESO BLANCO."
+    }
+  ]
+}

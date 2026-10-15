@@ -6,9 +6,9 @@ import 'loyalty_reward_utils.dart' show loyaltyMarkerPrefix;
 double _r(double v) => double.parse(v.toStringAsFixed(2));
 
 /// True si la línea es una OFERTA vendida desde el tile (marcador `[DEAL:` en
-/// notes). Para esas líneas el subtotal viene neto y el descuento se muestra
-/// aparte sin doble conteo.
-bool _notesHasDealMarker(String? notes) {
+/// notes). Cada línea representa un paquete que debe conservarse al dividir.
+bool isOfferDealItem(OrderItem item) {
+  final notes = item.notes;
   if (notes == null || notes.isEmpty) return false;
   return notes
       .split('\n')
@@ -144,7 +144,11 @@ double _takeoutInclusiveScale(OrderItem item) {
   return correctTax / originalSum;
 }
 
-OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {String? forcedOrigin}) {
+OrderItemPricingSummary summarizeItemPricing(
+  Order? order,
+  OrderItem item, {
+  String? forcedOrigin,
+}) {
   // PRD 2.5: modelo unificado. oi.tax ya incluye TODOS los impuestos aplicables
   // (ITBIS + Ley + cualquier otro), filtrados por apply_on_<origin> en el motor
   // backend. Ya no hay distinción tax vs service_fee a nivel item.
@@ -178,26 +182,9 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
       ? null
       : _r(item.taxLines.fold<double>(0, (s, line) => s + line.amount));
 
-  // LÍNEA DE OFERTA (tile del catálogo, marcada [DEAL:] en notes): el trigger
-  // backend guarda `subtotal` ya NETO (bruto - descuento) y `tax` sobre el neto.
-  // El cálculo general restaría el descuento OTRA VEZ (doble) y, para productos
-  // inclusive, lo extrae mal (daba 710 en vez de 960). Aquí mostramos el BRUTO
-  // (subtotal + descuento) y el descuento, restando una sola vez: el total queda
-  // = subtotal_neto + tax (idéntico al de la BD). Así abajo se ve "Subtotal /
-  // Descuento" correcto. Solo afecta a estas líneas (no toca el resto).
-  if (_notesHasDealMarker(item.notes)) {
-    final disc = _r(item.discounts);
-    final netSub = _r(item.subtotal);
-    final tx = _r(taxLinesSum ?? item.tax);
-    return OrderItemPricingSummary(
-      subtotal: _r(netSub + disc),
-      tax: tx,
-      discounts: disc,
-      serviceFee: 0,
-      extraServiceFee: 0,
-      total: _r(netSub + tx),
-    );
-  }
+  // Las ofertas usan el mismo contrato que cualquier línea: desde
+  // 20260630_0001 el backend guarda la base ANTES del descuento. El marcador
+  // [DEAL:] identifica el paquete, no cambia la fórmula de sus importes.
 
   // Detectar si los modifiers en draft aún no fueron procesados por el
   // backend (oi.subtotal/oi.tax persistidos no incluyen el modifier nuevo).
@@ -207,8 +194,8 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   final persistedGross = item.taxMode == 'inclusive'
       ? _r(item.subtotal + item.tax)
       : _r(item.subtotal);
-  final modifiersOutOfSync = item.modifiers.isNotEmpty &&
-      grossWithModifiers > persistedGross + 0.01;
+  final modifiersOutOfSync =
+      item.modifiers.isNotEmpty && grossWithModifiers > persistedGross + 0.01;
 
   // FIX takeout inclusive: el trigger backend extrae `oi.subtotal` a la
   // tasa consolidada completa (ej. 28% = ITBIS+Ley) y filtra los `tax_lines`
@@ -221,7 +208,9 @@ OrderItemPricingSummary summarizeItemPricing(Order? order, OrderItem item, {Stri
   //   tax      = gross - subtotal                     ej. 76.27 (= 18% de 423.73)
   // Math: subtotal + tax == gross == precio menú ✓
   final double applicableInclusiveRate;
-  if (item.taxMode == 'inclusive' && item.isTakeout && item.taxLines.isNotEmpty) {
+  if (item.taxMode == 'inclusive' &&
+      item.isTakeout &&
+      item.taxLines.isNotEmpty) {
     applicableInclusiveRate = item.taxLines.fold<double>(
       0,
       (sum, line) => sum + (line.taxRate / 100.0),
@@ -477,7 +466,11 @@ List<({String label, double amount})> buildOrderTaxBreakdown(
   final fromLines = buildBreakdownFromTaxLines(items);
   if (fromLines != null) return fromLines;
 
-  final summary = summarizeOrderPricing(order, items, forcedOrigin: forcedOrigin);
+  final summary = summarizeOrderPricing(
+    order,
+    items,
+    forcedOrigin: forcedOrigin,
+  );
   final breakdown = <({String label, double amount})>[];
 
   // Agrupamos primero por displayRate para que ítems con taxRate "camuflado"

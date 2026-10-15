@@ -116,9 +116,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
       final result = await send(
         OrderEdit(
           orderId: orderId,
-          base: force
-              ? OrderEditBase.forced
-              : OrderEditBase.ofVersion(version),
+          base: force ? OrderEditBase.forced : OrderEditBase.ofVersion(version),
         ),
       );
       if (result.version != null) _orderVersion = result.version;
@@ -275,7 +273,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
       // Recalculate check totals using catalog prices (not DB values which
       // may include service fee or have rounding drift for inclusive items).
-      final reconciledChecks = _recalculateChecksTotals(visibleChecks, visibleItems);
+      final reconciledChecks = _recalculateChecksTotals(
+        visibleChecks,
+        visibleItems,
+      );
 
       // reservedPositions incluye TODAS las positions ya en uso en BD,
       // tanto abiertas como cerradas. _getNextPosition lo consulta para
@@ -430,7 +431,9 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
   /// Pasa `ncfType=null` para volver al default del business al cobrar.
   Future<void> setNcfTypeForCheck(String checkId, String? ncfType) async {
     final normalized = ncfType?.trim();
-    final newValue = (normalized == null || normalized.isEmpty) ? null : normalized;
+    final newValue = (normalized == null || normalized.isEmpty)
+        ? null
+        : normalized;
 
     final updatedChecks = state.checks
         .map((check) {
@@ -808,15 +811,6 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
           final checkItems = itemsByCheckId[c.id] ?? const <OrderItem>[];
           final summary = summarizeOrderPricing(state.order, checkItems);
 
-          // For the displayed total, use the catalog prices (itemDisplayTotal)
-          // so inclusive items show the menu price, not base+tax recomposition.
-          final catalogTotal = double.parse(
-            checkItems.fold<double>(
-              0,
-              (sum, item) => sum + itemDisplayTotal(state.order, item),
-            ).toStringAsFixed(2),
-          );
-
           return OrderCheck(
             id: c.id,
             orderId: c.orderId,
@@ -827,7 +821,7 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
             discounts: summary.discounts,
             serviceFee: summary.serviceFee,
             tax: summary.tax,
-            total: catalogTotal,
+            total: summary.total,
             items: checkItems,
           );
         })
@@ -843,6 +837,12 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     for (final item in items) {
       if (item.checkId != checkId) {
+        otherItems.add(item);
+        continue;
+      }
+      // Cada alta de oferta es un paquete independiente. Unir dos paquetes
+      // iguales convertiría «eliminar una oferta» en eliminar ambos.
+      if (isOfferDealItem(item)) {
         otherItems.add(item);
         continue;
       }
@@ -875,6 +875,10 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
 
     for (final item in items) {
       if (item.checkId != null) {
+        assignedItems.add(item);
+        continue;
+      }
+      if (isOfferDealItem(item)) {
         assignedItems.add(item);
         continue;
       }
@@ -1020,17 +1024,13 @@ class SplitBillViewModel extends StateNotifier<SplitBillState> {
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();
-      final friendly =
-          msg.contains('PEOPLE_OUT_OF_RANGE')
-              ? 'El sistema permite dividir entre 2 y 4 personas.'
-              : msg.contains('ORDER_NOT_FOUND')
-                  ? 'La orden ya no existe o fue cerrada.'
-                  : 'No se pudo dividir la cuenta. Intentá de nuevo o '
-                    'recargá la mesa. Detalle técnico: $e';
-      state = state.copyWith(
-        loading: false,
-        error: friendly,
-      );
+      final friendly = msg.contains('PEOPLE_OUT_OF_RANGE')
+          ? 'El sistema permite dividir entre 2 y 4 personas.'
+          : msg.contains('ORDER_NOT_FOUND')
+          ? 'La orden ya no existe o fue cerrada.'
+          : 'No se pudo dividir la cuenta. Intentá de nuevo o '
+                'recargá la mesa. Detalle técnico: $e';
+      state = state.copyWith(loading: false, error: friendly);
     }
   }
 

@@ -26,7 +26,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mangopos/core/currency/business_currency_provider.dart';
 import 'package:mangopos/core/printing/print_error_humanizer.dart';
 import 'package:mangopos/core/printing/printerless_mode.dart';
-import 'package:mangopos/core/tax/tax_engine.dart';
 import 'package:mangopos/core/utils/app_toast.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
@@ -34,7 +33,7 @@ import 'package:mangopos/data/repositories/ecf_documents_repository.dart';
 import 'package:mangopos/data/repositories/business_profile_repository.dart';
 import 'package:mangopos/data/repositories/pos_settings_repository.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
-import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/utils/issued_receipt_order.dart';
 import 'package:mangopos/data/utils/virtual_sale_table_name.dart';
 import 'package:mangopos/presentation/printing/widgets/ticket_preview_dialog.dart';
 import 'package:mangopos/presentation/sales/viewmodel/sales_viewmodel.dart';
@@ -65,8 +64,7 @@ Future<void> reprintInvoiceFromPayment(
   // El scope del fd: si tiene check_id, la factura es de una sub-cuenta;
   // si es NULL, es full-order (puede ser cobro simple sin split, o el
   // remainder de una orden con sub-cuentas ya cobradas).
-  final fdCheckId = payment['check_id']?.toString();
-  final fdId = payment['fiscal_document_id']?.toString();
+  final requestedDocumentId = payment['fiscal_document_id']?.toString();
 
   // NOTA DE VENTA: la fila del historial viene de la vista `sales_documents`,
   // donde `ncf_number` es el número de la nota. Reimprimirla como NCF sería
@@ -76,9 +74,6 @@ Future<void> reprintInvoiceFromPayment(
   final isSalesNote =
       payment['doc_kind']?.toString() == 'sales_note' ||
       payment['ncf_type']?.toString() == 'NV';
-  final salesNoteNumber = isSalesNote
-      ? payment['ncf_number']?.toString()
-      : null;
 
   // Pre-declarada para que el catch pueda mencionar la impresora
   // específica en el mensaje de error humano (humanizePrintError).
@@ -88,6 +83,38 @@ Future<void> reprintInvoiceFromPayment(
 
     final salesRepo = ref.read(salesRepositoryProvider);
     final businessId = ref.read(sessionProvider).activeBusinessId;
+    if (businessId == null || businessId.isEmpty) {
+      throw StateError('No se pudo resolver el negocio activo.');
+    }
+    // Resolver el documento exacto ANTES de elegir productos y pagos. El
+    // check del pago representativo puede estar desactualizado en el listado.
+    var documentQuery = Supabase.instance.client
+        .from(isSalesNote ? 'sales_notes' : 'fiscal_documents')
+        .select()
+        .eq('business_id', businessId)
+        .eq('order_id', orderId);
+    if (requestedDocumentId != null && requestedDocumentId.isNotEmpty) {
+      documentQuery = documentQuery.eq('id', requestedDocumentId);
+    } else {
+      final number = payment['ncf_number']?.toString();
+      if (number == null || number.isEmpty) {
+        throw StateError(
+          'No se identificó el comprobante original. Recarga el historial.',
+        );
+      }
+      documentQuery = documentQuery.eq(
+        isSalesNote ? 'note_number' : 'ncf_number',
+        number,
+      );
+    }
+    final issuedDocument = await documentQuery.maybeSingle();
+    if (issuedDocument == null) {
+      throw StateError(
+        'No se encontró el comprobante original. Recarga el historial.',
+      );
+    }
+    final fdId = issuedDocument['id']?.toString();
+    final fdCheckId = issuedDocument['check_id']?.toString();
     final bundle = await salesRepo.getOrderBundle(
       orderId,
       businessId: businessId,
@@ -97,10 +124,8 @@ Future<void> reprintInvoiceFromPayment(
     // Para historial/reimpresión necesitamos TODOS los productos de la venta,
     // incluidos los ya pagados. El bundle del order detail excluye items paid
     // para no reinyectar subcuentas cerradas en la UI de la mesa.
-    final allItems = await salesRepo.getOrderItems(
+    final allItems = await salesRepo.getAllOrderItems(
       orderId,
-      includeModifiers: true,
-      onlyOpen: false,
       businessId: businessId,
     );
 
@@ -112,15 +137,24 @@ Future<void> reprintInvoiceFromPayment(
         .inFilter('status', ['completed', 'void', 'cancelled'])
         .order('created_at', ascending: false);
 
-    final payments = List<Map<String, dynamic>>.from(paymentsRaw).map((p) {
-      final map = p;
-      final method = map['payment_methods'] as Map<String, dynamic>?;
-      return Payment.fromMap({
-        ...map,
-        'payment_method_name': method?['name'],
-        'payment_method_code': method?['code'],
-      });
-    }).toList();
+    final payments = List<Map<String, dynamic>>.from(paymentsRaw)
+        .where((p) {
+          final documentId =
+              p[isSalesNote ? 'sales_note_id' : 'fiscal_document_id']
+                  ?.toString();
+          return documentId == fdId ||
+              (documentId == null && p['check_id']?.toString() == fdCheckId);
+        })
+        .map((p) {
+          final map = p;
+          final method = map['payment_methods'] as Map<String, dynamic>?;
+          return Payment.fromMap({
+            ...map,
+            'payment_method_name': method?['name'],
+            'payment_method_code': method?['code'],
+          });
+        })
+        .toList();
 
     // FILTRO POR SCOPE DEL FD:
     //   - fd.check_id != NULL (sub-cuenta): items y payments del check.
@@ -139,12 +173,6 @@ Future<void> reprintInvoiceFromPayment(
       printPayments = payments
           .where((payment) => payment.checkId == fdCheckId)
           .toList(growable: false);
-      try {
-        final check = bundle.checks.firstWhere((c) => c.id == fdCheckId);
-        printOrder = check.toOrder(createdAt: bundle.order!.createdAt);
-      } catch (_) {
-        printOrder = bundle.order!;
-      }
     } else {
       // Full-order: cargar otros fds de la orden para saber qué checks
       // ya tienen su propio fd. Items de esos checks NO pertenecen a
@@ -171,66 +199,31 @@ Future<void> reprintInvoiceFromPayment(
               .where((n) => n['check_id'] != null && n['status'] == 'active')
               .map((n) => n['check_id'].toString()),
         );
-      } catch (_) {}
+      } on PostgrestException catch (e) {
+        // Solo la ausencia de esta tabla en servidores antiguos permite
+        // continuar. Red/RLS/error del servidor no acreditan el ámbito.
+        if(e.code!='42P01' && e.code!='PGRST205') rethrow;
+      }
 
-      printItems = allItems.where((item) {
-        if (item.status == 'void') return false;
-        if (item.checkId == null) return true;
-        return !otherCheckFdIds.contains(item.checkId);
-      }).toList(growable: false);
+      printItems = allItems
+          .where((item) {
+            if (item.status == 'void') return false;
+            if (item.checkId == null) return true;
+            return !otherCheckFdIds.contains(item.checkId);
+          })
+          .toList(growable: false);
 
       printPayments = payments
           .where((payment) => payment.checkId == null)
           .toList(growable: false);
-
-      // Construir un "printOrder" cuyos totales reflejen el fd, no la
-      // orden completa. Usamos los campos del payment Map (que vienen
-      // del JOIN con fiscal_documents en getGlobalSalesHistoryPaged).
-      final fdSubtotal = (payment['subtotal'] as num?)?.toDouble() ?? 0;
-      final fdItbis = (payment['itbis_amount'] as num?)?.toDouble() ?? 0;
-      final fdServiceFee = (payment['service_fee'] as num?)?.toDouble() ?? 0;
-      final fdTotal = (payment['total'] as num?)?.toDouble() ?? 0;
-      printOrder = bundle.order!.copyWith(
-        subtotal: fdSubtotal,
-        tax: fdItbis,
-        serviceFee: fdServiceFee,
-        total: fdTotal,
+    }
+    printOrder = issuedReceiptOrder(bundle.order!, issuedDocument);
+    validateIssuedReceiptItems(printOrder, printItems);
+    if (printItems.isEmpty) {
+      throw StateError(
+        'Faltan los productos del comprobante original. '
+        'No se envió papel: recarga el historial antes de reimprimir.',
       );
-    }
-
-    // ¿El total guardado del comprobante difiere del recomputado desde los
-    // ítems? Pasa cuando la orden se cerró con un monto distinto al de sus
-    // ítems (cobro que no cubrió todo, ítems editados tras emitir el NCF,
-    // etc.). En ese caso el NCF manda: imprimimos los totales oficiales del
-    // fiscal document (igual que el modal de detalle), no un recálculo que
-    // saldría distinto a lo que registró la DGII y a lo que ve el cajero.
-    final itemsSummary = summarizeOrderPricing(printOrder, printItems);
-    final fdMismatch =
-        printOrder.total > 0 &&
-        (itemsSummary.total - printOrder.total).abs() > 1.0;
-
-    // Anti-doble-conteo del service fee (LEY): cuando los ítems ya traen sus
-    // `order_item_tax_lines` (modelo unificado), el fee YA está contado dentro
-    // de ellos. Si además dejamos `order.serviceFee > 0`, summarizeOrderPricing
-    // lo suma OTRA VEZ como fee legacy y el TOTAL impreso sale inflado (ej:
-    // RD$6,574.57 vs RD$6,170 real). El modal de detalle no falla porque arma
-    // sus totales con `order = null`; aquí lo replicamos. Para órdenes legacy
-    // SIN tax_lines conservamos el serviceFee (ahí el fee solo vive a nivel de
-    // orden y debe seguir imprimiéndose). Aplica a ambas ramas (full-order y
-    // sub-cuenta, donde check.toOrder también copia serviceFee).
-    //
-    // EXCEPCIÓN: si hay desajuste con el NCF (`fdMismatch`), conservamos el
-    // serviceFee del fiscal document — se imprimirá como parte de los totales
-    // oficiales, no recalculado desde ítems.
-    if (!fdMismatch &&
-        printOrder.serviceFee != 0 &&
-        printItems.any((item) => item.taxLines.isNotEmpty)) {
-      printOrder = printOrder.copyWith(serviceFee: 0);
-    }
-
-    // Loading business profile (simplified, usually from a provider)
-    if (businessId == null || businessId.isEmpty) {
-      throw Exception('No se pudo resolver el negocio activo.');
     }
 
     final profileRaw = await Supabase.instance.client
@@ -272,63 +265,7 @@ Future<void> reprintInvoiceFromPayment(
         .read(posSettingsRepositoryProvider)
         .getInvoiceTemplate(businessId);
 
-    // Build per-tax breakdown for the reprint receipt
-    final reprintTaxBreakdown = <({String label, double amount})>[];
-    if (fdMismatch) {
-      // NCF manda: desglose desde los montos OFICIALES del fiscal document,
-      // consistente con el subtotal/total que imprimirá generateInvoice vía
-      // `preferStoredOrderTotals`. Sin porcentaje en la etiqueta porque el fd
-      // solo guarda montos agregados (itbis_amount, service_fee), no por tasa.
-      if (printOrder.tax > 0.005) {
-        reprintTaxBreakdown.add((label: 'ITBIS', amount: printOrder.tax));
-      }
-      if (printOrder.serviceFee > 0.005) {
-        reprintTaxBreakdown.add((
-          label: 'Servicio',
-          amount: printOrder.serviceFee,
-        ));
-      }
-    } else {
-      try {
-        final taxRows = await Supabase.instance.client
-          .from('taxes')
-          .select(
-            'name,rate,is_active,is_service_fee,apply_on_zone,apply_on_manual,apply_on_quick,apply_on_delivery,apply_on_takeout,include_in_ecf',
-          )
-          .eq('business_id', businessId)
-          .eq('is_active', true);
-      final taxes = (taxRows as List)
-          .map((r) => TaxDef.fromMap(r as Map<String, dynamic>))
-          .toList();
-      final origin = parseSaleOrigin(payment['origin']?.toString());
-      final printSummary = summarizeOrderPricing(printOrder, printItems);
-      final base = printSummary.subtotal;
-      final configuredBreakdown = <({String label, double amount})>[];
-      for (final tx in taxes) {
-        if (!tx.isActive || tx.rate <= 0) continue;
-        if (!tx.appliesTo(origin)) continue;
-        final pctLabel = tx.rate.truncateToDouble() == tx.rate
-            ? '${tx.rate.toInt()}%'
-            : '${tx.rate}%';
-        final amount = double.parse(
-          (base * tx.rateDecimal).toStringAsFixed(2),
-        );
-        configuredBreakdown.add((
-          label: '${tx.name} ($pctLabel)',
-          amount: amount,
-        ));
-      }
-      reprintTaxBreakdown.addAll(
-        buildOrderTaxBreakdown(
-          printOrder,
-          printItems,
-          configuredBreakdown: configuredBreakdown,
-        ),
-      );
-      } catch (_) {
-        // Fallback: the ticket will use the summary-level ITBIS/SERVICIO lines
-      }
-    }
+    final reprintTaxBreakdown = issuedReceiptTaxBreakdown(printOrder, printItems);
 
     // e-CF: fresh fetch del fiscal_document. Crítico en re-impresión porque
     // el estado puede haber cambiado desde el cobro original (sent → accepted
@@ -348,10 +285,8 @@ Future<void> reprintInvoiceFromPayment(
       // En split bill una orden tiene N fds; getOrderFiscalDocument
       // devolvería cualquiera. Usar el id del fd (el `payment['id']`
       // del listado, que es el fd.id, no payment.id).
-      final fiscalDoc = fdId != null && fdId.isNotEmpty
-          ? await salesRepo.getFiscalDocumentById(fdId)
-          : await salesRepo.getOrderFiscalDocument(orderId);
-      if (fiscalDoc != null && fiscalDoc.isElectronic) {
+      final fiscalDoc = FiscalDocument.fromMap(issuedDocument);
+      if (fiscalDoc.isElectronic) {
         isElectronicCf = true;
         ecfSecurityCode = fiscalDoc.ecfSecurityCode;
         ecfSignedAt = fiscalDoc.ecfSignedAt;
@@ -383,14 +318,14 @@ Future<void> reprintInvoiceFromPayment(
           final qrUrl = fiscalDoc.publicUrl?.isNotEmpty == true
               ? fiscalDoc.publicUrl!
               : (fiscalDoc.buildDgiiVerifyUrl(
-                    emitterRnc: emitterRnc,
-                    // Ambiente real del negocio: con `true` fijo el QR
-                    // de respaldo apuntaba a las pruebas de la DGII.
-                    sandbox: await ref
-                        .read(ecfDocumentsRepositoryProvider)
-                        .isSandbox(businessId),
-                  ) ??
-                  '');
+                      emitterRnc: emitterRnc,
+                      // Ambiente real del negocio: con `true` fijo el QR
+                      // de respaldo apuntaba a las pruebas de la DGII.
+                      sandbox: await ref
+                          .read(ecfDocumentsRepositoryProvider)
+                          .isSandbox(businessId),
+                    ) ??
+                    '');
           if (qrUrl.isNotEmpty) {
             ecfQrBytes = await QrEscPosBuilder.build(data: qrUrl);
           } else {
@@ -410,8 +345,9 @@ Future<void> reprintInvoiceFromPayment(
     final businessProfileRepo = BusinessProfileRepository(
       Supabase.instance.client,
     );
-    final profileForPrint =
-        await businessProfileRepo.prepareForInvoicePrinting(businessId);
+    final profileForPrint = await businessProfileRepo.prepareForInvoicePrinting(
+      businessId,
+    );
 
     // Abono de la mesa: la reimpresión tiene que sacar el MISMO saldo que el
     // ticket original, no el de hoy. Por eso se lee por pago (el movimiento
@@ -449,14 +385,22 @@ Future<void> reprintInvoiceFromPayment(
       businessAddress: profileRaw?['address'],
       businessPhone: profileRaw?['phone'],
       businessRnc: profileRaw?['rnc'],
-      fiscalNcf: isSalesNote ? null : payment['ncf_number']?.toString(),
-      fiscalType: isSalesNote ? null : payment['ncf_type_name']?.toString(),
-      salesNoteNumber: salesNoteNumber,
-      customerName: payment['customer_name']?.toString(),
+      fiscalNcf: isSalesNote ? null : issuedDocument['ncf_number']?.toString(),
+      fiscalType: isSalesNote ? null : issuedDocument['ncf_type']?.toString(),
+      salesNoteNumber: isSalesNote
+          ? issuedDocument['note_number']?.toString()
+          : null,
+      customerName:
+          issuedDocument['customer_name']?.toString() ??
+          payment['customer_name']?.toString(),
       customerTaxId: isSalesNote
           ? null
-          : payment['customer_tax_id']?.toString(),
+          : issuedDocument['customer_rnc']?.toString(),
       title: '*** REIMPRESION ***',
+      issuedAt: DateTime.tryParse(
+        (issuedDocument['issued_at'] ?? issuedDocument['created_at'] ?? '')
+            .toString(),
+      ),
       currency: currentBusinessCurrencyOrFallback(ref),
       receiptItemDisplayMode: receiptItemDisplayMode,
       taxBreakdown: reprintTaxBreakdown,

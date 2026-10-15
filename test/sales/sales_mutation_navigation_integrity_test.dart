@@ -213,13 +213,17 @@ void main() {
     await client.dispose();
   });
 
-  Future<ProviderContainer> prepare(String biz, _Repository repository) async {
+  Future<ProviderContainer> prepare(
+    String biz,
+    _Repository repository, {
+    CurrentOrderState? initial,
+  }) async {
     await PosLookupOfflineCache().saveBusinessTaxes(biz, []);
     await offline.saveSnapshot(
       businessId: biz,
       slotId: 'quick',
       origin: 'quick',
-      state: _sale('A'),
+      state: initial ?? _sale('A'),
     );
     await offline.saveSnapshot(
       businessId: biz,
@@ -232,7 +236,7 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         sessionProvider.overrideWith(() => _Session(biz)),
-        currentOrderProvider.overrideWith(() => _Sales(_sale('A'))),
+        currentOrderProvider.overrideWith(() => _Sales(initial ?? _sale('A'))),
         hubModeProvider.overrideWith((ref) => _CloudHub()),
         byZoneVmProvider.overrideWith(_Zones.new),
         fiscalServiceProvider.overrideWithValue(_Fiscal()),
@@ -321,6 +325,198 @@ void main() {
     }
   }
 
+  test(
+    'grupo offline: una intención durable recupera la cuenta aunque el snapshot sea antiguo',
+    () async {
+      const biz = 'durable-group-offline';
+      final repo = _Repository(client);
+      final initial = _sale('A');
+      final base = initial.items.single.copyWith(
+        quantity: 4,
+        unitPrice: 250,
+        subtotal: 1000,
+        tax: 0,
+        discounts: 250,
+        total: 750,
+        status: 'pending',
+        notes: '[DEAL:promo]\n[DEAL_RULE:4:250.00]',
+      );
+      final rows = [base, base.copyWith(id: 'item-A2')];
+      final before = initial.copyWith(
+        items: rows,
+        order: initial.order!.copyWith(
+          subtotal: 2000,
+          discounts: 500,
+          total: 1500,
+        ),
+      );
+      final container = await prepare(biz, repo, initial: before);
+      ConnectivityService().simulateDisconnect();
+      final ok = await container
+          .read(currentOrderProvider.notifier)
+          .saveItemGroup(rows, base.copyWith(quantity: 6));
+      expect(ok, true);
+      final queue = await offline.unsettledActions(biz);
+      expect(queue, hasLength(1));
+      expect(queue.single['type'], 'edit_item_group');
+      expect(queue.single['actions'], hasLength(2));
+      expect(container.read(currentOrderProvider).order!.total, 1250);
+      expect(repo.quantities, isEmpty);
+      await offline.saveSnapshot(
+        businessId: biz,
+        slotId: 'quick',
+        origin: 'quick',
+        state: before,
+      );
+      final recovered = (await offline.loadSnapshot(
+        businessId: biz,
+        slotId: 'quick',
+      ))!;
+      expect(recovered.items.fold<double>(0, (s, i) => s + i.quantity), 6);
+      expect(recovered.order!.total, 1250);
+      expect(recovered.items.map((i) => i.discounts), [250, 0]);
+    },
+  );
+
+  test('grupo guardándose al navegar no modifica la otra mesa', () async {
+    const biz = 'group-navigation';
+    final repo = _Repository(client);
+    final original = _sale('A');
+    final container = await prepare(biz, repo);
+    final vm = container.read(currentOrderProvider.notifier);
+    ConnectivityService().simulateDisconnect();
+    final change = vm.saveItemGroup(
+      original.items,
+      original.items.single.copyWith(quantity: 2),
+    );
+    await goToB(vm);
+    final other = container.read(currentOrderProvider);
+    expect(await change, true);
+    expect(container.read(currentOrderProvider).order, other.order);
+    expect(container.read(currentOrderProvider).items, other.items);
+    final saved = (await offline.loadSnapshot(
+      businessId: biz,
+      slotId: 'quick',
+    ))!;
+    expect(saved.order!.id, 'order-A');
+    expect(saved.items.single.quantity, 2);
+    expect((await offline.unsettledActions(biz)).single['order_id'], 'order-A');
+  });
+
+  for (final qty in [4.0, 6.0, 7.0]) {
+    for (final outcome in ['saved', 'rejected', 'network']) {
+      test(
+        'oferta de 8 a $qty: $outcome conserva descuento, respaldo y rollback',
+        () async {
+          final biz = 'offer-quantity-$qty-$outcome';
+          final repository = _Repository(client);
+          final initial = _sale('A');
+          final row = initial.items.single.copyWith(
+            quantity: 8,
+            unitPrice: 250,
+            subtotal: 2000,
+            tax: 0,
+            discounts: 500,
+            total: 1500,
+            notes: '[DEAL:promo]\n[DEAL_RULE:4:250.00]',
+          );
+          final container = await prepare(
+            biz,
+            repository,
+            initial: initial.copyWith(
+              items: [row],
+              order: initial.order!.copyWith(
+                subtotal: 2000,
+                discounts: 500,
+                total: 1500,
+              ),
+            ),
+          );
+          final vm = container.read(currentOrderProvider.notifier);
+          final action = vm.updateItemQuantity(row.id, qty);
+          await repository.waitFor('qty-$qty');
+          final optimistic = container.read(currentOrderProvider);
+          expect(optimistic.items.single.discounts, 250);
+          expect(optimistic.order!.discounts, 250);
+          expect(optimistic.order!.total, qty * 250 - 250);
+          if (outcome == 'saved') {
+            repository.quantities[qty]!.complete();
+          } else {
+            repository.quantities[qty]!.completeError(
+              outcome == 'network'
+                  ? TimeoutException('respuesta perdida')
+                  : StateError('edición rechazada'),
+            );
+          }
+          await action;
+          final expectedQty = outcome == 'rejected' ? 8.0 : qty;
+          final expectedDiscount = outcome == 'rejected' ? 500.0 : 250.0;
+          expect(
+            container.read(currentOrderProvider).items.single.quantity,
+            expectedQty,
+          );
+          expect(
+            container.read(currentOrderProvider).items.single.discounts,
+            expectedDiscount,
+          );
+          final saved = (await offline.loadSnapshot(
+            businessId: biz,
+            slotId: 'quick',
+          ))!;
+          expect(saved.items.single.quantity, expectedQty);
+          expect(saved.items.single.discounts, expectedDiscount);
+          if (outcome == 'network') {
+            final queue = (await offline.unsettledActions(
+              biz,
+            )).where((a) => a['type'] == 'update_item_quantity');
+            expect(queue, hasLength(1));
+            expect((queue.single['item_snapshot'] as Map)['discounts'], 250);
+          }
+        },
+      );
+    }
+  }
+
+  test(
+    'oferta antigua sin regla no inventa un descuento sin conexión',
+    () async {
+      const biz = 'legacy-offer-no-rule-offline';
+      final repository = _Repository(client);
+      final initial = _sale('A');
+      final row = initial.items.single.copyWith(
+        quantity: 8,
+        unitPrice: 250,
+        subtotal: 2000,
+        tax: 0,
+        discounts: 500,
+        total: 1500,
+        notes: '[DEAL:promo]',
+      );
+      final container = await prepare(
+        biz,
+        repository,
+        initial: initial.copyWith(
+          items: [row],
+          order: initial.order!.copyWith(
+            subtotal: 2000,
+            discounts: 500,
+            total: 1500,
+          ),
+        ),
+      );
+      ConnectivityService().simulateDisconnect();
+      await container
+          .read(currentOrderProvider.notifier)
+          .updateItemQuantity(row.id, 4);
+      final current = container.read(currentOrderProvider);
+      expect(current.items.single.quantity, 8);
+      expect(current.items.single.discounts, 500);
+      expect(current.error, contains('Necesita conexión'));
+      expect(repository.quantities, isEmpty);
+      expect(await offline.unsettledActions(biz), isEmpty);
+    },
+  );
+
   test('alta fallida no borra otra alta concurrente confirmada', () async {
     const biz = 'concurrent-add-rollback';
     final repository = _Repository(client);
@@ -370,6 +566,14 @@ void main() {
       originalPrice: 25,
     );
     await repository.waitFor('offer-combo');
+    // El alta en vuelo debe usar la misma base pre-descuento que el servidor.
+    final optimistic = container.read(currentOrderProvider).items.last;
+    expect(optimistic.subtotal, 25);
+    expect(optimistic.discounts, 5);
+    expect(
+      optimistic.total,
+      closeTo(optimistic.subtotal + optimistic.tax - 5, 0.01),
+    );
     final add = vm.addItem(
       menuItemId: 'two',
       productName: 'Dos',

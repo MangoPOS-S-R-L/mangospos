@@ -29,6 +29,8 @@ import 'package:mangopos/core/tax/tax_exceptions.dart';
 import 'package:mangopos/data/utils/bogo_promo_allocator.dart';
 import 'package:mangopos/data/utils/loyalty_reward_utils.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/utils/offer_deal_pricing.dart';
+import 'package:mangopos/data/utils/grouped_item_edit.dart';
 import 'package:mangopos/core/multimesero/operator_permissions.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -4611,11 +4613,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
   }
 
-  /// Agrega una OFERTA vendible (tile "deal" del catálogo). Inserta [buyQty]
-  /// líneas separadas del producto (1 c/u) — NO una sola línea de cantidad N —
-  /// porque el motor BOGO descuenta por línea. Tras agregarlas, recarga la orden
-  /// y el motor auto-aplica el descuento (ej. 4x3 → cobra 3). Va por el repo
-  /// directo a propósito, saltando el anti-doble-clic de addItem.
+  /// Agrega una oferta del catálogo como una línea con [lineQty] unidades y
+  /// su descuento. Cada toque conserva la identidad de su paquete; el motor
+  /// de promociones automáticas ignora estas líneas marcadas [DEAL:].
   Future<void> addOfferDeal({
     required String menuItemId,
     required int lineQty,
@@ -4678,16 +4678,16 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await _ensureBusinessTaxSettingsLoaded();
     final resolvedTaxRate = productTaxRate ?? _cachedTaxRatePct;
 
-    // OPTIMISTA: subtotal NETO (bruto - descuento) + marcador [DEAL:], igual que
-    // lo guarda el backend, para que summarizeItemPricing aplique el override de
-    // oferta y se vea "Subtotal/Descuento/Total" correcto al INSTANTE.
-    final dealMarker = '[DEAL:${promotionId ?? ''}]';
+    // Igual que el backend: base antes del descuento. El resumen aplica el
+    // descuento una sola vez, también mientras el alta está en vuelo.
+    final dealMarker = [
+      '[DEAL:${promotionId ?? ''}]',
+      if (lineQty > 1) OfferDealRule(lineQty, discount).marker,
+    ].join('\n');
     OrderItem? optimisticItem;
     if (previousOrder != null && stillSelected()) {
       final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
-      final grossAmount = (qty * originalPrice - discount)
-          .clamp(0, double.infinity)
-          .toDouble();
+      final grossAmount = qty * originalPrice;
       final taxRateDecimal = resolvedTaxRate / 100.0;
       final optimisticAmounts = _estimateOptimisticItemAmounts(
         grossAmount: grossAmount,
@@ -4742,7 +4742,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         subtotal: optimisticAmounts.subtotal,
         discounts: discount,
         tax: optimisticAmounts.tax,
-        total: optimisticAmounts.total,
+        total: (optimisticAmounts.total - discount)
+            .clamp(0, double.infinity).toDouble(),
         checkId: null,
         isTakeout: false,
         status: 'draft',
@@ -4765,12 +4766,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       final updatedOrder = previousOrder.copyWith(
         subtotal: updatedSummary.subtotal,
+        discounts: updatedSummary.discounts,
         tax: updatedSummary.tax,
-        serviceFee: 0,
-        total:
-            updatedSummary.subtotal +
-            updatedSummary.tax -
-            updatedSummary.discounts,
+        serviceFee: updatedSummary.serviceFee,
+        total: updatedSummary.total,
       );
       state = state.copyWith(items: optimisticItems, order: updatedOrder);
     }
@@ -5152,8 +5151,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   /// por la LAN en este negocio (por su id local o, si la orden ya subió
   /// durante la impresión, por su id remoto). Solo se llama con una impresión
   /// en vuelo, así que sin ella las ediciones no ganan ningún await.
-  Future<bool> _inLocalKitchenPrint(String itemId) async {
-    final businessId = _activeBusinessId;
+  Future<bool> _inLocalKitchenPrint(String itemId, {String? capturedBusinessId}) async {
+    final businessId = capturedBusinessId ?? _activeBusinessId;
     for (final printing in List.of(_localKitchenPrints)) {
       if (printing.businessId != businessId) continue;
       if (printing.itemIds.contains(itemId)) return true;
@@ -5441,8 +5440,22 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       state = state.copyWith(error: 'El producto ya no pertenece a esta orden.');
       return;
     }
+    if (isOfferDealItem(targetItem) &&
+        OfferDealRule.fromNotes(targetItem.notes) == null &&
+        (targetItem.quantity - quantity).abs() > 0.0001 &&
+        (!_connectivity.isConnected || _isHubMode ||
+            orderId.startsWith('local-order-'))) {
+      state = state.copyWith(
+        error: 'Esta oferta antigua no tiene su regla guardada. '
+            'Necesita conexión con el servidor para recalcular sus unidades.',
+      );
+      return;
+    }
     final mutation = _captureOrderMutation(orderId);
     final originalItem = targetItem;
+    final nextDiscount = isOfferDealItem(targetItem)
+        ? discountAtQuantity(targetItem, quantity)
+        : targetItem.discounts;
     // T04: la versión (o los valores) que se veían antes de este toque.
     final editBase = OrderEditBase.ofItem(originalItem);
     final repository = ref.read(salesRepositoryProvider);
@@ -5466,6 +5479,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             subtotal: originalItem.subtotal,
             tax: originalItem.tax,
             total: originalItem.total,
+            discounts: originalItem.discounts,
             taxLines: originalItem.taxLines,
           );
         }).toList(growable: false));
@@ -5499,7 +5513,8 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                     quantity: quantity,
                     subtotal: optimisticAmounts.subtotal,
                     tax: optimisticAmounts.tax,
-                    total: (optimisticAmounts.total - item.discounts)
+                    discounts: nextDiscount,
+                    total: (optimisticAmounts.total - nextDiscount)
                         .clamp(0, double.infinity)
                         .toDouble(),
                     taxLines: _taxLinesAtSubtotal(
@@ -5518,6 +5533,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         order: state.order?.copyWith(
           subtotal: updatedSummary.subtotal,
           tax: updatedSummary.tax,
+          discounts: updatedSummary.discounts,
           serviceFee: updatedSummary.serviceFee,
           total: updatedSummary.total,
         ),
@@ -5540,6 +5556,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
                 subtotal: updatedItem.subtotal,
                 tax: updatedItem.tax,
                 total: updatedItem.total,
+                discounts: updatedItem.discounts,
                 taxLines: updatedItem.taxLines,
               )).toList(growable: false));
 
@@ -6101,8 +6118,13 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
     final newNotes = updatedItem.notes?.trim() ?? '';
     final oldNotes = current.notes?.trim() ?? '';
+    final quantityChanges =
+        (updatedItem.quantity - current.quantity).abs() > 0.0001;
+    final expectedDiscount = quantityChanges && isOfferDealItem(current)
+        ? discountAtQuantity(current, updatedItem.quantity)
+        : current.discounts;
     final discountChanged =
-        (updatedItem.discounts - current.discounts).abs() > 0.0001;
+        (updatedItem.discounts - expectedDiscount).abs() > 0.0001;
 
     if ((updatedItem.quantity - current.quantity).abs() > 0.0001) {
       await updateItemQuantity(itemId, updatedItem.quantity);
@@ -7508,6 +7530,142 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     await reloadOrderNow();
   }
 
+  /// El lote se acepta solo después de guardarse en disco. La cola lo
+  /// publica inmediatamente y el servidor aplica todas las líneas o ninguna.
+  Future<bool> saveItemGroup(
+    List<OrderItem> rows,
+    OrderItem edited, {
+    String? reductionReason,
+    String? reasonCode,
+    bool? isWaste,
+  }) async {
+    if (!operatorHasPermissionRef(ref, 'ventas.orden.editar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para editar líneas de orden.',
+      );
+      return false;
+    }
+    final orderId = state.order?.id;
+    if (orderId == null || rows.isEmpty) return false;
+    if (edited.quantity > rows.fold<double>(0, (s, i) => s + i.quantity) &&
+        !operatorHasPermissionRef(ref, 'ventas.orden.agregar_item')) {
+      state = state.copyWith(
+        error: 'No tienes permiso para agregar productos.',
+      );
+      return false;
+    }
+    if (rows.any(
+      (r) => r.orderId != orderId || r.status == 'paid' || r.status == 'void',
+    )) {
+      state = state.copyWith(
+        error: 'La cuenta cambió. Recárgala antes de editar.',
+      );
+      return false;
+    }
+    if (rows.any(
+      (r) => isOfferDealItem(r) && OfferDealRule.fromNotes(r.notes) == null,
+    )) {
+      state = state.copyWith(
+        error:
+            'Esta oferta antigua necesita su regla original antes de editarse en grupo.',
+      );
+      return false;
+    }
+    final mutation = _captureOrderMutation(orderId);
+    for (final row in rows) {
+      if (_localKitchenPrints.isNotEmpty &&
+          await _inLocalKitchenPrint(row.id, capturedBusinessId:mutation.businessId)) {
+        _applyOrderMutation(mutation,(s)=>s,error:_localKitchenPrintBusyMessage);
+        return false;
+      }
+    }
+    final businessId = mutation.businessId;
+    if (businessId == null) {
+      return false;
+    }
+    final plan = planGroupedItemEdit(
+      rows: rows,
+      edited: edited,
+      newId: () => const Uuid().v4(),
+      reductionReason: reductionReason,
+    );
+    for (final action in plan.actions) {
+      if (reductionReason != null) {
+        action['removal_reason'] = reductionReason;
+        action['reason_code'] = reasonCode;
+        action['is_waste'] = isWaste;
+        action['employee_id'] = mutation.actorEmployeeId;
+      }
+    }
+    final originalIds = rows.map((r) => r.id).toSet();
+    final all = repriceOfferGroups([
+      ...mutation.snapshot.items.where((r) => !originalIds.contains(r.id)),
+      ...plan.items,
+    ]);
+    final touchedScopes = plan.items
+        .map((i) => '${i.checkId}|${i.productId}')
+        .toSet();
+    final resultItems = all
+        .where(
+          (i) =>
+              originalIds.contains(i.id) ||
+              plan.items.any((p) => p.id == i.id) ||
+              (isOfferDealItem(i) &&
+                  touchedScopes.contains('${i.checkId}|${i.productId}')),
+        )
+        .toList();
+    final actionId = const Uuid().v4();
+    final action = <String, dynamic>{
+      'id': actionId,
+      'op_id': actionId,
+      'type': 'edit_item_group',
+      'order_id': orderId,
+      'origin': mutation.origin,
+      'table_id': mutation.tableId,
+      'slot_id': mutation.slotId,
+      'actions': plan.actions,
+      'result_items': resultItems.map(OrderItemSnapshot.encode).toList(),
+      'removed_ids': plan.removedIds,
+    };
+    try {
+      await _offlinePos.enqueueAction(businessId: businessId, action: action);
+    } catch (e) {
+      _applyOrderMutation(
+        mutation,
+        (s) => s,
+        error: 'No se guardó el cambio completo: $e',
+      );
+      return false;
+    }
+    final ids = resultItems.map((i) => i.id).toSet()..addAll(plan.removedIds);
+    CurrentOrderState apply(CurrentOrderState source) => _mutationItemsState(
+      source,
+      [...source.items.where((i) => !ids.contains(i.id)), ...resultItems],
+    );
+    _applyOrderMutation(mutation, apply);
+    try {
+      await _persistOrderMutation(mutation, apply);
+    } catch (e) {
+      // La intención ya está en SQLite: al reabrir se superpone a la copia.
+      debugPrint('Grupo guardado en cola; snapshot pendiente: $e');
+    }
+    if (_isMutationOrderActive(mutation)) {
+      state = state.copyWith(
+        syncStatus: 'Cambio completo guardado. Pendiente de sincronizar.',
+        isOfflineMode: true,
+      );
+    }
+    if (_connectivity.isConnected && !_isHubMode) {
+      unawaited(
+        syncPendingOfflineActions(reloadActiveOrder: true).catchError((
+          Object e,
+        ) {
+          debugPrint('Grupo pendiente de sincronizar: $e');
+        }),
+      );
+    }
+    return true;
+  }
   /// Detalle de una línea ([row] es lo que veía el operador) por la entrada
   /// versionada. Si otro equipo la cambió, deja el aviso y devuelve false.
   /// [partOfGroup]: la línea es parte de un cambio de varias; aplicar solo

@@ -11,6 +11,8 @@ import 'package:mangopos/services/session/session_controller.dart';
 import '../viewmodel/products_viewmodel.dart';
 import '../widgets/add_edit_product_dialog.dart';
 import '../widgets/import_catalog_dialog.dart';
+import '../widgets/product_filter_dropdown.dart';
+import '../widgets/product_stock_summary.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
 class ProductsView extends ConsumerStatefulWidget {
@@ -168,25 +170,25 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
     final compact = Breakpoints.isCompact(context);
 
     final searchField = _buildSearchField(viewModel);
-    final categoryDropdown = _buildDropdownButton(
+    final categoryDropdown = ProductFilterDropdown(
       name: 'Categoría',
-      allLabel: 'Todas',
+      allLabel: 'Todas las categorías',
       items: viewModel.categories,
       value: viewModel.selectedCategoryFilterId,
       onChanged: viewModel.setCategoryFilter,
       compact: compact,
     );
-    final menuDropdown = _buildDropdownButton(
+    final menuDropdown = ProductFilterDropdown(
       name: 'Menú',
-      allLabel: 'Todos',
+      allLabel: 'Todos los menús',
       items: viewModel.menus,
       value: viewModel.selectedMenuFilterId,
       onChanged: viewModel.setMenuFilter,
       compact: compact,
     );
-    final printAreaDropdown = _buildDropdownButton(
-      name: 'Área prod.',
-      allLabel: 'Todas',
+    final printAreaDropdown = ProductFilterDropdown(
+      name: 'Área de producción',
+      allLabel: 'Todas las áreas',
       items: viewModel.availablePrintAreas,
       value: viewModel.selectedPrintAreaFilterId,
       onChanged: viewModel.setPrintAreaFilter,
@@ -311,106 +313,6 @@ class _ProductsViewState extends ConsumerState<ProductsView> {
   void _clearFilters(ProductsViewModel viewModel) {
     _searchController.clear();
     viewModel.clearAllFilters();
-  }
-
-  /// Dropdown de filtro que SIEMPRE muestra por cuál campo se está filtrando.
-  /// Antes los tres se veían como "-- Todas --" / "-- Todos --" y no había
-  /// forma de saber cuál era cuál sin abrir el menú. Ahora en desktop el
-  /// nombre va como prefijo dentro del control ("Categoría: Todas") y en
-  /// móvil como caption encima, donde no hay ancho para el prefijo.
-  Widget _buildDropdownButton({
-    required String name,
-    required String allLabel,
-    required List<Map<String, dynamic>> items,
-    required String? value,
-    required ValueChanged<String?> onChanged,
-    required bool compact,
-  }) {
-    // Texto que se ve en el botón cerrado. En desktop lleva el nombre del
-    // filtro adelante; en móvil solo el valor (el nombre va en el caption).
-    Widget closedLabel(String text, {required bool isPlaceholder}) {
-      return Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: Text(
-          compact ? text : '$name: $text',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          softWrap: false,
-          style: TextStyle(
-            fontSize: 14,
-            color: isPlaceholder
-                ? AppColors.mutedForeground
-                : AppColors.foreground,
-            fontWeight: isPlaceholder ? FontWeight.w400 : FontWeight.w600,
-          ),
-        ),
-      );
-    }
-
-    final field = Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-      decoration: BoxDecoration(
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(AppRadius.button),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: value,
-          // En móvil los dropdowns van dentro de Expanded (ancho acotado),
-          // así que pueden expandirse y elipsar. En desktop la fila les da
-          // ancho infinito, donde isExpanded reventaría el layout.
-          isExpanded: compact,
-          hint: closedLabel(allLabel, isPlaceholder: true),
-          // El menú abierto muestra solo el nombre de cada opción; el botón
-          // cerrado es el que lleva el prefijo del filtro.
-          selectedItemBuilder: (context) => [
-            closedLabel(allLabel, isPlaceholder: true),
-            ...items.map(
-              (item) => closedLabel(
-                (item['name'] ?? '') as String,
-                isPlaceholder: false,
-              ),
-            ),
-          ],
-          icon: Icon(Icons.arrow_drop_down, color: AppColors.mutedForeground),
-          items: [
-            DropdownMenuItem<String>(
-              value: null,
-              child: Text('-- $allLabel --'),
-            ),
-            ...items.map((item) {
-              return DropdownMenuItem<String>(
-                value: item['id'].toString(),
-                child: Text(item['name'] ?? ''),
-              );
-            }),
-          ],
-          onChanged: onChanged,
-        ),
-      ),
-    );
-
-    if (!compact) return field;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          name.toUpperCase(),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.4,
-            color: AppColors.mutedForeground,
-          ),
-        ),
-        const SizedBox(height: 2),
-        field,
-      ],
-    );
   }
 
   void _showAddEditDialog(
@@ -916,17 +818,21 @@ class _ProductsTable extends StatelessWidget {
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  if (_extractStock(product) != null) ...[
+                                  if (productStockSummary(product)
+                                      case final stock?) ...[
                                     const SizedBox(height: 2),
-                                    Text(
-                                      'Stock: ${_extractStock(product)!.label}',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: _extractStock(product)!
-                                            .isLow
-                                            ? const Color(0xFFC2410C)
-                                            : AppColors.mutedForeground,
+                                    Tooltip(
+                                      message: ProductStockSummary.tooltip,
+                                      child: Text(
+                                        stock.text,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: stock.isLow
+                                              ? const Color(0xFFC2410C)
+                                              : AppColors.mutedForeground,
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -1093,15 +999,6 @@ String _resolveProductionAreaName({
   return '-';
 }
 
-/// Resumen de stock disponible para mostrar en la lista de productos.
-/// Devuelve null si el producto no es inventariable o no tiene receta 1:1
-/// (esos no se muestran).
-class _StockSummary {
-  final String label;
-  final bool isLow;
-  const _StockSummary({required this.label, required this.isLow});
-}
-
 /// Estado de disponibilidad de un producto en el catálogo. Hay 3 casos:
 ///   - Activo: is_active = true. Verde, clickable para apagar manualmente.
 ///   - Auto-agotado: is_active = false AND auto_disabled = true. Naranja.
@@ -1192,28 +1089,6 @@ class _AvailabilityIndicator extends StatelessWidget {
       ),
     );
   }
-}
-
-_StockSummary? _extractStock(Map<String, dynamic> product) {
-  final tracked = product['is_inventory_tracked'] == true;
-  if (!tracked) return null;
-  final stockRaw = product['stock'];
-  if (stockRaw == null) return null;
-  final stock = stockRaw is Map<String, dynamic>
-      ? stockRaw
-      : Map<String, dynamic>.from(stockRaw as Map);
-  final units = stock['available_units'];
-  if (units == null) return null;
-  final num n = units is num ? units : (num.tryParse(units.toString()) ?? 0);
-  final unit = stock['unit']?.toString() ?? '';
-  final unitSuffix = unit.isEmpty ? '' : ' $unit';
-  final value = n.toDouble();
-  final isInt = value == value.truncate();
-  final formatted = isInt ? value.toInt().toString() : value.toStringAsFixed(2);
-  return _StockSummary(
-    label: '$formatted$unitSuffix',
-    isLow: value <= 0,
-  );
 }
 
 class _TableHeaderCell extends StatelessWidget {
@@ -1477,36 +1352,37 @@ class _ProductCardMobile extends StatelessWidget {
                   ),
                 ],
               ),
-              if (_extractStock(product) != null) ...[
+              if (productStockSummary(product) case final s?) ...[
                 const SizedBox(height: 8),
-                Builder(
-                  builder: (_) {
-                    final s = _extractStock(product)!;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: (s.isLow
-                                ? const Color(0xFFC2410C)
-                                : AppColors.success)
-                            .withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.inventory_2_outlined,
-                            size: 14,
-                            color: s.isLow
-                                ? const Color(0xFFC2410C)
-                                : AppColors.success,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Stock: ${s.label}',
+                Tooltip(
+                  message: ProductStockSummary.tooltip,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: (s.isLow
+                              ? const Color(0xFFC2410C)
+                              : AppColors.success)
+                          .withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.inventory_2_outlined,
+                          size: 14,
+                          color: s.isLow
+                              ? const Color(0xFFC2410C)
+                              : AppColors.success,
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            s.text,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -1515,10 +1391,10 @@ class _ProductCardMobile extends StatelessWidget {
                                   : AppColors.success,
                             ),
                           ),
-                        ],
-                      ),
-                    );
-                  },
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
               const SizedBox(height: 10),

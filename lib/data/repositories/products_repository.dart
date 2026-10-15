@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../datasources/queries/products_queries.dart';
@@ -90,6 +91,79 @@ class ProductsRepository {
     }
 
     return products;
+  }
+
+  static const int _stockPageSize = 1000;
+
+  /// Existencia de cada producto sumando TODOS los almacenes activos del
+  /// negocio: menu_item_id → unidades. `v_menu_items_stock` suma solo los
+  /// que alimentan el punto de venta (el del área del producto, o los
+  /// marcados para venta) — eso es lo vendible, no lo que hay en total.
+  /// Lanza si alguna lectura falla.
+  Future<Map<String, int>> getStockAcrossWarehouses(String businessId) async {
+    final results = await Future.wait<dynamic>([
+      _client
+          .from(ProductsQueries.viewMenuItemsStock)
+          .select(ProductsQueries.selectMenuItemsStockLink),
+      _client
+          .from(ProductsQueries.tableWarehouses)
+          .select('id, is_active')
+          .eq('business_id', businessId),
+    ]);
+    final links = List<Map<String, dynamic>>.from(results[0] as List);
+    final warehouseIds = [
+      for (final w in (results[1] as List).cast<Map>())
+        if (w['is_active'] != false) w['id'].toString(),
+    ];
+
+    final stockRows = <Map<String, dynamic>>[];
+    if (warehouseIds.isNotEmpty) {
+      // Paginado: con varios almacenes las filas pasan fácil del tope de
+      // PostgREST y la suma saldría corta sin avisar.
+      for (var from = 0; ; from += _stockPageSize) {
+        final rows = await _client
+            .from(ProductsQueries.tableInventoryStock)
+            .select('item_id, quantity')
+            .inFilter('warehouse_id', warehouseIds)
+            .order('id')
+            .range(from, from + _stockPageSize - 1);
+        final page = List<Map<String, dynamic>>.from(rows as List);
+        stockRows.addAll(page);
+        if (page.length < _stockPageSize) break;
+      }
+    }
+    return unitsAcrossWarehouses(links: links, stockRows: stockRows);
+  }
+
+  /// Unidades de cada producto con la existencia de [stockRows] (filas de
+  /// `inventory_stock` de los almacenes a sumar): floor(suma / insumo por
+  /// unidad), la misma cuenta que `v_menu_items_stock`.
+  @visibleForTesting
+  static Map<String, int> unitsAcrossWarehouses({
+    required List<Map<String, dynamic>> links,
+    required List<Map<String, dynamic>> stockRows,
+  }) {
+    double? toDouble(dynamic v) =>
+        v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+
+    final onHand = <String, double>{};
+    for (final row in stockRows) {
+      final itemId = row['item_id']?.toString();
+      if (itemId == null) continue;
+      onHand[itemId] = (onHand[itemId] ?? 0) + (toDouble(row['quantity']) ?? 0);
+    }
+
+    final units = <String, int>{};
+    for (final link in links) {
+      final menuItemId = link['menu_item_id']?.toString();
+      final itemId = link['inventory_item_id']?.toString();
+      final perUnit = toDouble(link['ingredient_per_unit']);
+      if (menuItemId == null || itemId == null) continue;
+      if (perUnit == null || perUnit <= 0) continue;
+      // El margen evita que 0.3 / 0.1 = 2.999… baje a 2 (en SQL es exacto).
+      units[menuItemId] = ((onHand[itemId] ?? 0) / perUnit + 1e-9).floor();
+    }
+    return units;
   }
 
   Future<List<Map<String, dynamic>>> getCategories(String businessId) async {

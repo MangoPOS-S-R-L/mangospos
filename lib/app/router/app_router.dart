@@ -93,6 +93,7 @@ import '../../presentation/settings/header_personalize/view/header_personalize_v
 import '../../presentation/settings/currencies/view/currencies_view.dart';
 import '../../presentation/settings/more settings/system settings/device/view/device_binding_view.dart';
 import '../../presentation/settings/devices/view/device_sessions_view.dart';
+import '../../presentation/settings/history/view/change_history_view.dart';
 import '../../presentation/settings/regional/view/regional_view.dart';
 import 'package:mangopos/core/utils/logger.dart';
 import 'route_permissions.dart';
@@ -817,6 +818,10 @@ class AppRouter {
               GoRoute(
                 path: AppRoutes.settingsDevices,
                 builder: (context, state) => const DeviceSessionsView(),
+              ),
+              GoRoute(
+                path: AppRoutes.settingsHistory,
+                builder: (context, state) => const ChangeHistoryView(),
               ),
             ],
           ),

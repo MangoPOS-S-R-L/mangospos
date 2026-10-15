@@ -40,12 +40,25 @@ class _Server extends SalesRepository {
       return Future.sync(() => scripted.removeAt(0)(edit));
     }
     return Future.value(
-      OrderEditResult(
-        status: 'applied',
-        version: (edit.base.version ?? 0) + 1,
-      ),
+      OrderEditResult(status: 'applied', version: (edit.base.version ?? 0) + 1),
     );
   }
+
+  @override
+  Future<OrderEditResult> applyItemGroup({
+    required String orderId,
+    required String opId,
+    required List<Map<String, dynamic>> actions,
+    bool force = false,
+  }) => _reply(
+    'group',
+    actions,
+    OrderEdit(
+      orderId: orderId,
+      opId: opId,
+      base: force ? OrderEditBase.forced : OrderEditBase.ofVersion(null),
+    ),
+  );
 
   @override
   Future<OrderEditResult> updateItemQuantity({
@@ -129,15 +142,14 @@ void main() {
 
   setUp(() => server = _Server(client));
 
-  Future<OfflineQueueSyncResult> sync(String biz) =>
-      service.syncPendingActions(
-        businessId: biz,
-        salesRepository: server,
-        printingService: PrintingService(client),
-        inventoryRepository: InventoryRepository(client),
-        cashierRepository: CashierRepository(client),
-        force: true,
-      );
+  Future<OfflineQueueSyncResult> sync(String biz) => service.syncPendingActions(
+    businessId: biz,
+    salesRepository: server,
+    printingService: PrintingService(client),
+    inventoryRepository: InventoryRepository(client),
+    cashierRepository: CashierRepository(client),
+    force: true,
+  );
 
   Future<void> enqueue(String biz, Map<String, dynamic> action) =>
       service.enqueueAction(
@@ -148,25 +160,129 @@ void main() {
   Future<List<Map<String, dynamic>>> unsettled(String biz) =>
       service.unsettledActions(biz);
 
-  test('respuesta perdida: el reintento manda el mismo id de operación', () async {
-    const biz = 't04-lost-reply';
-    await enqueue(biz, {
-      'id': 'qty-lost',
-      'type': 'update_item_quantity',
-      'quantity': 2,
-      'base_version': 5,
-    });
-    server.scripted.add((_) => throw TimeoutException('respuesta perdida'));
+  test(
+    'grupo: respuesta perdida repite una sola transacción con la misma llave',
+    () async {
+      const biz = 'group-lost-reply';
+      final actions = [
+        {
+          'kind': 'details',
+          'item_id': _item,
+          'base_version': 5,
+          'args': {'qty': 3},
+        },
+        {
+          'kind': 'delete',
+          'item_id': '0e000000-0000-4000-8000-0000000000a2',
+          'base_version': 1,
+        },
+      ];
+      await enqueue(biz, {
+        'id': 'group-1',
+        'type': 'edit_item_group',
+        'actions': actions,
+        'result_items': [],
+        'removed_ids': [],
+      });
+      server.scripted.add((_) => throw TimeoutException('respuesta perdida'));
+      await sync(biz);
+      expect((await unsettled(biz)).single['actions'], actions);
+      await sync(biz);
+      expect(server.sent.map((s) => s.kind), ['group', 'group']);
+      expect(server.sent[0].edit.opId, server.sent[1].edit.opId);
+      expect(server.sent[0].value, server.sent[1].value);
+      expect(await unsettled(biz), isEmpty);
+    },
+  );
+  test(
+    'grupo: conflicto conserva todo y solo se fuerza por decisión del operador',
+    () async {
+      const biz = 'group-conflict';
+      await enqueue(biz, {
+        'id': 'group-conflict-op',
+        'type': 'edit_item_group',
+        'actions': [
+          {
+            'kind': 'details',
+            'item_id': _item,
+            'base_version': 5,
+            'args': {'qty': 3},
+          },
+          {
+            'kind': 'delete',
+            'item_id': '0e000000-0000-4000-8000-0000000000a2',
+            'base_version': 1,
+          },
+        ],
+        'result_items': [],
+        'removed_ids': [],
+      });
+      server.scripted.add(_conflict);
+      await sync(biz);
+      final pending = (await unsettled(biz)).single;
+      expect(pending['status'], 'dead');
+      expect(pending['edit_conflict'], true);
+      expect(pending['actions'], hasLength(2));
+      await service.retryDeadActions(biz);
+      await sync(biz);
+      expect(server.sent.last.edit.base.force, true);
+      expect(await unsettled(biz), isEmpty);
+    },
+  );
+  test(
+    'grupo: su versión final se usa en la siguiente edición de la misma línea',
+    () async {
+      const biz = 'group-rebase';
+      await enqueue(biz, {
+        'id': 'group-before-qty',
+        'type': 'edit_item_group',
+        'actions': [
+          {
+            'kind': 'details',
+            'item_id': _item,
+            'base_version': 5,
+            'args': {'qty': 3},
+          },
+        ],
+        'result_items': [],
+        'removed_ids': [],
+      });
+      await enqueue(biz, {
+        'id': 'qty-after-group',
+        'type': 'update_item_quantity',
+        'quantity': 4,
+        'base_version': 5,
+      });
+      server.scripted.add(
+        (_) => const OrderEditResult(status: 'applied', versions: {_item: 8}),
+      );
+      await sync(biz);
+      expect(server.sent.last.edit.base.version, 8);
+    },
+  );
 
-    await sync(biz);
-    expect(await unsettled(biz), hasLength(1));
-    await sync(biz);
+  test(
+    'respuesta perdida: el reintento manda el mismo id de operación',
+    () async {
+      const biz = 't04-lost-reply';
+      await enqueue(biz, {
+        'id': 'qty-lost',
+        'type': 'update_item_quantity',
+        'quantity': 2,
+        'base_version': 5,
+      });
+      server.scripted.add((_) => throw TimeoutException('respuesta perdida'));
 
-    expect(server.sent, hasLength(2));
-    expect(server.sent[0].edit.opId, server.sent[1].edit.opId);
-    expect(server.sent.map((s) => s.edit.base.version), [5, 5]);
-    expect(await unsettled(biz), isEmpty);
-  });
+      await sync(biz);
+      expect(await unsettled(biz), hasLength(1));
+      await sync(biz);
+
+      expect(server.sent, hasLength(2));
+      expect(server.sent[0].edit.opId, server.sent[1].edit.opId);
+      expect(server.sent.map((s) => s.edit.base.version), [5, 5]);
+      expect(await unsettled(biz), isEmpty);
+    },
+  );
 
   test('otro equipo cambió la línea antes de subir: no se aplica, queda el '
       'conflicto con lo vigente y «Reintentar» lo aplica encima', () async {
@@ -249,45 +365,48 @@ void main() {
     expect(server.sent.single.edit.base.version, 5);
   });
 
-  test('cambios encadenados de este equipo: el siguiente pasa a la versión '
-      'que dejó el anterior; uno de otra versión sigue siendo conflicto', () async {
-    const biz = 't04-rebase';
-    await enqueue(biz, {
-      'id': 'qty-own',
-      'type': 'update_item_quantity',
-      'quantity': 2,
-      'base_version': 5,
-    });
-    await enqueue(biz, {
-      'id': 'notes-own',
-      'type': 'update_item_notes',
-      'notes': 'sin hielo',
-      'base_version': 5,
-    });
+  test(
+    'cambios encadenados de este equipo: el siguiente pasa a la versión '
+    'que dejó el anterior; uno de otra versión sigue siendo conflicto',
+    () async {
+      const biz = 't04-rebase';
+      await enqueue(biz, {
+        'id': 'qty-own',
+        'type': 'update_item_quantity',
+        'quantity': 2,
+        'base_version': 5,
+      });
+      await enqueue(biz, {
+        'id': 'notes-own',
+        'type': 'update_item_notes',
+        'notes': 'sin hielo',
+        'base_version': 5,
+      });
 
-    await sync(biz);
+      await sync(biz);
 
-    expect(server.sent.map((s) => s.kind), ['qty', 'notes']);
-    expect(server.sent.map((s) => s.edit.base.version), [5, 6]);
-    expect(await unsettled(biz), isEmpty);
+      expect(server.sent.map((s) => s.kind), ['qty', 'notes']);
+      expect(server.sent.map((s) => s.edit.base.version), [5, 6]);
+      expect(await unsettled(biz), isEmpty);
 
-    const other = 't04-no-rebase';
-    await enqueue(other, {
-      'id': 'qty-own-2',
-      'type': 'update_item_quantity',
-      'quantity': 2,
-      'base_version': 5,
-    });
-    await enqueue(other, {
-      'id': 'notes-older',
-      'type': 'update_item_notes',
-      'notes': 'otra',
-      'base_version': 4,
-    });
-    await sync(other);
-    expect(server.sent.last.kind, 'notes');
-    expect(server.sent.last.edit.base.version, 4);
-  });
+      const other = 't04-no-rebase';
+      await enqueue(other, {
+        'id': 'qty-own-2',
+        'type': 'update_item_quantity',
+        'quantity': 2,
+        'base_version': 5,
+      });
+      await enqueue(other, {
+        'id': 'notes-older',
+        'type': 'update_item_notes',
+        'notes': 'otra',
+        'base_version': 4,
+      });
+      await sync(other);
+      expect(server.sent.last.kind, 'notes');
+      expect(server.sent.last.edit.base.version, 4);
+    },
+  );
 
   test('conflicto que subió por el Hub: queda en cuarentena; «Reintentar» lo '
       'reaplica el Hub encima, nunca la cola local', () async {

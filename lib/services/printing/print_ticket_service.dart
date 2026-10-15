@@ -116,34 +116,22 @@ class PrintTicketService {
         order.total > 0 ||
         order.discounts > 0;
 
-    // Preferimos `summary` (incluye recomputación takeout-inclusive y la
-    // override `inclusiveGrossNet` → matchea la UI). Caemos a los valores
-    // guardados en DB SOLO cuando `summary` está degenerado (perdió la info
-    // de impuestos pero la orden persistida sí los tiene). Esto hace que
-    // reimpresiones (con `preferStoredOrderTotals=true`) usen la lógica
-    // recomputada y no los valores antiguos del trigger backend, que para
-    // takeout inclusive sobreestimaba el ITBIS y subestimaba el subtotal.
-    final summaryIsDegenerate = summary.tax <= 0 && order.tax > 0;
+    // Una reimpresión usa los importes del documento emitido incluso si la
+    // diferencia con el catálogo actual es menor a un peso.
+    if (preferStoredOrderTotals && hasStoredTotals) {
+      return _PrintableReceiptTotals(
+        subtotal: order.subtotal,
+        discounts: order.discounts,
+        serviceFee: order.serviceFee,
+        tax: order.tax,
+        total: order.total,
+        deliveryFee: order.deliveryFee,
+      );
+    }
 
-    // Reimpresión de comprobantes ya emitidos (`preferStoredOrderTotals`):
-    // el NCF manda. Si el total recomputado desde ítems difiere del total
-    // GUARDADO en el comprobante por más de RD$1, imprimimos los valores
-    // oficiales del fiscal document (subtotal/impuestos/total) en vez del
-    // recálculo. Pasa cuando la orden se cerró con un monto distinto al de
-    // sus ítems (ej. cobro que no cubrió todo, o ítems editados tras emitir):
-    // el papel debe coincidir con la pantalla y con lo que registró la DGII,
-    // no inflar/desinflar según los ítems. Igual que el guard del modal en
-    // sales_history_view. Gate estricto (flag + total guardado > 0 +
-    // desajuste real) → facturas en vivo y reimpresiones que cuadran NO se
-    // ven afectadas.
-    final mismatchVsStored =
-        preferStoredOrderTotals &&
-        hasStoredTotals &&
-        order.total > 0 &&
-        (summary.total - order.total).abs() > 1.0;
-
-    final useStoredTotals =
-        (hasStoredTotals && summaryIsDegenerate) || mismatchVsStored;
+    // Fuera de reimpresión, solo se usa el respaldo guardado si faltan los
+    // impuestos en las líneas. No alterar los valores del documento emitido.
+    final useStoredTotals = hasStoredTotals && summary.tax <= 0 && order.tax > 0;
 
     if (!useStoredTotals) {
       return _PrintableReceiptTotals(
@@ -1377,6 +1365,24 @@ class PrintTicketService {
           'No se imprime: el comprobante ampararía mercancía de otra cuenta.',
         );
       }
+    }
+
+    final hasRecordedPayment = payments.any(
+      (payment) =>
+          payment.status == 'completed' && payment.amount > 0.005,
+    );
+    if (!items.any((item) => item.status != 'void') &&
+        (order.total > 0.005 || hasRecordedPayment)) {
+      throw StateError(
+        'No se puede imprimir la factura: faltan los productos '
+        'del comprobante. Recarga la venta antes de reimprimir.',
+      );
+    }
+    if (preferStoredOrderTotals && order.total <= 0.005 && hasRecordedPayment) {
+      throw StateError(
+        'No se puede reimprimir una factura en cero con un '
+        'cobro registrado. Recarga el comprobante original.',
+      );
     }
 
     _currency = currency ?? BusinessCurrency.fallbackDop;

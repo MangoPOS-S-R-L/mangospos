@@ -29,6 +29,8 @@ import '../../../data/models/kitchen_models.dart';
 /// requeriría capturar un snapshot base al entrar a modo hub (paso de
 /// activación pendiente). El caso principal —ver comandas NUEVAS sin red— sí
 /// queda cubierto.
+import 'grouped_ops.dart';
+
 class HubKitchenProjector {
   /// Dobla [ops] (en orden seq) en órdenes de cocina visibles.
   static List<KitchenOrder> project(List<Map<String, dynamic>> ops) {
@@ -41,7 +43,7 @@ class HubKitchenProjector {
 
     final orders = <String, _OrderAcc>{};
 
-    for (final op in sorted) {
+    for (final op in sorted.expand(expandGroupedOps)) {
       final type = op['type']?.toString();
       final orderId = op['order_id']?.toString() ?? '';
       if (orderId.isEmpty && type != 'kds_item_status') continue;
@@ -51,18 +53,22 @@ class HubKitchenProjector {
           final acc = orders.putIfAbsent(orderId, () => _OrderAcc(orderId));
           final itemId = op['item_id']?.toString() ?? '';
           if (itemId.isEmpty) break;
-          acc.items[itemId] = _ItemAcc(
-            id: itemId,
-            orderId: orderId,
-            productName: op['product_name']?.toString() ?? 'Producto',
-            quantity:
-                (op['qty'] as num?)?.toDouble() ??
-                (op['quantity'] as num?)?.toDouble() ??
-                1,
-            notes: op['notes']?.toString(),
-            isTakeout: op['takeout'] == true || op['is_takeout'] == true,
-            createdAt: _stamp(op),
-          );
+          acc.items[itemId] =
+              _ItemAcc(
+                  id: itemId,
+                  orderId: orderId,
+                  productName: op['product_name']?.toString() ?? 'Producto',
+                  quantity:
+                      (op['qty'] as num?)?.toDouble() ??
+                      (op['quantity'] as num?)?.toDouble() ??
+                      1,
+                  notes: op['notes']?.toString(),
+                  isTakeout: op['takeout'] == true || op['is_takeout'] == true,
+                  createdAt: _stamp(op),
+                )
+                ..visibleToKitchen =
+                    acc.sent &&
+                    (op['item_snapshot'] as Map?)?['status'] != 'draft';
           break;
         case 'delete_item':
           final acc = orders[orderId];
@@ -89,6 +95,9 @@ class HubKitchenProjector {
         case 'confirm_local_order':
           final acc = orders.putIfAbsent(orderId, () => _OrderAcc(orderId));
           acc.sent = true;
+          for (final item in acc.items.values) {
+            item.visibleToKitchen = true;
+          }
           acc.sentAt ??= _stamp(op);
           break;
         case 'mark_order_takeout':
@@ -127,7 +136,7 @@ class HubKitchenProjector {
     for (final acc in orders.values) {
       if (!acc.sent) continue;
       final items = acc.items.values
-          .where((i) => i.status != 'served')
+          .where((i) => i.visibleToKitchen && i.status != 'served')
           .map((i) => i.toModel())
           .toList(growable: false);
       if (items.isEmpty) continue;
@@ -187,6 +196,7 @@ class _ItemAcc {
   bool isTakeout;
   DateTime createdAt;
   String status = 'pending';
+  bool visibleToKitchen = false;
   DateTime? startedAt;
   DateTime? readyAt;
 

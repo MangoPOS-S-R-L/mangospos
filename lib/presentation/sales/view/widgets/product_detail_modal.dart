@@ -9,6 +9,7 @@ import '../../viewmodel/menu_browser_viewmodel.dart';
 import '../../viewmodel/sales_viewmodel.dart';
 import '../../../../data/models/sales_models.dart';
 import '../../../../data/utils/loyalty_reward_utils.dart';
+import '../../../../data/utils/offer_deal_pricing.dart';
 import 'package:mangopos/core/utils/app_snackbar.dart';
 import 'package:mangopos/core/utils/friendly_error.dart';
 
@@ -431,14 +432,14 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (_isCourtesy && _courtesyReasonController.text.isNotEmpty) {
       noteParts.add('$_courtesyPrefix$courtesyReason]');
     }
-    final finalNotes = noteParts.join('\n');
+    final finalNotes = preserveOfferRule(noteParts.join('\n'), widget.item);
 
     // El nombre del producto no se edita desde aquí — viene fijo del menú.
     final updated = widget.item.copyWith(
       quantity: _quantity,
       isTakeout: _isTakeout,
       discounts: discount,
-      notes: finalNotes.isNotEmpty ? finalNotes : null,
+      notes: finalNotes,
     );
 
     setState(() {
@@ -1468,7 +1469,7 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     if (_isFullCourtesyDiscount(widget.item.discounts)) {
       return 0;
     }
-    return widget.item.discounts;
+    return _scopedItems.fold<double>(0, (sum, item) => sum + item.discounts);
   }
 
   bool _isFullCourtesyDiscount(double discounts) {
@@ -1495,6 +1496,13 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
     }
     if (_isCourtesy) {
       return _fullAmountForQuantity(_quantity);
+    }
+    if (_dealMarker != null &&
+        (_enteredDiscount() - _initialManualDiscountValue).abs() < 0.001) {
+      return discountForGroupQuantity(
+        _scopedItems,
+        _quantity,
+      ).clamp(0, _fullAmountForQuantity(_quantity));
     }
     return _enteredDiscount().clamp(0, _fullAmountForQuantity(_quantity));
   }
@@ -1534,6 +1542,8 @@ class _ProductDetailModalState extends State<ProductDetailModal> {
       } else if (line.startsWith('[DEAL:') && line.endsWith(']')) {
         // Marcador de oferta: no es nota humana, se oculta del campo editable.
         dealMarker = line;
+      } else if (line.startsWith('[DEAL_RULE:') && line.endsWith(']')) {
+        continue;
       } else if (line == loyaltyMarker) {
         // Premio de la tarjeta de sellos: tampoco es nota humana.
         continue;

@@ -43,6 +43,7 @@ import 'package:mangopos/data/repositories/printing_repository.dart'
     show PrintOutcome;
 import 'package:mangopos/data/repositories/printing_service.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
+import 'package:mangopos/data/utils/offer_deal_pricing.dart';
 import 'package:mangopos/data/utils/loyalty_reward_utils.dart';
 import 'package:mangopos/presentation/loyalty/widgets/order_loyalty_strip.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
@@ -76,7 +77,6 @@ import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
 import 'package:mangopos/presentation/sales/logic/payment_completion_gate.dart';
 import 'package:mangopos/presentation/sales/logic/unit_removal_plan.dart';
-import 'package:mangopos/core/utils/friendly_error.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
 import 'package:mangopos/presentation/sales/widgets/table_deposit_dialog.dart';
@@ -4081,128 +4081,6 @@ class _CartView extends ConsumerWidget {
     return s != 'draft' && s != 'open' && s != 'void' && s != 'paid';
   }
 
-  /// `true` si los cambios a [row] no pueden ir directo al servidor y deben
-  /// pasar por la cola de la caja: sin red, caja cliente del Hub (WAN malo) u
-  /// orden que todavía es local.
-  bool _mustQueueItemEdits(WidgetRef ref, OrderItem row) =>
-      !ConnectivityService().isConnected ||
-      ref.read(hubModeProvider) == TerminalMode.hubClient ||
-      row.orderId.startsWith('local-order-');
-
-  /// Le quita unidades a UNA línea, sin borrarla, al eliminar «1 de N».
-  ///
-  /// Va en un solo UPDATE con la etiqueta `[REDUCCION:motivo]`: el trigger de
-  /// `order_item_removals` (20260919_0002) registra la reducción solo cuando
-  /// la cantidad baja y aparece una etiqueta nueva en la MISMA escritura. Las
-  /// notas y el descuento son los de ESA línea (no los del grupo), y el
-  /// descuento se prorratea para que una cortesía siga cubriendo justo lo que
-  /// queda. Devuelve `true` si la línea quedó con la cantidad nueva.
-  Future<bool> _trimLineForRemoval(
-    BuildContext context,
-    WidgetRef ref,
-    UnitRemovalStep step,
-    OrderItemRemovalDecision decision,
-  ) async {
-    final row = step.item;
-    final next = step.nextQuantity;
-    final orderNotifier = ref.read(currentOrderProvider.notifier);
-
-    // Sin red, caja cliente del Hub u orden local: la cantidad viaja por la
-    // cola de la caja. El registro del servidor no verá la etiqueta, pero el
-    // comprobante y el aviso al bar sí salen.
-    Future<bool> trimViaQueue() async {
-      await orderNotifier.updateItemQuantity(row.id, next);
-      for (final current in ref.read(currentOrderProvider).items) {
-        if (current.id == row.id) {
-          return (current.quantity - next).abs() < 0.0001;
-        }
-      }
-      return false;
-    }
-
-    if (_mustQueueItemEdits(ref, row)) return trimViaQueue();
-
-    final ratio = row.quantity > 0 ? next / row.quantity : 0.0;
-    final notes = [
-      if (row.notes?.trim().isNotEmpty == true) row.notes!.trim(),
-      '[REDUCCION:${decision.text}]',
-    ].join('\n');
-    try {
-      // T04: con la versión que veía el operador; si otro equipo la cambió,
-      // queda el aviso y no se quita nada.
-      final applied = await orderNotifier.updateItemDetailsVersioned(
-        row,
-        productName: row.productName,
-        quantity: next,
-        isTakeout: row.isTakeout,
-        discounts: double.parse((row.discounts * ratio).toStringAsFixed(2)),
-        notes: notes,
-      );
-      if (!applied) return false;
-    } catch (e) {
-      if (OfflinePosService.isTransportError(e)) return trimViaQueue();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showAppSnackBar(
-          SnackBar(
-            content: Text(
-              'No se pudo quitar ${row.productName}: '
-              '${FriendlyError.humanize(e.toString())}',
-            ),
-          ),
-        );
-      }
-      return false;
-    }
-    if (_itemAlreadySentToKitchen(row)) {
-      unawaited(
-        orderNotifier.noteItemRemoval(
-          row.id,
-          reason: decision.text,
-          reasonCode: decision.reason.code,
-          isWaste: decision.isWaste,
-        ),
-      );
-    }
-    return true;
-  }
-
-  /// Agrega [qty] unidades de [source] como una línea DRAFT nueva, en el mismo
-  /// check. Se usa al SUBIR la cantidad de un ítem ya enviado a cocina: la
-  /// línea enviada conserva su qty y el incremento queda "por confirmar" →
-  /// irá a cocina con "Enviar a cocina" (igual que tocar el producto del menú).
-  Future<void> _addUnitsAsNewDraftLine(
-    WidgetRef ref,
-    OrderItem source,
-    double qty,
-    bool isTakeout,
-  ) async {
-    if (qty <= 0 || source.productId == null) return;
-    final st = ref.read(currentOrderProvider);
-    final orderId = st.order?.id;
-    if (orderId == null) return;
-    var checkPosition = 1;
-    if (source.checkId != null) {
-      for (final c in st.checks) {
-        if (c.id == source.checkId) {
-          checkPosition = c.position;
-          break;
-        }
-      }
-    }
-    await ref
-        .read(currentOrderProvider.notifier)
-        .addItem(
-          menuItemId: source.productId!,
-          qty: qty,
-          checkPos: checkPosition,
-          takeout: isTakeout,
-          productName: source.productName,
-          productPrice: source.unitPrice,
-          productTaxMode: source.taxMode,
-          productTaxRate: source.taxRate,
-        );
-  }
-
   void _openProductDetailModal(
     BuildContext context,
     WidgetRef ref,
@@ -4302,42 +4180,13 @@ class _CartView extends ConsumerWidget {
               selectedModifiers: selectedModifiers,
             ),
         onSave: (updatedItem) async {
-          final notifier = ref.read(currentOrderProvider.notifier);
-          final increased = updatedItem.quantity > item.quantity + 0.0001;
-          if (increased &&
-              _itemAlreadySentToKitchen(item) &&
-              item.productId != null) {
-            // Subir cantidad de un ítem YA enviado a cocina: la línea enviada
-            // conserva su qty (con los demás cambios del modal) y el delta va
-            // como línea draft NUEVA → irá a cocina con "Enviar a cocina".
-            await notifier.updateItem(
-              item.id,
-              updatedItem.copyWith(quantity: item.quantity),
-            );
-            await _addUnitsAsNewDraftLine(
-              ref,
-              item,
-              updatedItem.quantity - item.quantity,
-              updatedItem.isTakeout,
-            );
-            await notifier.refreshOrder();
-          } else {
-            await notifier.updateItem(item.id, updatedItem);
-          }
+          final ok=await ref.read(currentOrderProvider.notifier).saveItemGroup(scopedItems,updatedItem);
+          if(!ok) throw StateError(ref.read(currentOrderProvider).error ?? 'No se guardaron los cambios.');
         },
         onSaveBatch: (items, updatedItem, reduction) async {
           final orderNotifier = ref.read(currentOrderProvider.notifier);
-          final totalBase = items.fold<double>(
-            0,
-            (sum, current) => sum + (current.subtotal + current.tax),
-          );
-          final originalTotalQty = items.fold<double>(
-            0,
-            (sum, current) => sum + current.quantity,
-          );
-          final targetTotalQty = updatedItem.quantity <= 0
-              ? 1.0
-              : updatedItem.quantity;
+          final originalTotalQty=items.fold<double>(0,(s,i)=>s+i.quantity);
+          final targetTotalQty=updatedItem.quantity;
           if (targetTotalQty < originalTotalQty) {
             // Sólo pedimos PIN cuando la rebaja se come unidades que YA
             // salieron impresas. Quitar lo que todavía está en draft es
@@ -4350,172 +4199,10 @@ class _CartView extends ConsumerWidget {
               return;
             }
           }
-          // Fase 1 Toast redesign: distribución discreta sin fracciones.
-          // - Si reducimos: caminar de la primera a la última fila, mantener
-          //   cada fila completa mientras quepa; cuando ya no cabe, truncar
-          //   esa fila al sobrante (entero) y borrar las restantes.
-          // - Si aumentamos: dejar cada fila intacta; el delta se suma a la
-          //   última fila.
-          // El target se redondea a entero porque el modal sólo permite
-          // unidades enteras post-rediseño; el round es defensa.
-          final isReducing = targetTotalQty < originalTotalQty;
-
-          // Una sola línea que no puede ir directo al servidor: el lote de
-          // abajo fallaría sin red, y `updateItem` sí sabe encolar. Es el
-          // camino que tomaba antes la reducción de una línea.
-          if (items.length == 1 && _mustQueueItemEdits(ref, items.single)) {
-            final row = items.single;
-            final notes = [
-              if (updatedItem.notes?.trim().isNotEmpty == true)
-                updatedItem.notes!.trim(),
-              if (reduction != null) '[REDUCCION:${reduction.text}]',
-            ].join('\n');
-            await orderNotifier.updateItem(
-              row.id,
-              updatedItem.copyWith(
-                quantity: targetTotalQty,
-                notes: notes.isEmpty ? null : notes,
-              ),
-            );
-            if (reduction == null || !context.mounted) return;
-            double? quantityNow;
-            for (final current in ref.read(currentOrderProvider).items) {
-              if (current.id == row.id) quantityNow = current.quantity;
-            }
-            if (quantityNow == null ||
-                (quantityNow - targetTotalQty).abs() > 0.0001) {
-              return;
-            }
-            await _afterRemoval(
-              context,
-              ref,
-              item: item,
-              quantity: row.quantity - targetTotalQty,
-              decision: reduction,
-              alreadySent: _itemAlreadySentToKitchen(row),
-              tableName: tableCode.isEmpty ? null : tableCode,
-              approverPin: approverPin,
-              removedItemIds: [row.id],
-            );
-            return;
-          }
-
-          var remaining = targetTotalQty.round();
-          // Lo que DE VERDAD salió de la cuenta: un borrado que el servidor
-          // rechaza no cuenta para el comprobante.
-          var removedQty = 0.0;
-          final removedIds = <String>[];
-
-          for (var index = 0; index < items.length; index++) {
-            final current = items[index];
-            final isLast = index == items.length - 1;
-            final currentQtyInt = current.quantity.round();
-            int nextQtyInt;
-
-            if (isReducing) {
-              if (remaining >= currentQtyInt) {
-                nextQtyInt = currentQtyInt;
-              } else {
-                nextQtyInt = remaining < 0 ? 0 : remaining;
-              }
-            } else {
-              nextQtyInt = isLast ? remaining : currentQtyInt;
-            }
-
-            final nextQty = nextQtyInt.toDouble();
-
-            final base = current.subtotal + current.tax;
-            final discountShare = totalBase > 0
-                ? (updatedItem.discounts * (base / totalBase))
-                : 0.0;
-            final trimmedNotes = updatedItem.notes?.trim();
-            final mergedNotes = <String>[];
-            if (trimmedNotes != null && trimmedNotes.isNotEmpty) {
-              mergedNotes.add(trimmedNotes);
-            }
-            if (reduction != null) {
-              mergedNotes.add('[REDUCCION:${reduction.text}]');
-            }
-
-            // Subir cantidad sobre una línea YA enviada a cocina: no inflarla;
-            // conserva su qty y el delta va como línea draft NUEVA (irá a
-            // cocina con "Enviar a cocina"). Solo la última fila absorbe el
-            // aumento.
-            if (isLast &&
-                !isReducing &&
-                nextQtyInt > currentQtyInt &&
-                _itemAlreadySentToKitchen(current) &&
-                current.productId != null) {
-              final applied = await orderNotifier.updateItemDetailsVersioned(
-                current,
-                productName: updatedItem.productName,
-                quantity: currentQtyInt.toDouble(),
-                isTakeout: updatedItem.isTakeout,
-                discounts: discountShare,
-                notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
-                partOfGroup: items.length > 1,
-              );
-              // T04: otro equipo cambió la línea; el aviso ya está y el
-              // resto del grupo no se toca.
-              if (!applied) break;
-              await _addUnitsAsNewDraftLine(
-                ref,
-                current,
-                (nextQtyInt - currentQtyInt).toDouble(),
-                updatedItem.isTakeout,
-              );
-              remaining -= nextQtyInt;
-              if (remaining < 0) remaining = 0;
-              continue;
-            }
-
-            if (nextQty <= 0.0001) {
-              final deleted = await orderNotifier.deleteItem(
-                current.id,
-                reason: reduction?.text ?? 'Reducción de cantidad',
-                reasonCode: reduction?.reason.code,
-                isWaste: reduction?.isWaste,
-              );
-              if (deleted) {
-                removedQty += current.quantity;
-                removedIds.add(current.id);
-              }
-            } else {
-              final applied = await orderNotifier.updateItemDetailsVersioned(
-                current,
-                productName: updatedItem.productName,
-                quantity: nextQty,
-                isTakeout: updatedItem.isTakeout,
-                discounts: discountShare,
-                notes: mergedNotes.isEmpty ? null : mergedNotes.join('\n'),
-                partOfGroup: items.length > 1,
-              );
-              if (!applied) break;
-              // Línea ya enviada a la que se le bajó la cantidad: el
-              // servidor la registra con el motivo de la etiqueta; acá va
-              // quién fue y qué pasa con el inventario (merma o devolución).
-              if (nextQtyInt < currentQtyInt) {
-                removedQty += currentQtyInt - nextQtyInt;
-                removedIds.add(current.id);
-              }
-              if (nextQtyInt < currentQtyInt &&
-                  _itemAlreadySentToKitchen(current)) {
-                unawaited(
-                  orderNotifier.noteItemRemoval(
-                    current.id,
-                    reason: reduction?.text,
-                    reasonCode: reduction?.reason.code,
-                    isWaste: reduction?.isWaste,
-                  ),
-                );
-              }
-            }
-
-            remaining -= nextQtyInt;
-            if (remaining < 0) remaining = 0;
-          }
-
-          await ref.read(currentOrderProvider.notifier).refreshOrder();
+          final ok=await orderNotifier.saveItemGroup(items,updatedItem,reductionReason:reduction?.text,reasonCode:reduction?.reason.code,isWaste:reduction?.isWaste);
+          if(!ok) throw StateError(ref.read(currentOrderProvider).error ?? 'No se guardó el grupo.');
+          final removedQty=(originalTotalQty-targetTotalQty).clamp(0,double.infinity).toDouble();
+          final removedIds=planUnitRemoval(items,removedQty).map((s)=>s.item.id).toList();
 
           // Bajar la cantidad saca unidades de la cuenta igual que borrarlas:
           // mismo comprobante y mismo aviso al bar.
@@ -4544,34 +4231,14 @@ class _CartView extends ConsumerWidget {
           final group = groupedItems;
           final rows = group != null && group.length > 1 ? group : [item];
           final total = rows.fold<double>(0, (sum, r) => sum + r.quantity);
-          final wanted = decision.quantity;
-          final steps = wanted == null || wanted >= total - 0.0001
-              ? [
-                  for (final row in rows)
-                    UnitRemovalStep(item: row, nextQuantity: 0),
-                ]
-              : planUnitRemoval(rows, wanted);
-
-          var removedQty = 0.0;
-          var removedSent = false;
-          var trimmed = false;
-          final removedIds = <String>[];
-          for (final step in steps) {
-            final ok = step.deletesRow
-                ? await orderNotifier.deleteItem(
-                    step.item.id,
-                    reason: decision.text,
-                    reasonCode: decision.reason.code,
-                    isWaste: decision.isWaste,
-                  )
-                : await _trimLineForRemoval(context, ref, step, decision);
-            if (!ok) continue;
-            if (!step.deletesRow) trimmed = true;
-            removedQty += step.removedQuantity;
-            removedIds.add(step.item.id);
-            if (_itemAlreadySentToKitchen(step.item)) removedSent = true;
-          }
-          if (trimmed) await orderNotifier.refreshOrder();
+          final removedQty=(decision.quantity??total).clamp(0,total).toDouble();
+          final steps=planUnitRemoval(rows,removedQty);
+          final ok=await orderNotifier.saveItemGroup(rows,item.copyWith(
+            quantity:total-removedQty,discounts:discountForGroupQuantity(rows,total-removedQty)),
+            reductionReason:decision.text,reasonCode:decision.reason.code,isWaste:decision.isWaste);
+          if(!ok) throw StateError(ref.read(currentOrderProvider).error ?? 'No se guardó el retiro.');
+          final removedIds=steps.map((s)=>s.item.id).toList();
+          final removedSent=steps.any((s)=>_itemAlreadySentToKitchen(s.item));
 
           // Si nada salió de la cuenta (el servidor lo rechazó), no hay
           // comprobante ni aviso al bar: el error ya está en pantalla.
