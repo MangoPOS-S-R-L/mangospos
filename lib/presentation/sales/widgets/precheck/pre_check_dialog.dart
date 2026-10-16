@@ -30,9 +30,21 @@ List<Map<String, dynamic>> _buildPrecheckItems(
     }
 
     final parts = roundedQty.toInt();
-    final unitPrice = ((item['price'] ?? 0) as num).toDouble();
+    final lineTotal =
+        (item['lineTotal'] as num?)?.toDouble() ??
+        ((item['price'] ?? 0) as num).toDouble() * qty;
+    final cents = (lineTotal * 100).round();
+    final unitCents = cents ~/ parts;
+    final remainder = cents - unitCents * parts;
     for (var idx = 0; idx < parts; idx++) {
-      expanded.add({...item, 'qty': 1, 'quantity': 1, 'price': unitPrice});
+      final amount = (unitCents + (idx < remainder ? 1 : 0)) / 100.0;
+      expanded.add({
+        ...item,
+        'qty': 1,
+        'quantity': 1,
+        'price': amount,
+        'lineTotal': amount,
+      });
     }
   }
 
@@ -55,6 +67,9 @@ class PreCheckDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final amountColumnWidth = (MediaQuery.sizeOf(context).width * 0.25)
+        .clamp(88.0, 120.0)
+        .toDouble();
     final currencyFormat = NumberFormat.currency(
       symbol: 'RD\$ ',
       decimalDigits: 2,
@@ -85,12 +100,17 @@ class PreCheckDialog extends StatelessWidget {
         .toList(growable: false);
 
     return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       elevation: 0,
       backgroundColor: Colors.transparent,
       child: Container(
-        width: 400,
-        constraints: const BoxConstraints(maxHeight: 700),
+        width: 480,
+        constraints: BoxConstraints(
+          maxHeight: (MediaQuery.sizeOf(context).height - 48)
+              .clamp(0.0, 820.0)
+              .toDouble(),
+        ),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -160,35 +180,40 @@ class PreCheckDialog extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _InfoRow(
-                              label: 'Mesa',
-                              value: data['tableName'] ?? 'N/A',
-                            ),
-                            _InfoRow(
-                              label: 'Fecha',
-                              value: DateFormat(
-                                'dd/MM/yyyy',
-                              ).format(DateTime.now()),
-                            ),
-                          ],
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _InfoRow(
+                                label: 'Mesa',
+                                value: data['tableName'] ?? 'N/A',
+                              ),
+                              _InfoRow(
+                                label: 'Fecha',
+                                value: DateFormat(
+                                  'dd/MM/yyyy',
+                                ).format(DateTime.now()),
+                              ),
+                            ],
+                          ),
                         ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            _InfoRow(
-                              label: 'Hora',
-                              value: DateFormat(
-                                'hh:mm a',
-                              ).format(DateTime.now()),
-                            ),
-                            _InfoRow(
-                              label: 'Mesero',
-                              value: data['waiterName'] ?? 'N/A',
-                            ),
-                          ],
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              _InfoRow(
+                                label: 'Hora',
+                                value: DateFormat(
+                                  'hh:mm a',
+                                ).format(DateTime.now()),
+                              ),
+                              _InfoRow(
+                                label: 'Mesero',
+                                value: data['waiterName'] ?? 'N/A',
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -212,49 +237,105 @@ class PreCheckDialog extends StatelessWidget {
                     Row(
                       children: [
                         SizedBox(
-                          width: 30,
-                          child: Text('CANT', style: _headerStyle),
+                          width: 52,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'CANT.',
+                              style: _headerStyle,
+                              maxLines: 1,
+                              softWrap: false,
+                            ),
+                          ),
                         ),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: Text('DESCRIPCIÓN', style: _headerStyle),
+                          child: Text(
+                            'DESCRIPCIÓN',
+                            style: _headerStyle,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        Text('PRECIO', style: _headerStyle),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: amountColumnWidth,
+                          child: Text(
+                            'IMPORTE',
+                            textAlign: TextAlign.right,
+                            style: _headerStyle,
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
 
                     // Products List
                     ...items.map((item) {
-                      final price = item['price'] ?? 0.0;
-                      final qty = item['qty'] ?? item['quantity'] ?? 1;
+                      final qty =
+                          ((item['qty'] ?? item['quantity'] ?? 1) as num)
+                              .toDouble();
+                      final amount =
+                          (item['lineTotal'] as num?)?.toDouble() ??
+                          ((item['price'] ?? 0) as num).toDouble() * qty;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             SizedBox(
-                              width: 30,
-                              child: Text(
-                                '$qty',
-                                style: _bodyStyle.copyWith(
-                                  fontWeight: FontWeight.w600,
+                              width: 52,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    NumberFormat('0.###').format(qty),
+                                    style: _bodyStyle.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
+                            const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 item['name'] ?? 'Item',
                                 style: _bodyStyle,
                               ),
                             ),
-                            Text(
-                              currencyFormat.format(price * qty),
-                              style: _bodyStyle,
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: amountColumnWidth,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    currencyFormat.format(amount),
+                                    style: _bodyStyle,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ),
                       );
                     }),
+                    if (items.isNotEmpty &&
+                        items.every(
+                          (i) => i['amountIncludesTaxAndDiscount'] == true,
+                        ))
+                      Text(
+                        'Importes con impuestos y descuentos incluidos',
+                        style: _bodyStyle.copyWith(
+                          fontSize: 11,
+                          color: const Color(0xFF777777),
+                        ),
+                      ),
 
                     const SizedBox(height: 16),
                     const Divider(color: Color(0xFFE5E5E5)),
@@ -268,11 +349,14 @@ class PreCheckDialog extends StatelessWidget {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: _TotalRow(
-                            label: row['label']?.toString() ?? '',
+                            label: row['label'] == 'Descuento' && !isNegative
+                                ? 'Descuento incluido'
+                                : row['label']?.toString() ?? '',
                             value: isNegative
                                 ? '- ${currencyFormat.format(amount)}'
                                 : currencyFormat.format(amount),
-                            highlight: isNegative,
+                            highlight:
+                                isNegative || row['label'] == 'Descuento',
                           ),
                         );
                       })
@@ -290,28 +374,8 @@ class PreCheckDialog extends StatelessWidget {
                     ],
                     const SizedBox(height: 4),
 
-                    // GRAND TOTAL
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'TOTAL',
-                          style: GoogleFonts.inter(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFF111111),
-                          ),
-                        ),
-                        Text(
-                          currencyFormat.format(total),
-                          style: GoogleFonts.inter(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                            color: const Color(0xFFF97316), // Mango Orange
-                          ),
-                        ),
-                      ],
-                    ),
+                    if (depositCoverage != null)
+                      _buildGrandTotal(currencyFormat, total),
 
                     // ABONO DE LA MESA: lo que tiene y la diferencia a pagar.
                     if (depositCoverage != null) ...[
@@ -379,6 +443,16 @@ class PreCheckDialog extends StatelessWidget {
 
             const Divider(height: 1, color: Color(0xFFE5E5E5)),
 
+            // Total fijo: sigue visible aunque la lista de productos se desplace.
+            if (depositCoverage == null)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 16,
+                ),
+                child: _buildGrandTotal(currencyFormat, total),
+              ),
+
             // --- FOOTER ---
             Padding(
               padding: const EdgeInsets.all(20),
@@ -422,7 +496,7 @@ class PreCheckDialog extends StatelessWidget {
                       onPressed: onPrint,
                       icon: const Icon(Icons.print_rounded, size: 20),
                       label: Text(
-                        'Imprimir Pre-Cuenta',
+                        'Imprimir precuenta',
                         style: GoogleFonts.inter(fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -435,6 +509,37 @@ class PreCheckDialog extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildGrandTotal(NumberFormat currencyFormat, num total) => Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        'TOTAL',
+        style: GoogleFonts.inter(
+          fontSize: 18,
+          fontWeight: FontWeight.w900,
+          color: const Color(0xFF111111),
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              currencyFormat.format(total),
+              style: GoogleFonts.inter(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                color: const Color(0xFFF97316), // Mango Orange
+              ),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
 
   Widget _buildHeader(BuildContext context) {
     return Padding(
@@ -527,13 +632,16 @@ class _TotalRow extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          label,
-          style: GoogleFonts.inter(
-            fontSize: 14,
-            color: const Color(0xFF666666),
+        Flexible(
+          child: Text(
+            label,
+            style: GoogleFonts.inter(
+              fontSize: 14,
+              color: const Color(0xFF666666),
+            ),
           ),
         ),
+        const SizedBox(width: 12),
         Text(
           value,
           style: GoogleFonts.inter(

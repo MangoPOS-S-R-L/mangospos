@@ -67,6 +67,7 @@ import 'package:mangopos/services/printing/qr_esc_pos_builder.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:mangopos/app/widgets/skeleton_loading.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/pre_check_dialog.dart';
+import 'package:mangopos/data/utils/precheck_item_payload.dart';
 import 'package:mangopos/presentation/sales/widgets/precheck/print_destination_picker.dart';
 import 'package:mangopos/core/printing/device_identity.dart';
 import 'package:mangopos/core/printing/printerless_mode.dart';
@@ -3812,15 +3813,7 @@ class _CartView extends ConsumerWidget {
           'tableName': tableName,
           'waiterName': waiterName,
           'customerName': finalCustomerName,
-          'items': items
-              .map(
-                (i) => {
-                  'quantity': i.quantity,
-                  'name': i.productName,
-                  'price': itemDisplayTotal(printOrder, i),
-                },
-              )
-              .toList(),
+          'items': buildPrecheckItemPayload(printOrder, items),
           'subtotal': printOrder.subtotal,
           'tax': printOrder.tax,
           'serviceFee': printOrder.serviceFee,
@@ -6195,18 +6188,11 @@ class _CartView extends ConsumerWidget {
                                       '$tableCode ${selectedCheckId != null ? "(Cuentas Separadas)" : ""}',
                                   'waiterName': waiterName,
                                   'customerName': freshState.customerName,
-                                  'items': freshItems
-                                      .map(
-                                        (i) => {
-                                          'quantity': i.quantity,
-                                          'name': i.productName,
-                                          'price': itemDisplayTotal(
-                                            freshOrder,
-                                            i,
-                                          ),
-                                        },
-                                      )
-                                      .toList(),
+                                  'items': buildPrecheckItemPayload(
+                                    freshOrder,
+                                    freshItems,
+                                    forcedOrigin: freshState.origin,
+                                  ),
                                   'subtotal': freshSummary.subtotal,
                                   'tax':
                                       freshSummary.tax +

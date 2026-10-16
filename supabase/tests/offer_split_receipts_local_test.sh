@@ -26,6 +26,10 @@ parts.append(cut('supabase/migrations/20260303_0008_sales_split_open_table_full_
 parts.append('create trigger order_items_totals_trigger after insert or update or delete on public.order_items for each row execute function public.trigger_update_order_totals();\n')
 for rel,start in [('20260605_0005_fn_add_offer_deal.sql','fn_add_offer_deal('),('20260601_0001_fix_explode_items_tax.sql','fn_explode_items_to_units('),('20260929_0001_add_item_idempotent.sql','fn_add_offer_deal_idempotent(')]:
  parts.append(cut('supabase/migrations/'+rel,'create or replace function public.'+start))
+(work/'split_guards.sql').write_text(cut('supabase/migrations/20260512_0002_auto_close_empty_subchecks.sql','create or replace function public.fn_auto_close_empty_subcheck()')+
+'create trigger trg_auto_close_empty_subcheck after insert or update or delete on public.order_items for each row execute function public.fn_auto_close_empty_subcheck();\n'+
+cut('supabase/migrations/20260513_0004_guard_items_against_closed_checks.sql','create or replace function public.fn_guard_item_check_open()')+
+'create trigger trg_guard_item_check_open before insert or update of check_id on public.order_items for each row execute function public.fn_guard_item_check_open();\n')
 (work/'prices.sql').write_text(''.join(parts))
 s+='\nQ -f "$REPO/supabase/tests/fixtures/offer_split_receipts_setup.sql"\n'
 s+='Q -f '+shlex.quote(str(work/'prices.sql'))+'\n'
@@ -36,13 +40,27 @@ s+='Q -f "$REPO/supabase/tests/fixtures/offer_split_receipts_assertions.sql"\n'
 s+='Q -f "$REPO/supabase/tests/fixtures/offer_quantity_discount_assertions.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261015_0001_atomic_item_groups.sql"\n'*2
 s+='Q -f "$REPO/supabase/tests/fixtures/atomic_item_groups_assertions.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0002_legacy_offer_group_rules.sql"\n'*2
+s+='Q -f "$REPO/supabase/tests/fixtures/legacy_offer_group_rules_assertions.sql"\n'
+s+='Q -f '+shlex.quote(str(work/'split_guards.sql'))+'\n'
+s+='Q -f "$REPO/supabase/migrations/20260605_0006_split_keep_offers_whole.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0003_atomic_bill_splits.sql"\n'*2
+s+='Q -f "$REPO/supabase/tests/fixtures/atomic_bill_splits_assertions.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0004_split_ordinary_items_to_units.sql"\n'*2
+s+='Q -f "$REPO/supabase/tests/fixtures/split_ordinary_units_assertions.sql"\n'
 s+='Q -c "create table review_hash as select id,md5(to_jsonb(i)::text) h from order_items i"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0004_split_ordinary_items_to_units_ROLLBACK.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0003_atomic_bill_splits_ROLLBACK.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0002_legacy_offer_group_rules_ROLLBACK.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261015_0001_atomic_item_groups_ROLLBACK.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261014_0001_preserve_offer_packages_in_split_ROLLBACK.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261014_0001_preserve_offer_packages_in_split.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261014_0002_offer_quantity_discount_ROLLBACK.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261014_0002_offer_quantity_discount.sql"\n'
 s+='Q -f "$REPO/supabase/migrations/20261015_0001_atomic_item_groups.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0002_legacy_offer_group_rules.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0003_atomic_bill_splits.sql"\n'
+s+='Q -f "$REPO/supabase/migrations/20261015_0004_split_ordinary_items_to_units.sql"\n'
 s+='Q -c "select test_assert(not exists(select 1 from review_hash h full join order_items i using(id) where h.h is distinct from md5(to_jsonb(i)::text)), \'rollback y reinstalación conservan los datos\')"\n'
 (work/'run.sh').write_text(s)
 PY

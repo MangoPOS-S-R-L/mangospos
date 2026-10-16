@@ -378,6 +378,37 @@ void main() {
     },
   );
 
+  for (final (after, singleEntry) in [(3.0,false),(0.0,false),(3.0,true)]) {
+    test('retirar oferta legacy a $after se guarda offline sin bloquear', () async {
+      final biz = 'legacy-group-$after-$singleEntry';
+      final repo = _Repository(client);
+      final initial = _sale('A');
+      final row = initial.items.single.copyWith(
+        productName: '4x3 Presidente', quantity: 4, unitPrice: 250,
+        subtotal: 1000, tax: 0, discounts: 250, total: 750,
+        notes: '[DEAL:promo]', status: 'pending');
+      final before = initial.copyWith(items: [row], order: initial.order!
+        .copyWith(subtotal: 1000, discounts: 250, total: 750));
+      final container = await prepare(biz, repo, initial: before);
+      ConnectivityService().simulateDisconnect();
+      final vm = container.read(currentOrderProvider.notifier);
+      if (singleEntry) {
+        await vm.updateItemQuantity(row.id, after);
+      } else {
+        expect(await vm.saveItemGroup([row], row.copyWith(quantity: after)),true);
+      }
+      final queue = await offline.unsettledActions(biz);
+      expect(queue, hasLength(1));
+      final saved = container.read(currentOrderProvider);
+      expect(saved.order!.total, after == 0 ? 0 : 750);
+      expect(saved.items.fold<double>(0, (s,i) => s+i.quantity), after);
+      if (after != 0) {
+        expect(saved.items.single.notes, contains('[DEAL_RULE:4:250.00]'));
+        expect(saved.items.single.discounts, 0);
+      }
+    });
+  }
+
   test('grupo guardándose al navegar no modifica la otra mesa', () async {
     const biz = 'group-navigation';
     final repo = _Repository(client);

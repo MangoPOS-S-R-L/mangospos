@@ -26,6 +26,69 @@ class OfferDealRule {
     }
     return OfferDealRule(units, discount);
   }
+
+  /// Compatibilidad con ventas anteriores al snapshot. El catálogo genera
+  /// esta etiqueta al vender (p. ej. «4x3 Presidente»). Solo se acepta cuando
+  /// describe paquetes completos y su beneficio coincide con el descuento
+  /// guardado, usando el precio de ESTA venta, nunca el precio actual.
+  static OfferDealRule? fromLegacySale(OrderItem item) {
+    if (!_isDeal(item) ||
+        (item.notes ?? '').contains('[CORTESIA:') ||
+        !item.quantity.isFinite ||
+        item.quantity <= 0 ||
+        item.quantity != item.quantity.truncateToDouble() ||
+        !item.unitPrice.isFinite ||
+        item.unitPrice <= 0 ||
+        !item.discounts.isFinite) {
+      return null;
+    }
+    final label = RegExp(
+      r'^\s*([0-9]+)[xX×]([0-9]+)\s+',
+    ).firstMatch(item.productName);
+    if (label == null) return null;
+    final units = int.tryParse(label.group(1)!);
+    final paid = int.tryParse(label.group(2)!);
+    if (units == null ||
+        units < 2 ||
+        units > 2147483647 ||
+        paid == null ||
+        paid < 1 ||
+        paid >= units ||
+        item.quantity < units ||
+        item.quantity % units != 0) {
+      return null;
+    }
+    final discount = double.parse(
+      (item.unitPrice * (units - paid)).toStringAsFixed(2),
+    );
+    if (!discount.isFinite ||
+        (item.discounts - item.quantity / units * discount).abs() > 0.01) {
+      return null;
+    }
+    return OfferDealRule(units, discount);
+  }
+}
+
+class OfferRuleUnavailable implements Exception {
+  const OfferRuleUnavailable();
+  static const message =
+      'No se pudo recuperar la regla de esta oferta. '
+      'Puedes retirar la oferta completa; para quitar unidades, '
+      'un administrador debe revisar la venta original.';
+  @override
+  String toString() => message;
+}
+
+OrderItem recoverLegacyOfferRule(OrderItem item) {
+  if (OfferDealRule.fromNotes(item.notes) != null) return item;
+  final rule = OfferDealRule.fromLegacySale(item);
+  if (rule == null) return item;
+  return item.copyWith(
+    notes: [
+      if (item.notes?.isNotEmpty == true) item.notes!,
+      rule.marker,
+    ].join('\n'),
+  );
 }
 
 bool _isDeal(OrderItem item) =>
@@ -36,7 +99,10 @@ bool _isDeal(OrderItem item) =>
 /// Sin snapshot (cliente antiguo), el backend resuelve la regla al editar.
 double discountAtQuantity(OrderItem item, double quantity) {
   final courtesy = (item.notes ?? '').contains('[CORTESIA:');
-  final rule = courtesy ? null : OfferDealRule.fromNotes(item.notes);
+  final rule = courtesy
+      ? null
+      : OfferDealRule.fromNotes(item.notes) ??
+            OfferDealRule.fromLegacySale(item);
   if (_isDeal(item) && rule != null) return rule.discountFor(quantity);
   if (item.quantity <= 0) return 0;
   return double.parse(

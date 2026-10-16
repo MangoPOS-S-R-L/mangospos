@@ -249,7 +249,17 @@ OrderItemPricingSummary summarizeItemPricing(
       // tasa consolidada). Si está en 0 (optimistic), fallback a extraer del
       // gross usando tax_rate.
       if (item.subtotal > 0) {
-        dbSubtotal = _r(item.subtotal);
+        final roundedSubtotal = _r(item.subtotal);
+        final storedGross = _r(item.subtotal + item.tax);
+        // Al subdividir, ambos componentes pueden terminar en medio centavo.
+        // Redondearlos por separado no debe convertir RD$300 en RD$300.01.
+        // Mantener el impuesto del snapshot y absorber SOLO ese centavo en
+        // la base, cuando el desglose coincide con el impuesto guardado.
+        dbSubtotal =
+            (dbTax - _r(item.tax)).abs() < 0.010001 &&
+                (roundedSubtotal + dbTax - storedGross).abs() < 0.010001
+            ? _r(storedGross - dbTax)
+            : roundedSubtotal;
       } else {
         dbSubtotal = fullRate > 0
             ? _r(grossWithModifiers / (1 + fullRate))

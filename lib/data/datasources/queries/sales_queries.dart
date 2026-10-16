@@ -210,8 +210,8 @@ class SalesQueries {
   /// Split bill UX (2026-05-13): divide items con qty>1 en N filas qty=1
   /// para que cada unidad sea transferible por separado en el modal de
   /// dividir cuenta. Idempotente.
-  // Sin esta RPC segura, initialize conserva las líneas completas. Nunca
-  // recurrir a la RPC antigua de un servidor que todavía parta ofertas.
+  // Sin esta RPC segura, initialize bloquea el reparto y ofrece reintentar.
+  // Nunca recurrir a una RPC antigua que todavía parta ofertas.
   static const String rpcExplodeItemsToUnits = 'fn_explode_items_for_split';
 
   /// Fase 0 Toast redesign: consolidar fracciones pre-existentes a qty entero.

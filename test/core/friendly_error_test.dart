@@ -3,6 +3,22 @@ import 'package:mangopos/core/utils/friendly_error.dart';
 
 void main() {
   group('FriendlyError.humanize', () {
+    test(
+      'oferta sin regla explica la acción necesaria, sin pedir reintentar',
+      () {
+        final message = FriendlyError.humanize(
+          'No se pudo guardar el producto: Bad state: '
+          'No se pudo recuperar la regla de esta oferta.',
+        );
+        expect(message, contains('Puedes retirar la oferta completa'));
+        expect(message, isNot(contains('Intenta de nuevo')));
+        expect(message, isNot(contains('Bad state')));
+        expect(
+          FriendlyError.from(Exception('OFFER_RULE_SNAPSHOT_REQUIRED')),
+          contains('un administrador'),
+        );
+      },
+    );
     test('el error real del login queda en una sola frase entendible', () {
       const raw =
           "ClientException with SocketException: Failed host lookup: "
@@ -92,7 +108,9 @@ void main() {
     test('rate limit de supabase', () {
       expect(
         FriendlyError.from(
-          Exception('For security purposes, you can only request this after 55 seconds'),
+          Exception(
+            'For security purposes, you can only request this after 55 seconds',
+          ),
         ),
         FriendlyError.tooManyAttempts,
       );
@@ -101,7 +119,9 @@ void main() {
     test('permisos / RLS', () {
       expect(
         FriendlyError.from(
-          Exception('new row violates row-level security policy for table "orders"'),
+          Exception(
+            'new row violates row-level security policy for table "orders"',
+          ),
         ),
         FriendlyError.noPermission,
       );
@@ -109,7 +129,9 @@ void main() {
 
     test('servidor caido', () {
       expect(
-        FriendlyError.from(Exception('AuthRetryableFetchException: Bad Gateway')),
+        FriendlyError.from(
+          Exception('AuthRetryableFetchException: Bad Gateway'),
+        ),
         FriendlyError.serverUnavailable,
       );
     });
@@ -135,7 +157,10 @@ void main() {
 
   group('FriendlyError.isTechnical', () {
     test('detecta texto de excepcion', () {
-      expect(FriendlyError.isTechnical('PostgrestException(code: 42501)'), isTrue);
+      expect(
+        FriendlyError.isTechnical('PostgrestException(code: 42501)'),
+        isTrue,
+      );
     });
 
     test('no marca texto humano', () {

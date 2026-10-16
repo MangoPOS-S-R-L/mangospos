@@ -24,6 +24,7 @@ class FriendlyError {
       'Sin conexión con el servidor. Revisa tu conexión a internet.';
   static const String timeout =
       'El servidor tardó demasiado en responder. Intenta de nuevo.';
+
   /// Fallo de TLS por la ventana de validez del certificado: el reloj del
   /// equipo esta corrido. Es el UNICO caso donde tiene sentido mandar al
   /// usuario a la fecha y hora.
@@ -112,6 +113,16 @@ class FriendlyError {
 
   /// Firmas ordenadas: la primera que aparezca en el texto define el mensaje.
   static const List<(List<String>, String)> _signatures = [
+    (
+      [
+        'offer_rule_snapshot_required',
+        'no se pudo recuperar la regla de esta oferta',
+        'esta oferta antigua necesita su regla original',
+      ],
+      'No se pudo recuperar la regla de esta oferta. Puedes retirar la '
+          'oferta completa; para quitar unidades, un administrador debe '
+          'revisar la venta original.',
+    ),
     (
       [
         'missing destination name oauth_client_id',
@@ -309,7 +320,8 @@ class FriendlyError {
       if (lower.contains(needle)) return tlsTrust;
     }
     // Handshake que se cae sin llegar a validar el certificado: es red.
-    if (lower.contains('handshakeexception') || lower.contains('tlsexception')) {
+    if (lower.contains('handshakeexception') ||
+        lower.contains('tlsexception')) {
       return tlsCertificate;
     }
     return null;

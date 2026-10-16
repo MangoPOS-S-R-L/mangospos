@@ -1042,7 +1042,7 @@ class PrintTicketService {
     // Post-discount mode: el descuento se muestra como línea informativa
     // justo debajo de los impuestos (no sustractiva: el total ya lo incluye).
     if (canRecompute && isPostDiscountMode && printableDiscounts > 0) {
-      amountRow('Descuento ', _formatMoney(printableDiscounts));
+      amountRow('Descuento incluido', _formatMoney(printableDiscounts));
     }
 
     // Fee de delivery propio: cargo exento, parte del total.

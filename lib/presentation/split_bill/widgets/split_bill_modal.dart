@@ -358,6 +358,14 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                 Expanded(
                   child: state.loading
                       ? const Center(child: CircularProgressIndicator())
+                      : state.initializationFailed
+                      ? Center(
+                          child: ElevatedButton.icon(
+                            onPressed: () => viewModel.initialize(widget.order),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Reintentar preparación'),
+                          ),
+                        )
                       : isMobile
                       ? _buildMobileLayout(state, viewModel)
                       : Row(
@@ -1149,6 +1157,7 @@ class _SplitBillModalState extends ConsumerState<SplitBillModal>
                                 checkId: check.id,
                                 customerId: customerId,
                                 customerName: customerName,
+                                customerRnc: selected['tax_id']?.toString(),
                               );
                             },
                             onClearCustomer:

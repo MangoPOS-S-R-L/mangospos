@@ -5442,6 +5442,12 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     }
     if (isOfferDealItem(targetItem) &&
         OfferDealRule.fromNotes(targetItem.notes) == null &&
+        OfferDealRule.fromLegacySale(targetItem) != null) {
+      await saveItemGroup([targetItem], targetItem.copyWith(quantity: quantity));
+      return;
+    }
+    if (isOfferDealItem(targetItem) &&
+        OfferDealRule.fromNotes(targetItem.notes) == null &&
         (targetItem.quantity - quantity).abs() > 0.0001 &&
         (!_connectivity.isConnected || _isHubMode ||
             orderId.startsWith('local-order-'))) {
@@ -7562,15 +7568,6 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       );
       return false;
     }
-    if (rows.any(
-      (r) => isOfferDealItem(r) && OfferDealRule.fromNotes(r.notes) == null,
-    )) {
-      state = state.copyWith(
-        error:
-            'Esta oferta antigua necesita su regla original antes de editarse en grupo.',
-      );
-      return false;
-    }
     final mutation = _captureOrderMutation(orderId);
     for (final row in rows) {
       if (_localKitchenPrints.isNotEmpty &&
@@ -7583,12 +7580,19 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     if (businessId == null) {
       return false;
     }
-    final plan = planGroupedItemEdit(
-      rows: rows,
-      edited: edited,
-      newId: () => const Uuid().v4(),
-      reductionReason: reductionReason,
-    );
+    final GroupedItemEdit plan;
+    try {
+      plan = planGroupedItemEdit(
+        rows: rows,
+        edited: edited,
+        newId: () => const Uuid().v4(),
+        reductionReason: reductionReason,
+      );
+    } on OfferRuleUnavailable {
+      _applyOrderMutation(mutation, (s) => s,
+          error: OfferRuleUnavailable.message);
+      return false;
+    }
     for (final action in plan.actions) {
       if (reductionReason != null) {
         action['removal_reason'] = reductionReason;

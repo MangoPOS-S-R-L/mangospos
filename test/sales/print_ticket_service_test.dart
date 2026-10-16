@@ -247,7 +247,7 @@ void main() {
         expect(text, contains('184.38'));
         expect(text, isNot(contains('171.47')));
         // El descuento sale como nota informativa bajo los impuestos.
-        expect(text, contains('Descuento'));
+        expect(text, contains('Descuento incluido'));
         expect(text, contains('59.00'));
       },
     );

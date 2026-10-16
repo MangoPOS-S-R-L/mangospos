@@ -4,6 +4,7 @@ import 'package:mangopos/core/offline/hub/hub_kitchen_projector.dart';
 import 'package:mangopos/core/offline/order_item_snapshot.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/utils/grouped_item_edit.dart';
+import 'package:mangopos/data/utils/offer_deal_pricing.dart';
 import 'package:mangopos/data/utils/order_pricing_utils.dart';
 
 OrderItem row(
@@ -31,6 +32,137 @@ OrderItem row(
   'created_at': '2026-10-14T12:00:00Z',
 });
 void main() {
+  for (final (before, after, total) in [
+    (4.0, 3.0, 750.0),
+    (8.0, 7.0, 1500.0),
+    (8.0, 6.0, 1250.0),
+    (8.0, 4.0, 750.0),
+    (4.0, 8.0, 1500.0),
+  ]) {
+    test('oferta sin snapshot: $before→$after recupera la venta original', () {
+      final source = row(
+        'legacy',
+        qty: before,
+        discount: before / 4 * 250,
+      ).copyWith(notes: '[DEAL:promo]');
+      final plan = planGroupedItemEdit(
+        rows: [source],
+        edited: source.copyWith(quantity: after),
+        newId: () => 'new',
+      );
+      expect(summarizeOrderPricing(null, plan.items).total, total);
+      expect(
+        plan.items.every(
+          (i) =>
+              OfferDealRule.fromNotes(i.notes)?.marker ==
+              '[DEAL_RULE:4:250.00]',
+        ),
+        true,
+      );
+      expect(plan.actions.first['base_version'], source.version);
+    });
+  }
+  test('recuperar regla conserva expected original en filas sin versión', () {
+    final source = OrderItemSnapshot.decode({
+      ...OrderItemSnapshot.encode(row('legacy')),
+      'version': null,
+      'notes': '[DEAL:promo]',
+    });
+    final plan = planGroupedItemEdit(
+      rows: [source],
+      edited: source.copyWith(quantity: 3),
+      newId: () => 'new',
+    );
+    expect((plan.actions.single['expected'] as Map)['notes'], '[DEAL:promo]');
+    expect(
+      (plan.actions.single['args'] as Map)['notes'],
+      contains('DEAL_RULE'),
+    );
+  });
+  test('oferta sin regla verificable permite retirar todas sus unidades', () {
+    final source = row(
+      'legacy',
+    ).copyWith(productName: 'Oferta especial', notes: '[DEAL:promo]');
+    final plan = planGroupedItemEdit(
+      rows: [source],
+      edited: source.copyWith(quantity: 0),
+      newId: () => 'new',
+    );
+    expect(plan.items, isEmpty);
+    expect(plan.actions.single['kind'], 'delete');
+  });
+  test(
+    'retirar una ronda completa desconocida conserva el importe de la otra',
+    () {
+      final source = row(
+        'a',
+      ).copyWith(productName: 'Oferta especial', notes: '[DEAL:promo]');
+      final plan = planGroupedItemEdit(
+        rows: [
+          source,
+          source.copyWith(id: 'b'),
+        ],
+        edited: source.copyWith(quantity: 4),
+        newId: () => 'new',
+      );
+      expect(plan.items.single.discounts, 250);
+      expect(plan.items.single.total, 750);
+    },
+  );
+  test(
+    'no deduce una regla si el descuento histórico contradice la etiqueta',
+    () {
+      final source = row(
+        'legacy',
+        discount: 125,
+      ).copyWith(notes: '[DEAL:promo]');
+      expect(OfferDealRule.fromLegacySale(source), isNull);
+      expect(
+        () => planGroupedItemEdit(
+          rows: [source],
+          edited: source.copyWith(quantity: 3),
+          newId: () => 'new',
+        ),
+        throwsA(isA<OfferRuleUnavailable>()),
+      );
+    },
+  );
+  test(
+    'no deduce paquetes desde un nombre corriente ni una fila fraccionada',
+    () {
+      expect(
+        OfferDealRule.fromLegacySale(
+          row('x').copyWith(productName: 'Presidente', notes: '[DEAL:promo]'),
+        ),
+        isNull,
+      );
+      expect(
+        OfferDealRule.fromLegacySale(
+          row('x', qty: 3, discount: 0).copyWith(notes: '[DEAL:promo]'),
+        ),
+        isNull,
+      );
+      expect(
+        OfferDealRule.fromLegacySale(
+          row('x').copyWith(notes: '[CORTESIA:autorizada]\n[DEAL:promo]'),
+        ),
+        isNull,
+      );
+    },
+  );
+  test('recupera 2x1 con el precio histórico, sin leer el catálogo', () {
+    final source = row(
+      'legacy',
+      qty: 2,
+    ).copyWith(productName: '2x1 Margarita Chinola', notes: '[DEAL:promo]');
+    final plan = planGroupedItemEdit(
+      rows: [source],
+      edited: source.copyWith(quantity: 1),
+      newId: () => 'new',
+    );
+    expect(plan.items.single.discounts, 0);
+    expect(plan.items.single.total, 250);
+  });
   for (final (qty, total, count) in [
     (12.0, 2250.0, 3),
     (8.0, 1500.0, 2),

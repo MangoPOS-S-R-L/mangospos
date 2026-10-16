@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mangopos/core/network/connectivity_service.dart';
 import 'package:mangopos/core/printing/printerless_mode.dart';
 import 'package:mangopos/data/models/order_edit.dart';
+import 'package:mangopos/data/models/bill_split_edit.dart';
 import 'package:mangopos/data/models/printing.dart';
 import 'package:mangopos/data/models/sales_models.dart';
 import 'package:mangopos/data/repositories/printing_repository.dart';
@@ -384,12 +385,14 @@ void main() {
             jsonEncode({'code': 'PGRST202', 'message': 'missing RPC'}),
             404,
             headers: {'content-type': 'application/json'},
+            request: r,
+            reasonPhrase: 'Not Found',
           );
         }),
       );
       await expectLater(
         SalesRepository(client).explodeItemsToUnits(orderId: 'order'),
-        throwsException,
+        throwsA(isA<BillSplitUnitsNotReady>()),
       );
       expect(paths, ['/rest/v1/rpc/fn_explode_items_for_split']);
       await client.dispose();

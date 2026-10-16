@@ -90,6 +90,7 @@ transacción agrupada, que recalcula los beneficios antes de confirmar.
    - `20261014_0001_preserve_offer_packages_in_split.sql`.
    - `20261014_0002_offer_quantity_discount.sql`.
    - `20261015_0001_atomic_item_groups.sql`.
+   - `20261015_0002_legacy_offer_group_rules.sql`.
 3. Comprobar la migración en el clon y aplicar al servidor antes de instalar
    el cliente nuevo. Los grupos no tienen fallback a escrituras individuales:
    si falta la RPC, quedan pendientes y el servidor informa la migración.
@@ -100,8 +101,11 @@ rollback retira la RPC y los parches de funciones, conservando la bitácora de
 lotes aplicados para que una reinstalación no duplique cambios. Ejecutar las
 reversas en orden inverso a la instalación. No descartar colas pendientes.
 
-Las ofertas antiguas sin snapshot original siguen requiriendo revisión antes
-de editarse en grupo; no se infiere una regla desde el nombre del producto.
+Las ofertas sin snapshot admiten ahora recuperación desde la etiqueta histórica
+N×M generada al vender, únicamente si el precio, la cantidad de paquetes completos
+y el descuento guardados concuerdan. No se consulta el catálogo actual ni se
+acepta el nombre como única evidencia. Si no se puede comprobar la regla, se
+permite retirar toda la línea; un retiro parcial requiere revisar la venta.
 Los documentos con detalle ya perdido no se reparan automáticamente.
 
 ## Regresiones
@@ -123,7 +127,8 @@ Los documentos con detalle ya perdido no se reparan automáticamente.
 
 ## Resultado de la verificación
 
-- Suite completa de Flutter: **2,761 pruebas aprobadas y una omitida**.
+- Suite completa de Flutter, incluyendo la corrección del bloqueo legacy:
+  **2,776 pruebas aprobadas y una omitida**.
 - Ensayo PostgreSQL local: aprobado, incluyendo instalación repetida, conflictos,
   reintentos y rollback/reinstalación sin alterar los datos del ensayo.
 - Análisis estático de los archivos revisados: sin errores. Conserva una
@@ -133,3 +138,58 @@ Los documentos con detalle ya perdido no se reparan automáticamente.
 
 Estos resultados validan la implementación local. La migración y los nuevos
 cliente/Hub todavía deben desplegarse siguiendo el orden indicado arriba.
+
+## Corrección del bloqueo reportado al retirar una unidad
+
+La validación anterior rechazaba cualquier edición de una línea `[DEAL:]`
+sin `[DEAL_RULE:]`, incluso su eliminación completa. Ese rechazo ocurría antes
+de encolar y el mensaje terminaba como «Intenta de nuevo» al envolverlo en un
+`StateError`.
+
+La aplicación recupera reglas verificables y conserva el snapshot después del
+primer retiro. El servidor reconstruye la misma regla sobre su fila original,
+antes de modificar la cantidad; prevalece sobre marcadores enviados por el
+cliente. La base de versión/valores se mantiene como la vio el operador. La
+edición individual de una oferta recuperable usa también el lote durable.
+
+Se cubren retiros 4→3, 8→7, 8→6 y 8→4, aumentos 4→8, 2×1, filas sin versión,
+reintentos, catálogo ausente, datos contradictorios y borrado completo. La
+migración nueva conserva el cálculo fiscal y no modifica ventas al instalarse.
+El ensayo SQL pasó incluyendo instalación repetida y rollback/reinstalación.
+Si las tres migraciones anteriores ya están aplicadas, solo falta ejecutar
+`20261015_0002_legacy_offer_group_rules.sql` y actualizar el cliente/Hub. Esta
+corrección no se ha aplicado desde aquí a producción.
+
+Los otros mensajes del log son independientes de ese rechazo:
+
+- `HubLease`: el servidor no expone `fn_hub_lease_acquire` con la firma esperada.
+  Revisar la migración `20260914_0050_hub_leases.sql` y la caché de PostgREST.
+  «Promoción» en ese log significa ascender otro equipo a Hub.
+- MAC inválido: no se autenticaron blobs locales con la clave disponible.
+  No demuestra por sí solo si hubo cambio de clave o corrupción. No se borraron
+  colas, claves ni snapshots; su recuperación necesita diagnosticar el equipo.
+- Bluetooth: respuesta duplicada del plugin; no participa en la validación de
+  reglas que devolvió el error al retirar el producto.
+
+## Vista previa de precuenta: MESA82
+
+El payload enviaba el total de cada línea en `price`, pero el diálogo trataba
+ese campo como precio unitario y volvía a multiplicarlo. Las líneas de RD$500
+y RD$750 aparecían en RD$1,000 y RD$3,000 pese al total correcto de RD$1,250.
+
+`buildPrecheckItemPayload` envía un `lineTotal` explícito, calculado con el
+resumen canónico que incluye impuestos y descuentos, y reserva `price` para
+el precio unitario. Se corrigieron tanto el recorrido normal como el offline.
+La presentación separada por unidades reparte los centavos conservando el
+importe completo. Los llamadores antiguos mantienen su contrato unitario.
+
+La vista usa «Importe», cantidades sin decimales innecesarios y «Descuento
+incluido» cuando el descuento es informativo. El encabezado no parte «CANT.»
+y el total permanece visible al desplazar una cuenta sin abonos. El recorrido
+de abonos mantiene el orden consumo/abono/diferencia. La precuenta impresa
+también identifica el descuento informativo como incluido.
+
+Validación de este ajuste: 47 pruebas aprobadas de precuenta, impuestos,
+abonos e impresión; regresiones a 360, 390 y 800 píxeles, más revisión visual
+de capturas locales. No requiere una migración adicional: se activa al
+actualizar/recargar la aplicación.

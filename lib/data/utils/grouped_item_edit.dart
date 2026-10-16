@@ -79,7 +79,8 @@ GroupedItemEdit planGroupedItemEdit({
   final removed = <String>[];
   var remaining = edited.quantity;
   for (var index = 0; index < rows.length; index++) {
-    final row = rows[index];
+    final originalRow = rows[index];
+    final row = recoverLegacyOfferRule(originalRow);
     final qty = index == rows.length - 1
         ? remaining
         : remaining.clamp(0, row.quantity).toDouble();
@@ -99,15 +100,29 @@ GroupedItemEdit planGroupedItemEdit({
       actions.add({
         'kind': 'delete',
         'item_id': row.id,
-        ...OrderEditBase.ofItem(row).toAction(),
+        ...OrderEditBase.ofItem(originalRow).toAction(),
       });
     } else {
+      if (isOfferDealItem(row) &&
+          OfferDealRule.fromNotes(row.notes) == null &&
+          !(row.notes ?? '').contains('[CORTESIA:') &&
+          (qty - row.quantity).abs() > 0.0001) {
+        throw const OfferRuleUnavailable();
+      }
       final ratio = keepQty / row.quantity;
       final managed =
           isOfferDealItem(row) && OfferDealRule.fromNotes(row.notes) != null;
       final groupGross = rows.fold<double>(0, (s, i) => s + i.subtotal + i.tax);
+      final preserveLegacyRound =
+          isOfferDealItem(row) &&
+          !managed &&
+          keepQty == row.quantity &&
+          edited.quantity != rows.fold<double>(0, (s, i) => s + i.quantity) &&
+          !(edited.notes ?? '').contains('[CORTESIA:');
       final discount = managed
           ? discountAtQuantity(row, keepQty)
+          : preserveLegacyRound
+          ? row.discounts
           : (groupGross > 0
                 ? edited.discounts * (row.subtotal + row.tax) / groupGross
                 : 0.0);
@@ -137,7 +152,7 @@ GroupedItemEdit planGroupedItemEdit({
       actions.add({
         'kind': 'details',
         'item_id': row.id,
-        ...OrderEditBase.ofItem(row).toAction(),
+        ...OrderEditBase.ofItem(originalRow).toAction(),
         'args': {
           'qty': keepQty,
           'discounts': discount,

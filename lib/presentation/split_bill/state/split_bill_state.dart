@@ -5,6 +5,7 @@ import '../../sales/state/sales_state.dart' show EditConflictNotice;
 /// 📄 Estado del proceso de división de cuenta
 class SplitBillState extends Equatable {
   final bool loading;
+  final bool initializationFailed;
   final String? error;
 
   // Orden original
@@ -38,6 +39,7 @@ class SplitBillState extends Equatable {
 
   const SplitBillState({
     this.loading = false,
+    this.initializationFailed = false,
     this.error,
     this.order,
     this.allItems = const [],
@@ -53,6 +55,7 @@ class SplitBillState extends Equatable {
 
   SplitBillState copyWith({
     bool? loading,
+    bool? initializationFailed,
     String? error,
     Order? order,
     List<OrderItem>? allItems,
@@ -68,6 +71,7 @@ class SplitBillState extends Equatable {
   }) {
     return SplitBillState(
       loading: loading ?? this.loading,
+      initializationFailed: initializationFailed ?? this.initializationFailed,
       error: error,
       order: order ?? this.order,
       allItems: allItems ?? this.allItems,
@@ -100,7 +104,7 @@ class SplitBillState extends Equatable {
 
   // Verificar si se puede aplicar la división
   bool get canApplySplit {
-    if (loading || order == null) return false;
+    if (loading || initializationFailed || order == null) return false;
 
     // Permitir guardar también cuando todas las subcuentas se eliminaron
     // y los items quedaron en la cuenta principal (C1).
@@ -138,6 +142,7 @@ class SplitBillState extends Equatable {
   @override
   List<Object?> get props => [
     loading,
+    initializationFailed,
     error,
     order,
     allItems,

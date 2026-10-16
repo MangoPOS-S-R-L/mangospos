@@ -9,6 +9,7 @@ import '../datasources/queries/sales_queries.dart';
 import '../models/credit_note_result.dart';
 import '../models/offline_payment_replay.dart';
 import '../models/order_edit.dart';
+import '../models/bill_split_edit.dart';
 import '../models/order_item_removal_reason.dart';
 import '../models/order_item_tax_line.dart';
 import '../models/sales_models.dart';
@@ -2054,6 +2055,7 @@ class SalesRepository {
     if (!result.applied) throw OrderEditConflict(result);
     return result;
   }
+
   Future<OrderEditResult> _editOrThrow(
     String failure,
     Future<OrderEditResult> Function() run,
@@ -2665,6 +2667,7 @@ class SalesRepository {
       if (page.length < size) return result;
     }
   }
+
   Future<List<OrderItem>> getOrderItems(
     String orderId, {
     bool includeModifiers = true,
@@ -2762,6 +2765,7 @@ class SalesRepository {
       throw Exception('Error al obtener items: $e');
     }
   }
+
   /// Elimina todos los items de un check y recalcula totales en DB
   Future<void> clearCheck(String checkId) async {
     throw UnsupportedError(
@@ -3225,10 +3229,31 @@ class SalesRepository {
     }
   }
 
+  /// Una RPC confirma todos los destinos y los datos fiscales, o ninguno.
+  Future<OrderEditResult> applyBillSplit(BillSplitEdit edit) async {
+    final dynamic raw;
+    try {
+      raw = await _client.rpc(
+        'fn_apply_bill_split',
+        params: edit.toRpcParams(),
+      );
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202' || e.code == '42883') {
+        throw const BillSplitServerOutdated();
+      }
+      rethrow;
+    }
+    if (raw is! Map) throw StateError('Respuesta inválida al guardar división');
+    final result = OrderEditResult.fromMap(Map<String, dynamic>.from(raw));
+    if (!result.applied) throw OrderEditConflict(result);
+    return result;
+  }
+
   /// Split bill UX (2026-05-13) — divide cada item abierto con qty>1 en
   /// N filas de qty=1 para que cada unidad sea transferible
   /// independientemente en el modal de dividir cuenta. Idempotente: si
-  /// todos los items ya están en qty=1, es no-op.
+  /// todos los items ordinarios ya están en qty=1, es no-op. Las ofertas
+  /// conservan paquetes completos; los extras se copian por unidad.
   ///
   /// Retorna el número de filas nuevas creadas (qty original - 1 por
   /// cada item explotado). 0 = no había nada que dividir.
@@ -3240,6 +3265,11 @@ class SalesRepository {
       );
       if (response == null) return 0;
       return (response as num).toInt();
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST202' || e.code == '42883') {
+        throw const BillSplitUnitsNotReady();
+      }
+      rethrow;
     } catch (e) {
       throw Exception('Error al dividir productos en unidades: $e');
     }

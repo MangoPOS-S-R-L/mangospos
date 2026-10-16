@@ -89,7 +89,8 @@ class OrderEditResult {
   factory OrderEditResult.fromMap(Map<String, dynamic> map) => OrderEditResult(
     status: map['status']?.toString() ?? 'conflict',
     reason: map['reason']?.toString(),
-    version: (map['version'] as num?)?.toInt() ??
+    version:
+        (map['version'] as num?)?.toInt() ??
         (map['current_version'] as num?)?.toInt(),
     current: map['current'] is Map
         ? Map<String, dynamic>.from(map['current'] as Map)
@@ -137,6 +138,12 @@ class OrderEditConflict implements Exception {
     'order_closed' => 'La cuenta ya se cerró en otro equipo.',
     'item_missing' => 'Otro equipo quitó este producto de la cuenta.',
     'item_closed' => 'Este producto ya se cobró o se anuló en otro equipo.',
+    'check_closed' =>
+      'Esta subcuenta ya se cobró o se cerró. Recarga la división.',
+    'check_exists' =>
+      'Otro equipo creó una subcuenta en esa posición. Recarga la división.',
+    'check_not_empty' =>
+      'La subcuenta recibió productos nuevos. Recarga antes de retirarla.',
     _ => 'Otro equipo cambió esto mientras lo editabas.',
   };
 
@@ -144,9 +151,8 @@ class OrderEditConflict implements Exception {
   String? get currentDescription {
     final current = result.current;
     if (current == null) return null;
-    String amount(num value) => value % 1 == 0
-        ? value.toInt().toString()
-        : value.toStringAsFixed(2);
+    String amount(num value) =>
+        value % 1 == 0 ? value.toInt().toString() : value.toStringAsFixed(2);
     final parts = <String>[];
     final qty = current['qty'];
     if (qty is num) parts.add('cantidad ${amount(qty)}');
