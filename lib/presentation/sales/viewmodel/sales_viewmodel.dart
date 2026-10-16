@@ -242,6 +242,36 @@ class _OrderMutationContext {
   CurrentOrderState snapshot;
 }
 
+/// La apertura puede terminar después de salir de la ruta. Conserva sus
+/// dependencias y resultados sin consultar la selección de otra pantalla.
+class _TableOpening {
+  _TableOpening({
+    required this.visitId,
+    required this.tableId,
+    required this.businessId,
+    required this.token,
+    required this.repository,
+    required this.terminalMode,
+    required this.hubUrl,
+    required this.refreshZone,
+  });
+
+  final Object? visitId;
+  final String tableId;
+  final String? businessId;
+  final int token;
+  final SalesRepository repository;
+  final TerminalMode terminalMode;
+  final String? hubUrl;
+  final Future<void> Function() refreshZone;
+  final Map<String, OpenTableResult> remoteResults = {};
+  final Map<String, CurrentOrderState> localDrafts = {};
+  final Set<String> publishedOrders = {};
+  final Set<String> scheduledOrders = {};
+  bool abandoned = false;
+  bool finished = false;
+}
+
 class SalesViewModel extends Notifier<CurrentOrderState> {
   static const _courtesyPrefix = '[CORTESIA:';
   static const _promoPrefix = '[PROMO_AUTO:';
@@ -253,6 +283,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
   // disco (async) solo aplica si su token sigue siendo el actual — abrir la
   // mesa A y saltar rápido a la B no debe pintar el snapshot de A.
   int _openTableToken = 0;
+  final Map<Object, _TableOpening> _tableOpeningsByVisit = Map.identity();
+  final Map<String, _TableOpening> _latestOpeningByTable = {};
+  _TableOpening? _selectedTableOpening;
   // Mesa actualmente cargada en el state (origin == 'table'). Es la clave
   // canónica del snapshot offline de la mesa: TODAS las lecturas
   // (fallback de openTable, hidratación cache-first, overlay del salón)
@@ -1667,7 +1700,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
 
   /// [businessId]: el del cobro, capturado al abrirlo; sin él, el activo.
   /// Con otra sucursal ya en pantalla solo se escribe la marca.
-  Future<void> markPaidOrderLocally(String orderId, {String? businessId}) async {
+  Future<void> markPaidOrderLocally(
+    String orderId, {
+    String? businessId,
+  }) async {
     final targetBusinessId = businessId ?? _activeBusinessId;
     if (targetBusinessId == null || targetBusinessId.isEmpty) return;
     await _offlinePos.markOrderClosedLocally(
@@ -1759,6 +1795,228 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     return null;
   }
 
+  /// Sale de una visita concreta, incluso si todavía no llegó su order_id.
+  /// La respuesta pendiente sigue observada para liberar únicamente su cuenta
+  /// vacía; una apertura más reciente conserva su estado y su selección.
+  void abandonTableOpening(Object visitId) {
+    final opening = _tableOpeningsByVisit.remove(visitId);
+    if (opening == null || opening.abandoned) return;
+    opening.abandoned = true;
+    // Puede salir mientras el post-load termina, con la cuenta ya editable.
+    // La pantalla libera según su snapshot actual; un resultado inicial vacío
+    // nunca autoriza descartar los productos que se agregaron después.
+    if (opening.token == _openTableToken) {
+      _markTableOpeningPublished(opening, state.order?.id);
+    }
+    if (opening.token == _openTableToken) {
+      if (!opening.finished) {
+        ++_openTableToken;
+        ++_loadGeneration;
+        _accountCheckTimer?.cancel();
+      }
+      _activeTableId = null;
+    }
+    for (final result in opening.remoteResults.values.toList()) {
+      _scheduleAbandonedTableResult(opening, result);
+    }
+    for (final draft in opening.localDrafts.values.toList()) {
+      _releaseAbandonedTableDraft(opening, draft);
+    }
+  }
+
+  _TableOpening? _activeVisitForTable(_TableOpening opening) {
+    final current = _selectedTableOpening;
+    if (current == null ||
+        current.abandoned ||
+        current.token != _openTableToken ||
+        current.businessId != opening.businessId ||
+        current.tableId != opening.tableId) {
+      return null;
+    }
+    return current;
+  }
+
+  void _rememberTableResult(_TableOpening opening, OpenTableResult result) {
+    if (opening.publishedOrders.contains(result.orderId)) return;
+    opening.remoteResults[result.orderId] = result;
+    if (opening.abandoned) _scheduleAbandonedTableResult(opening, result);
+  }
+
+  void _markTableOpeningPublished(_TableOpening opening, String? orderId) {
+    if (orderId == null) return;
+    opening.publishedOrders.add(orderId);
+    opening.remoteResults.remove(orderId);
+    opening.localDrafts.remove(orderId);
+  }
+
+  void _scheduleAbandonedTableResult(
+    _TableOpening opening,
+    OpenTableResult result,
+  ) {
+    if (result.bundle.items.isNotEmpty) return;
+    final current = _activeVisitForTable(opening);
+    if (current != null) {
+      // Si volvió a entrar antes de responder el RPC anterior, esa visita
+      // hereda el resultado: lo libera al salir si su propio RPC falla.
+      if (!current.publishedOrders.contains(result.orderId)) {
+        current.remoteResults.putIfAbsent(result.orderId, () => result);
+      }
+      return;
+    }
+    if (!opening.scheduledOrders.add(result.orderId)) return;
+    opening.repository.scheduleEmptyTableRelease(
+      result.orderId,
+      tableId: opening.tableId,
+      businessId: opening.businessId,
+      release: () => _releaseAbandonedTableResult(opening, result),
+      onReleased: () => unawaited(opening.refreshZone()),
+    );
+  }
+
+  Future<bool> _releaseAbandonedTableResult(
+    _TableOpening opening,
+    OpenTableResult result,
+  ) async {
+    bool protectActiveVisit() {
+      final current = _activeVisitForTable(opening);
+      if (current == null) return false;
+      if (!current.publishedOrders.contains(result.orderId)) {
+        current.remoteResults.putIfAbsent(result.orderId, () => result);
+      }
+      return true;
+    }
+
+    if (protectActiveVisit()) return false;
+    final businessId = opening.businessId;
+    if (businessId == null || businessId.isEmpty) return false;
+    final orderId = result.orderId;
+    if (opening.terminalMode != TerminalMode.hubClient &&
+        _connectivity.isConnected) {
+      try {
+        final deviceId = await DeviceUtils.getDeviceId();
+        final hasPending = await _offlinePos.hasPendingWorkForOrders(
+          businessId,
+          {orderId},
+          includeHubOpLog: opening.terminalMode == TerminalMode.hubHost,
+        );
+        // Los awaits de dispositivo/cola también permiten volver a entrar.
+        if (protectActiveVisit()) return false;
+        final released = await opening.repository.releaseEmptyTableIfNeeded(
+          orderId,
+          businessId: businessId,
+          deviceId: deviceId,
+          hasPendingWork: hasPending,
+        );
+        if (released && opening.terminalMode == TerminalMode.hubHost) {
+          await _offlinePos.publishHostOp(businessId, {
+            'type': 'release_empty_order',
+            'order_id': orderId,
+            'table_id': opening.tableId,
+            'op_id': 'auto-release-$orderId',
+            'hub_applied': true,
+          });
+        }
+        return released;
+      } catch (error) {
+        if (!OfflinePosService.isTransportError(error)) rethrow;
+      }
+    }
+    if (protectActiveVisit()) return false;
+    await _offlinePos.enqueueAction(
+      businessId: businessId,
+      action: {
+        'type': 'release_empty_order',
+        'order_id': orderId,
+        'table_id': opening.tableId,
+      },
+    );
+    await _offlinePos.removeOrderSnapshots(
+      businessId: businessId,
+      orderId: orderId,
+    );
+    if (opening.terminalMode == TerminalMode.hubHost ||
+        opening.terminalMode == TerminalMode.hubClient) {
+      await _offlinePos.flushPendingToHub(businessId);
+    }
+    return true;
+  }
+
+  void _rememberTableDraft(_TableOpening opening, CurrentOrderState draft) {
+    final orderId = draft.order?.id;
+    if (orderId == null ||
+        draft.items.isNotEmpty ||
+        opening.publishedOrders.contains(orderId)) {
+      return;
+    }
+    opening.localDrafts[orderId] = draft;
+    if (opening.abandoned) _releaseAbandonedTableDraft(opening, draft);
+  }
+
+  void _releaseAbandonedTableDraft(
+    _TableOpening opening,
+    CurrentOrderState draft,
+  ) {
+    final businessId = opening.businessId;
+    final orderId = draft.order?.id;
+    if (businessId == null || businessId.isEmpty || orderId == null) return;
+    final current = _activeVisitForTable(opening);
+    if (current != null) {
+      current.localDrafts.putIfAbsent(orderId, () => draft);
+      return;
+    }
+    if (!opening.scheduledOrders.add(orderId)) return;
+    unawaited(() async {
+      try {
+        final mayExistRemotely =
+            opening.terminalMode == TerminalMode.hubHost ||
+            opening.terminalMode == TerminalMode.hubClient ||
+            await _offlinePos.mayExistRemotely(
+              businessId: businessId,
+              orderId: orderId,
+            );
+        // Una visita posterior heredó este borrador y pudo editarlo y salir
+        // durante la lectura de la cola. Su ciclo de vida manda desde aquí.
+        if (!identical(
+              _latestOpeningByTable['$businessId|${opening.tableId}'],
+              opening,
+            ) ||
+            opening.publishedOrders.contains(orderId)) {
+          return;
+        }
+        final active = _activeVisitForTable(opening);
+        if (active != null) {
+          active.localDrafts.putIfAbsent(orderId, () => draft);
+          return;
+        }
+        if (mayExistRemotely) {
+          await _offlinePos.enqueueAction(
+            businessId: businessId,
+            action: {
+              'type': 'release_empty_order',
+              'order_id': orderId,
+              'table_id': opening.tableId,
+            },
+          );
+          await _offlinePos.removeOrderSnapshots(
+            businessId: businessId,
+            orderId: orderId,
+          );
+          await _offlinePos.flushPendingToHub(businessId);
+        } else {
+          await _offlinePos.discardLocalOrder(
+            businessId: businessId,
+            localOrderId: orderId,
+          );
+        }
+        await opening.refreshZone();
+      } catch (error) {
+        debugPrint(
+          '[SalesVM] no se liberó el borrador abandonado $orderId: $error',
+        );
+      }
+    }());
+  }
+
   /// Abre una mesa en modo Hub: resume el borrador local si ya existe en este
   /// equipo, si no crea uno nuevo y notifica al Hub con la op `open_table`
   /// (que mapea order↔table para el salón y el uplink). Reusa el camino offline
@@ -1768,6 +2026,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     String tableId,
     int peopleCount,
     int openToken,
+    _TableOpening opening,
   ) async {
     final businessId = _activeBusinessId;
     bool stillSelected() =>
@@ -1781,18 +2040,21 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // (que tiene internet). Devuelve el bundle completo con datos fiscales,
       // así el comprobante carga bien. Si el Hub no responde (offline), caemos
       // al respaldo local (borrador + op-log) de abajo.
-      final hubUrl = ref.read(hubModeProvider.notifier).reachableHubUrl;
+      final hubUrl = opening.hubUrl;
       if (hubUrl != null) {
         try {
-          final result = await ref
-              .read(salesRepositoryProvider)
+          final result = await opening.repository
               .openTableAndLoadViaHub(
                 hubBaseUrl: hubUrl,
                 tableId: tableId,
                 userId: Supabase.instance.client.auth.currentUser?.id,
                 peopleCount: peopleCount,
                 openedByEmployeeId: _trustedActiveWaiter()?.employeeId,
-              );
+              )
+              .then((result) {
+                _rememberTableResult(opening, result);
+                return result;
+              });
           if (!stillSelected()) return;
           if (await _offlinePos.isOrderClosedLocally(
             businessId: businessId,
@@ -1809,6 +2071,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             caller: 'openTableViaHub',
             preloadedBundle: result.bundle,
           );
+          if (stillSelected() && state.order?.id == result.orderId) {
+            _markTableOpeningPublished(opening, result.orderId);
+          }
           return;
         } catch (e) {
           if (!stillSelected()) return;
@@ -1843,6 +2108,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         state = _normalizeHydratedState(
           existing.copyWith(loading: false, origin: 'table', error: null),
         );
+        _markTableOpeningPublished(opening, existing.order?.id);
         _tableCache[tableId] = state;
         unawaited(_hydrateFiscalSequencesOffline());
         return;
@@ -1874,6 +2140,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         );
         if (!stillSelected()) return;
         state = _normalizeHydratedState(hydrated);
+        _markTableOpeningPublished(opening, hydrated.order?.id);
         _tableCache[tableId] = state;
         unawaited(_hydrateFiscalSequencesOffline());
         return;
@@ -1885,7 +2152,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         tableId: tableId,
         opener: _localDraftOpener(),
       );
-      if (!stillSelected()) return;
+      if (!stillSelected()) {
+        _rememberTableDraft(opening, draft);
+        return;
+      }
       final orderId = draft.order?.id;
       if (orderId != null) {
         await _offlinePos.enqueueAction(
@@ -1898,6 +2168,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           },
         );
       }
+      _rememberTableDraft(opening, draft);
       if (!stillSelected()) return;
       state = _normalizeHydratedState(
         draft.copyWith(
@@ -1906,6 +2177,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
           error: 'Mesa abierta en la red local (Hub).',
         ),
       );
+      _markTableOpeningPublished(opening, draft.order?.id);
       _tableCache[tableId] = state;
       unawaited(_hydrateFiscalSequencesOffline());
     } catch (e) {
@@ -1984,20 +2256,36 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     );
   }
 
-  Future<void> openTable(String tableId, {int peopleCount = 1}) {
+  Future<void> openTable(
+    String tableId, {
+    int peopleCount = 1,
+    Object? visitId,
+  }) {
     final diagnostics = PerformanceDiagnostics.instance;
     if (!diagnostics.isRunning) {
-      return _openTableImpl(tableId, peopleCount: peopleCount);
+      return _openTableImpl(
+        tableId,
+        peopleCount: peopleCount,
+        visitId: visitId,
+      );
     }
     return diagnostics
         .measure('apertura_mesa_total', () async {
-          await _openTableImpl(tableId, peopleCount: peopleCount);
+          await _openTableImpl(
+            tableId,
+            peopleCount: peopleCount,
+            visitId: visitId,
+          );
           return state.order != null;
         }, accepted: (opened) => opened)
         .then<void>((_) {});
   }
 
-  Future<void> _openTableImpl(String tableId, {int peopleCount = 1}) async {
+  Future<void> _openTableImpl(
+    String tableId, {
+    int peopleCount = 1,
+    Object? visitId,
+  }) async {
     ++_loadGeneration;
     final businessIdAtOpen = _activeBusinessId;
     // ⚡ Fix anti-parpadeo: reset SÍNCRONO del state ANTES de cualquier
@@ -2012,6 +2300,39 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // limpiamos completo. La data autoritativa llega en _loadOrderDetail.
     final myOpenToken = ++_openTableToken;
     _activeTableId = tableId;
+    final terminalMode = ref.read(hubModeProvider);
+    final zones = ref.read(byZoneVmProvider.notifier);
+    final opening = _TableOpening(
+      visitId: visitId,
+      tableId: tableId,
+      businessId: businessIdAtOpen,
+      token: myOpenToken,
+      repository: ref.read(salesRepositoryProvider),
+      terminalMode: terminalMode,
+      hubUrl: terminalMode == TerminalMode.hubClient
+          ? ref.read(hubModeProvider.notifier).reachableHubUrl
+          : null,
+      refreshZone: () async {
+        if (businessIdAtOpen == null || businessIdAtOpen.isEmpty) return;
+        try {
+          if (!ref.mounted || _activeBusinessId != businessIdAtOpen) return;
+          await zones.load(businessIdAtOpen);
+        } catch (error) {
+          debugPrint('[SalesVM] no se refrescó la mesa liberada: $error');
+        }
+      },
+    );
+    final tableKey = '$businessIdAtOpen|$tableId';
+    final previousOpening = _latestOpeningByTable[tableKey];
+    if (previousOpening != null && previousOpening.abandoned) {
+      // La pantalla entrante cancela el timer antes de llamar openTable. Se
+      // hereda aquí también, aunque el timer cancelado nunca llegue a correr.
+      opening.remoteResults.addAll(previousOpening.remoteResults);
+      opening.localDrafts.addAll(previousOpening.localDrafts);
+    }
+    _latestOpeningByTable[tableKey] = opening;
+    _selectedTableOpening = opening;
+    if (visitId != null) _tableOpeningsByVisit[visitId] = opening;
     final cached = _tableCache[tableId];
     _watchAccountCheck(myOpenToken);
     if (cached != null) {
@@ -2034,6 +2355,18 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       unawaited(_hydrateTableFromDiskSnapshot(tableId, myOpenToken));
     }
 
+    await _continueTableOpening(opening, peopleCount).whenComplete(() {
+      opening.finished = true;
+    });
+  }
+
+  Future<void> _continueTableOpening(
+    _TableOpening opening,
+    int peopleCount,
+  ) async {
+    final tableId = opening.tableId;
+    final myOpenToken = opening.token;
+    final businessIdAtOpen = opening.businessId;
     // Solo los roles con permisos de caja (cajero/admin/manager) necesitan
     // una sesión de caja abierta. Los meseros pueden abrir mesas directamente.
     final sessionCtrl = ref.read(sessionProvider.notifier);
@@ -2062,7 +2395,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
     // order↔table). Las mutaciones de ítem se enrutan al Hub por el uploader
     // (reusa el camino offline). Inerte si kHubModeEnabled=false.
     if (_isHubMode) {
-      await _openTableViaHub(tableId, peopleCount, myOpenToken);
+      await _openTableViaHub(tableId, peopleCount, myOpenToken, opening);
       return;
     }
 
@@ -2096,15 +2429,20 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       // timeout(12s): cubre la ventana "conectado pero malo" (el probe de
       // conectividad va 1-2 sondeos atrás). Sin él, un RPC colgado dejaba
       // la mesa sin abrir indefinidamente; con él degrada al camino offline.
-      final result = await ref
-          .read(salesRepositoryProvider)
+      final result = await opening.repository
           .openTableAndLoad(
             tableId: tableId,
             userId: userId,
             peopleCount: peopleCount,
             openedByEmployeeId: activeWaiter?.employeeId,
           )
-          .timeout(const Duration(seconds: 12));
+          .then((result) {
+            // Se observa antes del timeout: este no cancela el RPC y el
+            // servidor puede responder después de haber salido de la mesa.
+            _rememberTableResult(opening, result);
+            return result;
+          })
+          .timeout(tableOpenTimeout);
       final orderId = result.orderId;
       if (myOpenToken != _openTableToken ||
           _activeBusinessId != businessIdAtOpen) {
@@ -2122,6 +2460,10 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
         caller: 'openTable',
         preloadedBundle: result.bundle,
       );
+      if (myOpenToken != _openTableToken || opening.abandoned) return;
+      if (myOpenToken == _openTableToken && state.order?.id == orderId) {
+        _markTableOpeningPublished(opening, orderId);
+      }
       _settleAccountCheck(myOpenToken, AccountCheck.verified);
 
       // Fix #1: si soy el Hub host, publico la apertura al op-log para que las
@@ -2165,6 +2507,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               accountCheck: AccountCheck.localCopy,
             ),
           );
+          _markTableOpeningPublished(opening, offlineState.order?.id);
           _tableCache[tableId] = state;
           unawaited(_hydrateFiscalSequencesOffline());
           return;
@@ -2185,6 +2528,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
             tableId: tableId,
             opener: _localDraftOpener(),
           );
+          _rememberTableDraft(opening, draft);
           if (myOpenToken != _openTableToken ||
               _activeBusinessId != businessIdAtOpen) {
             return;
@@ -2197,6 +2541,7 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
               accountCheck: AccountCheck.localCopy,
             ),
           );
+          _markTableOpeningPublished(opening, draft.order?.id);
           _tableCache[tableId] = state;
           unawaited(_hydrateFiscalSequencesOffline());
           return;
@@ -2206,6 +2551,9 @@ class SalesViewModel extends Notifier<CurrentOrderState> {
       _settleAccountCheck(myOpenToken, AccountCheck.refreshFailed);
     }
   }
+
+  @visibleForTesting
+  static Duration tableOpenTimeout = const Duration(seconds: 12);
 
   /// Tope de la verificación de una cuenta recién abierta (ver
   /// [AccountCheck]): pasado, la copia queda marcada como posiblemente vieja

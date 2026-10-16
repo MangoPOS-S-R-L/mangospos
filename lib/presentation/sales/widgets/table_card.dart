@@ -170,113 +170,135 @@ class _TableCardState extends State<TableCard> {
 
   /// Sección superior: Código, estado y total
   Widget _buildTopSection(bool isOwnTable) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Lado izquierdo: Código y estado
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Código de mesa con efecto hover
-            AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: AppTextStyles.tableCode.copyWith(
-                color: _isHovered ? AppColors.primary : AppColors.foreground,
-              ),
-              child: Text(widget.table.code),
-            ),
-
-            const SizedBox(height: 2),
-
-            // Estado
-            Text(
-              _getStatusText(),
-              style: AppTextStyles.tableStatus.copyWith(
-                color: _getStatusColor(),
-              ),
-            ),
-
-            // Cuentas en revisión (llegaron de otro equipo o tarde) y saldo
-            // abonado, en una sola fila: la card tiene alto fijo.
-            if (widget.table.reviewAccounts > 0 ||
-                (widget.depositBalance ?? 0) > 0.005) ...[
-              const SizedBox(height: 4),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.table.reviewAccounts > 0)
-                    ReviewAccountsBadge(table: widget.table),
-                  if (widget.table.reviewAccounts > 0 &&
-                      (widget.depositBalance ?? 0) > 0.005)
-                    const SizedBox(width: 4),
-                  // Saldo abonado. Va en la identidad y no en el contexto porque
-                  // la mesa puede estar LIBRE y tener saldo: es una propiedad de
-                  // la mesa, no de la visita.
-                  if ((widget.depositBalance ?? 0) > 0.005)
-                    Consumer(
-                      builder: (context, ref, _) {
-                        final currency = currentBusinessCurrencyOrFallback(ref);
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.account_balance_wallet_outlined,
-                                size: 11,
-                                color: Color(0xFF15803D),
-                              ),
-                              const SizedBox(width: 3),
-                              Text(
-                                'Abono ${_formatCurrency(currency, widget.depositBalance!)}',
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF15803D),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+    // El total toma solo lo que mide (hasta media card) y el nombre el resto.
+    // Antes la columna del nombre iba sin límite de ancho: un nombre largo
+    // («ÁREA EXTERIOR - MESA 1») se pintaba fuera de la card y el número de la
+    // mesa quedaba cortado o encima de la card vecina.
+    return LayoutBuilder(
+      builder: (context, constraints) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: _buildIdentity()),
+          // Lado derecho: Total. Se muestra siempre que la mesa tenga
+          // sesión activa (ocupado o pagando) — el cajero debe ver lo
+          // que el cliente debe aunque ya se imprimió la precuenta.
+          if (widget.table.hasActiveSession && widget.table.total != null) ...[
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: constraints.maxWidth / 2),
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final currency = currentBusinessCurrencyOrFallback(ref);
+                  return Text(
+                    _formatCurrency(currency, widget.table.total!),
+                    // Spec: el total va a 16px/700. El token compartido
+                    // se queda en 14 porque lo reusa Delivery Express.
+                    style: AppTextStyles.tableTotal.copyWith(
+                      fontSize: 16,
+                      color: AppColors.foreground,
                     ),
-                ],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                  );
+                },
               ),
-            ],
+            ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// Código, estado y marcas de la mesa (lado izquierdo de la banda 1).
+  Widget _buildIdentity() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Código de mesa con efecto hover. Si no cabe en una línea se
+        // achica en vez de cortarse: con puntos suspensivos se perdería
+        // justo el final, que es el número de la mesa.
+        AnimatedDefaultTextStyle(
+          duration: const Duration(milliseconds: 200),
+          style: AppTextStyles.tableCode.copyWith(
+            color: _isHovered ? AppColors.primary : AppColors.foreground,
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(widget.table.code, maxLines: 1),
+          ),
         ),
 
-        // Lado derecho: Total. Se muestra siempre que la mesa tenga
-        // sesión activa (ocupado o pagando) — el cajero debe ver lo
-        // que el cliente debe aunque ya se imprimió la precuenta.
-        if (widget.table.hasActiveSession && widget.table.total != null)
-          Flexible(
-            child: Consumer(
-              builder: (context, ref, _) {
-                final currency = currentBusinessCurrencyOrFallback(ref);
-                return Text(
-                  _formatCurrency(currency, widget.table.total!),
-                  // Spec: el total va a 16px/700. El token compartido
-                  // se queda en 14 porque lo reusa Delivery Express.
-                  style: AppTextStyles.tableTotal.copyWith(
-                    fontSize: 16,
-                    color: AppColors.foreground,
+        const SizedBox(height: 2),
+
+        // Estado
+        Text(
+          _getStatusText(),
+          style: AppTextStyles.tableStatus.copyWith(color: _getStatusColor()),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+
+        // Cuentas en revisión (llegaron de otro equipo o tarde) y saldo
+        // abonado, en una sola fila: la card tiene alto fijo.
+        if (widget.table.reviewAccounts > 0 ||
+            (widget.depositBalance ?? 0) > 0.005) ...[
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.table.reviewAccounts > 0)
+                  ReviewAccountsBadge(table: widget.table),
+                if (widget.table.reviewAccounts > 0 &&
+                    (widget.depositBalance ?? 0) > 0.005)
+                  const SizedBox(width: 4),
+                // Saldo abonado. Va en la identidad y no en el contexto porque
+                // la mesa puede estar LIBRE y tener saldo: es una propiedad de
+                // la mesa, no de la visita.
+                if ((widget.depositBalance ?? 0) > 0.005)
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final currency = currentBusinessCurrencyOrFallback(ref);
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDCFCE7),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.account_balance_wallet_outlined,
+                              size: 11,
+                              color: Color(0xFF15803D),
+                            ),
+                            const SizedBox(width: 3),
+                            Text(
+                              'Abono ${_formatCurrency(currency, widget.depositBalance!)}',
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF15803D),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                );
-              },
+              ],
             ),
           ),
+        ],
       ],
     );
   }

@@ -686,6 +686,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   TerminalMode? _terminalModeAtBuild;
   String? _hubUrlAtBuild;
   bool _isRetailAtBuild = false;
+  Object? _tableOpeningVisitId;
+  bool _leavingScreen = false;
+
+  void _abandonTableOpening() {
+    final visitId = _tableOpeningVisitId;
+    _tableOpeningVisitId = null;
+    if (visitId != null) {
+      _orderNotifierRef?.abandonTableOpening(visitId);
+    }
+  }
 
   void _mirrorEmptyReleaseToHub({
     required bool released,
@@ -778,6 +788,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   @override
   void dispose() {
+    _leavingScreen = true;
+    _abandonTableOpening();
     // Catch-all: si se sale de una MESA o de una VENTA RÁPIDA sin productos
     // (orden vacía) por cualquier vía, liberarla de inmediato. El _handleBack
     // ya lo intenta para refrescar la zona al volver; esto garantiza que
@@ -863,7 +875,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final orderNotifier = ref.read(currentOrderProvider.notifier);
     final terminalMode = ref.read(hubModeProvider);
     final hubUrl = ref.read(hubModeProvider.notifier).reachableHubUrl;
-    if (hasEmptyOrder && order != null && order.id.startsWith('local-order-')) {
+    // La apertura puede seguir esperando al servidor sin haber publicado una
+    // orden todavía. Su respuesta también debe liberarse después de salir.
+    _leavingScreen = true;
+    _abandonTableOpening();
+    if (hasEmptyOrder && order.id.startsWith('local-order-')) {
       _localReleaseScheduledByBack = true;
     }
 
@@ -1651,16 +1667,21 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   void _initializeOrder() {
+    if (!mounted || _leavingScreen) return;
     final notifier = ref.read(currentOrderProvider.notifier);
+    _abandonTableOpening();
+    _orderNotifierRef = notifier;
     // Primero de todo: si la instancia anterior de esta pantalla dejó una
     // liberación programada para ESTA mesa, cancelarla ya. Se hace aquí,
     // síncrono y antes de cualquier RPC, para que la ventana de gracia solo
     // tenga que cubrir el salto entre frames (ver emptyTableReleaseDelay).
     SalesRepository.cancelPendingEmptyTableRelease(widget.tableId);
     if (widget.origin == OrderOrigin.table && widget.tableId != null) {
+      final visitId = _tableOpeningVisitId = Object();
       notifier.openTable(
         widget.tableId!,
         peopleCount: widget.initialPeopleCount,
+        visitId: visitId,
       );
     } else if (widget.origin == OrderOrigin.manual) {
       notifier.ensureManualOrder();
@@ -1685,6 +1706,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.origin != oldWidget.origin ||
         widget.tableId != oldWidget.tableId) {
+      _abandonTableOpening();
+      _leavingScreen = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _initializeOrder();
@@ -1697,6 +1720,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     super.initState();
     _currentTableCode = widget.tableCode;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _leavingScreen) return;
       _initializeOrder();
       _loadDeliveryAddressSetting();
     });
