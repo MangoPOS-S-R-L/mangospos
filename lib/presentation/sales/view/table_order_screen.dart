@@ -77,6 +77,9 @@ import 'package:mangopos/presentation/sales/viewmodel/sales_by_zone_viewmodel.da
 import 'package:mangopos/core/business/business_resolver.dart';
 import 'package:mangopos/presentation/sales/widgets/payment_success_dialog.dart';
 import 'package:mangopos/presentation/sales/logic/payment_completion_gate.dart';
+import 'package:mangopos/presentation/sales/logic/payment_fresh_total.dart';
+import 'package:mangopos/presentation/sales/logic/precheck_snapshot.dart';
+import 'package:mangopos/presentation/sales/logic/catalog_product_tap.dart';
 import 'package:mangopos/presentation/sales/logic/unit_removal_plan.dart';
 import 'package:mangopos/presentation/sales/widgets/pin_verification_modal.dart';
 import 'package:mangopos/data/repositories/table_deposit_repository.dart';
@@ -116,6 +119,10 @@ const double _salesRadiusTab = 12;
 /// haya llegado a correr (ej: app en background, frame skip).
 final _salesActionLocksProvider = StateProvider<Map<String, int>>(
   (ref) => const {},
+);
+
+final _catalogProductTapsProvider = Provider(
+  (ref) => CatalogProductTapTracker(),
 );
 
 /// Vida máxima de un lock antes de considerarse stale y permitir
@@ -1390,73 +1397,76 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     MenuProduct product,
   ) async {
     final vm = ref.read(currentOrderProvider.notifier);
+    CatalogProductTapSelection currentSelection() => CatalogProductTapSelection(
+      orderId: ref.read(currentOrderProvider).order?.id,
+      businessId: ref.read(sessionProvider).activeBusinessId,
+      origin: widget.origin.name,
+      tableId: widget.tableId,
+      visitId: _tableOpeningVisitId,
+    );
+    final selection = currentSelection();
+    bool stillSelected() =>
+        context.mounted &&
+        !_leavingScreen &&
+        selection.matches(currentSelection());
+    if (!stillSelected()) return;
 
-    // Tile de OFERTA vendible: UNA línea (cantidad N) a precio original con el
-    // descuento del deal (se ve abajo en los totales), optimista e instantánea.
-    if (product.itemType == 'offer') {
-      await vm.addOfferDeal(
-        menuItemId: product.id,
-        lineQty: product.offerLineQty ?? 1,
-        discount: product.offerDiscount ?? 0,
-        name: product.name,
-        originalPrice: product.price,
-        promotionId: product.offerPromoId,
-        productTaxMode: product.taxMode,
-        productTaxRate: product.taxRate,
-      );
-      return;
-    }
+    await ref.read(_catalogProductTapsProvider).track(
+      businessId: selection.businessId!,
+      orderId: selection.orderId!,
+      action: () async {
+        // Tile de OFERTA vendible: UNA línea (cantidad N) a precio original con el
+        // descuento del deal (se ve abajo en los totales), optimista e instantánea.
+        if (product.itemType == 'offer') {
+          await vm.addOfferDeal(
+            menuItemId: product.id,
+            lineQty: product.offerLineQty ?? 1,
+            discount: product.offerDiscount ?? 0,
+            name: product.name,
+            originalPrice: product.price,
+            promotionId: product.offerPromoId,
+            productTaxMode: product.taxMode,
+            productTaxRate: product.taxRate,
+          );
+          return;
+        }
 
-    List<SelectedModifierInput> selectedModifiers = const [];
-    if (product.itemType == 'combo') {
-      final comboGroups = await vm.getMenuItemComboGroups(product.id);
-      if (!context.mounted) return;
-      final comboResult = await showDialog<List<SelectedModifierInput>>(
-        context: context,
-        builder: (_) =>
-            _ComboSelectionDialog(product: product, groups: comboGroups),
-      );
-      if (!context.mounted || comboResult == null) return;
-      selectedModifiers = comboResult;
-    }
-
-    final groups = await vm.getMenuItemModifierGroups(product.id);
-    if (!context.mounted) return;
-    if (groups.isNotEmpty) {
-      final result = await showDialog<List<SelectedModifierInput>>(
-        context: context,
-        builder: (_) =>
-            _ModifiersSelectionDialog(product: product, groups: groups),
-      );
-      if (!context.mounted || result == null) return;
-      selectedModifiers = [...selectedModifiers, ...result];
-    }
-
-    // Ítem nuevo: default de "para llevar" por ORIGEN (mesa → consumo en mesa),
-    // NO heredado de otros ítems. Antes se propagaba state.takeout (derivado de
-    // "todos los ítems son takeout"), lo que contagiaba: al marcar 1-2 ítems
-    // para llevar, los siguientes entraban para llevar solos. El cajero marca
-    // cada ítem con el toggle por-ítem cuando aplique.
-    final orderTakeout = ref
-        .read(currentOrderProvider.notifier)
-        .defaultTakeoutForNewItem();
-    // Multiplicador de cantidad: se arma tocando «N×» en la barra del
-    // catálogo y se consume acá — vuelve a 1 para que no arrastre al
-    // siguiente producto. Las ofertas no pasan por aquí: traen su propia
-    // cantidad de línea y multiplicarla rompería la matemática del deal.
-    final qty = ref.read(quantityMultiplierProvider.notifier).consume();
-    await vm.addItem(
-      menuItemId: product.id,
-      qty: qty.toDouble(),
-      productName: product.name,
-      productPrice: product.price,
-      productTaxMode: product.taxMode,
-      productTaxRate: product.calculateTaxRate(
-        ref.read(currentOrderProvider).origin ?? 'table',
-      ),
-      productFullTaxRate: product.calculateFullTaxRate(),
-      selectedModifiers: selectedModifiers,
-      takeout: orderTakeout,
+        await runCatalogProductTap<Map<String, dynamic>, SelectedModifierInput>(
+          isCombo: product.itemType == 'combo',
+          selectionStillCurrent: stillSelected,
+          loadComboGroups: () => vm.getMenuItemComboGroups(product.id),
+          chooseCombo: (groups) => showDialog<List<SelectedModifierInput>>(
+            context: context,
+            builder: (_) => _ComboSelectionDialog(product: product, groups: groups),
+          ),
+          loadModifierGroups: () => vm.getMenuItemModifierGroups(product.id),
+          chooseModifiers: (groups) => showDialog<List<SelectedModifierInput>>(
+            context: context,
+            builder: (_) =>
+                _ModifiersSelectionDialog(product: product, groups: groups),
+          ),
+          addItem: (selectedModifiers) async {
+            // La guarda se comprueba antes de consumir N×: un toque abandonado
+            // tampoco puede cambiar la cantidad armada en la nueva mesa.
+            if (!stillSelected()) return;
+            final orderTakeout = vm.defaultTakeoutForNewItem();
+            final qty = ref.read(quantityMultiplierProvider.notifier).consume();
+            await vm.addItem(
+              menuItemId: product.id,
+              qty: qty.toDouble(),
+              productName: product.name,
+              productPrice: product.price,
+              productTaxMode: product.taxMode,
+              productTaxRate: product.calculateTaxRate(
+                ref.read(currentOrderProvider).origin ?? 'table',
+              ),
+              productFullTaxRate: product.calculateFullTaxRate(),
+              selectedModifiers: selectedModifiers,
+              takeout: orderTakeout,
+            );
+          },
+        );
+      },
     );
   }
 
@@ -3099,6 +3109,20 @@ class _CartView extends ConsumerWidget {
     // cambie de sucursal mientras responde el servidor.
     final paymentBusinessId = ref.read(sessionProvider).activeBusinessId ?? '';
     final paymentIsRetail = ref.read(currentBusinessModelProvider).isRetail;
+    final pendingProducts = ref.read(_catalogProductTapsProvider);
+    if (pendingProducts.isPending(
+      businessId: paymentBusinessId,
+      orderId: order.id,
+    )) {
+      ScaffoldMessenger.of(context).showAppSnackBar(
+        const SnackBar(
+          content: Text(
+            'Hay un producto cargándose. Espera a que termine antes de cobrar.',
+          ),
+        ),
+      );
+      return;
+    }
     // Gaveta al tocar "Pagar" (ajuste del negocio). Antes de cualquier await
     // y sin esperar: el cajero tiene el cambio a mano mientras elige el
     // método. El cobro a crédito no mueve efectivo.
@@ -3138,6 +3162,7 @@ class _CartView extends ConsumerWidget {
         }
       }
     }
+    final paymentOrderId = order.id;
 
     // Feature flag `kitchen_enabled`: si la cocina está apagada y hay
     // items draft/pending, los marcamos `ready` antes de abrir el pago
@@ -3214,7 +3239,7 @@ class _CartView extends ConsumerWidget {
     // Caso real 2026-08-30: MESA4, ticket con ORDEN/NCF de AA2686EE (537.60,
     // ya cobrada) sobre los ítems de DB5FE207 (710.72, sin cobrar).
     final freshOrder = currentOrderState.order;
-    if (freshOrder != null && freshOrder.id != order.id) {
+    if (freshOrder != null && freshOrder.id != paymentOrderId) {
       await showDialog<void>(
         context: context,
         builder: (dctx) => AlertDialog(
@@ -3407,6 +3432,54 @@ class _CartView extends ConsumerWidget {
     final finalCustomerName = fiscalCustomer.name;
     final finalCustomerTaxId = fiscalCustomer.rnc;
     final finalCustomerLegalName = currentOrderState.customerLegalName;
+    final freshTotal = freshPaymentScopeTotal(
+      expectedOrderId: paymentOrderId,
+      order: currentOrderState.order,
+      items: currentOrderState.items,
+      checks: currentOrderState.checks,
+      checkId: checkId,
+      forcedOrigin: currentOrderState.origin,
+    );
+    if (freshTotal == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'La cuenta cambió o ya no tiene productos pendientes. '
+            'Vuelve a entrar para revisar el monto a cobrar.',
+          ),
+        ),
+      );
+      return;
+    }
+    // Pagar todo puede partir de una subcuenta seleccionada. Normalizamos
+    // sólo el alcance para reutilizar la guarda de contenido de la precuenta.
+    CurrentOrderState paymentScopeState(CurrentOrderState state) =>
+        state.copyWith(
+          selectedCheckId: checkId,
+          clearSelectedCheck: checkId == null,
+        );
+    final paymentSnapshot = PrecheckSnapshot.capture(
+      paymentScopeState(currentOrderState),
+      expectedOrderId: paymentOrderId,
+      checkId: checkId,
+    );
+    List<Object?> billingDetails(CurrentOrderState state) {
+      final scopeChecks = state.checks.where((c) => c.id == checkId).toList();
+      final check = scopeChecks.isEmpty ? null : scopeChecks.first;
+      return [
+        state.fiscalType,
+        state.customerId,
+        state.customerName,
+        state.customerTaxId,
+        state.customerLegalName,
+        state.deliveryAddress,
+        check?.customerId,
+        check?.customerName,
+        check?.customerRnc,
+        check?.requestedNcfType,
+      ];
+    }
     final prePaymentItems = checkId == null
         ? List<OrderItem>.from(currentOrderState.items)
         : currentOrderState.items.where((i) => i.checkId == checkId).toList();
@@ -3440,18 +3513,7 @@ class _CartView extends ConsumerWidget {
     // quedó corto, avisamos al cajero y cobramos el correcto. Nada queda
     // fuera de la cuenta.
     if (checkId == null) {
-      final coverageItems = currentOrderState.items.where((i) {
-        if (i.status == 'paid' || i.status == 'void') return false;
-        final inClosedCheck = currentOrderState.checks.any(
-          (c) => c.id == i.checkId && c.isClosed,
-        );
-        return !inClosedCheck;
-      }).toList();
-      final coverageTotal = summarizeOrderPricing(
-        currentOrderState.order,
-        coverageItems,
-        forcedOrigin: currentOrderState.origin,
-      ).total;
+      final coverageTotal = freshTotal;
       // Umbral > RD$1 para tolerar redondeo de centavos; solo dispara ante
       // un ítem realmente ausente del total.
       if (coverageTotal - total > 1.0) {
@@ -3461,14 +3523,12 @@ class _CartView extends ConsumerWidget {
         final proceed = await showDialog<bool>(
           context: context,
           builder: (dctx) => AlertDialog(
-            title: const Text('La cuenta tiene ítems sin incluir'),
+            title: const Text('El total de la cuenta cambió'),
             content: Text(
-              'El total a cobrar (${cov.format(total)}) no cubre todos los '
-              'productos abiertos de la mesa (${cov.format(coverageTotal)}). '
-              'Faltan ${cov.format(missing)} — probablemente un producto '
-              'quedó fuera de la cuenta al dividir.\n\n'
-              'Si cobras así, ese producto se cerraría como PAGADO sin '
-              'cobrarse. Revisa la cuenta o cobra el total correcto.',
+              'El monto mostrado era ${cov.format(total)}. Al actualizar '
+              'la cuenta, el total es ${cov.format(coverageTotal)} '
+              '(${cov.format(missing)} más).\n\n'
+              'Revisa los productos antes de confirmar el cobro.',
             ),
             actions: [
               TextButton(
@@ -3483,8 +3543,49 @@ class _CartView extends ConsumerWidget {
           ),
         );
         if (proceed != true) return;
-        total = coverageTotal;
       }
+    }
+
+    // El guard anterior conserva el aviso de productos faltantes. También
+    // aplicamos reducciones y cambios de una subcuenta: el total capturado
+    // al tocar Pagar puede ser mayor que el de los productos recién leídos.
+    total = freshTotal;
+
+    if (!context.mounted) return;
+    final livePaymentState = ref.read(currentOrderProvider);
+    final liveTotal = freshPaymentScopeTotal(
+      expectedOrderId: paymentOrderId,
+      order: livePaymentState.order,
+      items: livePaymentState.items,
+      checks: livePaymentState.checks,
+      checkId: checkId,
+      forcedOrigin: livePaymentState.origin,
+    );
+    // Una navegación o una edición mientras se mostraba el aviso invalida
+    // el snapshot que se va a cobrar e imprimir. El cajero lo revisa de nuevo.
+    if (liveTotal == null ||
+        (liveTotal - freshTotal).abs() > 0.009 ||
+        ref.read(sessionProvider).activeBusinessId != paymentBusinessId ||
+        livePaymentState.selectedCheckId != currentOrderState.selectedCheckId ||
+        pendingProducts.isPending(
+          businessId: paymentBusinessId,
+          orderId: paymentOrderId,
+        ) ||
+        paymentSnapshot == null ||
+        !paymentSnapshot.matches(paymentScopeState(livePaymentState)) ||
+        !listEquals(
+          billingDetails(currentOrderState),
+          billingDetails(livePaymentState),
+        )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'La cuenta cambió mientras se preparaba el cobro. '
+            'Revisa el monto y vuelve a tocar Pagar.',
+          ),
+        ),
+      );
+      return;
     }
 
     // Usamos el tableCode disponible en la vista
@@ -5963,6 +6064,27 @@ class _CartView extends ConsumerWidget {
                               await _runLockedAction(ref, precheckLockKey, () async {
                                 final tappedOrder = orderState.order;
                                 if (tappedOrder == null) return;
+                                final precheckBusinessId = ref
+                                    .read(sessionProvider)
+                                    .activeBusinessId;
+                                final pendingProducts = ref.read(
+                                  _catalogProductTapsProvider,
+                                );
+                                if (pendingProducts.isPending(
+                                  businessId: precheckBusinessId,
+                                  orderId: tappedOrder.id,
+                                )) {
+                                  ScaffoldMessenger.of(context).showAppSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Hay un producto cargándose. Espera a '
+                                        'que termine antes de imprimir la '
+                                        'precuenta.',
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                }
                                 final notifier = ref.read(
                                   currentOrderProvider.notifier,
                                 );
@@ -5977,6 +6099,8 @@ class _CartView extends ConsumerWidget {
                                 // se cambió de mesa o de subcuenta, no se
                                 // imprime otra.
                                 bool sameAccount(CurrentOrderState s) =>
+                                    ref.read(sessionProvider).activeBusinessId ==
+                                        precheckBusinessId &&
                                     s.order?.id == tappedOrder.id &&
                                     s.selectedCheckId == selectedCheckId;
                                 void accountChanged() =>
@@ -6032,6 +6156,12 @@ class _CartView extends ConsumerWidget {
                                         tappedOrder.id,
                                       );
                                       if (!context.mounted) return;
+                                      if (!sameAccount(
+                                        ref.read(currentOrderProvider),
+                                      )) {
+                                        accountChanged();
+                                        return;
+                                      }
                                       final sent = await notifier.confirmOrder(
                                         tableName: tableCode,
                                         waiterName: waiter,
@@ -6077,6 +6207,11 @@ class _CartView extends ConsumerWidget {
                                 final rounds = await notifier
                                     .kitchenRoundsOfCurrentOrder();
                                 if (!context.mounted) return;
+                                freshState = ref.read(currentOrderProvider);
+                                if (!sameAccount(freshState)) {
+                                  accountChanged();
+                                  return;
+                                }
                                 var freshOrder = freshState.order;
                                 if (freshOrder == null) return;
                                 // ── Gate de FEE DE DELIVERY PROPIO ──
@@ -6104,6 +6239,12 @@ class _CartView extends ConsumerWidget {
                                     formatAmount: feeCurrency.formatter.format,
                                   );
                                   if (!context.mounted) return;
+                                  if (!sameAccount(
+                                    ref.read(currentOrderProvider),
+                                  )) {
+                                    accountChanged();
+                                    return;
+                                  }
                                   if (chosenFee == null) {
                                     if (features.deliveryFeeRequired) {
                                       ScaffoldMessenger.of(
@@ -6145,29 +6286,36 @@ class _CartView extends ConsumerWidget {
                                     freshOrder = freshState.order ?? freshOrder;
                                   }
                                 }
-                                // Recomputamos items/totales desde el estado
-                                // recién recargado (mismo filtro que la vista
-                                // del carrito).
-                                final freshOpen = freshState.items
-                                    .where(_isOpenItem)
-                                    .toList();
-                                final freshItems = selectedCheckId != null
-                                    ? freshOpen
-                                          .where(
-                                            (i) => i.checkId == selectedCheckId,
-                                          )
-                                          .toList()
-                                    : freshOpen.where((i) {
-                                        return !freshState.checks.any(
-                                          (c) =>
-                                              c.id == i.checkId && c.isClosed,
-                                        );
-                                      }).toList();
-                                final freshSummary = summarizeOrderPricing(
-                                  freshOrder,
-                                  freshItems,
-                                  forcedOrigin: freshState.origin,
+                                // La precuenta usa el mismo alcance del cobro.
+                                // Se valida de nuevo después de los metadatos
+                                // y del selector, justo antes de despacharla.
+                                freshState = ref.read(currentOrderProvider);
+                                final snapshot = PrecheckSnapshot.capture(
+                                  freshState,
+                                  expectedOrderId: tappedOrder.id,
+                                  checkId: selectedCheckId,
                                 );
+                                if (snapshot == null) {
+                                  accountChanged();
+                                  return;
+                                }
+                                freshOrder = snapshot.order;
+                                final freshItems = snapshot.items;
+                                final freshSummary = snapshot.summary;
+                                void validatePrecheck() {
+                                  if (!context.mounted ||
+                                      ref.read(sessionProvider).activeBusinessId !=
+                                          precheckBusinessId ||
+                                      pendingProducts.isPending(
+                                        businessId: precheckBusinessId,
+                                        orderId: tappedOrder.id,
+                                      ) ||
+                                      !snapshot.matches(
+                                        ref.read(currentOrderProvider),
+                                      )) {
+                                    throw const PrecheckChangedException();
+                                  }
+                                }
                                 final businessProfile =
                                     await _loadBusinessReceiptProfile(ref);
                                 final waiterName = await _loadWaiterName(
@@ -6234,10 +6382,16 @@ class _CartView extends ConsumerWidget {
                                     orderObj: freshOrder,
                                     orderItems: freshItems,
                                     forcePicker: forcePicker,
+                                    validatePrecheck: validatePrecheck,
                                   );
                                   if (context.mounted) {
                                     _showPendingKitchenRounds(context, rounds);
                                   }
+                                } on PrecheckChangedException catch (e) {
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showAppSnackBar(
+                                    SnackBar(content: Text(e.toString())),
+                                  );
                                 } catch (e) {
                                   if (context.mounted) {
                                     // Precuenta: no bloquea otra
@@ -6257,6 +6411,7 @@ class _CartView extends ConsumerWidget {
                                             preCheckData['waiterName']
                                                 as String?,
                                         errorMsg: e.toString(),
+                                        validatePrecheck: validatePrecheck,
                                       ),
                                     );
                                   }
@@ -6398,6 +6553,7 @@ class _CartView extends ConsumerWidget {
     String? tableName,
     String? waiterName,
     required List<PrintDestination> destinations,
+    VoidCallback? validatePrecheck,
   }) async {
     final printerDestinations = destinations
         .where(
@@ -6431,6 +6587,7 @@ class _CartView extends ConsumerWidget {
           waiterName: waiterName,
           showSnackBar: false,
           forcedPrinter: d.printer,
+          validatePrecheck: validatePrecheck,
         );
         return null;
       } catch (e) {
@@ -6468,6 +6625,7 @@ class _CartView extends ConsumerWidget {
     required Order orderObj,
     required List<OrderItem> orderItems,
     bool forcePicker = false,
+    VoidCallback? validatePrecheck,
   }) async {
     final session = ref.read(sessionProvider);
     final businessId = session.activeBusinessId;
@@ -6491,6 +6649,7 @@ class _CartView extends ConsumerWidget {
         orderItems: orderItems,
         tableName: tableName,
         waiterName: waiterName,
+        validatePrecheck: validatePrecheck,
       );
       return;
     }
@@ -6528,6 +6687,7 @@ class _CartView extends ConsumerWidget {
             tableName: tableName,
             waiterName: waiterName,
             destinations: printerDestinations,
+            validatePrecheck: validatePrecheck,
           );
           return;
         }
@@ -6582,6 +6742,7 @@ class _CartView extends ConsumerWidget {
           .read(posSettingsRepositoryProvider)
           .getReceiptItemDisplayMode(businessId);
       if (!context.mounted) return;
+      validatePrecheck?.call();
       // ignore: use_build_context_synchronously
       unawaited(
         showDialog<void>(
@@ -6610,6 +6771,7 @@ class _CartView extends ConsumerWidget {
       tableName: tableName,
       waiterName: waiterName,
       forcedPrinter: chosen?.printer,
+      validatePrecheck: validatePrecheck,
     );
   }
 
@@ -6727,6 +6889,7 @@ class _CartView extends ConsumerWidget {
     // trae para armar invoiceData). Si viene, el bloque e-CF se ahorra
     // re-consultarlo al server. Null → fetch propio (callers legacy).
     FiscalDocument? preloadedFiscalDoc,
+    VoidCallback? validatePrecheck,
   }) async {
     try {
       final printRepo = ref.read(printingPrintersRepositoryProvider);
@@ -7128,6 +7291,7 @@ class _CartView extends ConsumerWidget {
       // el hecho relevante es que el cliente ya pidió la cuenta.
       if (printerless) {
         if (context.mounted && ticket is PrintTicket) {
+          validatePrecheck?.call();
           await showPrintTicketOnScreen(
             context,
             ticket: ticket,
@@ -7216,6 +7380,7 @@ class _CartView extends ConsumerWidget {
       }
 
       final printFuture = Future<PrintOutcome>(() async {
+        validatePrecheck?.call();
         if (ticket != null) {
           return await printRepo.printEscPos(
             printer: printer,
@@ -7471,6 +7636,7 @@ class _CartView extends ConsumerWidget {
     String? waiterName,
     required String errorMsg,
     VoidCallback? onFinish,
+    VoidCallback? validatePrecheck,
   }) {
     final retryPrintLockKey = _printActionKey(
       type,
@@ -7597,11 +7763,19 @@ class _CartView extends ConsumerWidget {
                                     tableName: tableName,
                                     waiterName: waiterName,
                                     showSnackBar: true,
+                                    validatePrecheck: validatePrecheck,
                                   );
                                   onFinish?.call();
                                   resolve();
                                 } catch (e) {
                                   if (!context.mounted) {
+                                    resolve();
+                                    return;
+                                  }
+                                  if (e is PrecheckChangedException) {
+                                    ScaffoldMessenger.of(context).showAppSnackBar(
+                                      SnackBar(content: Text(e.toString())),
+                                    );
                                     resolve();
                                     return;
                                   }

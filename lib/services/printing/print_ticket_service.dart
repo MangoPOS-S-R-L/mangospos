@@ -119,6 +119,7 @@ class PrintTicketService {
     // Una reimpresión usa los importes del documento emitido incluso si la
     // diferencia con el catálogo actual es menor a un peso.
     if (preferStoredOrderTotals && hasStoredTotals) {
+      _validateStoredReceiptTotals(order);
       return _PrintableReceiptTotals(
         subtotal: order.subtotal,
         discounts: order.discounts,
@@ -144,6 +145,7 @@ class PrintTicketService {
       );
     }
 
+    _validateStoredReceiptTotals(order);
     return _PrintableReceiptTotals(
       subtotal: order.subtotal,
       discounts: order.discounts,
@@ -152,6 +154,43 @@ class PrintTicketService {
       total: order.total,
       deliveryFee: order.deliveryFee,
     );
+  }
+
+  /// Un comprobante guardado conserva sus importes, pero debe cuadrar consigo
+  /// mismo antes de imprimirse. Los pagos no corrigen el valor del documento.
+  static void _validateStoredReceiptTotals(Order order) {
+    final amounts = [
+      order.subtotal,
+      order.tax,
+      order.serviceFee,
+      order.deliveryFee,
+      order.discounts,
+      order.total,
+    ];
+    if (amounts.any((amount) => !amount.isFinite)) {
+      throw StateError(
+        'Factura inconsistente: el comprobante contiene importes inválidos. '
+        'Recarga el comprobante original antes de reimprimir.',
+      );
+    }
+    final expected =
+        order.subtotal +
+        order.tax +
+        order.serviceFee +
+        order.deliveryFee -
+        order.discounts;
+    // Comparar en centavos evita falsos rechazos por punto flotante. Se admite
+    // un centavo de diferencia por el redondeo de las partes del documento.
+    final expectedCents = (expected * 100).round();
+    final storedCents = (order.total * 100).round();
+    if ((expectedCents - storedCents).abs() > 1) {
+      throw StateError(
+        'Factura inconsistente: el subtotal, impuestos, servicio, delivery '
+        'y descuento suman ${expected.toStringAsFixed(2)}, pero el total '
+        'guardado es ${order.total.toStringAsFixed(2)}. '
+        'Recarga el comprobante original antes de reimprimir.',
+      );
+    }
   }
 
   /// ============================================================
@@ -589,6 +628,41 @@ class PrintTicketService {
     if (current.isNotEmpty) gen.text('$prefix$current');
   }
 
+  /// El precio de la selección ya está incluido en el importe del producto.
+  /// En el ticket del cliente solo se describe el modificador: repetir su
+  /// importe lo presenta como otro cargo y mezcla precios brutos con la base
+  /// sin impuestos del producto.
+  static void _writeCustomerModifiers(
+    EscPosGenerator gen,
+    List<OrderItemModifier> modifiers, {
+    String prefix = '  + ',
+  }) {
+    for (final modifier in modifiers) {
+      _writeWrappedLine(gen, '$prefix${modifier.name}', gen.maxChars);
+    }
+  }
+
+  /// El modelo simple conserva nombre, unitario e importe completos cuando
+  /// la fila no cabe, especialmente con papel de 58mm.
+  static void _writeSimpleCustomerItem(
+    EscPosGenerator gen, {
+    required int number,
+    required String name,
+    required String quantity,
+    required String unitPrice,
+    required String amount,
+  }) {
+    final description = '# $number: $name';
+    final unit = '$quantity X $unitPrice';
+    final label = '$description $unit';
+    if (label.length + amount.length + 1 <= gen.maxChars) {
+      gen.dotRow(label, amount);
+      return;
+    }
+    _writeWrappedLine(gen, description, gen.maxChars);
+    gen.dotRow(unit, amount);
+  }
+
   /// ============================================================
   /// PRECUENTA - DISEÑO TÉRMICO MEJORADO
   /// ============================================================
@@ -817,12 +891,6 @@ class PrintTicketService {
 
     for (int i = 0; i < consolidatedItems.length; i++) {
       final item = consolidatedItems[i];
-      // Layout B: la línea principal muestra el PRECIO BASE del producto
-      // (sin sumar modificadores). El modifier sale en su propia línea con
-      // su delta, y el total de la derecha (`baseTotal`) ya incluye base +
-      // modifiers para que cuadre con SUBTOTAL.
-      final baseUnitPrice = item.unitPrice;
-
       // Impuestos por item: NO se muestran aquí (solo consolidados en TOTALES);
       // el snapshot en `order_item_tax_lines` se mantiene para la factura.
       // Las notas del ítem (instrucciones para cocina y marcadores internos
@@ -835,12 +903,15 @@ class PrintTicketService {
         isPostDiscountMode: recompute.isPostDiscountMode,
         declaredRate: recompute.declaredRate,
       );
+      // El unitario y el total del producto incluyen las selecciones y usan
+      // la misma base sin impuestos que el SUBTOTAL.
+      final qtyForUnit = item.quantity <= 0 ? 1.0 : item.quantity;
+      final baseUnitPrice = baseTotal / qtyForUnit;
 
       if (modern) {
         // Mismo renglón de producto que la factura: cantidad, nombre, monto,
         // y debajo el precio unitario solo cuando aporta.
         final showUnit = (item.quantity - 1).abs() > 0.001;
-        final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
         ModernInvoiceLayout.item(
           gen,
           qty: displayQty,
@@ -850,35 +921,34 @@ class PrintTicketService {
           isTakeout: item.isTakeout,
           modifiers: [
             for (final mod in item.modifiers)
-              (
-                name: mod.name,
-                amount: mod.price * itemQty * mod.qty > 0
-                    ? _formatMoney(mod.price * itemQty * mod.qty)
-                    : '',
-              ),
+              (name: mod.name, amount: ''),
           ],
         );
       } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
-        // líneas SEGUIDAS (sin blanco), modificadores con precio.
-        gen.dotRow(
-          '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(baseUnitPrice)}',
-          _formatMoney(baseTotal),
+        // líneas SEGUIDAS (sin blanco), modificadores solo descriptivos.
+        _writeSimpleCustomerItem(
+          gen,
+          number: i + 1,
+          name: item.productName,
+          quantity: displayQty,
+          unitPrice: _formatMoney(baseUnitPrice),
+          amount: _formatMoney(baseTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
           gen.text('   [PARA LLEVAR]');
           gen.setBold(false);
         }
-        for (final mod in item.modifiers) {
-          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-          final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
+        _writeCustomerModifiers(
+          gen,
+          item.modifiers,
+          prefix: '   Modificador: ',
+        );
         // Líneas seguidas: sin renglón en blanco entre ítems.
       } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Modificadores
-        // (con precio) indentados debajo; un renglón en blanco separa cada
+        // descriptivos indentados debajo; un renglón en blanco separa cada
         // ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
@@ -889,11 +959,11 @@ class PrintTicketService {
           gen.text('   [PARA LLEVAR]');
           gen.setBold(false);
         }
-        for (final mod in item.modifiers) {
-          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-          final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
+        _writeCustomerModifiers(
+          gen,
+          item.modifiers,
+          prefix: '   Modificador: ',
+        );
         gen.lineFeed(); // espacio entre ítems
       } else {
         // Nombre del producto en negrita. En 58mm (32 columnas) se envuelve
@@ -906,7 +976,7 @@ class PrintTicketService {
         }
         gen.setBold(false);
 
-        // Cantidad x precio unitario base ......... TOTAL CON MODIFICADORES
+        // Cantidad x precio unitario ......... TOTAL CON MODIFICADORES
         final leftPart = '$displayQty x ${_formatMoney(baseUnitPrice)}';
         final rightPart = _formatMoney(baseTotal);
         gen.dotRow(leftPart, rightPart);
@@ -918,22 +988,7 @@ class PrintTicketService {
           gen.setBold(false);
         }
 
-        // Modificadores con indentación
-        if (item.modifiers.isNotEmpty) {
-          for (final mod in item.modifiers) {
-            final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-            final modTotal = mod.price * itemQty * mod.qty;
-            final priceSuffix = modTotal > 0
-                ? ' (+${_formatMoney(modTotal)})'
-                : '';
-            final modLine = '  + ${mod.name}$priceSuffix';
-            if (narrow) {
-              _writeWrappedLine(gen, modLine, gen.maxChars);
-            } else {
-              gen.text(modLine);
-            }
-          }
-        }
+        _writeCustomerModifiers(gen, item.modifiers);
 
         // Espacio ligero entre items
         if (i < consolidatedItems.length - 1) {
@@ -1645,7 +1700,6 @@ class PrintTicketService {
         // El precio unitario solo cuando aporta: en una línea de 1 unidad,
         // repetir el mismo número debajo del total es ruido.
         final showUnit = (item.quantity - 1).abs() > 0.001;
-        final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
         ModernInvoiceLayout.item(
           gen,
           qty: displayQty,
@@ -1655,35 +1709,34 @@ class PrintTicketService {
           isTakeout: item.isTakeout,
           modifiers: [
             for (final mod in item.modifiers)
-              (
-                name: mod.name,
-                amount: mod.price * itemQty * mod.qty > 0
-                    ? _formatMoney(mod.price * itemQty * mod.qty)
-                    : '',
-              ),
+              (name: mod.name, amount: ''),
           ],
         );
       } else if (compact && simple) {
         // v3 SIMPLE (estilo KAELUS): "# N: Nombre qty X precio …… total",
-        // líneas SEGUIDAS (sin blanco entre ítems), modificadores con precio.
-        gen.dotRow(
-          '# ${i + 1}: ${item.productName} $displayQty X ${_formatMoney(unitPrice)}',
-          _formatMoney(lineTotal),
+        // líneas SEGUIDAS (sin blanco entre ítems), modificadores descriptivos.
+        _writeSimpleCustomerItem(
+          gen,
+          number: i + 1,
+          name: item.productName,
+          quantity: displayQty,
+          unitPrice: _formatMoney(unitPrice),
+          amount: _formatMoney(lineTotal),
         );
         if (item.isTakeout) {
           gen.setBold(true);
           gen.text('   [PARA LLEVAR]');
           gen.setBold(false);
         }
-        for (final mod in item.modifiers) {
-          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-          final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
+        _writeCustomerModifiers(
+          gen,
+          item.modifiers,
+          prefix: '   Modificador: ',
+        );
         // Líneas seguidas: sin renglón en blanco entre ítems.
       } else if (compact) {
         // Una sola línea: "1x Nombre …………… total" (sin "#"). Los
-        // modificadores (con precio) van indentados debajo, y un renglón en
+        // modificadores descriptivos van indentados debajo, y un renglón en
         // blanco separa cada ítem.
         gen.dotRow(
           '${displayQty}x ${item.productName}',
@@ -1694,11 +1747,11 @@ class PrintTicketService {
           gen.text('   [PARA LLEVAR]');
           gen.setBold(false);
         }
-        for (final mod in item.modifiers) {
-          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-          final modTotal = mod.price * itemQty * mod.qty;
-          gen.dotRow('   Modificador: ${mod.name}', _formatMoney(modTotal));
-        }
+        _writeCustomerModifiers(
+          gen,
+          item.modifiers,
+          prefix: '   Modificador: ',
+        );
         gen.lineFeed(); // espacio entre ítems
       } else {
         gen.setBold(true);
@@ -1722,21 +1775,7 @@ class PrintTicketService {
           gen.setBold(false);
         }
 
-        if (item.modifiers.isNotEmpty) {
-          for (final mod in item.modifiers) {
-            final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-            final modTotal = mod.price * itemQty * mod.qty;
-            final priceSuffix = modTotal > 0
-                ? ' (+${_formatMoney(modTotal)})'
-                : '';
-            final modLine = '  + ${mod.name}$priceSuffix';
-            if (narrow) {
-              _writeWrappedLine(gen, modLine, gen.maxChars);
-            } else {
-              gen.text(modLine);
-            }
-          }
-        }
+        _writeCustomerModifiers(gen, item.modifiers);
 
         if (i < consolidatedItems.length - 1) {
           gen.lineFeed();
@@ -2537,15 +2576,7 @@ class PrintTicketService {
           item,
           preferStoredItemTotals: preferStoredItemTotals,
         ),
-        modifiers: item.modifiers.map((m) {
-          // Costo total que aporta el modifier a la línea, consistente con
-          // catalogGrossAmount y los demás tickets: qty_item × qty_mod × precio.
-          final itemQty = item.quantity <= 0 ? 1.0 : item.quantity;
-          final modTotal = m.price * itemQty * m.qty;
-          return modTotal > 0
-              ? '${m.name} (+${_formatMoney(modTotal)})'
-              : m.name;
-        }).toList(),
+        modifiers: item.modifiers.map((modifier) => modifier.name).toList(),
       );
       // Indicador para llevar (takeout)
       if (item.isTakeout) {
