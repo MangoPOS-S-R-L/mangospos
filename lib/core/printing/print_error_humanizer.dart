@@ -42,16 +42,71 @@ class FriendlyPrintError {
 /// Convierte un error en una versión amigable. `printerName` es opcional
 /// — si se conoce, los mensajes lo incluyen entre comillas para que el
 /// cajero sepa cuál de varias impresoras es la afectada.
-FriendlyPrintError humanizePrintError(
-  Object error, {
-  String? printerName,
-}) {
+FriendlyPrintError humanizePrintError(Object error, {String? printerName}) {
   final raw = error.toString();
   final lower = raw.toLowerCase();
   // Recortamos "Exception:" del inicio porque es ruido visual.
   final namePart = printerName == null || printerName.trim().isEmpty
       ? ''
       : ' «${printerName.trim()}»';
+
+  // La preparación del comprobante también puede fallar antes de contactar
+  // la impresora. Conservar la razón de esos candados evita recomendar
+  // revisar el hardware cuando falta el documento o sus importes no cuadran.
+  // Debe ir antes de "papel": algunas validaciones dicen "No se envió papel".
+  if (error is StateError) {
+    final reason = error.message.toString();
+    if (lower.contains('no se encontró el comprobante original') ||
+        lower.contains('no se identificó el comprobante original')) {
+      return FriendlyPrintError(
+        title: 'Comprobante original no disponible',
+        message: reason,
+        hint:
+            'Recarga el historial y selecciona el comprobante original '
+            'antes de volver a imprimir.',
+      );
+    }
+    if (lower.contains('importes incompletos') ||
+        lower.contains('comprobante contiene importes inválidos')) {
+      return FriendlyPrintError(
+        title: 'Importes del comprobante incompletos',
+        message: reason,
+        hint:
+            'Recarga el historial. Si el problema continúa, revisa los '
+            'importes del comprobante original con el administrador.',
+      );
+    }
+    if (lower.contains('factura en cero') &&
+        lower.contains('cobro registrado')) {
+      return FriendlyPrintError(
+        title: 'Total del comprobante no válido',
+        message: reason,
+        hint:
+            'Recarga el comprobante original y revisa su total antes '
+            'de volver a imprimir.',
+      );
+    }
+    if (lower.contains('faltan los productos') ||
+        lower.contains('detalle está incompleto') ||
+        lower.contains('no coincide con el comprobante emitido')) {
+      return FriendlyPrintError(
+        title: 'Detalle del comprobante incompleto',
+        message: reason,
+        hint:
+            'Recarga el historial y revisa los productos del comprobante '
+            'original. Si persiste, pide al administrador que lo revise.',
+      );
+    }
+    if (lower.contains('factura inconsistente')) {
+      return FriendlyPrintError(
+        title: 'Datos del comprobante no coinciden',
+        message: reason,
+        hint:
+            'Recarga el historial y revisa el comprobante original con el '
+            'administrador antes de volver a imprimir.',
+      );
+    }
+  }
 
   // ── No hay impresora configurada ────────────────────────────────────
   if (lower.contains('no hay impresora') ||

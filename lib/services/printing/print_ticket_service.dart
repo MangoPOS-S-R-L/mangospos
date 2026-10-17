@@ -998,6 +998,10 @@ class PrintTicketService {
     }
 
     if (modern) {
+      ModernInvoiceLayout.gap(
+        gen,
+        spacing: ModernInvoiceLayout.itemsEndGapSpacing,
+      );
       ModernInvoiceLayout.rule(gen);
     } else {
       _thinSeparator(gen);
@@ -1784,6 +1788,10 @@ class PrintTicketService {
     }
 
     if (modern) {
+      ModernInvoiceLayout.gap(
+        gen,
+        spacing: ModernInvoiceLayout.itemsEndGapSpacing,
+      );
       ModernInvoiceLayout.rule(gen);
     } else {
       _thinSeparator(gen);

@@ -392,10 +392,8 @@ void main() {
       );
 
       // UN SOLO RITMO: los únicos interlineados del ticket son el del cuerpo
-      // y el de las líneas en doble altura, más el separador `gapSpacing`
-      // entre ítems, títulos y TOTAL (pedido del dueño 2026-09-25). Cualquier
-      // otro valor sería un renglón de aire metido a mano, y es justo lo que
-      // rompía la uniformidad del ticket.
+      // y el de las líneas en doble altura, más los espacios entre ítems
+      // y los 4 puntos adicionales antes de la regla que cierra el detalle.
       final interlineados = <int>{};
       for (var i = 0; i + 2 < bytes.length; i++) {
         if (bytes[i] == 0x1B && bytes[i + 1] == 0x33) {
@@ -406,6 +404,7 @@ void main() {
         ModernInvoiceLayout.bodyLineSpacing,
         ModernInvoiceLayout.bigLineSpacing,
         ModernInvoiceLayout.gapSpacing,
+        ModernInvoiceLayout.itemsEndGapSpacing,
         ModernInvoiceLayout.sectionLineSpacing,
       });
 

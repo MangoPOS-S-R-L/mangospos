@@ -33,6 +33,70 @@ Order receipt({double subtotal = 500, double discount = 0}) => Order.fromMap({
   'created_at': '2026-10-15T00:00:00Z',
 });
 void main() {
+  test('el cero por defecto fiscal no borra el descuento de la venta', () {
+    final printed = issuedReceiptOrder(receipt(subtotal: 0), {
+      'ncf_number': 'B0100000012',
+      'ncf_type': 'B01',
+      'subtotal': 4296.88,
+      'itbis_amount': 773.46,
+      'service_fee': 429.67,
+      'discount': 0,
+      'total': 4250,
+    });
+    expect(printed.discounts, 1250.01);
+    expect(printed.total, 4250);
+    expect(printed.subtotal, 4296.88);
+    expect(printed.tax, 773.46);
+    expect(printed.serviceFee, 429.67);
+  });
+
+  test('la nota conserva su descuento explícito aunque no cuadre', () {
+    final printed = issuedReceiptOrder(receipt(subtotal: 0), {
+      'note_number': 'NV-000123',
+      'subtotal': 500,
+      'tax': 0,
+      'discount': 0,
+      'total': 400,
+    });
+    expect(printed.discounts, 0);
+    expect(
+      () => validateIssuedReceiptItems(printed, [item('a'), item('b')]),
+      throwsStateError,
+    );
+  });
+
+  test('un descuento fiscal explícito distinto de cero se conserva', () {
+    final printed = issuedReceiptOrder(receipt(subtotal: 0), {
+      'ncf_number': 'B0100000012',
+      'subtotal': 500,
+      'itbis_amount': 0,
+      'discount': 50,
+      'total': 400,
+    });
+    expect(printed.discounts, 50);
+    expect(
+      () => validateIssuedReceiptItems(printed, [
+        item('a', discount: 25),
+        item('b', discount: 25),
+      ]),
+      throwsStateError,
+    );
+  });
+
+  test('derivar el descuento fiscal no admite un detalle sin descuento', () {
+    final printed = issuedReceiptOrder(receipt(subtotal: 0), {
+      'ncf_number': 'B0100000012',
+      'subtotal': 500,
+      'itbis_amount': 0,
+      'discount': 0,
+      'total': 400,
+    });
+    expect(
+      () => validateIssuedReceiptItems(printed, [item('a'), item('b')]),
+      throwsStateError,
+    );
+  });
+
   test('una factura válida conserva su detalle completo', () {
     expect(
       () => validateIssuedReceiptItems(receipt(), [item('a'), item('b')]),

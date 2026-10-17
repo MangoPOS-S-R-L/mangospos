@@ -202,7 +202,7 @@ Future<void> reprintInvoiceFromPayment(
       } on PostgrestException catch (e) {
         // Solo la ausencia de esta tabla en servidores antiguos permite
         // continuar. Red/RLS/error del servidor no acreditan el ámbito.
-        if(e.code!='42P01' && e.code!='PGRST205') rethrow;
+        if (e.code != '42P01' && e.code != 'PGRST205') rethrow;
       }
 
       printItems = allItems
@@ -265,7 +265,10 @@ Future<void> reprintInvoiceFromPayment(
         .read(posSettingsRepositoryProvider)
         .getInvoiceTemplate(businessId);
 
-    final reprintTaxBreakdown = issuedReceiptTaxBreakdown(printOrder, printItems);
+    final reprintTaxBreakdown = issuedReceiptTaxBreakdown(
+      printOrder,
+      printItems,
+    );
 
     // e-CF: fresh fetch del fiscal_document. Crítico en re-impresión porque
     // el estado puede haber cambiado desde el cobro original (sent → accepted
@@ -448,7 +451,14 @@ Future<void> reprintInvoiceFromPayment(
     if (context.mounted) {
       AppToast.success(context, 'Impresión enviada correctamente.');
     }
-  } catch (e) {
+  } catch (e, stack) {
+    // Registrar identificadores y el error técnico, sin volcar el documento,
+    // los productos, el cliente ni las filas de pagos.
+    debugPrint(
+      '[invoice_reprint] order_id=$orderId '
+      'document_id=${requestedDocumentId ?? 'unresolved'} error=$e',
+    );
+    debugPrintStack(stackTrace: stack);
     if (context.mounted) {
       final friendly = humanizePrintError(
         e,

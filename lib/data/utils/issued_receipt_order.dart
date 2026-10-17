@@ -25,11 +25,24 @@ Order issuedReceiptOrder(Order source, Map<String, dynamic> document) {
   final total = amount('total', required: true);
   final hasDiscount =
       document['discounts'] != null || document['discount'] != null;
-  final discount = hasDiscount
+  final storedDiscount = hasDiscount
       ? amount('discounts', alternative: 'discount')
-      : (subtotal + tax + service + delivery - total)
-            .clamp(0, double.infinity)
-            .toDouble();
+      : null;
+  final inferredDiscount = (subtotal + tax + service + delivery - total)
+      .clamp(0, double.infinity)
+      .toDouble();
+  // La emisión fiscal conserva los componentes y el total, pero en algunos
+  // servidores deja `discount` en su cero por defecto incluso con ofertas.
+  // Reconstruir ese descuento desde el documento evita borrar el de la venta;
+  // validateIssuedReceiptItems todavía exige que coincida con sus productos.
+  // Las notas de venta y los descuentos fiscales explícitos no se reemplazan.
+  final isFiscalDocument =
+      (document['ncf_number']?.toString().trim().isNotEmpty ?? false) ||
+      (document['ncf_type']?.toString().trim().isNotEmpty ?? false);
+  final discount =
+      storedDiscount == null || (isFiscalDocument && storedDiscount == 0)
+      ? inferredDiscount
+      : storedDiscount;
   return source.copyWith(
     subtotal: subtotal,
     tax: tax,

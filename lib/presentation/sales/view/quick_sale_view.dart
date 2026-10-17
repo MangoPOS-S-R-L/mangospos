@@ -13,6 +13,7 @@ import 'package:mangopos/services/printing/print_ticket_service.dart';
 import 'package:mangopos/services/session/session_controller.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../settings/more%20settings/printing/printers/viewmodel/printers_viewmodel.dart';
+import '../state/payment_flow_provider.dart';
 import '../viewmodel/sales_viewmodel.dart';
 
 class QuickSaleView extends ConsumerWidget {
@@ -28,16 +29,19 @@ class QuickSaleView extends ConsumerWidget {
         ? null
         : summarizeOrderPricing(order, items);
     final total = pricingSummary?.total ?? 0.0;
+    final paymentFlowActive = ref.watch(paymentFlowProvider);
     // `ventas_rapida.acceso` abre la pestaña; crear la orden y cobrarla son
     // permisos propios que hasta acá no se consultaban en ningún lado.
     final sessionCtrl = ref.watch(sessionProvider.notifier);
     final canCreate = sessionCtrl.hasPermission('ventas_rapida.crear_orden');
     final canCharge =
         sessionCtrl.hasPermission('ventas_rapida.cobrar_inmediato');
-    final canPay = canCharge &&
+    final canPay =
+        canCharge &&
         order != null &&
         items.isNotEmpty &&
         !loading &&
+        !paymentFlowActive &&
         total > 0;
     return Scaffold(
       appBar: AppBar(
@@ -89,7 +93,7 @@ class QuickSaleView extends ConsumerWidget {
                   ),
                   onPressed: !canPay
                       ? null
-                      : () {
+                      : () => ref.read(paymentFlowProvider.notifier).run(() async {
                           final paidOrder = order.copyWith(
                             subtotal:
                                 pricingSummary?.subtotal ?? order.subtotal,
@@ -107,7 +111,9 @@ class QuickSaleView extends ConsumerWidget {
                           // cierra al cobrar): lo necesita el modo sin
                           // impresora para mostrar la factura en pantalla.
                           final viewContext = context;
-                          showDialog(
+                          Future<void>? receiptWork;
+                          Future<void>? nextSaleWork;
+                          await showDialog<void>(
                             context: context,
                             builder: (context) => PaymentModal(
                               order: paidOrder,
@@ -124,34 +130,58 @@ class QuickSaleView extends ConsumerWidget {
                                     fiscalDoc,
                                     modalCustomerName,
                                     salesNote,
-                                  ) => _printQuickSaleComprobante(
-                                    ref,
-                                    viewContext: viewContext,
-                                    order: paidOrder,
-                                    items: printItems,
-                                    payment: payment,
-                                    fiscalNcf: fiscalDoc?.ncfNumber,
-                                    fiscalType: fiscalDoc?.ncfType,
-                                    salesNoteNumber: salesNote?.noteNumber,
-                                    customerName:
-                                        (modalCustomerName?.trim().isNotEmpty ??
-                                            false)
-                                        ? modalCustomerName!.trim()
-                                        : (salesNote?.customerName ??
-                                              fiscalDoc?.customerName),
-                                    customerTaxId: fiscalDoc?.customerRnc,
-                                  ),
+                                  ) {
+                                    final printing =
+                                        _printQuickSaleComprobante(
+                                          ref,
+                                          viewContext: viewContext,
+                                          order: paidOrder,
+                                          items: printItems,
+                                          payment: payment,
+                                          fiscalNcf: fiscalDoc?.ncfNumber,
+                                          fiscalType: fiscalDoc?.ncfType,
+                                          salesNoteNumber:
+                                              salesNote?.noteNumber,
+                                          customerName:
+                                              (modalCustomerName
+                                                      ?.trim()
+                                                      .isNotEmpty ??
+                                                  false)
+                                              ? modalCustomerName!.trim()
+                                              : (salesNote?.customerName ??
+                                                    fiscalDoc?.customerName),
+                                          customerTaxId: fiscalDoc?.customerRnc,
+                                        ).catchError((
+                                          Object error,
+                                          StackTrace stack,
+                                        ) {
+                                          debugPrint(
+                                            'Venta rápida: no se pudo completar el comprobante: $error\n$stack',
+                                          );
+                                        });
+                                    receiptWork = printing;
+                                    return printing;
+                                  },
                               onPaymentSuccess: () {
-                                ref
-                                    .read(currentOrderProvider.notifier)
-                                    .refreshOrder(clearIfPaid: true);
-                                ref
-                                    .read(currentOrderProvider.notifier)
-                                    .openQuick(forceRestart: true);
+                                nextSaleWork = () async {
+                                  final sales = ref.read(
+                                    currentOrderProvider.notifier,
+                                  );
+                                  sales.markOrderClosing(paidOrder.id);
+                                  await sales.refreshOrder(clearIfPaid: true);
+                                  await sales.openQuick(forceRestart: true);
+                                }();
                               },
                             ),
                           );
-                        },
+                          // El modal cierra antes de terminar el comprobante.
+                          // Conservamos el bloqueo hasta que también termine
+                          // la impresión o la vista de factura en pantalla.
+                          await Future.wait<void>([
+                            if (receiptWork != null) receiptWork!,
+                            if (nextSaleWork != null) nextSaleWork!,
+                          ]);
+                        }),
                   child: Text(
                     'PAGAR RD\$ ${total.toStringAsFixed(2)}',
                     style: const TextStyle(fontWeight: FontWeight.w800),

@@ -48,6 +48,7 @@ import 'package:mangopos/data/utils/loyalty_reward_utils.dart';
 import 'package:mangopos/presentation/loyalty/widgets/order_loyalty_strip.dart';
 import 'package:mangopos/presentation/sales/viewmodel/menu_browser_viewmodel.dart';
 import 'package:mangopos/presentation/sales/state/sales_state.dart';
+import 'package:mangopos/presentation/sales/state/payment_flow_provider.dart';
 import 'package:mangopos/presentation/sales/state/sales_zoom_provider.dart';
 import 'package:mangopos/presentation/sales/state/catalog_view_prefs.dart';
 import 'package:mangopos/presentation/sales/widgets/catalog_product_list.dart';
@@ -3089,7 +3090,31 @@ class _CartView extends ConsumerWidget {
     }
   }
 
-  void _openPaymentModal(
+  Future<void> _openPaymentModal(
+    BuildContext context,
+    WidgetRef ref,
+    Order order,
+    double total, {
+    String? checkId,
+    String? customerId,
+    String? customerName,
+    bool creditMode = false,
+  }) => ref
+      .read(paymentFlowProvider.notifier)
+      .run(
+        () => _prepareAndShowPayment(
+          context,
+          ref,
+          order,
+          total,
+          checkId: checkId,
+          customerId: customerId,
+          customerName: customerName,
+          creditMode: creditMode,
+        ),
+      );
+
+  Future<void> _prepareAndShowPayment(
     BuildContext context,
     WidgetRef ref,
     Order order,
@@ -3595,7 +3620,7 @@ class _CartView extends ConsumerWidget {
 
     // onFinish corre DESPUÉS de que PaymentSplitDialog hace pop —
     // navega/recarga la orden. Definido aquí para que tanto onConfirmed
-    // (vía _showReimpresionDialog en error) como el .then() lo puedan
+    // (vía _showReimpresionDialog en error) como el cierre lo puedan
     // invocar.
     void returnToSalon() {
       if (!context.mounted) return;
@@ -3617,6 +3642,7 @@ class _CartView extends ConsumerWidget {
       );
     }
 
+    Future<void>? finishWork;
     void onFinish() {
       if (checkId == null) {
         // PRD 4: en Quick/Manual cerramos la orden de forma MANDATORIA,
@@ -3632,7 +3658,7 @@ class _CartView extends ConsumerWidget {
           if (!ref.read(currentBusinessModelProvider).isRetail) {
             ref.read(currentOrderProvider.notifier).markOrderClosing(order.id);
           }
-          () async {
+          finishWork = () async {
             // Sin red (o venta local) no hay nada que cerrar en el servidor:
             // el replay del cobro la cierra al sincronizar. Esperar a que
             // esta llamada muriera retrasaba abrir la siguiente venta.
@@ -3676,8 +3702,8 @@ class _CartView extends ConsumerWidget {
         // cerró la orden (fn_process_payment_v3 → fn_close_order_and_table
         // cuando v_open_items_count == 0), así que navegamos afuera para
         // no dejar al cajero atascado en una mesa cerrada vacía.
-        () async {
-          await ref.read(currentOrderProvider.notifier).refreshOrder();
+        finishWork = () async {
+          await ref.read(currentOrderProvider.notifier).reloadOrderNow();
           final refreshed = ref.read(currentOrderProvider).order;
           final orderClosed =
               refreshed == null ||
@@ -4044,7 +4070,7 @@ class _CartView extends ConsumerWidget {
             tableName: tableName,
             waiterName: waiterName,
             errorMsg: e.toString(),
-            // onFinish ya corre desde el .then() del modal de pago,
+            // onFinish ya corre al cerrarse el modal de pago,
             // así que no lo pasamos aquí — evita doble navegación.
           );
         }
@@ -4058,7 +4084,8 @@ class _CartView extends ConsumerWidget {
       // imprime la factura y RECIÉN después corre onFinish: si navegáramos
       // antes (onPaymentSuccess), el context se desmonta y la factura no
       // llega a imprimirse.
-      _showSmoothDialog(
+      Future<void>? creditCompletion;
+      await _showSmoothDialog(
         context: context,
         barrierDismissible: false,
         builder: (context) => PaymentModal(
@@ -4068,20 +4095,22 @@ class _CartView extends ConsumerWidget {
           initialCustomerId: finalCustomerId,
           initialCustomerName: finalCustomerName,
           onServerConfirmed: (payment) => markPaidLocally([payment]),
-          onComprobante:
-              (payment, fiscalDoc, modalCustomerName, salesNote) async {
+          onComprobante: (payment, fiscalDoc, modalCustomerName, salesNote) =>
+              creditCompletion = () async {
                 await handleConfirmed([payment]);
                 onFinish();
-              },
+                await finishWork;
+              }(),
           onPaymentSuccess: () {},
         ),
       );
+      await creditCompletion;
       return;
     }
 
     final completionGate = PaymentCompletionGate(onFinish);
 
-    _showSmoothDialog(
+    final result = await _showSmoothDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => PaymentSplitDialog(
@@ -4095,7 +4124,7 @@ class _CartView extends ConsumerWidget {
         fiscalType: finalFiscalType,
         onServerConfirmed: markPaidLocally,
         // Cuando el Future de onConfirmed resuelve, el modal de pago hace
-        // pop y el .then() de abajo dispara onFinish.
+        // pop y el cierre de abajo dispara onFinish.
         onConfirmed: (payments, {offlineNcf}) async {
           try {
             await handleConfirmed(payments, offlineNcf: offlineNcf);
@@ -4104,9 +4133,9 @@ class _CartView extends ConsumerWidget {
           }
         },
       ),
-    ).then((result) {
-      completionGate.close(hasPaymentResult: result is List<Payment>);
-    });
+    );
+    completionGate.close(hasPaymentResult: result is List<Payment>);
+    await finishWork;
   }
 
   void _openSplitBillModal(BuildContext context, WidgetRef ref, Order order) {
@@ -4492,12 +4521,15 @@ class _CartView extends ConsumerWidget {
     // Retail: habilita el botón "Pausar venta" (hold) junto a Pagar.
     final isRetail = ref.watch(currentBusinessModelProvider).isRetail;
     final sessionCtrl = ref.read(sessionProvider.notifier);
-    final canCharge = sessionCtrl.hasAnyPermission([
-      'pagos.acceso',
-      'pagos.cobrar_efectivo',
-      'pagos.cobrar_tarjeta',
-      'pagos.cobrar_transferencia',
-    ]);
+    final paymentInProgress = ref.watch(paymentFlowProvider);
+    final canCharge =
+        !paymentInProgress &&
+        sessionCtrl.hasAnyPermission([
+          'pagos.acceso',
+          'pagos.cobrar_efectivo',
+          'pagos.cobrar_tarjeta',
+          'pagos.cobrar_transferencia',
+        ]);
     final allItems = orderState.items; // RESTORED
     final openItems = allItems.where(_isOpenItem).toList();
 

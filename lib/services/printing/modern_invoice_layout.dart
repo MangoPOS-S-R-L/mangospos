@@ -47,9 +47,9 @@ typedef ModernModifier = ({String name, String amount});
 class ModernInvoiceLayout {
   /// Interlineado del cuerpo, en puntos.
   ///
-  /// La fuente A mide 24 puntos de alto, así que 52 deja 28 de aire, casi el
-  /// triple que el 1/6" de fábrica (~34 de paso, ~10 de aire). Desde
-  /// 2026-09-25 la regla es que la Moderna nunca salga más larga que la
+  /// La fuente A mide 24 puntos de alto, así que 58 deja 34 de aire. Los
+  /// ajustes de 2026-10-17 añaden 4 + 2 puntos al interlineado anterior (52).
+  /// Desde 2026-09-25 la regla es que la Moderna nunca salga más larga que la
   /// Estándar (con 88 salía un 30% más larga). Es más aire a propósito: este modelo no separa
   /// los bloques con reglas `====` sino con espacio, y el dueño calibró
   /// cuánto espacio sobre el papel (ver `TicketRasterizer.proportionalLeading`
@@ -70,29 +70,27 @@ class ModernInvoiceLayout {
   ///
   /// El ahorro de este modelo viene del LAYOUT (la mitad de renglones que el
   /// estándar), no de exprimir el interlineado.
-  static const int bodyLineSpacing = 52;
+  static const int bodyLineSpacing = 58;
 
   /// Interlineado para las líneas en doble altura (48 puntos de glifo). El
   /// avance de papel es SIEMPRE el interlineado vigente, así que dejar el
   /// del cuerpo haría que el TOTAL se solape con la línea siguiente.
   ///
-  /// Mismo aire que el cuerpo (28 puntos) sobre un glifo del doble de alto:
-  /// el nombre del negocio y el TOTAL respiran como el resto en vez de
-  /// llevarse el doble de espacio por ser más grandes.
-  static const int bigLineSpacing = 85;
+  /// En raster deja 31 puntos de aire sobre un glifo de 60, igual que las
+  /// secciones normales: el nombre del negocio y el TOTAL reciben los mismos
+  /// 4 + 2 puntos adicionales de interlineado.
+  static const int bigLineSpacing = 91;
 
   /// Interlineado de las SECCIONES que no son productos: cabecera, títulos,
   /// subtotales, TOTAL y la parte de RNC/razón social.
   ///
-  /// Regla del dueño (2026-09-25): esas líneas llevan 2/3 del aire que separa
-  /// un producto del siguiente. Entre productos hay 38 puntos de aire (22 del
-  /// interlineado del cuerpo + [gapSpacing]); 2/3 son 25. En el raster el
-  /// paso es caja del glifo (30) + aire, o sea 55. El TOTAL y el nombre del
+  /// En raster el paso es caja del glifo (30) + aire (31), o sea 61:
+  /// 4 + 2 puntos más que el interlineado anterior (55). El TOTAL y el nombre del
   /// negocio usan [bigLineSpacing] con el mismo aire sobre un glifo de 60.
   ///
   /// El detalle de un producto (c/u, modificadores, nota) y la ÚLTIMA sección
   /// del ticket (aviso, agradecimiento, pie) siguen en [bodyLineSpacing].
-  static const int sectionLineSpacing = 55;
+  static const int sectionLineSpacing = 61;
 
   /// Interlineado vigente de la sección en curso de cada ticket. Los helpers
   /// que cambian el interlineado (ítem, TOTAL, separador) vuelven a este, no
@@ -163,13 +161,16 @@ class ModernInvoiceLayout {
   /// el total sí". O sea, el detalle de un ítem (c/u, modificadores, nota)
   /// va con el interlineado normal y se lee como un grupo; lo que se separa
   /// es un grupo del siguiente.
-  static const int gapSpacing = 16;
+  static const int gapSpacing = 18;
+
+  /// Aire adicional entre el último producto y la regla de los totales.
+  static const int itemsEndGapSpacing = 4;
 
   /// Renglón en blanco de [gapSpacing] puntos. En el raster un renglón vacío
   /// avanza exactamente su interlineado (sin piso de glifo), y en firmware un
   /// LF avanza el `ESC 3` vigente — mismo resultado por los dos caminos.
-  static void gap(EscPosGenerator gen) {
-    gen.setLineSpacing(gapSpacing);
+  static void gap(EscPosGenerator gen, {int spacing = gapSpacing}) {
+    gen.setLineSpacing(spacing);
     gen.text('');
     gen.setLineSpacing(_baseSpacing(gen));
   }
